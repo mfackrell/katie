@@ -15,8 +15,24 @@ export function selectGrokVisionFallback(models: readonly string[]): string | nu
     eligible[0] ?? null;
 }
 
-/** Generic refusals are not descriptions of image pixels, even when HTTP succeeds. */
+/** A refusal-only provider reply is not pixel evidence.
+ * Reject only when every sentence is a refusal or canned nonvisual follow-up.
+ * A limitation followed by an actual visual observation must be preserved. */
 export function isGenericVisionRefusal(text: string): boolean {
-  const normalized = text.trim().replace(/\s+/g, ' ');
-  return /^(?:(?:i(?:'m| am)\s+sorry[,;:]?\s*)?(?:but\s+)?(?:i\s+(?:can't|cannot|can not|won't|will not)\s+(?:assist|help|comply|provide|describe|analyze|analyse|process|fulfill|fulfil)\b|(?:sorry[,;:]?\s*)?(?:i\s+)?(?:can't|cannot|can not)\s+help\b)|(?:i\s+must\s+decline\b)|(?:i\s+cannot\s+assist\b))[\s\S]{0,240}$/i.test(normalized);
+  const normalized = text.replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > 1000) return false;
+
+  const refusal = /^(?:(?:i(?:'m| am)\s+sorry|sorry|i\s+apologize)[,;:\s-]*(?:but\s+)?)?(?:i\s+(?:(?:can't|cannot|can not|won't|will not|am unable to)\s+(?:assist|help|comply|provide|describe|analy[sz]e|process|fulfill|fulfil|answer)|must\s+decline)|i(?:'m| am)\s+unable\s+to\s+(?:assist|help|comply|provide|describe|analy[sz]e|process|fulfill|fulfil|answer))\b/i;
+  if (!refusal.test(normalized)) return false;
+
+  // These are grounded visual assertions even if preceded by a limitation.
+  // Err toward retaining evidence when the output is mixed or ambiguous.
+  const visualAssertion = /\b(?:image|photo|photograph|picture|diagram|chart|screenshot|scene|subject|foreground|background|person|woman|man|animal|object|rectangle|label|heading|text)\s+(?:shows?|depicts?|displays?|features?|contains?|includes?|has|is|are|appears?|looks?|reads?)\b|\bthere\s+(?:is|are)\s+(?:a|an|one|two|several|\d)\b/i;
+  if (visualAssertion.test(normalized)) return false;
+
+  const clauses = normalized.split(/(?:[.!?]+\s+|;\s+)+/).map(s => s.trim()).filter(Boolean);
+  const cannedFollowUp = /^(?:please\s+(?:try|ask|provide|upload|rephrase)\b|i\s+(?:can|could|would)\s+(?:help|assist|offer|provide)\b|if\s+you(?:'d| would| can)\s+(?:like|prefer)\b)/i;
+  return clauses.length > 0 && clauses.every((clause, index) =>
+    refusal.test(clause) || (index > 0 && cannedFollowUp.test(clause))
+  );
 }
