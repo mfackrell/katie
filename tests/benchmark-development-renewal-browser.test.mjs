@@ -30,7 +30,7 @@ test('same-task renewal displays remaining allowance and requires explicit exact
   await page.goto('http://localhost/approval');
   const button=page.getByRole('button',{name:'Approve this continuation using remaining Full allowance'});await button.waitFor();
   const text=await page.locator('body').innerText();
-  for(const expected of ['Full Katie continuation approval','165,581 additional tokens','105,581 tokens remaining','assessment: 60,000','same approved development task for four hours','No new funds','131,140 tokens already charged','No research or specification restart'])assert.ok(text.includes(expected),expected);
+  for(const expected of ['Full Katie continuation approval','165,581 additional tokens','105,581 tokens remaining','assessment: 60,000','same approved development task for four hours','No spending reset','131,140 tokens already charged','No research or specification restart'])assert.ok(text.includes(expected),expected);
   assert.equal(posts.length,0);
   await page.getByRole('button',{name:'Refresh status',exact:true}).click();assert.equal(posts.length,0);
   await button.click();await page.getByText('Continuation approved until',{exact:false}).waitFor();
@@ -40,7 +40,7 @@ test('same-task renewal displays remaining allowance and requires explicit exact
  }finally{await browser.close();}
 });
 
-test('owner resource amendment displays exact fixed-deadline resources and requires explicit exact-plan approval, surviving reload',{timeout:90000},async()=>{
+test('owner resource amendment displays exact cumulative resources and requires explicit exact-plan approval, surviving reload',{timeout:90000},async()=>{
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),args:bundledChromium.args,headless:true});
  try{
   const page=await browser.newPage(),errors=[],posts=[];page.on('pageerror',e=>errors.push(e.message));
@@ -60,17 +60,18 @@ test('owner resource amendment displays exact fixed-deadline resources and requi
    if(path.endsWith('/dashboard'))return reply({canRetry:false,qualification:{deadline:'2020-01-01',revoked_at:null},consent:null,execution:null});
    if(path.endsWith('/development'))return reply({task:null});
    assert.equal(path,'/api/benchmark/715/continuation');
-   return reply({continuation:{id:approved?'renewal':null,projectId,trialId:'preserved-trial',accountId:'preserved-account',approved,live:approved,deadline:fixedDeadline,planHash,sourceSnapshotHash:'d'.repeat(64),spentTokens:195941,plan:{kind:'development-renewal',resourceAmendment:true,allocationIncreaseTokens:50000,maxCalls:24,callsUsed:9,callsRemaining:15,unallocatedAccountTokens:3279,additionalTokenCap:150780,specificationTokens:0,developmentTokens:170000,developmentSpentTokens:79220,developmentRemainingTokens:90780,assessmentTokens:60000}}});
+   return reply({continuation:{id:approved?'renewal':null,projectId,trialId:'preserved-trial',accountId:'preserved-account',approved,live:approved,deadline:fixedDeadline,planHash,sourceSnapshotHash:'d'.repeat(64),spentTokens:195941,plan:{kind:'development-renewal',resourceAmendment:true,allocationIncreaseTokens:253279,maxCalls:24,callsUsed:9,callsRemaining:15,unallocatedAccountTokens:0,additionalTokenCap:354059,specificationTokens:0,developmentTokens:373279,developmentSpentTokens:79220,developmentRemainingTokens:294059,assessmentTokens:60000}}});
   });
   await page.goto('http://localhost/approval');
-  const button=page.getByRole('button',{name:'Approve this exact resource amendment before the fixed deadline'});await button.waitFor();
+  const button=page.getByRole('button',{name:'Approve 550,000 cumulative Full tokens, $10 total, and four hours'});await button.waitFor();
   const text=await page.locator('body').innerText();
-  for(const expected of ['150,780 additional tokens','90,780 tokens','170,000 tokens','call limit from 12 to 24','9 calls are already charged','15 more calls','Assessment retains 60,000','50,000 previously unused Full tokens','3,279 remain unallocated','there is no time extension','195,941 tokens already charged','One new execution only'])assert.ok(text.includes(expected),expected);
+  for(const expected of ['354,059 additional tokens','294,059 tokens','373,279 tokens','call limit from 12 to 24','9 calls are already charged','15 more calls','Assessment retains 60,000','Increase the Full token ceiling by 200,000','Four hours start when you approve','195,941 tokens already charged','One new execution only'])assert.ok(text.includes(expected),expected);
   assert.equal(posts.length,0);
   await page.getByRole('button',{name:'Refresh status',exact:true}).click();assert.equal(posts.length,0);
   await button.click();await page.getByText('Continuation approved until',{exact:false}).waitFor();
-  assert.deepEqual(posts,[{approve:true,authorization:'full-development-resource-amendment-fixed-deadline',projectId,planHash}]);
+  assert.deepEqual(posts,[{approve:true,authorization:'full-development-resource-amendment-550000tokens-10usd-4hours',projectId,planHash}]);
   await page.reload();await page.getByText('Continuation approved until',{exact:false}).waitFor();
   assert.equal(await button.count(),0);assert.equal(posts.length,1);assert.deepEqual(errors,[]);
  }finally{await browser.close();}
 });
+

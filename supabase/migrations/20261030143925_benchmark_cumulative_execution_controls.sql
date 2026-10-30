@@ -17,14 +17,14 @@ grant select on benchmark_dollar_exposures to service_role;
 insert into benchmark_dollar_exposures(call_id,account_id,reserved_microusd,exposure_microusd,price_per_million,basis,price_evidence)
 select c.id,c.account_id,28*greatest(c.reserved_tokens,coalesce(c.actual_tokens,0)),
  case when c.state='settled' and c.provider_namespace='openai-responses'
- and c.pricing_snapshot->>'status'='verified'
+ and c.pricing_snapshot->>'status'='verified' and c.pricing_snapshot->>'serviceTier'='default'
  and (c.pricing_snapshot->>'inputPerMillion')::numeric between 0.000001 and 28
  and (c.pricing_snapshot->>'outputPerMillion')::numeric between 0.000001 and 28
  and (c.provider_usage->>'input_tokens')::bigint+(c.provider_usage->>'output_tokens')::bigint=c.actual_tokens
  then (c.provider_usage->>'input_tokens')::bigint*(c.pricing_snapshot->>'inputPerMillion')::numeric
      +(c.provider_usage->>'output_tokens')::bigint*(c.pricing_snapshot->>'outputPerMillion')::numeric
  else 28*(case when c.state='settled' then coalesce(c.actual_tokens,c.reserved_tokens) else greatest(c.reserved_tokens,coalesce(c.actual_tokens,0)) end) end,
- 28,case when c.state='settled' and c.pricing_snapshot->>'status'='verified' and c.provider_usage is not null then 'historical-verified' else 'historical-provision' end,
+ 28,case when c.state='settled' and c.pricing_snapshot->>'status'='verified' and c.pricing_snapshot->>'serviceTier'='default' and c.provider_usage is not null then 'historical-verified' else 'historical-provision' end,
  jsonb_build_object('usage',c.provider_usage,'pricing',c.pricing_snapshot,'fallbackPerMillion',28)
 from benchmark_budget_calls c join benchmark_budget_accounts a on a.id=c.account_id where a.arm='full';
 
@@ -194,7 +194,7 @@ begin
  and p_release~'^[a-f0-9]{40}$' and p_release<>s.release_sha and p_runtime='provider-input-count-v1'
  and exists(select 1 from model_registry where provider_name='openai' and model_id='gpt-5.3-codex' and pricing_status='verified' and pricing_verified_at>now()-interval '24 hours' and pricing_verified_at<=now() and pricing_input_per_1m between 0.000001 and 14 and pricing_output_per_1m between 0.000001 and 14);
  eligible:=eligible and (select count(*) from benchmark_dollar_exposures where account_id=acct.id)=(select count(*) from benchmark_budget_calls where account_id=acct.id)
- and (select coalesce(sum(exposure_microusd),0) from benchmark_dollar_exposures where account_id=acct.id)+354059*14<=10000000;
+ and (select coalesce(sum(exposure_microusd),0) from benchmark_dollar_exposures where account_id=acct.id)+292823*14<=10000000;
  if eligible is distinct from true then if p_approve then raise exception 'Current amendment checkpoint unavailable';end if;return null;end if;
  snap:=jsonb_build_object('trial',(select to_jsonb(tr) from benchmark_three_arm_trials tr where id=b.trial_id),'qualification',to_jsonb(q),'binding',to_jsonb(b),'project',to_jsonb(p),'mission',to_jsonb(m),'assignment',to_jsonb(j),'task',to_jsonb(t),'account',to_jsonb(acct),
  'previousContinuation',to_jsonb(prior)-'source_snapshot','approval',to_jsonb(old),'oldGrant',to_jsonb(g)-'token_digest',
@@ -213,7 +213,7 @@ begin
  'sourceSnapshotHash',snapshot_hash,'releaseSha',p_release,'runtimeVersion',p_runtime,'durationSeconds',14400,'windowStartsAtApproval',true,
  'existingAccountTokenCap',350000,'cumulativeTokenCap',550000,'tokenCapIncrease',200000,'dollarCeilingMicrousd',10000000,'monetaryControl','atomic-exposure-v1','serviceTier','default','historicalExposureMicrousd',snap->'dollarExposure','existingArmUsdCents',1000,'newFunds',0,'additionalTokenCap',remaining+60000
  )||jsonb_build_object('remainingAccountTokens',354059,'unallocatedAccountTokens',0,
- 'specificationTokens',0,'developmentTokens',373279,'previousDevelopmentTokens',120000,'allocationIncreaseTokens',253279,'nativeAdditionalCallLimit',11,'developmentClosureCalls',4,'developmentClosureTokens',60000,
+ 'specificationTokens',0,'developmentTokens',373279,'previousDevelopmentTokens',120000,'allocationIncreaseTokens',253279,'nativeAdditionalCallLimit',11,'developmentClosureCalls',4,'developmentClosureTokens',60000,'qualifiedRemainingTokenEnvelope',292823,
  'developmentSpentTokens',m.actual_tokens,'developmentRemainingTokens',remaining,'assessmentTokens',60000,
  'previousMaxCalls',12,'maxCalls',24,'callsUsed',m.calls,'callsRemaining',24-m.calls,
  'repeatResearch',false,'regenerateSpecification',false,'frozenRequirements',true,'scopeApprovalPreserved',true,'taskApprovalPreserved',true,'productionPublication',false);
@@ -266,3 +266,17 @@ do $$ declare body text;begin
  if position('acc.cap_tokens>a.max_tokens' in body)=0 then raise exception 'Approval ceiling anchor absent';end if;
  body:=replace(body,'acc.cap_tokens>a.max_tokens','benchmark_effective_account_cap(acc.id)>a.max_tokens');execute body;
 end $$;
+-- Existing bounded plans remain valid; only the exact v5 owner proposal adds
+-- the extra cumulative token ceiling. No row or prior plan is rewritten.
+alter table benchmark_full_continuations drop constraint benchmark_continuation_bounded_plan;
+alter table benchmark_full_continuations add constraint benchmark_continuation_bounded_plan check((
+ (previous_continuation_id is null and additional_token_cap=270000) or
+ (previous_continuation_id is not null and additional_token_cap=240000 and coalesce(plan->>'kind','specification')='specification') or
+ (previous_continuation_id is not null and plan->>'kind'='development-renewal' and additional_token_cap between 1 and 180000 and additional_token_cap=(plan->>'developmentRemainingTokens')::integer+(plan->>'assessmentTokens')::integer) or
+ (previous_continuation_id is not null and plan->>'kind'='development-renewal' and plan->>'resourceAmendment'='true' and plan->>'version'='5' and additional_token_cap=354059 and plan->>'developmentRemainingTokens'='294059' and plan->>'assessmentTokens'='60000' and spent_at_approval=195941)
+) is true);
+alter table benchmark_full_continuations drop constraint benchmark_full_continuations_check1;
+alter table benchmark_full_continuations add constraint benchmark_full_continuations_check1 check((
+ spent_at_approval+additional_token_cap<=350000 or
+ (plan->>'version'='5' and plan->>'resourceAmendment'='true' and plan->>'cumulativeTokenCap'='550000' and spent_at_approval=195941 and additional_token_cap=354059)
+) is true);

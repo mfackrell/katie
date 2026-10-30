@@ -118,7 +118,8 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
   const call=randomUUID();const op=(await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,15000,$5) id',[review.job.id,review.job.lease,call,'openai:gpt-5.3-codex',routing])).rows[0].id;assert.ok(op);
   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[call,'synthetic-closure-'+call,{input_tokens:7000,output_tokens:2000,total_tokens:9000}]);
  }
- await assert.rejects(db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,1,true)',[review.job.id,review.job.lease,randomUUID(),'openai:gpt-5.3-codex']),/billable call ceiling/);
+ await db.query('savepoint call_limit');
+ await assert.rejects(db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,1,true)',[review.job.id,review.job.lease,randomUUID(),'openai:gpt-5.3-codex']),/billable call ceiling/);await db.query('rollback to savepoint call_limit');
 
  assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','completed','completed',$4) ok",[review.job.id,review.job.lease,{verdict:'pass'},'Synthetic independently reviewed fixture.'])).rows[0].ok,true);
  assert.equal((await db.query('select status from agent_missions where id=$1',[mission])).rows[0].status,'completed');

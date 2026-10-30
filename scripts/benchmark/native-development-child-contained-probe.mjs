@@ -35,7 +35,7 @@ const phases=expectedLogprobsDenial?['implementation']:['implementation','review
 const realistic=process.env.KATIE_NATIVE_PROBE_COMPLETION_BUDGET==='1';
 const phaseLimits={implementation:3,review:2,repair:3,'final-review':2};
 const firstCounts={implementation:7139,review:7221,repair:7150,'final-review':7208};
-let currentInput=0,used=0,held=0,nativeCalls=0,dollars=960680;
+let currentInput=0,used=0,held=0,nativeCalls=0,dollars=5486348;
 const token='synthetic-bridge-token-not-a-provider-credential';
 const calls=[],receipts=[],summaries=[],phaseRequests=new Map(),firstRequests=new Map();let phase='',forwarded=0,countedRequests=0;
 const db={rpc:async(name,args)=>{
