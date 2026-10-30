@@ -1,3 +1,4 @@
+import {qualifiedDevelopmentAmendmentRelease} from '@/lib/agents/development';
 import {NextRequest,NextResponse} from 'next/server';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import config from '@/config/benchmark-715-production-qualification.json';
@@ -12,6 +13,12 @@ async function authenticatedOwner(request:NextRequest){
 export async function GET(request:NextRequest){
  try{
   if(!await authenticatedOwner(request))return reply({error:'Sign in to Katie as the owner.'},401);
+  const release=await qualifiedDevelopmentAmendmentRelease();
+  if(release){
+   const amendment=await getSupabaseAdminClient().rpc('benchmark_dashboard_development_amendment',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_release:release,p_runtime:'provider-input-count-v1'});
+   if(amendment.error)return reply({error:'Resource amendment status is unavailable.'},409);
+   if(amendment.data)return reply({continuation:amendment.data});
+  }
   const {data,error}=await getSupabaseAdminClient().rpc('benchmark_dashboard_continuation',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID});
   if(error)return reply({error:'No live benchmark continuation approval is available.'},409);
   return reply({continuation:data});
@@ -21,6 +28,13 @@ export async function POST(request:NextRequest){
  try{
   if(!await authenticatedOwner(request)||request.headers.get('origin')!==config.productionUrl)return reply({error:'Approve from your authenticated Katie owner session.'},403);
   const body=await request.json();
+  if(body.authorization==='full-development-resource-amendment-fixed-deadline'){
+   if(body.approve!==true||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return reply({error:'Explicit approval of the displayed resource amendment is required.'},400);
+   const release=await qualifiedDevelopmentAmendmentRelease();if(!release)return reply({error:'Verified count-aware runtime is not available.'},409);
+   const {data,error}=await getSupabaseAdminClient().rpc('benchmark_dashboard_development_amendment',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:body.projectId,p_plan_hash:body.planHash,p_approve:true,p_release:release,p_runtime:'provider-input-count-v1'});
+   if(error)return reply({error:'The displayed amendment changed or expired. Refresh and review it before approving.'},409);
+   return reply({continuation:data});
+  }
   if(body.approve!==true||!['full-continuation-existing-budget-270000tokens-4hours','full-continuation-displayed-plan-existing-budget-4hours'].includes(body.authorization)||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return reply({error:'Explicit approval of the displayed continuation plan is required.'},400);
   const {data,error}=await getSupabaseAdminClient().rpc('benchmark_dashboard_continuation',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:body.projectId,p_plan_hash:body.planHash,p_approve:true});
   if(error)return reply({error:'The checkpoint, plan, deadline, or remaining allowance changed. Refresh and review the saved continuation plan.'},409);

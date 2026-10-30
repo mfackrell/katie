@@ -1,5 +1,5 @@
 export interface NativeDispatchPayload {
- paidSuccessorId?:string;pregrantRecoveryId?:string;developmentRenewalId?:string;startupRecoveryId?:string;productionRuntime?:string;continuationId?:string;
+ resourceAmendmentId?:string;paidSuccessorId?:string;pregrantRecoveryId?:string;developmentRenewalId?:string;startupRecoveryId?:string;productionRuntime?:string;continuationId?:string;
  taskId:string;trialId:string;approvalId:string;projectId:string;
  contractHash:string;benchmarkContractHash:string;baselineSha:string;expiresAt:number;
 }

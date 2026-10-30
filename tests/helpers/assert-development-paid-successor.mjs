@@ -1,3 +1,4 @@
+import {assertDevelopmentResourceAmendment} from './assert-development-resource-amendment.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 export async function assertDevelopmentPaidSuccessor(db,rival,{renewal,project,mission,task,grant,trial,receipt,reserved}){
@@ -50,6 +51,7 @@ export async function assertDevelopmentPaidSuccessor(db,rival,{renewal,project,m
  const nextLinked=(await db.query('select legacy_mission_call_id from benchmark_budget_calls where id=$1',[next])).rows[0].legacy_mission_call_id;
  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[nextLinked,'synthetic-paid-successor-call',{input_tokens:60,output_tokens:10,total_tokens:70}]);
  const after=await snapshot();assert.equal(after.mission.calls,before.mission.calls+1);assert.equal(after.mission.actual,before.mission.actual+70);assert.equal(after.mission.reserved,after.mission.actual);assert.equal(after.account.spent_tokens,before.account.spent_tokens+70);assert.deepEqual(after.approval,before.approval);
+ await assertDevelopmentResourceAmendment(db,rival,{renewal,project,mission,task,grant:newGrant,trial,receipt});
  for(const table of ['benchmark_development_paid_successors','benchmark_development_paid_successor_dispatches','benchmark_development_paid_successor_grants'])assert.equal((await db.query("select has_table_privilege('service_role',$1,'UPDATE,DELETE,TRUNCATE') mutable",[table])).rows[0].mutable,false);
  await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(prepare,args),/permission denied/);await assert.rejects(db.query(issue,issueArgs),/permission denied/);await db.query('reset role');await db.query('set role service_role');
 }
