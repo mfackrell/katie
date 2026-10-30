@@ -44,12 +44,12 @@ async function verifiedCronQwenOwner(actorId:string,chatId:string,requestId:stri
   if(workflowError||!workflow||workflow.status!=='paused'||!workflow.error?.includes('standalone_runpod_in_progress'))
     throw new StandaloneAccountingError('resume_denied','No paused Qwen workflow is eligible for automatic continuation.');
   const {data:attempts,error:attemptError}=await db.from('standalone_provider_attempts')
-    .select('id').eq('owner_id',workflow.owner_id).eq('request_id',requestId)
+    .select('id,provider_request_id').eq('owner_id',workflow.owner_id).eq('request_id',requestId)
     .eq('actor_id',actorId).eq('chat_id',chatId).eq('provider','runpod')
     .eq('model',QWEN_STILL_POLICY.model).eq('pricing_version',QWEN_STILL_POLICY.version)
-    .eq('state','dispatched').not('provider_request_id','is',null)
-    .is('response_checkpoint',null).limit(1);
-  if(attemptError||!attempts?.length)
+    .eq('state','dispatched').is('response_checkpoint',null).limit(10);
+  if(attemptError||!attempts?.some((attempt: {provider_request_id?:string|null})=>
+      /^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id??'')))
     throw new StandaloneAccountingError('resume_denied','No accepted, uncompleted Qwen job is eligible for automatic continuation.');
   return workflow.owner_id;
 }
