@@ -37,14 +37,24 @@ function authorized(request: NextRequest): boolean {
 export async function POST(request: NextRequest) {
   if (!authorized(request)) return new NextResponse(null, {status:404});
   const db = getSupabaseAdminClient();
-  const {data:original,error} = await db.from("standalone_provider_attempts")
-    .select("owner_id,actor_id,chat_id,prepared_payload")
-    .eq("request_id",SOURCE_REQUEST).eq("provider","venice")
-    .maybeSingle<{owner_id:string;actor_id:string;chat_id:string;prepared_payload:{
+  // The ledger table is intentionally inaccessible to direct service-role SELECT.
+  // Resolve the original row exclusively through the pre-existing, owner-scoped
+  // SECURITY DEFINER ledger RPC. Never widen table privileges for this benchmark.
+  const ownerId=request.headers.get("x-katie-test-owner")??"";
+  const attemptId=request.headers.get("x-katie-test-attempt")??"";
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(ownerId)||!uuid.test(attemptId)) return new NextResponse(null,{status:404});
+  type SavedAttempt={id:string;owner_id:string;request_id:string;provider:string;
+    actor_id:string;chat_id:string;prepared_payload:{
       sourceHash?:string;
       payload?:{messages?:Array<{content?:Array<{image_url?:{url?:string}}>}>};
-    }}>();
-  if (error || !original) return NextResponse.json({error:"Saved source not found"},{status:404});
+    }};
+  const {data:details,error}=await db.rpc<{attempts:SavedAttempt[]}>(
+    "standalone_attempt_details",{p_owner:ownerId,p_attempt:attemptId});
+  const original=details?.attempts?.[0];
+  if (error||!original||original.owner_id!==ownerId||original.id!==attemptId||
+      original.request_id!==SOURCE_REQUEST||original.provider!=="venice")
+    return NextResponse.json({error:"Saved source not found"},{status:404});
   const image=original.prepared_payload?.payload?.messages?.[0]?.content?.[1]?.image_url?.url;
   if (typeof image !== "string" ||
       !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(image) ||
