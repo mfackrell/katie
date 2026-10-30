@@ -50,7 +50,7 @@ async function advance(p: Project) {
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: ['block','input'].includes(action) ? {...data, impediment: data.impediment ?? projectImpediment(p,String(data.detail??'Required evidence unavailable'))} : data });
     const runs = await projectRuns(p.id);
     const game=p.profile==='game';
-    let continuation:{id:string;plan_hash:string;deadline:string;plan:{kind?:string;developmentRemainingTokens?:number;developmentSpentTokens?:number;specificationTokens:number;developmentTokens:number;assessmentTokens:number;additionalTokenCap:number}}|null=null;
+    let continuation:{id:string;plan_hash:string;deadline:string;plan:{version?:number;capacityRenewal?:boolean;cumulativeTokenCap?:number;kind?:string;developmentRemainingTokens?:number;developmentSpentTokens?:number;specificationTokens:number;developmentTokens:number;assessmentTokens:number;additionalTokenCap:number}}|null=null;
     if(game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
       continuation=await projectRpc('benchmark_active_full_continuation',{p_project:p.id});
     }
@@ -310,7 +310,7 @@ async function advance(p: Project) {
       const plan=continuationPlan;
       const renewal=plan?.kind==='development-renewal';
       const valid=plan&&(renewal
-        ? p.phase==='assessment'&&plan.specificationTokens===0&&[120000,170000,373279].includes(plan.developmentTokens)&&plan.assessmentTokens===60000
+        ? p.phase==='assessment'&&plan.specificationTokens===0&&([120000,170000,373279].includes(plan.developmentTokens)||(plan.version===6&&plan.capacityRenewal===true&&plan.developmentTokens===448279&&plan.cumulativeTokenCap===625000))&&plan.assessmentTokens===60000
           &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
           &&Number(plan.developmentRemainingTokens)>0&&Number(plan.developmentSpentTokens)>=0
           &&Number(plan.developmentRemainingTokens)+Number(plan.developmentSpentTokens)===plan.developmentTokens

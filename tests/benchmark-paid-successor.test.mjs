@@ -27,8 +27,8 @@ test('uncertain accepted dispatch is not automatically submitted twice',async()=
 });
 test('host recovery checks record/release and uses only recovery grant endpoint',async()=>{
  const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
- const start=host.indexOf('let ownerApprovedSuccessor=false;'),end=host.indexOf('const clientToken=',start);
- const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','NATIVE_ADMISSION_DIAGNOSTICS_VERSION',host.slice(start,end)+'return {grantId,executionEpoch,ownerApprovedSuccessor};');
+ const start=host.indexOf('let ownerApprovedSuccessor='),end=host.indexOf('const clientToken=',start);
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','NATIVE_ADMISSION_DIAGNOSTICS_VERSION','const continuation=null;'+host.slice(start,end)+'return {grantId,executionEpoch,ownerApprovedSuccessor};');
  const proof={paidSuccessorId:'recovery',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task'};
  for(const scenario of ['valid','consented','consent-error','release','disabled','marker']){
   const wrong=scenario==='release';

@@ -526,6 +526,12 @@ export async function qualifiedDevelopmentAmendmentRelease(){
  return release;
 }
 
+export async function qualifiedCapacityRenewalRelease(){
+ const release=await qualifiedAmendmentSuccessorRelease();if(!release)return null;
+ const {data}=await github().repos.getContent({owner:'mfackrell',repo:'katie',path:'scripts/benchmark/native-development-host.mjs',ref:release});
+ return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('const cumulativeCap=continuation.plan.version===6?625000:550000')?release:null;
+}
+
 // Owner consent binds a single terminal run; this never approves or spends by itself.
 export async function qualifiedAmendmentSuccessorRelease(){
  const release=await qualifiedDevelopmentAmendmentRelease();if(!release)return null;
@@ -534,12 +540,12 @@ export async function qualifiedAmendmentSuccessorRelease(){
 }
 export async function verifiedAmendmentSuccessorRun(projectId:string){
  const db=getSupabaseAdminClient();
- const {data:am}=await db.from('benchmark_development_resource_amendments').select('id,task_id,release_sha').eq('project_id',projectId).single<{id:string;task_id:string;release_sha:string}>();
+ const {data:am}=await db.from('benchmark_development_resource_amendments').select('id,task_id,release_sha').eq('project_id',projectId).order('created_at',{ascending:false}).limit(1).maybeSingle<{id:string;task_id:string;release_sha:string}>();
  if(!am)throw Error('Amendment missing');
  const task=await readTask(am.task_id),saved=receiptSchema.parse(task.external.receipt),client=github(),binding=await repository(task);
  const c=await getDevelopmentProjectContext(task.id);if(!c||c.projectId!==projectId||task.external.resourceAmendmentId!==am.id)throw Error('Task binding differs');
  const {data:run}=await client.actions.getWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:saved.run_id});
- if(run.status!=='completed'||run.conclusion!=='failure'||run.event!=='workflow_dispatch'||run.path!=='.github/workflows/autonomous-development.yml'||run.head_sha!==am.release_sha||run.head_branch!=='main'||run.repository.full_name!==binding.fullName||run.head_repository?.full_name!==binding.fullName)throw Error('Terminal run differs');
+ if(run.status!=='completed'||run.conclusion!=='failure'||run.event!=='workflow_dispatch'||run.path!=='.github/workflows/autonomous-development.yml'||run.head_sha!==(task.external.paidSuccessorRelease??am.release_sha)||run.head_branch!=='main'||run.repository.full_name!==binding.fullName||run.head_repository?.full_name!==binding.fullName)throw Error('Terminal run differs');
  const artifacts=await client.actions.listWorkflowRunArtifacts({owner:binding.owner,repo:binding.repo,run_id:run.id,per_page:20});
  const artifact=artifacts.data.artifacts.find(x=>x.name==='agent-completion'&&!x.expired&&x.size_in_bytes<=1_000_000);if(!artifact)throw Error('Terminal receipt missing');
  const downloaded=await client.actions.downloadArtifact({owner:binding.owner,repo:binding.repo,artifact_id:artifact.id,archive_format:'zip'});

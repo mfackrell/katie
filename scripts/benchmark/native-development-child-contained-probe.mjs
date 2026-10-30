@@ -38,10 +38,13 @@ const probePath='app/project-pilots/take-eleven/qualification-probe.mjs';
 const testProbePath='tests/game-development/take-eleven.test.mjs';
 const outsideProbePath='app/project-pilots/outside-qualification-probe.mjs';
 if(sourceWrite){assert.equal(baseline,'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319');writeFileSync(join(root,'AGENT_REQUEST.md'),readFileSync('tests/fixtures/take-eleven-frozen-development-request.md','utf8'));}
+const capacityRenewal=process.env.KATIE_NATIVE_PROBE_CAPACITY_RENEWAL==='1';
 const realistic=process.env.KATIE_NATIVE_PROBE_COMPLETION_BUDGET==='1';
-const phaseLimits={implementation:3,review:2,repair:3,'final-review':2};
+const expectedCalls=capacityRenewal?11:10;
+const expectedTokens=capacityRenewal?192913:172823;
+const phaseLimits={implementation:capacityRenewal?4:3,review:2,repair:3,'final-review':2};
 const firstCounts={implementation:7139,review:7221,repair:7150,'final-review':7208};
-let currentInput=0,used=0,held=0,nativeCalls=0,dollars=5486348;
+let currentInput=0,used=0,held=0,nativeCalls=0,dollars=capacityRenewal?5657365:5486348;
 const token='synthetic-bridge-token-not-a-provider-credential';
 const completionCountRequests=[];
 const calls=[],receipts=[],summaries=[],phaseRequests=new Map(),firstRequests=new Map();let phase='',forwarded=0,countedRequests=0;
@@ -50,7 +53,7 @@ const db={rpc:async(name,args)=>{
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
  if(name==='benchmark_full_native_reserve'){
   if(!expectedLogprobsDenial)assert.ok(args.p_tokens<=40780,'Authoritative fixture count must fit the remaining production capacity');
-  if(realistic){assert.ok(nativeCalls<11);assert.ok(used+held+args.p_tokens<=234059);assert.ok(dollars+args.p_tokens*14<=10000000);held=args.p_tokens;nativeCalls++;}
+  if(realistic){assert.ok(nativeCalls<11);assert.ok(used+held+args.p_tokens<=(capacityRenewal?217105:234059));assert.ok(dollars+args.p_tokens*14<=10000000);held=args.p_tokens;nativeCalls++;}
   return {data:'synthetic-operation-'+calls.length,error:null};
  }
  throw Error('UNEXPECTED_PROBE_RPC:'+name);
@@ -100,7 +103,7 @@ const upstream=async request=>{
 // Synthetic count result exercises the actual SDK count-before-reserve path;
 // the separate fixed-provider count job qualifies real model counting support.
 upstream.countInputTokens=async body=>{countedRequests++;if(realistic)completionCountRequests.push({phase,body});assert.ok(Object.isFrozen(body));if(!firstRequests.has(phase))firstRequests.set(phase,body);currentInput=realistic?Math.ceil(((phaseRequests.get(phase)??0)===0?firstCounts[phase]:12795)*1.25):7000;return {inputTokens:currentInput,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
-const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>{receipts.push(r);if(realistic){used+=r.actualTokens;held=0;dollars+=r.actualTokens*14;}},clientToken:token,fullMission:true,requireInputCount:true});
+const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>{receipts.push(r);if(realistic){used+=r.actualTokens;held=0;dollars+=capacityRenewal?Math.ceil(r.usage.input_tokens*1.75+r.usage.output_tokens*14):r.actualTokens*14;}},clientToken:token,fullMission:true,requireInputCount:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
  try{const b=JSON.parse(raw);const nontextPaths=[];
@@ -171,12 +174,12 @@ try{
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
  }
  if(!expectedLogprobsDenial){
- assert.equal(forwarded,realistic?10:8);assert.equal(receipts.length,realistic?10:8);assert.equal(summaries.length,realistic?10:8);
- assert.equal(countedRequests,realistic?10:8);
- assert.deepEqual([...phaseRequests.values()],realistic?[3,2,3,2]:[2,2,2,2]);
- assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,realistic?10:8);
- assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),realistic?172823:40);
- if(realistic){assert.ok(process.env.RUNNER_TEMP);writeFileSync(join(process.env.RUNNER_TEMP,'native-sdk-completion-count-requests.json'),JSON.stringify(completionCountRequests),{mode:0o600});assert.equal(used,172823);assert.ok(used+60000<=294059);assert.ok(195941+used+60000+60000<=550000);assert.ok(dollars+(60000+60000)*14<=10000000);console.log('COMPLETION_SDK_ENVELOPE_PASS='+JSON.stringify({nativeCalls,developmentClosureCalls:4,developmentClosureTokens:60000,assessmentTokens:60000,used,dollars}));}
+ assert.equal(forwarded,realistic?expectedCalls:8);assert.equal(receipts.length,realistic?expectedCalls:8);assert.equal(summaries.length,realistic?expectedCalls:8);
+ assert.equal(countedRequests,realistic?expectedCalls:8);
+ assert.deepEqual([...phaseRequests.values()],realistic?[capacityRenewal?4:3,2,3,2]:[2,2,2,2]);
+ assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,realistic?expectedCalls:8);
+ assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),realistic?expectedTokens:40);
+ if(realistic){assert.ok(process.env.RUNNER_TEMP);writeFileSync(join(process.env.RUNNER_TEMP,'native-sdk-completion-count-requests.json'),JSON.stringify(completionCountRequests),{mode:0o600});assert.equal(used,expectedTokens);assert.ok(used+60000<=(capacityRenewal?277105:294059));assert.ok((capacityRenewal?287895:195941)+used+60000+60000<=(capacityRenewal?625000:550000));assert.ok(dollars+(60000+60000)*14<=10000000);console.log('COMPLETION_SDK_ENVELOPE_PASS='+JSON.stringify({nativeCalls,developmentClosureCalls:4,developmentClosureTokens:60000,assessmentTokens:60000,used,dollars}));}
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
  if(process.env.KATIE_NATIVE_PROBE_CAPTURE_FIRST_REQUESTS==='1'){
   assert.ok(process.env.RUNNER_TEMP);assert.equal(firstRequests.size,4);

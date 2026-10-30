@@ -94,9 +94,10 @@ const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.
 const pricing=await readVerifiedBenchmarkPricing(signal=>db.from('model_registry')
  .select('pricing_input_per_1m,pricing_output_per_1m,pricing_status')
  .eq('provider_name','openai').eq('model_id',approval.model).abortSignal(signal).maybeSingle());
-if(continuation?.plan?.version===5){
+if([5,6].includes(continuation?.plan?.version)){
+ const cumulativeCap=continuation.plan.version===6?625000:550000;
  const control=await db.rpc('benchmark_full_monetary_control',{p_account:account.id,p_continuation:continuation.id});
- if(control.error||control.data?.version!=='atomic-exposure-v1'||control.data.cumulativeTokenCap!==550000||control.data.dollarCeilingMicrousd!==10000000||Number(approval.max_tokens)!==550000)denied('atomic cumulative monetary control unavailable');
+ if(control.error||control.data?.version!=='atomic-exposure-v1'||control.data.cumulativeTokenCap!==cumulativeCap||control.data.dollarCeilingMicrousd!==10000000||Number(approval.max_tokens)!==cumulativeCap)denied('atomic cumulative monetary control unavailable');
 }else assertBenchmarkDollarCeiling({
  armUsdCents:productionRuntime?1000:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
  priceCeilingMicrosPerMillion:productionRuntime?28000000:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
@@ -140,7 +141,7 @@ if(proof.pregrantRecoveryId){
  const recovery=await readOne('benchmark_development_pregrant_recoveries','id',proof.pregrantRecoveryId);
  if(recovery.renewal_id!==proof.developmentRenewalId||recovery.release_sha!==process.env.GITHUB_SHA||task.external?.pregrantRecoveryId!==recovery.id)denied('pregrant recovery identity or release mismatch');
 }
-let ownerApprovedSuccessor=false;
+let ownerApprovedSuccessor=continuation?.plan?.capacityRenewal===true;
 if(proof.paidSuccessorId){
  if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId||proof.pregrantRecoveryId||process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS!=='enabled'||NATIVE_ADMISSION_DIAGNOSTICS_VERSION!=='bounded-schema-v1')denied('instrumented paid successor transport required');
  const successor=await readOne('benchmark_development_paid_successors','id',proof.paidSuccessorId);
@@ -314,20 +315,42 @@ try{
  },3000);
  await safelyRunPhase('implementation');
  let candidateHead=commitCandidate('native: checkpoint approved implementation');
- const first=await safelyRunPhase('review');
- if(first.verdict!=='pass'){
-  // One bounded repair only. Every retry/request remains metered; any uncertain
-  // provider call holds capacity rather than being silently refunded.
-  await safelyRunPhase('repair',first.findings);
+ // Run the existing trusted deterministic/build/browser verifier before the
+ // one paid correction. Candidate commands remain inside its credential-free sandbox.
+ const verifyCandidate=async()=>{
+  const output=join(root,'project-acceptance.json');
+  const failure=join(root,'project-verification-failure.json');
+  rmSync(output,{force:true});rmSync(failure,{force:true});
+  const verifier=spawn(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-ci.mjs'),'--request',requestFile,'--output',output],{
+   cwd:boundary.root,timeout:2100000,killSignal:'SIGKILL',env:{PATH:process.env.PATH||'',RUNNER_TEMP:process.env.RUNNER_TEMP,CI:'true'},stdio:['ignore','pipe','pipe']});
+  child=verifier;let log='';
+  for(const stream of [verifier.stdout,verifier.stderr])stream.on('data',x=>{log=(log+x).slice(-16000);});
+  const code=await new Promise((resolve,reject)=>{verifier.once('error',reject);verifier.once('close',resolve);});child=null;
+  const result={passed:code===0,detail:sanitizeEvidence(log,diagnosticSecrets,12000)};
+  diagnostics.verification??=[];diagnostics.verification.push({head:candidateHead,...result});saveDiagnostics();
+  if(gatewayFailure||code===null)denied('deterministic verification interrupted');
+  try{if(JSON.parse(readFileSync(failure,'utf8')).kind==='infrastructure')denied('deterministic verification infrastructure failed before candidate tests');}catch(error){if(error.message?.startsWith('NATIVE_HOST_DENIED'))throw error;}
+  return result;
+ };
+ const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true;
+ let verification=qualifiedLifecycle?await verifyCandidate():{passed:true,detail:''};
+ const first=await safelyRunPhase('review',qualifiedLifecycle?'Trusted deterministic verification: '+JSON.stringify(verification):'');
+ let repairPerformed=false;
+ if(first.verdict!=='pass'||!verification.passed){
+  await safelyRunPhase('repair',first.findings+'\nTrusted deterministic verification: '+JSON.stringify(verification));
+  repairPerformed=true;
   candidateHead=commitCandidate('native: checkpoint bounded repair');
-  const final=await safelyRunPhase('final-review');
+  if(qualifiedLifecycle){verification=await verifyCandidate();if(!verification.passed)denied('bounded repair failed deterministic acceptance');}
+ }
+ if(repairPerformed||qualifiedLifecycle){
+  const final=await safelyRunPhase('final-review',qualifiedLifecycle?'Trusted deterministic verification: '+JSON.stringify(verification):'');
   if(final.verdict!=='pass')denied('independent final review requires changes');
- } 
+ }
  if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
   denied('trusted evidence destination unavailable');
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),
   approvalId:proof.approvalId,projectId:proof.projectId,review:decisions[0],
-  finalReview:decisions.at(-1),repairPerformed:decisions.length===2,
+  finalReview:decisions.at(-1),repairPerformed,
   metered:true,completed:true,reviewedHeadSha:candidateHead})+'\n',{mode:0o600,flag:'wx'});
  diagnostics.completed=true;
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');

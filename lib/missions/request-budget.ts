@@ -7,7 +7,7 @@ export const CONTINUATION_SPECIFICATION_TOKENS={compose:30000,review:18000,revis
 function specificationStages(claim:Claim){return (claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget?.version===2?CONTINUATION_SPECIFICATION_TOKENS:SPECIFICATION_STAGE_TOKENS;}
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
 export function missionInputLimit(claim:Claim):number {
- const evidence=claim.mission.project_evidence as {projectProfile?:string;savedSpecificationCheckpoint?:unknown;specificationRecovery?:unknown}|null;
+ const evidence=claim.mission.project_evidence as {projectProfile?:string;gameContract?:unknown;gameRules?:unknown;savedSpecificationCheckpoint?:unknown;specificationRecovery?:unknown}|null;
  const finalStage=['compose','review','revise'].includes(claim.job.role);
  // Immutable source excerpts, a full candidate and independently scoped live
  // traces must fit together. This changes input capacity, not token authority:
@@ -15,7 +15,10 @@ export function missionInputLimit(claim:Claim):number {
  const repositoryAudit=Boolean(claim.mission.repository_id)&&readOnlyRepositoryObjective(claim.mission.objective);
  const operationalAudit=/\baudit\b/i.test(claim.mission.objective)&&/\b(?:workflow|operational|assignment histor|execution record)/i.test(claim.mission.objective);
  const recoveredSpecificationStage=['review','revise'].includes(claim.job.role)&&claim.mission.project_kind==='specification'&&Boolean(evidence?.savedSpecificationCheckpoint&&evidence?.specificationRecovery);
- return finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||recoveredSpecificationStage||repositoryAudit||operationalAudit)?96000:48000;
+ // A complete generated game completion report must fit its independent review.
+ // Keep compose output bounds unchanged; native token/$ admission is authoritative.
+ const gameCompletionReview=claim.job.role==='review'&&Boolean(evidence?.gameContract||evidence?.gameRules)&&['development','assessment'].includes(claim.mission.project_kind??'');
+ return gameCompletionReview||finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||recoveredSpecificationStage||repositoryAudit||operationalAudit)?96000:48000;
 }
 /** Size the first audited deliverable for its full evidence-backed scope. A
  * known short word cap stays small; an unbounded audit must not buy a predictably
@@ -109,3 +112,4 @@ export function missionAttemptTimeout(deadline:number,outputTokens:number,now=Da
  // This does NOT extend the caller's overall runtime, lease, or project deadline.
  return Math.min(outputTokens>=12000?180_000:90_000,deadline-now-5000);
 }
+

@@ -170,6 +170,7 @@ jobs:
       - name: Actual pinned SDK realistic cumulative completion envelope (no inference)
         env:
           KATIE_NATIVE_PROBE_COMPLETION_BUDGET: '1'
+          KATIE_NATIVE_PROBE_CAPACITY_RENEWAL: ${{ github.head_ref == 'fix/take-eleven-capacity-renewal' && '1' || '0' }}
           KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
         run: node scripts/benchmark/native-development-child-contained-probe.mjs
 
@@ -182,7 +183,7 @@ jobs:
           retention-days: 1
   completion-input-count:
     needs: native-gateway
-    if: github.head_ref == 'fix/full-completion-execution-controls' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON('["fix/full-completion-execution-controls","fix/take-eleven-capacity-renewal"]'), github.head_ref) && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 4
     permissions:
@@ -199,5 +200,11 @@ jobs:
       - name: Count frozen actual SDK request contexts only; never generate
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          KATIE_NATIVE_PROBE_CAPACITY_RENEWAL: ${{ github.head_ref == 'fix/take-eleven-capacity-renewal' && '1' || '0' }}
         run: node scripts/benchmark/completion-input-count-probe.mjs
 
+      - name: Count actual closure and assessment router, compose and review bodies (no inference)
+        if: github.head_ref == 'fix/take-eleven-capacity-renewal'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/closure-input-count-probe.mjs
