@@ -9,7 +9,7 @@ import {
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 const cookieOptions=(request:NextRequest,maxAge:number)=>({
-  httpOnly:true,secure:request.nextUrl.protocol==='https:',
+  httpOnly:true,secure:process.env.NODE_ENV==='production'||request.nextUrl.protocol==='https:',
   sameSite:'strict' as const,path:'/',maxAge
 });
 const noStore={'Cache-Control':'no-store, private'};
@@ -23,7 +23,9 @@ export async function POST(request:NextRequest){
   const key=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if(!url||!key) return NextResponse.json({error:'Katie session service is unavailable.'},{status:503,headers:noStore});
   try{
-    const presented=request.headers.get('authorization');
+    // Explicit owner sign-out must revoke the owner cookie rather than silently reuse it.
+    const resetToGuest=request.headers.get('x-katie-guest-reset')==='1';
+    const presented=resetToGuest?null:request.headers.get('authorization');
     if(presented){
       const owner=await authenticateStandalonePrincipal(request);
       // An anonymous browser Bearer token is not elevated to administrative identity.
@@ -33,14 +35,16 @@ export async function POST(request:NextRequest){
       return response;
     }
     // A valid cookie is enough; no second anonymous signup is ever made on reload.
-    try{
-      const existing=await authenticateStandalonePrincipal(request);
-      return NextResponse.json({ready:true,guest:existing.isAnonymous},{headers:noStore});
-    }catch{/* Expired or missing access token; try the rotating refresh token. */}
+    if(!resetToGuest){
+      try{
+        const existing=await authenticateStandalonePrincipal(request);
+        return NextResponse.json({ready:true,guest:existing.isAnonymous},{headers:noStore});
+      }catch{/* Expired or missing access token; try the rotating refresh token. */}
+    }
     const client=createClient(url,key,{
       auth:{autoRefreshToken:false,persistSession:false,detectSessionInUrl:false}
     });
-    const refresh=cookieRefreshToken(request);
+    const refresh=resetToGuest?null:cookieRefreshToken(request);
     const result=refresh?await client.auth.refreshSession({refresh_token:refresh})
       :await client.auth.signInAnonymously();
     if(result.error||!result.data.session||!result.data.user){
