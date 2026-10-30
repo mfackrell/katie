@@ -123,6 +123,7 @@ type ChatMetadataChunk = {
   provider: string;
   explainer?: SelectionExplainer;
   resetText?: boolean;
+  review?: { mode: "always"; status: string; detail?: string };
   collaborationEvent?: CollaborationUiEvent;
   collaboration?: CollaborationUiMetadata;
   providerFailover?: {
@@ -139,6 +140,13 @@ type ChatMetadataChunk = {
   replayed?: boolean;
   requestId?: string;
 };
+
+function reviewStatusMessage(review: NonNullable<ChatMetadataChunk["review"]>): string {
+  if (review.status === "in_progress") {
+    return review.detail?.trim() || "Katie is independently reviewing the answer…";
+  }
+  return "Independent review finished. Preparing the response…";
+}
 
 const IMAGE_OBSERVATION_STAGES = new Set([
   'Analyzing image with Qwen…', 'Qwen image analysis queued…', 'Qwen image analysis complete',
@@ -1954,6 +1962,13 @@ export function ChatPanel({
           }
           if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
 
+          // Required review emits metadata without modelId/provider. Render its
+          // progress instead of accidentally clearing the active model state.
+          if (chunk.type === "metadata" && chunk.review) {
+            setStatusMessage(reviewStatusMessage(chunk.review));
+            continue;
+          }
+
           if (chunk.type === 'metadata' && typeof chunk.imageObservation === 'string') {
             if (IMAGE_OBSERVATION_STAGES.has(chunk.imageObservation)) {
               setStatusMessage(chunk.imageObservation);
@@ -2058,7 +2073,9 @@ export function ChatPanel({
 
         if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message, trailingChunk.messageId);
 
-        if (trailingChunk.type === 'metadata' && typeof trailingChunk.imageObservation === 'string') {
+        if (trailingChunk.type === "metadata" && trailingChunk.review) {
+          setStatusMessage(reviewStatusMessage(trailingChunk.review));
+        } else if (trailingChunk.type === 'metadata' && typeof trailingChunk.imageObservation === 'string') {
           if (IMAGE_OBSERVATION_STAGES.has(trailingChunk.imageObservation)) {
             setStatusMessage(trailingChunk.imageObservation);
             setImageObservationStages(current => appendImageObservationStage(current, trailingChunk.imageObservation!));
