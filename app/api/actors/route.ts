@@ -238,6 +238,24 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
+
+    // Review mode is actor-scoped and persistent. Verify that this browser
+    // actually owns the target actor before accepting any actor PATCH.
+    let principal: Awaited<ReturnType<typeof authenticateStandalonePrincipal>>;
+    try { principal = await authenticateStandalonePrincipal(request); }
+    catch { return NextResponse.json({ error: "Session required." }, { status: 403 }); }
+    const authorizationDb = getSupabaseAdminClient();
+    if (principal.isAnonymous) {
+      const { data, error } = await authorizationDb.rpc<string>("standalone_guest_workspace", { p_owner: principal.id });
+      if (error || data !== actorId) return NextResponse.json({ error: "Actor access denied." }, { status: 403 });
+    } else if (principal.id === process.env.KATIE_OWNER_AUTH_USER_ID) {
+      const { data, error } = await authorizationDb.rpc<string[]>("standalone_guest_actor_ids", {});
+      if (error) return NextResponse.json({ error: "Actor isolation unavailable." }, { status: 503 });
+      if (data?.includes(actorId)) return NextResponse.json({ error: "Actor access denied." }, { status: 403 });
+    } else {
+      return NextResponse.json({ error: "Actor access denied." }, { status: 403 });
+    }
+
     const raw = await request.json();
     if(raw?.calibration === "apply") return calibrationApply(actorId,String(raw.hash||""),raw.approved,raw.groups,raw.proof);
     const { purpose, reviewMode } = updateActorSchema.parse(raw);
