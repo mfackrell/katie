@@ -114,11 +114,15 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
     const claimed=await ledger.claimDispatch(context.userId,attempt.id);
     if(!claimed)throw annotate(failure('dispatch_conflict','Qwen image analysis cannot be submitted again. Refresh the saved job state.'));
     deps.onStatus?.('Analyzing image with Qwen…');
+    let submissionStage:'http_dispatch'|'http_response'|'response_parse'|'job_identity'|'job_registration'='http_dispatch';
+    let submissionHttpStatus:number|null=null;
     try{
       const submitted=await fetchFn('https://api.runpod.ai'+policy.endpoint,{
         method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json',Accept:'application/json'},
         cache:'no-store',redirect:'error',signal:AbortSignal.timeout(25_000),body:prepared.serializedBody,
       });
+      submissionStage='http_response';
+      submissionHttpStatus=submitted.status;
       if(!submitted.ok){
         if([400,401,403,404,422,429].includes(submitted.status)){
           await submitted.body?.cancel();
@@ -127,13 +131,24 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
         }
         throw new Error('RunPod still-image submission failed (HTTP '+submitted.status+').');
       }
+      submissionStage='response_parse';
       job=await submitted.json() as Job;
+      submissionStage='job_identity';
       if(typeof job.id!=='string'||!JOB_ID.test(job.id))throw new Error('RunPod still-image submission returned no valid job identity.');
       jobId=job.id;
       // Persist acceptance before consulting the browser's cancellation signal.
+      submissionStage='job_registration';
       await ledger.recordProviderIdentifiers(context.userId,attempt.id,jobId,null);
     }catch(error){
       if(error&&typeof error==='object'&&'qwenRejected' in error)throw error;
+      // Never log request bodies, image bytes, credentials, or raw provider responses.
+      // A known job ID must be retained even when its database registration failed.
+      console.error('[RunPod Qwen] submission or job registration failed',{
+        requestId:context.requestId,attemptId:attempt.id,stage:submissionStage,
+        httpStatus:submissionHttpStatus,jobIdKnown:Boolean(jobId),
+        errorName:error instanceof Error?error.name:'NonErrorThrown',
+        errorCode:error&&typeof error==='object'&&'code' in error&&typeof error.code==='string'?error.code:null,
+      });
       await ledger.markUncertain(context.userId,attempt.id,'Qwen submission outcome or job registration is unknown; fixed infrastructure exposure remains held.').catch(()=>{});
       if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))throw new Error('Qwen outcome is unknown; the full reserved exposure is authorized and retained. This attempt will not be resent; separate image escalation is required.');
       throw annotate(failure('outcome_unknown','Qwen submission outcome is unknown. The full reservation is retained and this attempt will not be resubmitted.'));
