@@ -70,3 +70,18 @@ test('queued Qwen remains pending and recovers the saved answer without manual c
  assert.equal(result[0].content,'Actual visual description delivered');
  assert.equal(statusChecks,2);
 });
+
+
+test('durable paused workflow stops mobile recovery without polling again or inventing an answer', async () => {
+ let calls=0;
+ const poll=polling(async (url) => {
+   calls++;
+   assert.match(String(url), /\/api\/chat\/status/);
+   return {ok:true,json:async()=>({status:'paused',error:'Saved request paused for accounting review. Open Status / Usage to continue.'})};
+ });
+ await assert.rejects(
+   poll('chat',{requestId:'saved-uncertain',startedAt:new Date().toISOString(),content:'original request'}),
+   error=>error.name==='PausedChatError'&&error.message.includes('Status / Usage'),
+ );
+ assert.equal(calls,1,'one status read ends the pending spinner; no POST or request replay');
+});
