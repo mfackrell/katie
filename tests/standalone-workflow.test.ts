@@ -46,6 +46,22 @@ test('durable pause and fresh resume replay immutable inputs and execution conte
  const resumed=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);assert.match(await resumed.text(),/completed/);assert.equal(stored.status,'completed');assert.equal(loads,1);assert.equal(checkpoints,1);
  const replay=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);assert.match(await replay.text(),/completed/);assert.equal(executions,2,'completed request does not reexecute');
 });
+test('cached token count absence is durable across approved workflow resume',async()=>{
+ let countCalls=0,run=0;
+ const execute=async()=>{
+   run++;
+   const unsupported=await cachedWorkflowValue('context-count:chat:0:saved-request-hash',async()=>{countCalls++;return null;});
+   assert.equal(unsupported,null);
+   return new Response(run===1?'{"type":"accounting_pause","code":"standalone_approval_required"}\n':'{"type":"content","text":"confirmed"}\n',
+     {headers:{'content-type':'application/x-ndjson'}});
+ };
+ await executeStandaloneWorkflow(request(),payload,execute);
+ assert.equal(stored.status,'paused');assert.equal(countCalls,1);
+ const resumed=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);
+ assert.match(await resumed.text(),/confirmed/);
+ assert.equal(stored.status,'completed');assert.equal(countCalls,1,'resume reuses the saved unavailability decision');
+ assert.equal(checkpoints,1);
+});
 test('simultaneous reconnect returns existing fenced workflow without running twice',async()=>{
  let unblock!:()=>void;const gate=new Promise<void>(resolve=>{unblock=resolve});
  const execute=async()=>{executions++;await gate;return new Response('done');};
