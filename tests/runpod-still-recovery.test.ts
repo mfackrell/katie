@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcileSavedQwenJobs, type SavedQwenJob, type QwenJobStatus } from '../lib/chat/runpod-still-recovery';
+import { reconcileSavedQwenJobs, selectRecoverableQwenJobs, type SavedQwenJob, type QwenJobStatus } from '../lib/chat/runpod-still-recovery';
 
 function job(n:number):SavedQwenJob{
   return {owner_id:'owner',actor_id:'actor',chat_id:'chat',request_id:'request-'+n,
@@ -70,4 +70,26 @@ test('each cron tick bounds completed chat resumes independently of queued jobs'
     resume:async()=>{resumed++;return true;},
   });
   assert.equal(resumed,1);assert.equal(result.resumed,1);assert.equal(result.deferred,3);
+});
+
+test('stale old RunPod attempts cannot starve newer eligible Qwen jobs',async()=>{
+  const rows=Array.from({length:7},(_,i)=>job(i+1));
+  const scanned:number[]=[];
+  const found=await selectRecoverableQwenJobs(
+    async(offset,size)=>{scanned.push(offset);return rows.slice(offset,offset+size);},
+    async(batch)=>batch.filter(item=>item.request_id==='request-7'),
+    1,3,
+  );
+  assert.deepEqual(scanned,[0,3,6]);
+  assert.deepEqual(found,[rows[6]]);
+});
+
+test('reconciliation paginates past ineligible jobs without exceeding its eligible cap',async()=>{
+  const rows=Array.from({length:10},(_,i)=>job(i+1));
+  const found=await selectRecoverableQwenJobs(
+    async(offset,size)=>rows.slice(offset,offset+size),
+    async(batch)=>batch.filter(item=>!['request-1','request-2','request-3'].includes(item.request_id)),
+    3,2,
+  );
+  assert.deepEqual(found,rows.slice(3,6));
 });
