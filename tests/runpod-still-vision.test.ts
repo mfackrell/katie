@@ -42,7 +42,7 @@ function fixture(){
       const body=JSON.parse(String(init?.body));
       assert.equal(body.input.body.messages[0].content[0].image_url.url,image);
       assert.equal(body.input.body.model,QWEN_STILL_POLICY.model);
-      assert.equal(body.policy.executionTimeout,60000);assert.equal(body.input.body.max_tokens,1400);
+      assert.equal(body.policy.executionTimeout,60000);assert.equal(body.input.body.max_tokens,QWEN_STILL_POLICY.maxOutputTokens);
       assert.equal(String(init?.body),(row?.prepared_payload as {serializedBody:string}).serializedBody);
       assert.equal(row?.state,'dispatched','durable claim precedes transmission');
       if(lostAcceptance)throw Error('Connection lost after POST');
@@ -54,7 +54,7 @@ function fixture(){
     if(queue)return Response.json({id:'job-accepted-123',status:'IN_PROGRESS'});
     return Response.json({id:mismatch?'another-job-456':'job-accepted-123',status:'COMPLETED',executionTime:1200,output:{choices:[{finish_reason:'stop',message:{content:'A brown dog in a room.'}}],usage:{prompt_tokens:100,completion_tokens:10},cost:0}});
   };
-  const run=()=>runWithStandaloneAccounting(scope,()=>describeImageWithRunpodQwen(image,'Describe photo',{ledgerFactory:()=>ledger,fetchFn:wire,sleep:async()=>{now+=2500;},now:()=>now,attachmentId:'immutable-attachment'}));
+  const run=(question='Describe photo')=>runWithStandaloneAccounting(scope,()=>describeImageWithRunpodQwen(image,question,{ledgerFactory:()=>ledger,fetchFn:wire,sleep:async()=>{now+=2500;},now:()=>now,attachmentId:'immutable-attachment'}));
   return {run,calls,ledger,get row(){return row;},get sends(){return sends;},get polls(){return polls;},set failPoll(v:boolean){failPoll=v;},set queue(v:boolean){queue=v;},set allowed(v:boolean){allowed=v;},set pause(v:boolean){pause=v;},set mismatch(v:boolean){mismatch=v;},set submissionStatus(v:number){submissionStatus=v;},set lostAcceptance(v:boolean){lostAcceptance=v;},set exposureAccepted(v:boolean){exposureAccepted=v;},set state(v:LedgerAttempt['state']){row={...row!,state:v};}};
 }
 test('Qwen reserves reviewed $0.02 under original owner/request before one submission and retains estimate without inventing actual',async()=>{
@@ -66,6 +66,21 @@ test('Qwen reserves reviewed $0.02 under original owner/request before one submi
   assert.equal((input.p_estimate as {costKind:string}).costKind,'estimated_infrastructure');assert.ok(20000<500000);
   assert.equal(f.calls.filter(c=>c.name==='standalone_settle').length,0,'worker-supplied cost:0 is not authoritative monetary evidence');
 });
+test('long focal-point prompt is transmitted in full with the revised Qwen output cap',async()=>{
+  const f=fixture();
+  const instruction='Examine the central subject and preserve all distinguishable visible details. ';
+  const question=instruction.repeat(60)+'CURRENT VISUAL QUESTION: Describe the focal point';
+  assert.ok(question.length>3700&&question.length<QWEN_STILL_POLICY.maxQuestionCharacters);
+  await f.run(question);
+  const admitted=f.calls.find(c=>c.name==='standalone_admit')!.args;
+  const prepared=admitted.p_payload as {question:string;payload:{input:{body:{max_tokens:number;messages:Array<{content:Array<{text?:string}>}>}}}};
+  assert.equal(prepared.question,question,'approved full prompt and user question may not be truncated');
+  assert.equal(prepared.payload.input.body.messages[0].content[1].text,question);
+  assert.equal(prepared.payload.input.body.max_tokens,4096);
+  assert.equal(admitted.p_pricing,'standalone-runpod-qwen-still-v2');
+  assert.equal(admitted.p_reserved,'20000','existing $0.02 infrastructure reservation remains unchanged');
+});
+
 test('reconnect/restart replays the same complete outcome with zero new HTTP and retained exposure',async()=>{
   const f=fixture();await f.run();const calls=f.polls;await f.run();assert.equal(f.sends,1);assert.equal(f.polls,calls);assert.equal(f.row?.reserved_microusd,'20000');
 });
