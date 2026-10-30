@@ -74,3 +74,14 @@ test('pregrant recovery transport requires renewal and binds the exact recovery 
  assert.throws(()=>encodeNativeHandoff({...p,developmentRenewalId:undefined},key));
  assert.throws(()=>encodeNativeHandoff({...p,startupRecoveryId:pregrantRecoveryId},key));
 });
+
+test('paid successor transport requires renewal and binds the exact recovery identity',()=>{
+ const paidSuccessorId='99999999-9999-4999-8999-999999999999';
+ const p={...proof,continuationId:'55555555-5555-4555-8555-555555555555',developmentRenewalId:'88888888-8888-4888-8888-888888888888',paidSuccessorId};
+ const capsule=sealNativeProductionRuntime(secret,p,key,now);
+ const verified=readNativeHandoff(encodeNativeHandoff({...p,productionRuntime:capsule},key),key,now);
+ assert.equal(verified.paidSuccessorId,paidSuccessorId);
+ assert.throws(()=>openNativeProductionRuntime(capsule,{...p,paidSuccessorId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},key,now));
+ assert.throws(()=>encodeNativeHandoff({...p,developmentRenewalId:undefined},key));
+ assert.throws(()=>encodeNativeHandoff({...p,startupRecoveryId:paidSuccessorId},key));
+});

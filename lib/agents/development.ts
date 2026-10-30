@@ -462,6 +462,55 @@ async function recoverOwnerRenewalPregrant(db:ReturnType<typeof getSupabaseAdmin
  return false;
 }
 
+// One instrumented continuation of a terminal paid failure; historical request shape is unknown.
+async function recoverOwnerRenewalPaidSuccessor(db:ReturnType<typeof getSupabaseAdminClient>,key:string,release:string){
+ const {data:rows,error}=await db.from('benchmark_development_renewals').select('id,approval_id,task_id,prior_run').order('created_at',{ascending:false}).limit(4).returns<{id:string;approval_id:string;task_id:string;prior_run:number}>();
+ if(error)throw Error('Pregrant renewal inspection failed');
+ for(const renewal of rows??[]){
+  const {data:linked}=await db.from('benchmark_development_renewal_grants').select('grant_id').eq('renewal_id',renewal.id).maybeSingle<{grant_id:string}>();if(!linked)continue;
+  const {data:pending}=await db.from('benchmark_development_paid_successors').select('id,release_sha').eq('renewal_id',renewal.id).maybeSingle<{id:string;release_sha:string}>();
+  if(pending){if(pending.release_sha!==release)continue;const {data:sent}=await db.from('benchmark_development_paid_successor_dispatches').select('successor_id').eq('successor_id',pending.id).maybeSingle();if(sent)continue;}
+  const capacity=await db.rpc('benchmark_development_paid_successor_capacity',{p_renewal:renewal.id,p_grant:linked.grant_id});if(capacity.error||capacity.data!==true)continue;
+  const {data:a}=await db.from('benchmark_native_spending_approvals').select('*').eq('id',renewal.approval_id).maybeSingle<{id:string;task_id:string;project_id:string;trial_id:string;continuation_id:string;deadline:string}>();if(!a)continue;
+  const task=await readTask(a.task_id);
+  if(!['blocked','dispatching'].includes(task.status)||task.external.developmentRenewalId!==renewal.id)continue;
+  const c=await getDevelopmentProjectContext(task.id);if(!c||c.projectId!==a.project_id)continue;
+  const saved=receiptSchema.safeParse(task.external.receipt);if(!saved.success||saved.data.outcome!=='BLOCKED'||saved.data.run_id===renewal.prior_run||saved.data.pr_url||saved.data.tested_head_sha||saved.data.reviewed_head_sha)continue;
+  const client=github(),binding=await repository(task),issue=Number(task.external.issueNumber);
+  const {data:run}=await client.actions.getWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:saved.data.run_id});
+  if(run.status!=='completed'||run.conclusion!=='failure'||run.event!=='workflow_dispatch'||run.path!=='.github/workflows/autonomous-development.yml'||run.head_sha!==String(task.external.pregrantRecoveryRelease??task.external.developmentRenewalRelease)||run.head_sha===release||run.head_branch!=='main'||run.repository.full_name!==binding.fullName||run.head_repository?.full_name!==binding.fullName)continue;
+  const {data:main}=await client.repos.getCommit({owner:binding.owner,repo:binding.repo,ref:'main'});if(main.sha!==release)continue;
+  const jobs=await client.actions.listJobsForWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:run.id,per_page:30});
+  const build=jobs.data.jobs.find(j=>j.name==='build'&&j.status==='completed'&&j.conclusion==='failure');if(!build||!build.started_at||!build.completed_at)continue;
+  const logs=await client.actions.downloadJobLogsForWorkflowRun({owner:binding.owner,repo:binding.repo,job_id:build.id});
+  const log=typeof logs.data==='string'?logs.data:Buffer.from(logs.data as ArrayBuffer).toString('utf8');
+  if(Buffer.byteLength(log,'utf8')>2_000_000||!/(?:^|\n)(?:[0-9T:.Z-]+\s+)?NATIVE_GATEWAY_DENIAL_CODE GATEWAY_UNBOUNDED_INPUT_DENIED\r?(?:\n|$)/.test(log))continue;
+  // Read capability evidence from the exact trusted deployment commit, never from a caller flag.
+  const sources=await Promise.all(['scripts/benchmark/native-request-admission.mjs','scripts/benchmark/native-http-bridge.mjs'].map(path=>client.repos.getContent({owner:binding.owner,repo:binding.repo,path,ref:release})));
+  const code=sources.map(({data})=>!Array.isArray(data)&&data.type==='file'?Buffer.from(data.content,'base64').toString('utf8'):'');
+  if(!/export const NATIVE_ADMISSION_DIAGNOSTICS_VERSION\s*=\s*['"]bounded-schema-v1['"]/.test(code[0])||!code[1].includes('nativeAdmissionDiagnostic')||!code[1].includes('KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS')||!code[1].includes('NATIVE_GATEWAY_ADMISSION_DIAGNOSTIC'))continue;
+  const artifacts=await client.actions.listWorkflowRunArtifacts({owner:binding.owner,repo:binding.repo,run_id:run.id,per_page:20});
+  const artifact=artifacts.data.artifacts.find(x=>x.name==='agent-completion'&&!x.expired&&x.size_in_bytes<=1_000_000);if(!artifact)continue;
+  const download=await client.actions.downloadArtifact({owner:binding.owner,repo:binding.repo,artifact_id:artifact.id,archive_format:'zip'});
+  const receipt=parseCompletionReceipt(completionJson(Buffer.from(download.data as ArrayBuffer)),binding.fullName,issue,run.id,run.conclusion,acceptanceBinding(c));if(digest(receipt)!==digest(saved.data))continue;
+  const {data:existing}=await client.issues.get({owner:binding.owner,repo:binding.repo,issue_number:issue});
+  const body=unpackDevelopmentRequest(existing.body??'');
+  if(existing.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!body.startsWith(marker(task)+'\n\n')||[...body.matchAll(/<!-- katie-native-benchmark:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/g)].length!==1)continue;
+  const {data:bound}=await db.from('benchmark_development_dispatches').select('*').eq('task_id',task.id).maybeSingle<{contract_hash:string;trial_id:string;benchmark_contract_hash:string}>();if(!bound||bound.contract_hash!==c.contractHash||bound.trial_id!==a.trial_id)continue;
+  const prior=readNativeHandoff(body,key,0);
+  if(prior.taskId!==task.id||prior.approvalId!==a.id||prior.developmentRenewalId!==renewal.id||prior.paidSuccessorId||prior.continuationId!==a.continuation_id||prior.trialId!==a.trial_id||prior.projectId!==c.projectId||prior.contractHash!==c.contractHash||prior.benchmarkContractHash!==bound.benchmark_contract_hash||prior.baselineSha!==c.baselineSha)continue;
+  const prepared=await db.rpc('benchmark_prepare_development_paid_successor',{p_renewal:renewal.id,p_grant:linked.grant_id,p_run:run.id,p_receipt:receipt,p_failed_release:run.head_sha,p_release:release,p_started:build.started_at,p_finished:build.completed_at,p_diagnostics:'bounded-schema-v1'});
+  const recovery=prepared.data as {id?:string}|null;if(prepared.error||!recovery?.id)return false;
+  const handoff={taskId:task.id,trialId:a.trial_id,approvalId:a.id,projectId:a.project_id,continuationId:a.continuation_id,developmentRenewalId:renewal.id,paidSuccessorId:recovery.id,contractHash:c.contractHash,benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:c.baselineSha,expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(a.deadline))};
+  const header=encodeNativeHandoff({...handoff,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',handoff,key)},key);
+  const claimed=await db.rpc('benchmark_claim_development_paid_successor',{p_successor:recovery.id,p_release:release});if(claimed.error||claimed.data!==true)return false;
+  await client.issues.update({owner:binding.owner,repo:binding.repo,issue_number:issue,body:packDevelopmentRequest(body.replace(/<!-- katie-native-benchmark:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/,header),marker(task))});
+  await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
+  return true;
+ }
+ return false;
+}
+
 // Dispatch only a separately authenticated, append-only owner development renewal.
 export async function dispatchOwnerRenewedNativeDevelopment() {
  const release=process.env.VERCEL_GIT_COMMIT_SHA;
@@ -469,6 +518,7 @@ export async function dispatchOwnerRenewedNativeDevelopment() {
     process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'||!release||!/^[a-f0-9]{40}$/.test(release))return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
+ if(await recoverOwnerRenewalPaidSuccessor(db,key,release))return true;
  if(await recoverOwnerRenewalPregrant(db,key,release))return true;
  const {data:rows,error}=await db.from('benchmark_development_renewals').select('*').order('created_at',{ascending:false}).limit(8).returns<{id:string;approval_id:string;previous_approval_id:string;prior_run:number;receipt:unknown}>();
  if(error)throw Error('Development renewal inspection failed');
@@ -519,7 +569,8 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
   const deadline = Date.now() + 60_000;
   if (!["submitted", "dispatching", "ready", "blocked"].includes(task.status)) return task;
-  if(task.external.pregrantRecoveryId&&!task.external.pregrantRecoverySince)return persist(task,task.status,'Waiting for verified pregrant recovery dispatch; original authority and receipt remain preserved.');
+  if(task.external.paidSuccessorId&&!task.external.paidSuccessorSince)return persist(task,task.status,'Waiting for the single instrumented successor dispatch; prior paid calls and receipt remain preserved.');
+  if(!task.external.paidSuccessorId&&task.external.pregrantRecoveryId&&!task.external.pregrantRecoverySince)return persist(task,task.status,'Waiting for verified pregrant recovery dispatch; original authority and receipt remain preserved.');
   if(task.external.developmentRenewalId&&!task.external.developmentRenewalSince)return persist(task,task.status,'Waiting for the owner-authorized renewal dispatch; the predecessor receipt remains preserved.');
   const client = github(), binding = await repository(task);
   let issueNumber = Number(task.external.issueNumber);
@@ -546,8 +597,9 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   const runs = await client.actions.listWorkflowRuns({ owner: binding.owner, repo: binding.repo, workflow_id: workflowId, per_page: 20 });
   for (const run of runs.data.workflow_runs) {
     if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
-    if(typeof task.external.pregrantRecoverySince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.pregrantRecoverySince)||run.head_sha!==task.external.pregrantRecoveryRelease||run.event!=='workflow_dispatch'))continue;
-    if (!task.external.pregrantRecoveryId&&typeof task.external.developmentRenewalSince==='string' && (new Date(run.created_at).getTime()<Date.parse(task.external.developmentRenewalSince)||run.head_sha!==task.external.developmentRenewalRelease||run.event!=='workflow_dispatch'))continue;
+    if(typeof task.external.paidSuccessorSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.paidSuccessorSince)||run.head_sha!==task.external.paidSuccessorRelease||run.event!=='workflow_dispatch'))continue;
+    if(!task.external.paidSuccessorId&&typeof task.external.pregrantRecoverySince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.pregrantRecoverySince)||run.head_sha!==task.external.pregrantRecoveryRelease||run.event!=='workflow_dispatch'))continue;
+    if (!task.external.paidSuccessorId&&!task.external.pregrantRecoveryId&&typeof task.external.developmentRenewalSince==='string' && (new Date(run.created_at).getTime()<Date.parse(task.external.developmentRenewalSince)||run.head_sha!==task.external.developmentRenewalRelease||run.event!=='workflow_dispatch'))continue;
     if (!task.external.developmentRenewalId && typeof task.external.startupRecoverySince==='string' && (new Date(run.created_at).getTime()<Date.parse(task.external.startupRecoverySince)||run.head_sha!==task.external.startupRecoveryRelease||run.event!=='workflow_dispatch'))continue;
     if (run.status !== "completed" || !["issues", "workflow_dispatch"].includes(run.event) || run.repository.full_name !== binding.fullName || run.head_branch !== "main" || run.head_repository?.full_name !== binding.fullName || run.path !== workflowPath || (verificationOnly && (run.event!=='workflow_dispatch'||new Date(run.created_at).getTime()<verificationSince))) continue;
     const artifacts = await client.actions.listWorkflowRunArtifacts({ owner: binding.owner, repo: binding.repo, run_id: run.id, per_page: 20 });

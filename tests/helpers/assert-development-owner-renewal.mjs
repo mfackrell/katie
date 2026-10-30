@@ -1,3 +1,4 @@
+import {assertDevelopmentPaidSuccessor} from './assert-development-paid-successor.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {assertDevelopmentPregrantRecovery} from './assert-development-pregrant-recovery.mjs';
@@ -110,6 +111,7 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  const call=randomUUID(),reserved=(await db.query(reserve,[grant.token_digest,trial,4,call,'gpt-5.3-codex',100])).rows[0].id;
  assert.ok(reserved);assert.equal((await db.query('select continuation_id from benchmark_budget_calls where id=$1',[reserved])).rows[0].continuation_id,c.id);
  assert.equal((await db.query('select deadline<now() old_deadline, reserved_tokens from agent_missions where id=$1',[mission])).rows[0].old_deadline,true);
+ await assertDevelopmentPaidSuccessor(db,rival,{renewal:r,project,mission,task,grant,trial,receipt,reserved});
  await assert.rejects(db.query('delete from benchmark_development_renewals where id=$1',[r.id]),/permission denied/);
  await db.query('reset role');await db.query('set role authenticated');
  await assert.rejects(db.query(rpc,[owner,project,plan.planHash,true]),/permission denied/);
