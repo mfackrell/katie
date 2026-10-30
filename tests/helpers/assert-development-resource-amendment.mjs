@@ -74,35 +74,53 @@ export async function assertDevelopmentResourceAmendment(db,rival,{renewal,proje
  await assert.rejects(db.query(reserve,[newGrant.token_digest,trial,6,randomUUID(),'gpt-5.3-codex',90781]),/capacity/);
  const charged=[];
  for(let i=0;i<15;i++){
-  const request=randomUUID(),tokenHold=i===0?60000:100;
+  const request=randomUUID(),tokenHold=i===0?60000:100,actual=i===0?45000:70;
   const id=(await db.query(reserve,[newGrant.token_digest,trial,6,request,'gpt-5.3-codex',tokenHold])).rows[0].id;charged.push(id);
   const linked=(await db.query('select legacy_mission_call_id from benchmark_budget_calls where id=$1',[id])).rows[0].legacy_mission_call_id;
   if(i===0)await assert.rejects(db.query(reserve,[newGrant.token_digest,trial,6,randomUUID(),'gpt-5.3-codex',40000]),/capacity/,'Concurrent holds share cumulative ceiling');
-  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-amendment-call-'+id,{input_tokens:60,output_tokens:10,total_tokens:70}]);
+  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-amendment-call-'+id,{input_tokens:actual-10,output_tokens:10,total_tokens:actual}]);
   if(i===4){
    await db.query('update mission_assignments set available_at=now() where id=$1',[task]);
    const work=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(work.job.id,task);
-   const view=(await db.query('select mission_call_capacity($1,$2) c',[task,work.job.lease])).rows[0].c;assert.equal(view.callsRemaining,10);assert.equal(view.remainingTokens,90780-350);
-   await db.query('begin');assert.equal((await db.query('select try_reserve_mission_capacity($1,$2,$3,$4,50000,false) ok',[task,work.job.lease,randomUUID(),'openai:gpt-5.3-codex'])).rows[0].ok,true);await db.query('rollback');
+   const view=(await db.query('select mission_call_capacity($1,$2) c',[task,work.job.lease])).rows[0].c;assert.equal(view.callsRemaining,10);assert.equal(view.remainingTokens,90780-45000-4*70);
+   await db.query('begin');assert.equal((await db.query('select try_reserve_mission_capacity($1,$2,$3,$4,44000,false) ok',[task,work.job.lease,randomUUID(),'openai:gpt-5.3-codex'])).rows[0].ok,true);await db.query('rollback');
    assert.equal((await db.query("select commit_mission_work($1,$2,'{}','[]','waiting_external',null,null) ok",[task,work.job.lease])).rows[0].ok,true);
   }
 
  }
  await assert.rejects(db.query(reserve,[newGrant.token_digest,trial,6,randomUUID(),'gpt-5.3-codex',1]),/capacity/,'Cumulative call24 stops further calls');
- const after=await snapshot();assert.equal(after.mission.calls,24);assert.equal(after.mission.actual,79220+15*70);assert.equal(after.mission.limit,120000);assert.equal(after.mission.maxCalls,12);assert.equal(after.spent,before.spent+15*70);
- // Follow-through: the ordinary assessment reservation retains exactly60,000.
+ const after=await snapshot();assert.equal(after.mission.calls,24);assert.equal(after.mission.actual,79220+45000+14*70);assert.equal(after.mission.limit,120000);assert.equal(after.mission.maxCalls,12);assert.equal(after.spent,before.spent+45000+14*70);
+ // Follow-through in a rollback fixture: complete above the old120k ceiling
+ // through ordinary compose/review commits, then advance and create assessment.
  await db.query('begin');
- const assessment=randomUUID(),team=(await db.query('select team from agent_missions where id=$1',[mission])).rows[0].team;
- await db.query('select create_mission($1,$2,$3,60,null)',[assessment,'Synthetic preserved assessment',team]);
- await db.query("update agent_missions set project_id=$2,project_kind='assessment',status='running',token_allowance=60000,deadline=least(now()+interval '1 hour',$3::timestamptz),project_evidence=jsonb_build_object('benchmarkContinuationId',$4::uuid) where id=$1",[assessment,project,accepted.deadline,accepted.id]);
- await db.query("update agent_missions set status='completed' where id=$1",[mission]);
- await db.query("update work_projects set phase='assessment',active_mission_id=$2 where id=$1",[project,assessment]);
- const assessmentJob=(await db.query('select id from mission_assignments where mission_id=$1 order by created_at,id limit 1',[assessment])).rows[0].id,lease=randomUUID();
- await db.query("update mission_assignments set status='running',role='compose',lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[assessmentJob,lease]);
+ const team=(await db.query('select team from agent_missions where id=$1',[mission])).rows[0].team;
+ const head='a'.repeat(40),contractHash='b'.repeat(64);
+ // This startup fixture only supplied scopeHash; add synthetic immutable-head
+ // acceptance metadata here to exercise lifecycle gates, never production proof.
+ await db.query("update project_runs set binding=binding||jsonb_build_object('contractHash',$2::text) where mission_id=$1",[mission,contractHash]);
+ await db.query('update mission_assignments set available_at=now() where id=$1',[task]);
+ const developer=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(developer.job.id,task);
+ const verification={testedHeadSha:head,reviewedHeadSha:head,observedHeadSha:head,projectAcceptance:{passed:true,headSha:head,contractHash,projectId:project}};
+ const children=[{key:'amendment_compose',role:'compose',agent_id:team[0].id,instruction:'Summarize the synthetic verified fixture.',dependencies:[developer.job.job_key],payload:{}},{key:'amendment_review',role:'review',agent_id:team[1].id,instruction:'Review the synthetic verified fixture.',dependencies:['amendment_compose'],payload:{}}];
+ assert.equal((await db.query("select commit_mission_work($1,$2,$3,$4,'completed',null,null) ok",[task,developer.job.lease,{verification},JSON.stringify(children)])).rows[0].ok,true);
+ const composer=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(composer.job.role,'compose');
+ assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','completed',null,null) ok",[composer.job.id,composer.job.lease,{text:'Synthetic completed code and browser receipt.'}])).rows[0].ok,true);
+ const review=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(review.job.role,'review');
+ assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','completed','completed',$4) ok",[review.job.id,review.job.lease,{verdict:'pass'},'Synthetic independently reviewed fixture.'])).rows[0].ok,true);
+ assert.equal((await db.query('select status from agent_missions where id=$1',[mission])).rows[0].status,'completed');
+ const projectClaim=(await db.query('select claim_work_project() p')).rows[0].p;assert.equal(projectClaim.id,project);
+ assert.equal((await db.query("select finish_work_project($1,$2,'advance',$3) ok",[project,projectClaim.lease,{head}])).rows[0].ok,true);
+ assert.equal((await db.query('select verified_sha from work_projects where id=$1',[project])).rows[0].verified_sha,head);
+ // Stand in for the separately tested deployment/browser receipt, then use the
+ // real coordinator's assessment child creation and ordinary reservation path.
+ await db.query("update work_projects set phase='assessment' where id=$1",[project]);
+ const nextProjectClaim=(await db.query('select claim_work_project() p')).rows[0].p;assert.equal(nextProjectClaim.id,project);
+ assert.equal((await db.query("select finish_work_project($1,$2,'child',$3) ok",[project,nextProjectClaim.lease,{kind:'assessment',objective:'Synthetic preserved assessment',evidence:{benchmarkContinuationId:accepted.id,benchmarkContinuationPlanHash:accepted.planHash}}])).rows[0].ok,true);
+ const assessmentWork=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(assessmentWork.mission.project_kind,'assessment');assert.equal(assessmentWork.mission.token_allowance,60000);
  const assessmentCall=randomUUID();
- const reserved=(await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,60000,false) id',[assessmentJob,lease,assessmentCall,'openai:gpt-5.3-codex'])).rows[0].id;assert.ok(reserved);
+ const reserved=(await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,60000,false) id',[assessmentWork.job.id,assessmentWork.job.lease,assessmentCall,'openai:gpt-5.3-codex'])).rows[0].id;assert.ok(reserved);
  assert.equal((await db.query('select continuation_id from benchmark_budget_calls where id=$1',[reserved])).rows[0].continuation_id,accepted.id);
- assert.equal((await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,1,false) id',[assessmentJob,lease,randomUUID(),'openai:gpt-5.3-codex'])).rows[0].id,null);
+ assert.equal((await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,1,false) id',[assessmentWork.job.id,assessmentWork.job.lease,randomUUID(),'openai:gpt-5.3-codex'])).rows[0].id,null);
  await db.query('rollback');
  for(const table of ['benchmark_development_resource_amendments','benchmark_development_amendment_dispatches','benchmark_development_amendment_grants'])assert.equal((await db.query("select has_table_privilege('service_role',$1,'UPDATE,DELETE,TRUNCATE') mutable",[table])).rows[0].mutable,false);
  await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(rpc,approve),/permission denied/);await assert.rejects(db.query(issue,issueArgs),/permission denied/);await db.query('reset role');await db.query('set role service_role');
