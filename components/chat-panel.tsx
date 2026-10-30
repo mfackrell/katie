@@ -396,7 +396,9 @@ class TerminalChatError extends Error {
 /** A durable spending pause is not a lost request or a failed assistant reply.
  * Stop mobile polling, keep the original workflow and show Usage controls.
  */
-class PausedChatError extends Error {}
+class PausedChatError extends Error {
+  constructor(message: string) { super(message); this.name = "PausedChatError"; }
+}
 
 async function pollForPersistedAssistant(
   chatId: string,
