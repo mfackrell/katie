@@ -30,7 +30,7 @@ function observation(job:Job, sourceHash:string):StillObservation {
   const choice=first&&typeof first==='object'?(first as {choices?:Array<{finish_reason?:string}>}).choices?.[0]:undefined;
   if(job.status!=='COMPLETED'||parsed.status!=='completed'||!parsed.analysis_text)
     throw new Error('RunPod Qwen returned no usable still-image observation.');
-  const text=parsed.analysis_text.slice(0,8000);
+  const text=parsed.analysis_text.slice(0,20000);
   const incomplete=choice?.finish_reason==='length'||/\b(?:coverage\s*:\s*(?:partial|incomplete)|unable to (?:read|see|identify)|cannot (?:read|see|determine)|illegible|insufficient (?:resolution|detail))\b/i.test(text);
   return {text,model:'runpod:'+policy.model,coverage:incomplete?'sampled':'full',jobId:job.id!,sourceHash};
 }
