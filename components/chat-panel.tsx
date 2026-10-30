@@ -764,6 +764,7 @@ export function ChatPanel({
   const [statusMount, setStatusMount] = useState<HTMLElement | null>(null);
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
   const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
@@ -2323,6 +2324,30 @@ export function ChatPanel({
     abortControllerRef.current?.abort();
   }
 
+  async function handleDeleteMessage(messageId: string) {
+    if (loading || deletingMessageId || !window.confirm("Permanently delete this message? This cannot be undone.")) return;
+    setDeletingMessageId(messageId);
+    try {
+      const bearer = await ownerSessionBearer();
+      const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&messageId=${encodeURIComponent(messageId)}`, {
+        method: "DELETE",
+        headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as {error?: string};
+        throw new Error(body.error || "Message could not be deleted.");
+      }
+      setMessages(current => current.filter(message => message.id !== messageId));
+      setMessagesByChatId(current => ({...current, [chatId]: (current[chatId] ?? []).filter(message => message.id !== messageId)}));
+      setReplyTo(current => current?.id === messageId ? null : current);
+      setStatusMessage("Message deleted.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Message deletion failed.");
+    } finally {
+      setDeletingMessageId(null);
+    }
+  }
+
   async function handleCopyMessage(messageId: string, content: string) {
     await navigator.clipboard.writeText(content);
     setCopiedMessageId(messageId);
@@ -2949,7 +2974,8 @@ export function ChatPanel({
                 className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-zinc-400 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:rounded-xl sm:px-2.5 sm:py-1.5 sm:text-[11px]"
               >
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
-              </button></div>
+              </button>
+              <button type="button" onClick={() => void handleDeleteMessage(message.id)} disabled={loading || deletingMessageId !== null} aria-label={`Delete ${message.role} message`} className="shrink-0 rounded-lg border border-red-500/25 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/10 disabled:opacity-40">{deletingMessageId === message.id ? "Deleting…" : "Delete"}</button></div>
             </div>
             {message.role === "assistant" &&
             message.content.startsWith("[Katie video analysis pending:") ? (() => {
