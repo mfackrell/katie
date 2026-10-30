@@ -638,3 +638,53 @@ test('auto-authorized lost transmission returns a non-retryable local failure an
  for(let i=0;i<2;i++)await assert.rejects(runWithStandaloneAccounting({...context,resumed:i>0},()=>client.chat.completions.create({model:'gpt-4o',messages:[{role:'user',content:'hello'}]})),error=>error instanceof Error&&/400/.test(error.message));
  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts.length,1);
 });
+
+test('large Claude input uses provider count for its saved exact approval and resumes without a second quote', async () => {
+  const fake=fakeLedger(true);
+  const system='Long standing executive context. '.repeat(11000);
+  const body=JSON.stringify({model:'claude-sonnet-4-5',system,max_tokens:16384,messages:[{role:'user',content:'hi katie'}]});
+  const original={method:'POST',headers:{'x-api-key':'fixture-key','anthropic-version':'2023-06-01'},body};
+  let counts=0,paid=0;
+  const send=createAccountingFetch('anthropic',async(input,init)=>{
+    if(String(input).endsWith('/count_tokens')){
+      counts++;
+      const counted=JSON.parse(String(init?.body));
+      assert.equal(counted.system,system);
+      assert.equal(counted.max_tokens,undefined);
+      assert.equal(counted.model,'claude-sonnet-4-5');
+      return Response.json({input_tokens:90000});
+    }
+    paid++;
+    assert.deepEqual(JSON.parse(String(init?.body)),JSON.parse(String(fake.attempts[0].prepared_payload.serializedBody)));
+    return Response.json({id:'approved-claude-receipt',model:'claude-sonnet-4-5',content:[{type:'text',text:'Saved answer'}],stop_reason:'end_turn',usage:{input_tokens:90000,output_tokens:64,cache_read_input_tokens:0,cache_creation_input_tokens:0}});
+  },fake.factory);
+  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.anthropic.com/v1/messages',original)),error=>standaloneAccountingCause(error)?.code==='standalone_approval_required');
+  assert.equal(counts,1);assert.equal(paid,0,'provider counting is not a paid generation');
+  const attempt=fake.attempts[0];
+  assert.equal(attempt.preflight_estimate.inputTokens,90000);
+  assert.equal(attempt.preflight_estimate.outputAllowance,16384);
+  assert.equal(attempt.preflight_estimate.inputCountSource,'provider');
+  assert.equal(attempt.reserved_microusd,'515760','native input count and full output allowance determine approval amount');
+  assert.equal(attempt.state,'paused');
+  attempt.state='reserved'; // An audited owner approve_once commits the saved exact attempt.
+  const response=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.anthropic.com/v1/messages',original));
+  assert.equal((await response.json()).content[0].text,'Saved answer');
+  assert.equal(counts,1,'saved approved count is not recounted or silently repriced');
+  assert.equal(paid,1);assert.equal(attempt.state,'settled');
+});
+
+test('unverified oversized context has no approvable ledger attempt or paid dispatch',async()=>{
+  const fake=fakeLedger();let counts=0,paid=0;
+  const original={method:'POST',headers:{'x-api-key':'fixture-key'},body:JSON.stringify({
+    model:'claude-sonnet-4-5',system:'Historical system reference. '.repeat(12000),
+    messages:[{role:'user',content:'hi katie'}],max_tokens:16384,
+  })};
+  const send=createAccountingFetch('anthropic',async(input)=>{
+    if(String(input).endsWith('/count_tokens')){counts++;return Response.json({error:'model token count unsupported'},{status:400});}
+    paid++;return Response.json({});
+  },fake.factory);
+  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.anthropic.com/v1/messages',original)),
+    error=>standaloneAccountingCause(error)?.code==='standalone_context_capacity_unverified');
+  assert.equal(counts,1);assert.equal(paid,0);
+  assert.equal(fake.attempts.length,0,'non-priceable technical context does not manufacture an approval');
+});
