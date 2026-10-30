@@ -731,7 +731,7 @@ async function executeChat(request: NextRequest) {
     // Resolve Katie's own repository before either project control or model routing.
     // This does not grant new credentials: writes remain in the existing
     // audited project/developer workflow with its approval and verification.
-    const selfInspectionRequest = isExplicitKatieSelfInspectionRequest(message);
+    const selfInspectionRequest = !isGuestSession && isExplicitKatieSelfInspectionRequest(message);
     let selfRepoId: string | null = null;
     const selfToolRequest = selfInspectionRequest;
     const selfToolActor = selfToolRequest && !currentAgentTask()
@@ -1280,7 +1280,7 @@ async function executeChat(request: NextRequest) {
     // controller. Status, scoped approvals and amendments stay durable there.
     const savedDeveloperCommand = /^(?:(?:(?:what(?:'s| is)|show|check|give me|tell me|how(?:'s| is))\b.{0,36})?(?:project\s+(?:status|progress)|(?:the|my|this)\s+project\s+(?:status|progress)|project\s+(?:note|context|answer)\s*:)|(?:please\s+)?(?:resume|pause|stop|approve)\s+(?:(?:the|my|this)\s+)?project\b|(?:please\s+)?(?:add|change|fix|remove|update|keep|retain|preserve|support|enable)\b.{0,180}\b(?:game|app|website|project|software|multiplayer|keyboard|undo|button)\b)/i.test(message.trim());
     const explicitProjectControl = !isGuestSession && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand);
-    const projectReply = !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
