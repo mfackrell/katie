@@ -1,4 +1,4 @@
-import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { isStandaloneAccountingError, standaloneAccountingCause } from "@/lib/standalone-accounting/context";
 import { assertProviderOutput, isTerminalProviderError, ProviderResponseError } from "@/lib/providers/response-errors";
 import type { ProviderResponse } from "@/lib/providers/types";
 import { isExplicitContentRefusal } from "@/lib/router/provider-error";
@@ -189,7 +189,30 @@ export async function runWithRefusalFallback<TAttempt>({
         onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
         continue;
       }
-      if (isStandaloneAccountingError(error)) throw error;
+      if (isStandaloneAccountingError(error)) {
+        // Context validation happens BEFORE provider dispatch, so it has no
+        // uncertain paid exposure. Only this technical blocker may request a
+        // capability-preserving reroute; spending pauses are never retried.
+        const code = standaloneAccountingCause(error)?.code;
+        if (!['standalone_context_window_exceeded','standalone_context_capacity_unverified'].includes(code ?? '') || !rerouteOnError) throw error;
+        try {
+          const newer = await rerouteOnError({
+            attempt, attemptIndex: currentAttemptIndex,
+            attemptedAttempts: [...attemptedAttempts],
+            remainingAttempts: [...pendingAttempts], error,
+          });
+          if (newer) {
+            // Never let a lower-capacity ordinary fallback run after context
+            // rejection. The caller must have qualified this upgrade.
+            pendingAttempts.splice(0,pendingAttempts.length,newer);
+            onErrorReroute?.({attempt,attemptIndex:currentAttemptIndex,reroutedAttempt:newer,error});
+            continue;
+          }
+        } catch (rerouteError) {
+          onRerouteError?.({attempt,attemptIndex:currentAttemptIndex,error:rerouteError});
+        }
+        throw error;
+      }
       if (isTerminalProviderError(error)) {
         // Only explicitly authorized terminal errors may be retried. Safety and
         // content blocks remain terminal; caller's retryTerminalError must deny.
