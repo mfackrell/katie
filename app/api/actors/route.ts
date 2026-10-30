@@ -173,7 +173,7 @@ export async function GET(request:NextRequest) {
     if(error||!data)return NextResponse.json({error:"Actor access denied."},{status:403});
     actors=allActors.filter(a=>a.id===data);
   } else {
-    const {data,error}=await getSupabaseAdminClient().rpc<string[]>('standalone_guest_actor_ids');
+    const {data,error}=await getSupabaseAdminClient().rpc<string[]>('standalone_guest_actor_ids',{});
     if(error)return NextResponse.json({error:"Guest isolation unavailable."},{status:503});
     const guestIds=new Set(data??[]);
     actors=allActors.filter(a=>!guestIds.has(a.id));
