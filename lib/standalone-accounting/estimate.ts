@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_SNAPSHOT, type PricingSnapshot, OPENAI_NO_FEE_CACHE_RETENTIONS, type AccountingProvider, type ModelPrice } from "./pricing";
 /** Changing counting/admissibility rules requires a new estimator identity. */
 export const ESTIMATOR_VERSION = "standalone-estimator-v6";
+export const PROVIDER_COUNT_ESTIMATOR_VERSION = "standalone-provider-count-v1";
+export type ProviderInputCount = Readonly<{ inputTokens: number; requestHash: string }>;
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:string]: JsonValue };
 export type JsonObject = { [key:string]: JsonValue };
@@ -9,7 +11,7 @@ export type FrozenPreparedRequest = Readonly<{schemaVersion:"standalone-request-
 export type StandaloneEstimate = {
   status:"estimated"|"unsupported";pricingVersion:string;estimatorVersion:string;requestHash:string;currency:"USD";isCeiling:false;
   estimatedCostMicrousd:string|null;reservationMicrousd:string|null;inputTokens:number;outputAllowance:number;imageTokens:number;cacheWriteInputAllowance:number;cacheWriteTtl:"5m"|"30m"|"12h"|null;
-  issues:string[];assumptions:string[];breakdown:Array<{dimension:string;tokens:number;costMicrousd:string}>;
+  issues:string[];assumptions:string[];inputCountSource?:"provider"|"heuristic";breakdown:Array<{dimension:string;tokens:number;costMicrousd:string}>;
 };
 export function canonicalJson(value: unknown): string {
   if (value===null||typeof value==="string"||typeof value==="boolean") return JSON.stringify(value);
@@ -78,7 +80,7 @@ function validEndpoint(r:FrozenPreparedRequest):boolean {
   if(r.provider==="anthropic")return path==="/v1/messages";
   return ["/v1/responses","/v1/chat/completions","responses","chat-completions"].includes(path);
 }
-export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:PricingSnapshot=PRICING_SNAPSHOT):StandaloneEstimate {
+export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:PricingSnapshot=PRICING_SNAPSHOT,providerInputCount?:ProviderInputCount):StandaloneEstimate {
   const issues:string[]=[];const assumptions=["Input text allowance is one token per UTF-8 byte plus framing allowance; it is an estimate, not a provider token count or guaranteed spending ceiling.","All allowed output tokens are reserved, including hidden reasoning/thinking. No future cache-hit discount is assumed."];
   let textTokens=256,imageTokens=0,outputAllowance=0,cacheBreakpoints=0,cachePolicyValid=true;
   const price=getModelPrice(request.provider,request.model,snapshot),body=request.payload;
@@ -252,7 +254,11 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
     }
   }
   if(!positiveInt(outputAllowance))issues.push("Missing finite positive output allowance");
-  const inputTokens=textTokens+imageTokens;
+  const verifiedCount = providerInputCount && providerInputCount.requestHash === request.hash &&
+    Number.isSafeInteger(providerInputCount.inputTokens) && providerInputCount.inputTokens >= 0;
+  if (providerInputCount && !verifiedCount) issues.push("Provider count does not match the prepared request or is invalid");
+  if (verifiedCount) assumptions.push("Provider-native token counting measured this exact frozen request input. All allowed output tokens remain reserved; no cache-hit discount is assumed.");
+  const inputTokens=verifiedCount ? providerInputCount!.inputTokens : textTokens+imageTokens;
   if(cacheBreakpoints>4){issues.push("Claude cache breakpoint limit exceeded");cachePolicyValid=false;}
   const cacheWriteInputAllowance=cacheBreakpoints||request.provider==="openai"&&price?.cacheWriteNanoUsd?inputTokens:0;
   const cacheWriteTtl=cacheBreakpoints?"5m":request.provider==="openai"&&price?.cacheWriteNanoUsd?openAiCacheTtl as "30m"|"12h":null;
@@ -262,7 +268,7 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
   if(price&&outputAllowance>price.maxOutputTokens)issues.push("Output allowance exceeds supported model limit");
   const cost=price&&!issues.length?priceTokenUsage(price,inputTokens,outputAllowance,0,cacheWriteInputAllowance,cacheWriteTtl??"5m"):null;
   const inputCost=cost&&price?priceTokenUsage(price,inputTokens,0,0,cacheWriteInputAllowance,cacheWriteTtl??"5m"):"0";
-  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?[{dimension:cacheWriteInputAllowance?"full input allowance at selected cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]:[]});
+  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:verifiedCount?PROVIDER_COUNT_ESTIMATOR_VERSION:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,inputCountSource:verifiedCount?"provider":"heuristic",issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?[{dimension:cacheWriteInputAllowance?"full input allowance at selected cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]:[]});
 }
 export type BillableUsage = { inputTokens:number;outputTokens:number;cachedInputTokens?:number;cacheReadInputTokens?:number;cacheWriteInputTokens?:number;cacheCreationInputTokens?:number;cacheWriteTtl?:"5m"|"30m"|"12h";[key:string]:unknown };
 export function actualCostFromUsage(request:FrozenPreparedRequest,usage:BillableUsage,snapshot:PricingSnapshot=PRICING_SNAPSHOT):{actualMicrousd:string;pricingVersion:string} {
