@@ -76,7 +76,7 @@ const upstream=async request=>{
  }
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
- const item=count<(realistic?phaseLimits[phase]:2)?{id:'call_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
+ const item=count<(realistic?phaseLimits[phase]:2)?{id:'fc_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
   arguments:JSON.stringify({cmd:(reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
