@@ -5,6 +5,7 @@ import { createStandaloneLedger, StandaloneAccountingError } from './ledger';
 import { getAccountingScope, nextStandaloneAttempt } from './context';
 import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION, type StandaloneEstimate } from './estimate';
 import { countNativePreparedInput } from './native-token-count';
+import { cachedWorkflowValue } from './workflow';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
 import type { ResponseCheckpoint } from './types';
 
@@ -284,7 +285,10 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     if (!attempt && estimate.issues.every(issue => issue === contextIssue) &&
         (estimate.inputTokens >= 100_000 || estimate.issues.includes(contextIssue))) {
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      const nativeCount = await countNativePreparedInput(prepared,transport,headers,signal);
+      const nativeCount = await cachedWorkflowValue(
+        `context-count:${attemptKey}:${prepared.hash}`,
+        () => countNativePreparedInput(prepared,transport,headers,signal),
+      );
       if (nativeCount !== null) {
         estimate = estimatePreparedRequest(prepared,pricing,{inputTokens:nativeCount,requestHash:prepared.hash});
       }
