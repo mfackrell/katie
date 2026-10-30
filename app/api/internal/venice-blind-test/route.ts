@@ -11,7 +11,7 @@ export const maxDuration = 120;
 // One-time, owner-requested vision accuracy experiment. Only the SHA-256 of
 // the unguessable invocation token is in source. Do not log the token or pixels.
 // Retire this endpoint after verifying the result.
-const AUTH_HASH = "b93ea01fe60d840b9fe5cc1f771deb690950fca68d5c666f39e81625675650b7";
+const AUTH_HASH = "1d235454794b3d1e207b051bf9cc6931da1db6cf6076c582f65de9caff25d192";
 const EXPIRES = Date.parse("2026-10-30T23:59:00Z");
 const SOURCE_REQUEST = "23bc8322-d403-4982-8991-cfc89de4c4ca";
 const TEST_REQUEST = "41c66a47-c074-4c89-9353-615c1db877ad";
