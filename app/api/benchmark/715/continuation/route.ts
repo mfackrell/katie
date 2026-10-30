@@ -1,4 +1,4 @@
-import {qualifiedDevelopmentAmendmentRelease,qualifiedAmendmentSuccessorRelease,verifiedAmendmentSuccessorRun} from '@/lib/agents/development';
+import {qualifiedCapacityRenewalRelease,qualifiedDevelopmentAmendmentRelease,qualifiedAmendmentSuccessorRelease,verifiedAmendmentSuccessorRun} from '@/lib/agents/development';
 import {NextRequest,NextResponse} from 'next/server';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import config from '@/config/benchmark-715-production-qualification.json';
@@ -18,6 +18,8 @@ async function authenticatedOwner(request:NextRequest){
 export async function GET(request:NextRequest){
  try{
   if(!await authenticatedOwner(request))return reply({error:'Sign in to Katie as the owner.'},401);
+  const capacityRelease=await qualifiedCapacityRenewalRelease();
+  if(capacityRelease){const offer=await getSupabaseAdminClient().rpc('benchmark_dashboard_capacity_renewal',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_release:capacityRelease,p_runtime:'provider-input-count-v1'});if(offer.error)return reply({error:'Capacity renewal status unavailable.'},409);if(offer.data)return reply({continuation:offer.data});}
   const successorRelease=await qualifiedAmendmentSuccessorRelease();
   if(successorRelease){const successor=await getSupabaseAdminClient().rpc('benchmark_dashboard_amendment_successor',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_release:successorRelease});if(successor.error)return reply({error:'Successor status unavailable.'},409);if(successor.data)return reply({continuation:successor.data});}
   const release=await qualifiedDevelopmentAmendmentRelease();
@@ -38,6 +40,15 @@ export async function POST(request:NextRequest){
   if(request.headers.get('origin')!==config.productionUrl)return rejected(403,'origin','Approve from https://katie-mu.vercel.app.');
   stage='invalid_json';
   const body=await request.json();
+  if(body.authorization==='full-capacity-renewal-625000tokens-32calls-10usd-4hours'){
+   if(body.approve!==true||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return rejected(400,'capacity_payload','Explicit approval of this exact capacity renewal is required.');
+   const release=await qualifiedCapacityRenewalRelease();if(!release)return rejected(409,'release_unavailable','The deployed capacity renewal is not qualified.');
+   stage='capacity_terminal_evidence';
+   const run=await verifiedAmendmentSuccessorRun(body.projectId);
+   const {data,error}=await getSupabaseAdminClient().rpc('benchmark_dashboard_capacity_renewal',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:body.projectId,p_plan_hash:body.planHash,p_approve:true,p_release:release,p_runtime:'provider-input-count-v1',p_run:run});
+   if(error)return rejected(409,'capacity_checkpoint','The capacity proposal, terminal evidence, or ledger changed. Refresh and review the current plan.');
+   return reply({continuation:data});
+  }
   if(body.authorization==='full-amendment-one-successor-fixed-deadline'){
    if(body.approve!==true||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return rejected(400,'successor_payload','Explicit approval of this successor is required.');
    const release=await qualifiedAmendmentSuccessorRelease();if(!release)return rejected(409,'release_unavailable','The deployed successor runtime is not qualified.');

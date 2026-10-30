@@ -310,7 +310,7 @@ async function advance(p: Project) {
       const plan=continuationPlan;
       const renewal=plan?.kind==='development-renewal';
       const valid=plan&&(renewal
-        ? p.phase==='assessment'&&plan.specificationTokens===0&&[120000,170000,373279].includes(plan.developmentTokens)&&plan.assessmentTokens===60000
+        ? p.phase==='assessment'&&plan.specificationTokens===0&&([120000,170000,373279].includes(plan.developmentTokens)||(plan.version===6&&plan.capacityRenewal===true&&plan.developmentTokens===448279&&plan.cumulativeTokenCap===625000))&&plan.assessmentTokens===60000
           &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
           &&Number(plan.developmentRemainingTokens)>0&&Number(plan.developmentSpentTokens)>=0
           &&Number(plan.developmentRemainingTokens)+Number(plan.developmentSpentTokens)===plan.developmentTokens

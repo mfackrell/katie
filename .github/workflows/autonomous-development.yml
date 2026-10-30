@@ -22,7 +22,8 @@ jobs:
   build:
     if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.event.issue.title, '[agent]') && github.event.issue.user.login == github.repository_owner) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Two bounded isolated verifications plus native review/repair fit the owner window.
+    timeout-minutes: 120
     outputs:
       branch: ${{ steps.task.outputs.branch }}
       issue: ${{ steps.task.outputs.issue }}
