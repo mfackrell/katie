@@ -13,7 +13,7 @@ test('empty replay metadata and narrow plaintext namespace/name fields remain fu
    {type:'function_call_output',call_id:'call',name:'exec_command',namespace,output:'private tool result'},
    {type:'custom_tool_call',call_id:'custom',name:'patch',namespace,input:'private patch'},
    {type:'custom_tool_call_output',call_id:'custom',name:'patch',output:'done'}];
-  const body={model,input};const admitted=admitNativeRequest(body);
+  const body={model,input,service_tier:'default'};const admitted=admitNativeRequest(body);
   assert.deepEqual(admitted.body,body);assert.equal(admitted.plaintextBytes,Buffer.byteLength(JSON.stringify(body)));assert.equal(admitted.opaqueTokens,0);
  }
  for(const logprobs of [null,{},'private',[{token:'private',logprob:-1}]])assert.throws(()=>admitNativeRequest(message({...part,logprobs})),/UNBOUNDED/);
@@ -56,3 +56,4 @@ test('incident forensics makes only fixed existing-response GETs and emits no co
  assert.ok(!JSON.stringify(results).includes(secret));assert.ok(!JSON.stringify(results).includes('private-id'));assert.equal(results[0].responseState,'completed');
  const absent=await retrieveNativeResponseShapes({apiKey:secret,fetchImpl:async()=>({ok:false,status:404})});assert.ok(absent.every(x=>x.outcome==='not-retained'));
 });
+

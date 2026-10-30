@@ -522,12 +522,12 @@ export async function qualifiedDevelopmentAmendmentRelease(){
  const paths=['scripts/benchmark/native-provider-receipts.mjs','scripts/benchmark/authenticated-native-gateway.mjs','scripts/benchmark/native-development-host.mjs'];
  const sources=await Promise.all(paths.map(path=>client.repos.getContent({...binding,path,ref:release})));
  const code=sources.map(({data})=>!Array.isArray(data)&&data.type==='file'?Buffer.from(data.content,'base64').toString('utf8'):'');
- if(!/export const NATIVE_INPUT_COUNT_VERSION\s*=\s*['"]provider-input-count-v1['"]/.test(code[0])||!code[1].includes('countInputTokens')||!code[2].includes('NATIVE_INPUT_COUNT_VERSION')||!code[2].includes('resourceAmendmentId'))return null;
+ if(!/export const NATIVE_INPUT_COUNT_VERSION\s*=\s*['"]provider-input-count-v1['"]/.test(code[0])||!code[1].includes('countInputTokens')||!code[2].includes('NATIVE_INPUT_COUNT_VERSION')||!code[2].includes('resourceAmendmentId')||!code[0].includes("NATIVE_MONETARY_CONTROL_VERSION='atomic-exposure-v1'"))return null;
  return release;
 }
 
 async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAdminClient>,key:string,release:string){
- const {data:rows,error}=await db.from('benchmark_development_resource_amendments').select('*').order('created_at',{ascending:false}).limit(4).returns<{id:string;renewal_id:string;approval_id:string;task_id:string;continuation_id:string;successor_id:string;failed_run:number;release_sha:string;receipt:unknown;source_snapshot:{approval:{id:string};previousContinuation:{id:string};successor:{release_sha:string}}}>();
+ const {data:rows,error}=await db.from('benchmark_development_resource_amendments').select('*').order('created_at',{ascending:false}).limit(4).returns<{id:string;renewal_id:string;approval_id:string;task_id:string;continuation_id:string;successor_id:string;failed_run:number;release_sha:string;receipt:unknown;source_snapshot:{approval:{id:string};previousContinuation:{id:string};executedApproval?:{id:string};executedContinuation?:{id:string};successor:{release_sha:string}}}>();
  if(error)throw Error('Resource amendment inspection failed');
  if(!rows?.length||await qualifiedDevelopmentAmendmentRelease()!==release)return false;
  for(const am of rows??[]){
@@ -550,7 +550,7 @@ async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAd
   if(existing.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!body.startsWith(marker(task)+'\n\n')||[...body.matchAll(/<!-- katie-native-benchmark:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/g)].length!==1)continue;
   const {data:bound}=await db.from('benchmark_development_dispatches').select('*').eq('task_id',task.id).maybeSingle<{contract_hash:string;trial_id:string;benchmark_contract_hash:string}>();if(!bound||bound.contract_hash!==c.contractHash||bound.trial_id!==a.trial_id)continue;
   const prior=readNativeHandoff(body,key,0);
-  if(prior.taskId!==task.id||prior.approvalId!==am.source_snapshot.approval.id||prior.paidSuccessorId!==am.successor_id||prior.resourceAmendmentId||prior.continuationId!==am.source_snapshot.previousContinuation.id||prior.trialId!==a.trial_id||prior.projectId!==c.projectId||prior.contractHash!==c.contractHash||prior.benchmarkContractHash!==bound.benchmark_contract_hash||prior.baselineSha!==c.baselineSha)continue;
+  if(prior.taskId!==task.id||prior.approvalId!==(am.source_snapshot.executedApproval??am.source_snapshot.approval).id||prior.paidSuccessorId!==am.successor_id||prior.resourceAmendmentId||prior.continuationId!==(am.source_snapshot.executedContinuation??am.source_snapshot.previousContinuation).id||prior.trialId!==a.trial_id||prior.projectId!==c.projectId||prior.contractHash!==c.contractHash||prior.benchmarkContractHash!==bound.benchmark_contract_hash||prior.baselineSha!==c.baselineSha)continue;
   const handoff={taskId:task.id,trialId:a.trial_id,approvalId:a.id,projectId:a.project_id,continuationId:a.continuation_id,developmentRenewalId:am.renewal_id,resourceAmendmentId:am.id,contractHash:c.contractHash,benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:c.baselineSha,expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(a.deadline))};
   const header=encodeNativeHandoff({...handoff,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',handoff,key)},key);
   const claimed=await db.rpc('benchmark_claim_development_amendment',{p_amendment:am.id,p_release:release});if(claimed.error||claimed.data!==true)return false;
@@ -765,5 +765,6 @@ export async function developmentPreview(task: AgentTask, project: ProjectAccept
   }
   return null;
 }
+
 
 

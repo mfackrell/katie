@@ -37,7 +37,7 @@ test('opaque reasoning requires exact terminal-response provenance, same model a
  proof.remember(response(),model,4096);
  const one=admitNativeRequest(body,proof),two=admitNativeRequest({...body,input:[item,item]},proof);
  assert.equal(one.opaqueTokens,4096);assert.equal(two.opaqueTokens,8192);assert.deepEqual(one.body.input,[item]);
- assert.equal(one.plaintextBytes,Buffer.byteLength(JSON.stringify({...body,input:[{...item,encrypted_content:''}]})));
+ assert.equal(one.plaintextBytes,Buffer.byteLength(JSON.stringify({...body,service_tier:'default',input:[{...item,encrypted_content:''}]})));
  for(const changed of [{...item,encrypted_content:'tampered'},{...item,id:'other'},{...item,summary:[{type:'summary_text',text:'changed'}]}])
   assert.throws(()=>admitNativeRequest({...body,input:[changed]},proof),/UNBOUNDED/);
  assert.throws(()=>admitNativeRequest({...body,model:'other'},proof),/UNBOUNDED/);
@@ -69,4 +69,5 @@ test('actual paid admission reserves normalized bytes and opaque bounds, settles
  await assert.rejects(forwardAuthorizedModelRequest({...options,requestBody:{model,input:[{...item,encrypted_content:'foreign'}]}}),/UNBOUNDED/);
  assert.equal(reserved.length,count);assert.equal(forwarded,2);
 });
+
 

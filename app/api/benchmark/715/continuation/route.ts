@@ -28,7 +28,7 @@ export async function POST(request:NextRequest){
  try{
   if(!await authenticatedOwner(request)||request.headers.get('origin')!==config.productionUrl)return reply({error:'Approve from your authenticated Katie owner session.'},403);
   const body=await request.json();
-  if(body.authorization==='full-development-resource-amendment-fixed-deadline'){
+  if(body.authorization==='full-development-resource-amendment-550000tokens-10usd-4hours'){
    if(body.approve!==true||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return reply({error:'Explicit approval of the displayed resource amendment is required.'},400);
    const release=await qualifiedDevelopmentAmendmentRelease();if(!release)return reply({error:'Verified count-aware runtime is not available.'},409);
    const {data,error}=await getSupabaseAdminClient().rpc('benchmark_dashboard_development_amendment',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:body.projectId,p_plan_hash:body.planHash,p_approve:true,p_release:release,p_runtime:'provider-input-count-v1'});
@@ -41,3 +41,4 @@ export async function POST(request:NextRequest){
   return reply({continuation:data});
  }catch{return reply({error:'Approval could not be saved. Refresh status before retrying.'},503)}
 }
+

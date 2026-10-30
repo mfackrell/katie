@@ -48,3 +48,10 @@ jobs:
           KATIE_BENCHMARK_PAID_EXECUTION: disabled
           KATIE_REQUIRE_NATIVE_BWRAP: '1'
         run: node --test tests/benchmark-nonfull-postgres-host.test.mjs
+
+
+      - name: Full completion amendment atomic dollars and exact owner authority (no inference)
+        env:
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_BENCHMARK_PAID_EXECUTION: disabled
+        run: node --test tests/benchmark-renewal-postgres.test.mjs

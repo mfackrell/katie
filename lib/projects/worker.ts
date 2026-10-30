@@ -310,7 +310,7 @@ async function advance(p: Project) {
       const plan=continuationPlan;
       const renewal=plan?.kind==='development-renewal';
       const valid=plan&&(renewal
-        ? p.phase==='assessment'&&plan.specificationTokens===0&&plan.developmentTokens===120000&&plan.assessmentTokens===60000
+        ? p.phase==='assessment'&&plan.specificationTokens===0&&[120000,170000,373279].includes(plan.developmentTokens)&&plan.assessmentTokens===60000
           &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
           &&Number(plan.developmentRemainingTokens)>0&&Number(plan.developmentSpentTokens)>=0
           &&Number(plan.developmentRemainingTokens)+Number(plan.developmentSpentTokens)===plan.developmentTokens
@@ -500,4 +500,5 @@ catch (error) {
     await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail, impediment:projectImpediment(p,detail) } });
     return { claimed: 1, status: 'error_recorded' };
 } } finally {await maintenance;} }
+
 

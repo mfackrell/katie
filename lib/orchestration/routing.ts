@@ -45,17 +45,18 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   // transports and the SAME mission call ledger as execution, not chat adapters.
   generate:async(params)=>{
    if(!params.modelId)throw Error('Routing decision requires an explicit verified model');
-   const request={model:params.modelId,instructions:params.persona,
+   const request={...(input.fixedModel?{service_tier:'default'}:{}),model:params.modelId,instructions:params.persona,
     input:[...params.history,{role:'user',content:params.summary+'\n'+params.user}],max_output_tokens:2000,store:false};
    if(JSON.stringify(request).length>96000)throw Error('Routing context exceeds bounded input');
    const client=boundedProvider({provider,modelId:params.modelId,reasoning:'routing decision'});
-   const countInput:Record<string,unknown>={...request};delete countInput.max_output_tokens;delete countInput.store;
+   const countInput:Record<string,unknown>={...request};delete countInput.service_tier;delete countInput.max_output_tokens;delete countInput.store;
    const counted=await Promise.resolve().then(()=>client.post('/responses/input_tokens',{body:countInput,timeout:15000})).catch(()=>null);
    const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0
     ?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
    const reservation=await input.accounting?.reserve(provider.name+':'+params.modelId,inputTokens+2000);
    try{
     const result=await client.responses.create(request,{timeout:30_000});
+    if(input.fixedModel&&(result as {service_tier?:string}).service_tier!=='default')throw Error('Full routing service tier uncertain; reservation retained');
     if(reservation)await input.accounting!.finish(reservation,result.usage?.total_tokens??null,{id:result.id,usage:result.usage});
     if(result.status!=='completed'||!result.output_text?.trim())throw Error('Routing decision incomplete');
     return{text:result.output_text,model:params.modelId,provider:provider.name};
@@ -87,3 +88,4 @@ export async function orchestrationFailure(choice:OrchestrationChoice,error:unkn
  await recordSharedProviderFailure(choice.provider.name,error);
  return classifyGenerationFailure(error);
 }
+

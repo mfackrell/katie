@@ -1,3 +1,4 @@
+import {assertCompletionBudgetControls} from './assert-completion-budget-controls.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 export async function assertDevelopmentResourceAmendment(db,rival,{renewal,project,mission,task,grant,trial,receipt}){
@@ -18,6 +19,7 @@ export async function assertDevelopmentResourceAmendment(db,rival,{renewal,proje
  const planArgs=[owner,null,null,false,release,runtime];
  const snapshot=async()=>(await db.query(`select jsonb_build_object('approval',(select to_jsonb(a) from benchmark_native_spending_approvals a where id=$1),'continuation',(select to_jsonb(c) from benchmark_full_continuations c where id=$2),'mission',(select jsonb_build_object('deadline',deadline,'calls',calls,'actual',actual_tokens,'reserved',reserved_tokens,'limit',token_allowance,'maxCalls',max_calls) from agent_missions where id=$3),'spent',(select spent_tokens from benchmark_budget_accounts where id=$4),'calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$4)) s`,[approval.id,approval.continuation_id,mission,grant.account_id])).rows[0].s;
  await assert.rejects(db.query("insert into benchmark_full_continuations select (jsonb_populate_record(null::benchmark_full_continuations,to_jsonb(c)||jsonb_build_object('id',gen_random_uuid(),'deadline',c.deadline+interval '1 second'))).* from benchmark_full_continuations c where previous_continuation_id is null limit 1"),/benchmark_full_continuations_check/);
+ if(process.env.KATIE_TEST_COMPLETION_CONTROLS==='1'){await assertCompletionBudgetControls(db,rival,{project,mission,task,grant,trial,owner});return;}
  const before=await snapshot();assert.equal(before.mission.calls,9);assert.equal(before.mission.actual,79220);
  const plan=(await db.query(rpc,planArgs)).rows[0].r;
  assert.equal(plan.approved,false);assert.equal(plan.plan.resourceAmendment,true);assert.equal(plan.plan.developmentRemainingTokens,90780);assert.equal(plan.plan.assessmentTokens,60000);assert.equal(plan.plan.additionalTokenCap,150780);assert.equal(plan.plan.allocationIncreaseTokens,50000);assert.equal(plan.plan.maxCalls,24);assert.equal(plan.plan.callsRemaining,15);assert.equal(Date.parse(plan.deadline),approval.deadline.getTime());
@@ -125,3 +127,4 @@ export async function assertDevelopmentResourceAmendment(db,rival,{renewal,proje
  for(const table of ['benchmark_development_resource_amendments','benchmark_development_amendment_dispatches','benchmark_development_amendment_grants'])assert.equal((await db.query("select has_table_privilege('service_role',$1,'UPDATE,DELETE,TRUNCATE') mutable",[table])).rows[0].mutable,false);
  await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(rpc,approve),/permission denied/);await assert.rejects(db.query(issue,issueArgs),/permission denied/);await db.query('reset role');await db.query('set role service_role');
 }
+

@@ -145,3 +145,38 @@ jobs:
 
 
 
+
+
+      - name: Actual pinned SDK realistic cumulative completion envelope (no inference)
+        env:
+          KATIE_NATIVE_PROBE_COMPLETION_BUDGET: '1'
+          KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+        run: node scripts/benchmark/native-development-child-contained-probe.mjs
+
+      - name: Upload credential-free complete frozen request qualification fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sdk-completion-count-requests
+          path: ${{ runner.temp }}/native-sdk-completion-count-requests.json
+          if-no-files-found: error
+          retention-days: 1
+  completion-input-count:
+    needs: native-gateway
+    if: github.head_ref == 'fix/full-completion-execution-controls' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-sdk-completion-count-requests
+          path: ${{ runner.temp }}
+      - name: Count frozen actual SDK request contexts only; never generate
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/completion-input-count-probe.mjs

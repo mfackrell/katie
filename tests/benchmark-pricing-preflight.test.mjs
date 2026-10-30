@@ -30,10 +30,16 @@ test('host executes exact read-only pricing filter and preserves dollar ceiling 
  const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
  const start=source.indexOf('const pricing=await readVerifiedBenchmarkPricing('),end=source.indexOf('let delegatedTask=',start);
  assert.ok(start>0&&end>start);assert.ok(end<source.indexOf('const grantToken='));
- const execute=new (Object.getPrototypeOf(async function(){}).constructor)('db','readVerifiedBenchmarkPricing','assertBenchmarkDollarCeiling','approval','account','productionRuntime',source.slice(start,end));
+ const execute=new (Object.getPrototypeOf(async function(){}).constructor)('db','readVerifiedBenchmarkPricing','assertBenchmarkDollarCeiling','approval','account','productionRuntime','continuation','denied',source.slice(start,end));
  let reads=0;const filters=[];
  const db={from(table){assert.equal(table,'model_registry');return {select(fields){assert.equal(fields,'pricing_input_per_1m,pricing_output_per_1m,pricing_status');return this;},eq(k,v){filters.push([k,v]);return this;},abortSignal(signal){assert.ok(signal instanceof AbortSignal);return this;},async maybeSingle(){reads++;return {data:price,status:200};}};}};
  await execute(db,readVerifiedBenchmarkPricing,assertBenchmarkDollarCeiling,{model:'gpt-5.3-codex',max_tokens:350000},{cap_tokens:350000},true);
  assert.equal(reads,1);assert.deepEqual(filters,[['provider_name','openai'],['model_id','gpt-5.3-codex']]);
  await assert.rejects(execute(db,readVerifiedBenchmarkPricing,assertBenchmarkDollarCeiling,{model:'gpt-5.3-codex',max_tokens:350000},{cap_tokens:3500000},true),/BENCHMARK_USD_TOKEN_CEILING_EXCEEDED/);
+ let monetaryReads=0;db.rpc=async(name,args)=>{assert.equal(name,'benchmark_full_monetary_control');assert.deepEqual(args,{p_account:'account',p_continuation:'continuation'});monetaryReads++;return {data:{version:'atomic-exposure-v1',cumulativeTokenCap:550000,dollarCeilingMicrousd:10000000}};};
+ const denied=message=>{throw Error(message);};
+ await execute(db,readVerifiedBenchmarkPricing,()=>assert.fail('v5 uses atomic exposure'),{model:'gpt-5.3-codex',max_tokens:550000},{id:'account',cap_tokens:350000},true,{id:'continuation',plan:{version:5}},denied);
+ assert.equal(monetaryReads,1);db.rpc=async()=>({error:{message:'unavailable'}});
+ await assert.rejects(execute(db,readVerifiedBenchmarkPricing,()=>assert.fail(),{model:'gpt-5.3-codex',max_tokens:550000},{id:'account'},true,{id:'continuation',plan:{version:5}},denied),/atomic cumulative monetary control unavailable/);
 });
+

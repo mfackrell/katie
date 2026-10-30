@@ -18,3 +18,4 @@ test('unverified mission binding cannot reach provider',async()=>{
  binding:{verifiedByServer:false,missionId:'m1',arm:'orchestrated',baselineSha,accountId:'account',experimentId:'exp'},invoke:async()=>{called=true}}),/BINDING_UNVERIFIED/);
  assert.equal(called,false);
 });
+
