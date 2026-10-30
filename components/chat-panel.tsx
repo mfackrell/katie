@@ -393,6 +393,10 @@ function waitForRecoveryPoll(ms = MOBILE_RECOVERY_POLL_INTERVAL_MS): Promise<voi
 class TerminalChatError extends Error {
   constructor(message: string, readonly messageId?: string) { super(message); }
 }
+/** A durable spending pause is not a lost request or a failed assistant reply.
+ * Stop mobile polling, keep the original workflow and show Usage controls.
+ */
+class PausedChatError extends Error {}
 
 async function pollForPersistedAssistant(
   chatId: string,
@@ -424,11 +428,17 @@ async function pollForPersistedAssistant(
 
         if (statusResponse.ok) {
           const statusPayload = (await statusResponse.json()) as {
-            status?: "processing" | "completed" | "failed";
+            status?: "processing" | "completed" | "failed" | "paused";
             waitingForRunpod?: boolean;
             assistantMessageId?: string | null;
             error?: string | null;
           };
+
+          if (statusPayload.status === "paused") {
+            throw new PausedChatError(
+              statusPayload.error ?? "Saved request paused for accounting review. Open Status / Usage to continue or cancel; do not resend this request.",
+            );
+          }
 
           if (statusPayload.status === "failed") {
             throw new TerminalChatError(
@@ -499,7 +509,7 @@ async function pollForPersistedAssistant(
         }
       }
     } catch (error) {
-      if (error instanceof TerminalChatError) throw error;
+      if (error instanceof TerminalChatError || error instanceof PausedChatError) throw error;
       // Mobile connectivity may still be settling after the app resumes.
     }
 
@@ -1370,7 +1380,14 @@ export function ChatPanel({
           "Katie finished while this screen was away. The saved response has been restored.",
         );
       } catch (error) {
-        if (error instanceof TerminalChatError) {
+        if (error instanceof PausedChatError) {
+          clearPendingChatRequest(chatId);
+          if (!cancelled) {
+            setStatusMessage(error.message);
+            setAccountingResumeFailure(error.message);
+            window.dispatchEvent(new Event("standalone-accounting-updated"));
+          }
+        } else if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
           if (!cancelled) setInput(pending.content);
           if (!cancelled) {
@@ -2195,6 +2212,16 @@ export function ChatPanel({
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
+      if (error instanceof PausedChatError) {
+        // The original request is already retained on the server. Do not
+        // restore it as a sendable draft, manufacture a failed assistant
+        // response, or keep the mobile recovery spinner alive.
+        clearPendingChatRequest(chatId);
+        setStatusMessage(error.message);
+        setAccountingResumeFailure(error.message);
+        window.dispatchEvent(new Event("standalone-accounting-updated"));
+        return;
+      }
 
       if (requestStage === "preparing attachments") {
         // The optimistic message never reached /api/chat. Restore its draft
