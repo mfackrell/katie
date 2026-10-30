@@ -7,12 +7,25 @@ const panel = readFileSync('components/chat-panel.tsx', 'utf8');
 
 test('the chat shows owner spending decisions inline, including after a refresh', () => {
   assert.match(panel, /<StandaloneUsage inlinePendingOnly actorId=\{actorId\} chatId=\{chatId\} \/>/);
-  assert.match(usage, /if \(inlinePendingOnly\) return snapshotScope\.current ===/);
+  assert.match(usage, /const inlinePendingContent = snapshotScope\.current ===/);
+  assert.match(usage, /if \(inlinePendingOnly\) return inlinePendingContent/);
   assert.match(usage, /snapshot\?\.pending\.length/);
   assert.match(usage, /snapshot\.pending\.map\(attempt =>/);
   assert.match(usage, /void next\.refresh\(\)/, 'initial ledger read recovers existing paused approvals');
   assert.match(usage, /addEventListener\('standalone-accounting-updated',update\)/, 'chat pause refreshes the inline card');
   assert.match(panel, /window\.dispatchEvent\(new Event\("standalone-accounting-updated"\)\)/);
+});
+
+test('desktop and legacy chat share their existing usage reader with the inline approval portal', () => {
+  const workspace = readFileSync('components/chat-workspace.tsx', 'utf8');
+  const legacy = readFileSync('app/legacy/page.tsx', 'utf8');
+  assert.match(usage, /createPortal\(inlinePendingContent, inlineTarget\)/);
+  assert.match(usage, /if \(rail\) return <>\{inlinePortal\}<section/);
+  assert.match(panel, /id="katie-inline-spending-approval"/);
+  assert.match(panel, /!spendingApprovalHostedExternally && <StandaloneUsage inlinePendingOnly/);
+  assert.match(workspace, /spendingApprovalHostedExternally=\{railOpen && !actor\.managedAgentId/);
+  assert.match(legacy, /spendingApprovalHostedExternally=\{Boolean\(activeActor/);
+  assert.match(usage, /createRefreshFlight\(async signal =>/);
 });
 
 test('the owner chooses whether to approve the exact selected attempt without changing normal thresholds', () => {
