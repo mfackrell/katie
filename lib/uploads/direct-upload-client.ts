@@ -231,6 +231,7 @@ export async function uploadFilesDirect(
 
   for (const [fileIndex, file] of files.entries()) {
     const isVideo = file.type.startsWith("video/");
+    const isImage = file.type.startsWith("image/");
     const key = isVideo ? resumeKey(file) : "";
     let stage = "prepare";
     let uploadId: string | undefined;
@@ -340,7 +341,7 @@ export async function uploadFilesDirect(
       if (!prepared) {
         transport = DEFAULT_VIDEO_TRANSPORT;
         chunkBytes = chunkSizeFor(transport);
-        chunkCount = isVideo ? Math.ceil(file.size / chunkBytes) : 0;
+        chunkCount = isVideo || isImage ? Math.ceil(file.size / chunkBytes) : 0;
         onStatus(`Preparing ${file.name}…`);
         const payload = await withUploadDeadline("Preparing video upload", 30_000, async signal =>
           readUploadResponse(await fetcher("/api/upload/prepare", {
@@ -348,7 +349,7 @@ export async function uploadFilesDirect(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               name: file.name, type: file.type, size: file.size,
-              ...(isVideo ? { transport } : {}),
+              ...(isVideo || isImage ? { transport } : {}),
               ...(isVideo && options.handoffRequestId ? {
                 handoffRequestId: options.handoffRequestId,
                 handoffIndex: fileIndex + (options.handoffIndexOffset ?? 0),
@@ -587,6 +588,56 @@ export async function uploadFilesDirect(
           };
           dispatch();
         });
+      } else if (isImage) {
+        // Mobile image uploads used to send one unbounded cross-origin Storage
+        // PUT. On affected phones /prepare succeeded but the original never
+        // reached Storage, /complete, or /api/chat. Use the existing private,
+        // signed, same-origin 512 KiB relay already proven for video uploads.
+        // Each chunk's HMAC ticket, index, byte count and total file size
+        // are validated on the server before assembly of the original.
+        const total = Math.ceil(file.size / JSON_VIDEO_SMALL_CHUNK_BYTES);
+        for (let index = 0; index < total; index++) {
+          chunkIndex = index;
+          const offset = index * JSON_VIDEO_SMALL_CHUNK_BYTES;
+          const slice = file.slice(offset, Math.min(offset + JSON_VIDEO_SMALL_CHUNK_BYTES, file.size), "application/octet-stream");
+          let saved = false;
+          let lastError: unknown;
+          for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
+            try {
+              await withUploadDeadline("Uploading image part", 30_000, async signal =>
+                readUploadResponse(await fetcher("/api/upload/chunk", {
+                  method: "POST", signal,
+                  headers: {
+                    "Content-Type": "application/octet-stream",
+                    "x-katie-upload-token": prepared.uploadToken,
+                    "x-katie-chunk-index": String(index),
+                  },
+                  body: slice,
+                }))
+              );
+              saved = true;
+            } catch (error) {
+              lastError = error;
+              // A lost HTTP acknowledgment is not proof the private write
+              // failed. Check that the exact signed upload received this index
+              // before considering a second write to its immutable path.
+              try {
+                const progress = await status(prepared.uploadToken);
+                if (progress.uploadId === prepared.uploadId &&
+                    progress.chunkCount === total &&
+                    progress.transport === DEFAULT_VIDEO_TRANSPORT &&
+                    progress.uploadedIndexes.includes(index)) saved = true;
+              } catch { /* A bounded retry will report a concrete failure. */ }
+              if (!saved && attempt < 3)
+                await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
+            }
+          }
+          if (!saved) {
+            const reason = lastError instanceof Error ? lastError.message : String(lastError ?? "Unknown upload error");
+            throw new Error(`Image upload stopped at part ${index + 1}/${total}: ${reason}. Nothing was sent for image analysis; reselect the image to retry.`);
+          }
+          onStatus(`Uploading ${file.name}: ${Math.round(((index + 1) / total) * 100)}%…`);
+        }
       } else {
         onStatus(`Uploading ${file.name}…`);
         await readUploadResponse(await fetcher(prepared.uploadUrl, {
@@ -702,7 +753,7 @@ export async function uploadFilesDirect(
       // Keep the small receipt until the caller confirms the chat accepted it.
       // If a mobile tab disconnects now, a retry recovers /result without transfer.
     } catch (error) {
-      if (isVideo) {
+      if (isVideo || isImage) {
         await reportVideoUploadError(fetcher, {
           uploadId, stage,
           message: error instanceof Error ? error.message : String(error),
