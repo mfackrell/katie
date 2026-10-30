@@ -63,7 +63,16 @@ export async function authorizeStandaloneCaller(request:Pick<Request,'headers'>,
     const recovered=await getSupabaseAdminClient().rpc<boolean>('standalone_claim_verified_legacy_scope',{
       p_owner:ownerId,p_actor:actorId,p_chat:chatId
     });
-    if(recovered.error||recovered.data!==true)throw denied();
+    if(recovered.error||recovered.data!==true){
+      // Historic grants did not exist before owner authentication was introduced.
+      // Permit recovery only for a verified owner in a provably single-owner,
+      // pre-authentication tenant. The database enforces all scope constraints
+      // and records each recovered chat in a durable audit table.
+      const legacy=await getSupabaseAdminClient().rpc<boolean>('standalone_claim_pre_auth_owner_scope',{
+        p_owner:ownerId,p_actor:actorId,p_chat:chatId
+      });
+      if(legacy.error||legacy.data!==true)throw denied();
+    }
   }
   return ownerId;
 }
