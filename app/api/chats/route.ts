@@ -73,7 +73,16 @@ export async function POST(request: NextRequest) {
       updatedAt: now
     };
 
-    let row: {id:string;actor_id:string;title:string;created_at:string;updated_at:string}|null=n...[truncated]
+    let row: {id:string;actor_id:string;title:string;created_at:string;updated_at:string}|null=null;
+    if(ledger && ownerId){
+      if(principal?.isAnonymous){
+        const result=await getSupabaseAdminClient().rpc<typeof row>('standalone_guest_create_conversation',{
+          p_owner:ownerId,p_actor:chat.actorId,p_chat:chat.id,p_title:chat.title
+        });
+        if(result.error||!result.data)throw new StandaloneAuthorizationError('Guest workspace does not own this actor.');
+        row=result.data;
+      } else row=await ledger.createConversation(ownerId,chat.actorId,chat.id,chat.title);
+    }
     const savedChat = row ? { id:row.id, actorId:row.actor_id, title:row.title, createdAt:row.created_at, updatedAt:row.updated_at } : await saveChat(chat);
 
     return NextResponse.json({ chat: savedChat }, { status: 201 });
