@@ -65,6 +65,11 @@ export async function POST(request: NextRequest) {
     p_owner:original.owner_id,p_actor:original.actor_id,p_chat:original.chat_id,
   });
   if (scopeError || hasScope !== true) return NextResponse.json({error:"Saved source not authorized"},{status:403});
+  // Non-billable qualification: verify exact protected source, hash and scope
+  // before permitting the one authorized Venice submission.
+  if(request.nextUrl.searchParams.get("preflight")==="1")
+    return NextResponse.json({test:"venice-blind-preflight",ready:true,model:"venice-uncensored-1-2"},
+      {headers:{"Cache-Control":"private, no-store"}});
   try {
     const result=await runWithStandaloneAccounting({
       userId:original.owner_id,actorId:original.actor_id,chatId:original.chat_id,
