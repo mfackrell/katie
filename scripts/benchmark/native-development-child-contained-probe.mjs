@@ -33,7 +33,7 @@ writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final 
 const expectedLogprobsDenial=process.env.KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENIAL==='1';
 const phases=expectedLogprobsDenial?['implementation']:['implementation','review','repair','final-review'];
 const token='synthetic-bridge-token-not-a-provider-credential';
-const calls=[],receipts=[],summaries=[],phaseRequests=new Map();let phase='',forwarded=0,countedRequests=0;
+const calls=[],receipts=[],summaries=[],phaseRequests=new Map(),firstRequests=new Map();let phase='',forwarded=0,countedRequests=0;
 const db={rpc:async(name,args)=>{
  calls.push({name,args});
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
@@ -82,7 +82,7 @@ const upstream=async request=>{
 };
 // Synthetic count result exercises the actual SDK count-before-reserve path;
 // the separate fixed-provider count job qualifies real model counting support.
-upstream.countInputTokens=async body=>{countedRequests++;assert.ok(Object.isFrozen(body));return {inputTokens:7000,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
+upstream.countInputTokens=async body=>{countedRequests++;assert.ok(Object.isFrozen(body));if(!firstRequests.has(phase))firstRequests.set(phase,body);return {inputTokens:7000,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
 const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true,requireInputCount:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
@@ -136,7 +136,16 @@ try{
  assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,8);
  assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),40);
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
+ if(process.env.KATIE_NATIVE_PROBE_CAPTURE_FIRST_REQUESTS==='1'){
+  assert.ok(process.env.RUNNER_TEMP);assert.equal(firstRequests.size,4);
+  const requests=phases.map(phase=>({phase,body:firstRequests.get(phase)}));
+  assert.ok(requests.every(({body})=>!body.input?.some?.(item=>item.type==='reasoning')),'Capture only initial requests, never synthetic reasoning replay');
+  const raw=JSON.stringify(requests);assert.ok(Buffer.byteLength(raw)<=2_000_000);
+  writeFileSync(join(process.env.RUNNER_TEMP,'native-sdk-first-count-requests.json'),raw,{mode:0o600,flag:'wx'});
+  console.log('ACTUAL_NATIVE_FIRST_REQUESTS_CAPTURED=4');
+ }
  }
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
+
 
 

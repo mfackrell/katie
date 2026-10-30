@@ -8,6 +8,26 @@ on:
   workflow_dispatch:
   workflow_call:
 jobs:
+  actual-sdk-input-count:
+    needs: native-gateway
+    if: github.head_ref == 'qualify/native-sdk-input-count' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-sdk-first-count-requests
+          path: ${{ runner.temp }}
+      - name: Count four actual SDK first requests only (no inference)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/native-sdk-input-count-probe.mjs
   provider-input-count:
     if: github.head_ref == 'fix/native-authoritative-count' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -85,9 +105,17 @@ jobs:
         env:
           KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
           KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+          KATIE_NATIVE_PROBE_CAPTURE_FIRST_REQUESTS: '1'
         run: |
           git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
           node scripts/benchmark/native-development-child-contained-probe.mjs
+      - name: Upload credential-free first-request count fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sdk-first-count-requests
+          path: ${{ runner.temp }}/native-sdk-first-count-requests.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Adversarial shared trust boundary (Git, hooks, dependencies, symlinks)
         run: node --test tests/benchmark-native-trust-boundary.test.mjs
       - name: Qualify Native Thin owner grant and canonical HTTP receipt boundaries
@@ -114,5 +142,6 @@ jobs:
         run: node scripts/benchmark/native-four-phase-contained-host-probe.mjs
       - name: Qualify actual SDK plus HTTP gateway inside containment
         run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
+
 
 
