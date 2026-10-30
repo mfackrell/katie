@@ -87,3 +87,97 @@ test('UI binds the pure engine, persistence and the source-bound selectors', () 
   assert.match(page, /aria-label="Reset"/);
   assert.match(page, /aria-label=\{\`Take \$\{count\}\`\}/);
 });
+
+test('the full frozen Take Eleven browser contract runs against the real Next route', { timeout: 170000 }, async () => {
+  const { spawn } = await import('node:child_process');
+  const { createServer } = await import('node:net');
+  const { once } = await import('node:events');
+  const { chromium } = await import('playwright-core');
+  const { default: bundledChromium } = await import('@sparticuz/chromium');
+
+  // Read the immutable source-bound scenarios, rather than authoring a weaker fixture.
+  const request = readFileSync('tests/fixtures/take-eleven-frozen-development-request.md', 'utf8');
+  const marker = request.match(/<!-- katie-project: ([A-Za-z0-9_-]+) -->/);
+  assert.ok(marker, 'Frozen Take Eleven contract is present');
+  const project = JSON.parse(Buffer.from(marker[1], 'base64url').toString('utf8'));
+  const scenarios = project.contract.scenarios;
+  assert.equal(scenarios.length, 5, 'All five approved browser scenarios must execute');
+
+  const socket = createServer();
+  socket.listen(0, '127.0.0.1');
+  await once(socket, 'listening');
+  const port = socket.address().port;
+  await new Promise(resolve => socket.close(resolve));
+  const origin = `http://127.0.0.1:${port}`;
+
+  let output = '';
+  const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--hostname', '127.0.0.1', '--port', String(port)], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      NEXT_TELEMETRY_DISABLED: '1',
+      NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://example.supabase.co',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'anon-placeholder',
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || 'service-role-placeholder',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  for (const stream of [server.stdout, server.stderr]) stream.on('data', bytes => {
+    output = (output + String(bytes)).slice(-16000);
+  });
+  let browser;
+  try {
+    const startupDeadline = Date.now() + 65000;
+    while (!output.includes('Ready in')) {
+      if (server.exitCode !== null || Date.now() > startupDeadline) {
+        throw Error('Take Eleven Next test server failed to start: ' + output.slice(-4000));
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    browser = await chromium.launch({
+      executablePath: process.env.KATIE_TEST_CHROMIUM || await bundledChromium.executablePath(),
+      args: bundledChromium.args,
+      headless: true,
+    });
+    for (const scenario of scenarios) {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      try {
+        const page = await context.newPage();
+        const pageErrors = [];
+        page.on('pageerror', err => pageErrors.push(err.message));
+        for (const [index, step] of scenario.steps.entries()) {
+          const prefix = scenario.name + ' step ' + (index + 1) + ' (' + step.action + ')';
+          switch (step.action) {
+            case 'goto':
+              assert.equal(step.path, '/project-pilots/take-eleven', prefix + ' route');
+              await page.goto(origin + step.path, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await page.locator('main[data-game-ready="true"]').waitFor({ state: 'visible', timeout: 15000 });
+              break;
+            case 'click':
+              await page.locator(step.selector).click({ timeout: 10000 });
+              break;
+            case 'expectVisible':
+              await page.locator(step.selector).waitFor({ state: 'visible', timeout: 10000 });
+              break;
+            case 'expectText':
+              await page.waitForFunction(
+                ({ selector, value }) => document.querySelector(selector)?.textContent?.trim() === value,
+                { selector: step.selector, value: step.value },
+                { timeout: 12000 }
+              );
+              break;
+            default:
+              assert.fail(prefix + ' unsupported action');
+          }
+        }
+        assert.deepEqual(pageErrors, [], scenario.name + ' browser errors');
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser?.close();
+    if (server.exitCode === null) server.kill('SIGTERM');
+  }
+});
