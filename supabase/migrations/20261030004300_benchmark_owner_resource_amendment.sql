@@ -80,9 +80,9 @@ begin
  select * into j from mission_assignments where mission_id=m.id and role='development' order by created_at desc limit 1 for update;
  select * into t from agent_tasks where id=j.id for update;
  select * into prior from benchmark_full_continuations where project_id=p.id order by created_at desc,id desc limit 1;
- select * into old from benchmark_native_spending_approvals where task_id=t.id order by created_at desc,id desc limit 1;
+ select * into old from benchmark_native_spending_approvals where task_id=t.id order by created_at desc,id desc limit 1 for update;
  select * into s from benchmark_development_paid_successors where id=(t.external->>'paidSuccessorId')::uuid;
- select eg.* into g from benchmark_execution_grants eg join benchmark_development_paid_successor_grants sg on sg.grant_id=eg.id where sg.successor_id=s.id for update;
+ select eg.* into g from benchmark_execution_grants eg join benchmark_development_paid_successor_grants sg on sg.grant_id=eg.id where sg.successor_id=s.id for update of eg;
  remaining:=170000-m.actual_tokens;
  eligible:=p.phase='development' and p.status='blocked' and m.status='blocked' and m.project_kind='development'
  and j.status='failed' and t.status='blocked' and t.kind='development' and j.payload->>'approved'='true'
