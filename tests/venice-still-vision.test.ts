@@ -19,12 +19,13 @@ const good='Primary focal point: A small blue ceramic cup occupies the center. '
   'Spatial relationships and interactions: The cup stands upright on a matte wooden table, with the handle on the right. '+
   'Secondary context: A plain pale wall is behind it, softly lit. Uncertainties: The volume of the cup cannot be measured from the image.';
 function fixture(){
-  let attempt:LedgerAttempt|null=null,sends=0,discovery=0,uncertain=0,dispatches=0;
+  let attempt:LedgerAttempt|null=null,sends=0,discovery=0,uncertain=0,dispatches=0,exposureAccepted=false;
   let mode:'success'|'denied'|'lost'|'malformed'='success';
   let modelSpec:Record<string,unknown>={};
   const ledger={
     authorizeScope:async()=>true,
     lookupAttempt:async()=>attempt,
+    uncertainExposureAccepted:async()=>exposureAccepted,
     registerPricing:async()=>true,
     admit:async (entry:Record<string,unknown>)=>{
       attempt={id:'attempt-venice-1',owner_id:scope.userId,actor_id:scope.actorId,
@@ -64,6 +65,7 @@ function fixture(){
   };
   const run=(question='Describe the image')=>runWithStandaloneAccounting(scope,()=>describeImageWithVenice(image,question,{key,ledgerFactory:()=>ledger as never,fetchFn:transport}));
   return {run,set mode(v:typeof mode){mode=v;},set modelSpec(v:Record<string,unknown>){modelSpec=v;},
+    set exposureAccepted(v:boolean){exposureAccepted=v;},
     get sends(){return sends;},get discovery(){return discovery;},get uncertain(){return uncertain;},
     get dispatches(){return dispatches;},get attempt(){return attempt;}};
 }
@@ -93,6 +95,16 @@ test('lost provider result remains uncertain and cannot create a duplicate infer
   await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
   await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
   assert.equal(f.sends,1);assert.equal(f.uncertain,1);
+});
+test('acknowledged lost Venice exposure never retransmits and allows separately accounted continuation',async()=>{
+  const f=fixture();f.mode='lost';
+  await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
+  f.exposureAccepted=true;
+  const resumed=await f.run();
+  assert.equal(resumed,null,'saved unavailable evidence is not invented');
+  assert.equal(f.sends,1,'no second Venice POST after owner acknowledgement');
+  assert.equal(f.dispatches,1);
+  assert.equal(f.attempt?.state,'uncertain','original held exposure remains unresolved');
 });
 test('unexpected model substitution is retained as evidence but never supplied to conversation',async()=>{
   const f=fixture();f.mode='malformed';
