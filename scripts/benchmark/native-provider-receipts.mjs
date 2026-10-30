@@ -1,6 +1,7 @@
 // Trusted host only. The Codex child never receives this provider credential.
 // Buffer one bounded Responses event stream until a terminal receipt exists;
 // unknown/partial responses keep their reservation for later reconciliation.
+import {createHash} from 'node:crypto';
 export const NATIVE_INPUT_COUNT_VERSION='provider-input-count-v1';
 export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https://api.openai.com'}){
  if(typeof apiKey!=='string'||apiKey.length<20)throw Error('GATEWAY_PROVIDER_KEY_REQUIRED');
@@ -36,6 +37,7 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
    usage:terminal.usage,body:raw,contentType:resp.headers.get('content-type')||'text/event-stream'};
  };
  provider.countInputTokens=async body=>{
+  const requestHash=createHash('sha256').update(JSON.stringify(body)).digest('hex');
   // Context-bearing parameters from the provider's InputTokenCountParams.
   // Generation controls (stream/output cap/sampling/store/include/metadata)
   // are not count parameters and do not add input context.
@@ -55,7 +57,7 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
   }catch{throw Error('GATEWAY_INPUT_COUNT_INVALID');}
   if(result?.object!=='response.input_tokens'||!Number.isSafeInteger(result.input_tokens)||result.input_tokens<0||result.input_tokens>120000)
    throw Error('GATEWAY_INPUT_COUNT_INVALID');
-  return result.input_tokens;
+  return {inputTokens:result.input_tokens,requestHash};
  };
  return provider;
 }

@@ -10,8 +10,8 @@ import {tmpdir} from 'node:os';
 import {randomBytes} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
-import {createNativeHttpBridge} from './native-http-bridge.mjs';
-import {createResponsesProvider} from './native-provider-receipts.mjs';
+import {createNativeHttpBridge,nativeChildInterruptionRetryable} from './native-http-bridge.mjs';
+import {createResponsesProvider,NATIVE_INPUT_COUNT_VERSION} from './native-provider-receipts.mjs';
 import {assertBenchmarkDollarCeiling,readVerifiedBenchmarkPricing} from './paid-dollar-ceiling.mjs';
 import {tokenDigest} from './authenticated-native-gateway.mjs';
 import {readNativeHandoff} from './native-dispatch-contract.mjs';
@@ -141,9 +141,16 @@ if(proof.paidSuccessorId){
  const successor=await readOne('benchmark_development_paid_successors','id',proof.paidSuccessorId);
  if(successor.renewal_id!==proof.developmentRenewalId||successor.release_sha!==process.env.GITHUB_SHA||successor.diagnostic_version!==NATIVE_ADMISSION_DIAGNOSTICS_VERSION||task.external?.paidSuccessorId!==successor.id)denied('paid successor identity or release mismatch');
 }
+if(proof.resourceAmendmentId){
+ if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId||proof.pregrantRecoveryId||proof.paidSuccessorId)denied('invalid resource amendment transport');
+ const amendment=await readOne('benchmark_development_resource_amendments','id',proof.resourceAmendmentId);
+ if(amendment.renewal_id!==proof.developmentRenewalId||amendment.approval_id!==proof.approvalId||amendment.task_id!==proof.taskId||amendment.continuation_id!==proof.continuationId||amendment.release_sha!==process.env.GITHUB_SHA||amendment.runtime_version!==NATIVE_INPUT_COUNT_VERSION||task.external?.resourceAmendmentId!==amendment.id)denied('resource amendment identity or release mismatch');
+}
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
-const {data:grantResult,error:issueError}=proof.paidSuccessorId
+const {data:grantResult,error:issueError}=proof.resourceAmendmentId
+ ?await db.rpc('benchmark_issue_development_amendment_grant',{p_amendment:proof.resourceAmendmentId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
+ :proof.paidSuccessorId
  ?await db.rpc('benchmark_issue_development_paid_successor_grant',{p_successor:proof.paidSuccessorId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
  :proof.pregrantRecoveryId
  ?await db.rpc('benchmark_issue_development_pregrant_recovery_grant',{p_recovery:proof.pregrantRecoveryId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
@@ -188,7 +195,10 @@ mkdirSync(sockdir,{mode:0o700});
 const perRequestCap=Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens));
 if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
 const upstream=createResponsesProvider({apiKey:providerKey});
+let gatewayFailure=null;
 const server=createNativeHttpBridge({
+ onFailure:classification=>{gatewayFailure??=classification;},
+ requireInputCount:true,
  db,grantToken,trialId:proof.trialId,executionEpoch,
  providerNamespace:'openai-responses',upperTokens:perRequestCap,
  upstream,clientToken,fullMission:true,
@@ -235,7 +245,7 @@ try{
    child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));
   });
   child=null;
-  if(outcome.code!==0)denied('native '+phase+' failed; spending holds retained');
+  if(outcome.code!==0)throw Object.assign(new Error('NATIVE_HOST_DENIED: native '+phase+' failed; spending holds retained'),{nativeChildOutcome:outcome});
   if(!reviewing)return null;
   const marker=output.split('\n').filter(x=>x.startsWith('NATIVE_REVIEW_RESULT=')).at(-1);
   if(!marker)denied('missing independent '+phase+' decision');
@@ -248,12 +258,12 @@ try{
   return decision;
  };
  const safelyRunPhase=async(phase,findings='')=>{
-  // One bounded retry only for an interrupted native child, never for a
-  // rejected reviewer verdict, missing receipt, expired grant or failed auth.
+  // Retry only a positively identified process interruption. Any gateway denial,
+  // uncertain upstream result, ordinary nonzero exit or intentional stop is final.
   for(let attempt=0;attempt<2;attempt++){
    try{return await runPhase(phase,findings)}
    catch(error){
-    if(attempt!==0||!/NATIVE_HOST_DENIED: native (implementation|review|repair|final-review) failed; spending holds retained/.test(String(error?.message)))
+    if(attempt!==0||!nativeChildInterruptionRetryable(error?.nativeChildOutcome,gatewayFailure))
      throw error;
     const {data:pending,error:ledgerError}=await db.from('benchmark_budget_calls')
       .select('id').eq('account_id',account.id)
@@ -280,8 +290,8 @@ try{
    ]);
    if(g.stopped_at||g.revoked_at||new Date(g.deadline)<=new Date()||
       p.status!=='running'||new Date(p.deadline)<=new Date()||
-      !p.approved_hash||p.approved_hash!==p.approval_hash)child?.kill('SIGKILL');
-  }catch{child?.kill('SIGKILL')}
+      !p.approved_hash||p.approved_hash!==p.approval_hash){gatewayFailure??='host-stop';child?.kill('SIGKILL');}
+  }catch{gatewayFailure??='host-stop';child?.kill('SIGKILL')}
  },3000);
  await safelyRunPhase('implementation');
  let candidateHead=commitCandidate('native: checkpoint approved implementation');
@@ -308,5 +318,6 @@ try{
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
 }
+
 
 

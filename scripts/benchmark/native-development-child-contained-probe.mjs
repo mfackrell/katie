@@ -1,7 +1,7 @@
 // Run the actual production child and model configuration through the real paid
 // admission path. The isolated gateway has ONLY in-memory DB/synthetic responses.
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {mkdtempSync,mkdirSync,writeFileSync,rmSync,realpathSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -33,11 +33,14 @@ writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final 
 const expectedLogprobsDenial=process.env.KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENIAL==='1';
 const phases=expectedLogprobsDenial?['implementation']:['implementation','review','repair','final-review'];
 const token='synthetic-bridge-token-not-a-provider-credential';
-const calls=[],receipts=[],summaries=[],phaseRequests=new Map();let phase='',forwarded=0;
+const calls=[],receipts=[],summaries=[],phaseRequests=new Map();let phase='',forwarded=0,countedRequests=0;
 const db={rpc:async(name,args)=>{
  calls.push({name,args});
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
- if(name==='benchmark_full_native_reserve')return {data:'synthetic-operation-'+calls.length,error:null};
+ if(name==='benchmark_full_native_reserve'){
+  if(!expectedLogprobsDenial)assert.ok(args.p_tokens<=40780,'Authoritative fixture count must fit the remaining production capacity');
+  return {data:'synthetic-operation-'+calls.length,error:null};
+ }
  throw Error('UNEXPECTED_PROBE_RPC:'+name);
 }};
 // Deliberately DO NOT set upstream.nonbillableFixture: it bypasses the actual
@@ -77,7 +80,10 @@ const upstream=async request=>{
  const events=[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],...output.flatMap((item,output_index)=>[['response.output_item.added',{type:'response.output_item.added',output_index,item}],['response.output_item.done',{type:'response.output_item.done',output_index,item}]]),['response.completed',{type:'response.completed',response}]];
  return {providerRequestId:response.id,actualTokens:5,usage:response.usage,contentType:'text/event-stream',body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
 };
-const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true});
+// Synthetic count result exercises the actual SDK count-before-reserve path;
+// the separate fixed-provider count job qualifies real model counting support.
+upstream.countInputTokens=async body=>{countedRequests++;assert.ok(Object.isFrozen(body));return {inputTokens:7000,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
+const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true,requireInputCount:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
  try{const b=JSON.parse(raw);const nontextPaths=[];
@@ -125,10 +131,12 @@ try{
  }
  if(!expectedLogprobsDenial){
  assert.equal(forwarded,8);assert.equal(receipts.length,8);assert.equal(summaries.length,8);
+ assert.equal(countedRequests,8);
  assert.deepEqual([...phaseRequests.values()],[2,2,2,2]);
  assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,8);
  assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),40);
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
  }
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
+
 
