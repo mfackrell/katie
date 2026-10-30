@@ -92,7 +92,7 @@ test('deterministic image limitations are saved as terminal failures rather than
 
 test('a non-approvable model context blocker is terminal and does not strand a workflow paused',async()=>{
   const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(
-    JSON.stringify({type:'reasoning_error',code:'standalone_context_capacity_unverified',message:'No newer context-capable model is available.'})+'\\n',
+    JSON.stringify({type:'reasoning_error',code:'standalone_context_capacity_unverified',message:'No newer context-capable model is available.'})+'\n',
     {headers:{'content-type':'application/x-ndjson'}}));
   assert.equal(stored.status,'failed');
   assert.match(await response.text(),/standalone_context_capacity_unverified/);
