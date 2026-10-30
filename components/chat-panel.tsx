@@ -2296,10 +2296,10 @@ export function ChatPanel({
     if (loading || deletingMessageId || !window.confirm("Permanently delete this message? This cannot be undone.")) return;
     setDeletingMessageId(messageId);
     try {
-      const bearer = ownerSessionBearer();
+      const bearer = await ownerSessionBearer();
       const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&messageId=${encodeURIComponent(messageId)}`, {
         method: "DELETE",
-        headers: bearer ? { Authorization: bearer } : {},
+        headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as {error?: string};
