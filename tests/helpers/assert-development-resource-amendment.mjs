@@ -93,7 +93,7 @@ export async function assertDevelopmentResourceAmendment(db,rival,{renewal,proje
  // Follow-through: the ordinary assessment reservation retains exactly60,000.
  await db.query('begin');
  const assessment=randomUUID(),team=(await db.query('select team from agent_missions where id=$1',[mission])).rows[0].team;
- await db.query('select create_mission($1,$2,$3,60,null)',[assessment,'Synthetic preserved assessment',JSON.stringify(team)]);
+ await db.query('select create_mission($1,$2,$3,60,null)',[assessment,'Synthetic preserved assessment',team]);
  await db.query("update agent_missions set project_id=$2,project_kind='assessment',status='running',token_allowance=60000,deadline=least(now()+interval '1 hour',$3::timestamptz),project_evidence=jsonb_build_object('benchmarkContinuationId',$4::uuid) where id=$1",[assessment,project,accepted.deadline,accepted.id]);
  await db.query("update agent_missions set status='completed' where id=$1",[mission]);
  await db.query("update work_projects set phase='assessment',active_mission_id=$2 where id=$1",[project,assessment]);
