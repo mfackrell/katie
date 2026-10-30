@@ -32,7 +32,7 @@ export async function assertDevelopmentPaidSuccessor(db,rival,{renewal,project,m
  assert.deepEqual(await snapshot(),before,'Approval consumption, original grant link, balances and history unchanged');
  assert.ok((await db.query('select stopped_at from benchmark_execution_grants where id=$1',[grant.id])).rows[0].stopped_at);
  const reserve='select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6) id';
- await assert.rejects(db.query(reserve,[grant.token_digest,trial,4,randomUUID(),'gpt-5.3-codex',1]),/grant|live|stopped|unavailable/);
+ await assert.rejects(db.query(reserve,[grant.token_digest,trial,4,randomUUID(),'gpt-5.3-codex',1]),/external session unauthorized/);
  const issue='select benchmark_issue_development_paid_successor_grant($1,$2,$3,$4,$5) g',issueArgs=[rec.id,'c'.repeat(64),renewal.approval_id,task,corrected];
  await assert.rejects(db.query(issue,issueArgs),/unavailable/);
  assert.equal((await db.query('select benchmark_claim_development_paid_successor($1,$2) ok',[rec.id,'4'.repeat(40)])).rows[0].ok,false);
