@@ -50,7 +50,7 @@ begin
  or r.pricing_input_per_1m is null or r.pricing_output_per_1m is null
  or r.pricing_input_per_1m not between 0.000001 and 14 or r.pricing_output_per_1m not between 0.000001 and 14
  then raise exception 'Full monetary pricing admission denied';end if;
- if exists(select 1 from benchmark_budget_calls c left join benchmark_dollar_exposures e on e.call_id=c.id where c.account_id=a.id and c.id<>new.id and e.call_id is null)
+ if exists(select 1 from benchmark_budget_calls bc left join benchmark_dollar_exposures e on e.call_id=bc.id where bc.account_id=a.id and bc.id<>new.id and e.call_id is null)
  then raise exception 'Full monetary history incomplete';end if;
  rate:=greatest(r.pricing_input_per_1m,r.pricing_output_per_1m);
  select coalesce(sum(exposure_microusd),0) into used from benchmark_dollar_exposures where account_id=a.id;
@@ -74,9 +74,10 @@ begin
  or coalesce(new.provider_usage->>'input_tokens','')!~'^[0-9]+$'
  or coalesce(new.provider_usage->>'output_tokens','')!~'^[0-9]+$'
  or (new.provider_usage->>'input_tokens')::numeric+(new.provider_usage->>'output_tokens')::numeric is distinct from new.actual_tokens::numeric then return new;end if;
- cost:=new.actual_tokens*e.price_per_million;
- -- Conservative settlement prices EVERY actual token at the most expensive
- -- verified admission rate. Pricing changes cannot retroactively lower exposure.
+ cost:=ceil((new.provider_usage->>'input_tokens')::numeric*(e.price_evidence->>'inputPerMillion')::numeric+(new.provider_usage->>'output_tokens')::numeric*(e.price_evidence->>'outputPerMillion')::numeric);
+ -- Settle complete standard-tier usage at the verified ADMISSION price, rounded
+ -- upward to microdollars; ignore cache discounts. Unknown receipts retain holds.
+ -- Later registry price changes cannot retroactively lower exposure.
  update benchmark_dollar_exposures set exposure_microusd=cost,basis='receipt-provision' where call_id=new.id;
  if cost>e.reserved_microusd then update benchmark_budget_accounts set frozen_at=coalesce(frozen_at,now()) where id=e.account_id;end if;
  return new;

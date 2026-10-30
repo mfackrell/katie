@@ -94,7 +94,7 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  await db.query('select benchmark_finish_mission_call($1,null)',[linked]);
  assert.equal((await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].exposure_microusd,held);
  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-dollar-race',{input_tokens:60,output_tokens:10,total_tokens:70}]);
- assert.equal(Number((await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].exposure_microusd),980);
+ assert.equal(Number((await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].exposure_microusd),245);
  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-dollar-race',{input_tokens:60,output_tokens:10,total_tokens:70}]);
  await db.query('reset role');await db.query('update benchmark_dollar_exposures set exposure_microusd=$2 where call_id=$1',[original.call_id,original.exposure_microusd]);await db.query('set role service_role');
  // Ten more native turns + initial race=eleven, with realistic full-size receipts.
