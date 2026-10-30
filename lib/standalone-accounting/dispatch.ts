@@ -3,7 +3,8 @@ import { freezeStoredImages } from './immutable-media';
 import { loadStandalonePricing } from './pricing-intake';
 import { createStandaloneLedger, StandaloneAccountingError } from './ledger';
 import { getAccountingScope, nextStandaloneAttempt } from './context';
-import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION } from './estimate';
+import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION, type StandaloneEstimate } from './estimate';
+import { countNativePreparedInput } from './native-token-count';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
 import type { ResponseCheckpoint } from './types';
 
@@ -252,19 +253,51 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     }
     let pricing=await loadStandalonePricing(ledger,attempt?.pricing_version);
     await ledger.registerPricing(pricing.version,pricing);
-    if (attempt && attempt.state !== 'settled' && attempt.estimator_version !== ESTIMATOR_VERSION) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    // Persisted native counts are immutable evidence for the exact hash and model.
+    // Resume must not silently recalculate or substitute a different reservation.
+    const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
+    const countedInput = attempt?.estimator_version === PROVIDER_COUNT_ESTIMATOR_VERSION &&
+      savedEstimate?.inputCountSource === 'provider' &&
+      savedEstimate.requestHash === prepared.hash &&
+      Number.isSafeInteger(savedEstimate.inputTokens) && savedEstimate.inputTokens >= 0
+      ? { inputTokens: savedEstimate.inputTokens, requestHash: prepared.hash } : undefined;
+    if (attempt?.estimator_version === PROVIDER_COUNT_ESTIMATOR_VERSION && !countedInput) {
+      throw failure('estimate_changed', 'Stored provider count evidence does not match this prepared request.');
+    }
     if(attempt&&['paused','reserved'].includes(attempt.state)){
       const current=await loadStandalonePricing(ledger);
       const oldPrice=getModelPrice(provider,prepared.model,pricing),currentPrice=getModelPrice(provider,prepared.model,current);
       if(!currentPrice)throw failure('unsupported_billing','The current validated catalog has no applicable price for this exact model. The saved attempt remains held.');
       if(!oldPrice||canonicalJson(oldPrice)!==canonicalJson(currentPrice)){
-        const quote=estimatePreparedRequest(prepared,current);
+        const quote=estimatePreparedRequest(prepared,current,countedInput);
         if(quote.status!=='estimated'||quote.reservationMicrousd===null)throw failure('unsupported_billing','Updated pricing cannot estimate this request: '+quote.issues.join('; '));
         attempt=await ledger.reprice(context.userId,attempt.id,current.version,quote as unknown as Record<string,unknown>);
         pricing=current;
       }
     }
-    const estimate = estimatePreparedRequest(prepared,pricing);
+    let estimate = estimatePreparedRequest(prepared,pricing,countedInput);
+    const contextIssue = 'Estimated input plus output exceeds supported context window';
+    // Exact input counting is worth the free provider preflight for large
+    // prompts, especially whenever the byte-based heuristic would reject the
+    // model. Never use a browser-supplied token count or alter the frozen body.
+    if (!attempt && estimate.issues.every(issue => issue === contextIssue) &&
+        (estimate.inputTokens >= 100_000 || estimate.issues.includes(contextIssue))) {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const nativeCount = await countNativePreparedInput(prepared,transport,headers,signal);
+      if (nativeCount !== null) {
+        estimate = estimatePreparedRequest(prepared,pricing,{inputTokens:nativeCount,requestHash:prepared.hash});
+      }
+    }
+    if (estimate.issues.includes(contextIssue)) {
+      const confirmed = estimate.inputCountSource === 'provider';
+      throw Object.assign(failure(
+        confirmed ? 'context_window_exceeded' : 'context_capacity_unverified',
+        confirmed
+          ? 'Provider-counted input plus the unchanged output allowance exceeds this model\'s reviewed context window. A higher-capacity model is required.'
+          : 'This model cannot verify the full input token count, and its conservative estimate exceeds its reviewed context window. A higher-capacity model is required.'
+      ),{provider:prepared.provider,model:prepared.model,inputTokens:estimate.inputTokens,outputAllowance:estimate.outputAllowance});
+    }
     if (estimate.status !== 'estimated' || estimate.reservationMicrousd === null) throw Object.assign(failure('unsupported_billing', 'This provider request cannot be priced: '+estimate.issues.join('; ')), { issues: estimate.issues });
     if (attempt && attempt.state !== 'settled' && BigInt(attempt.reserved_microusd) !== BigInt(estimate.reservationMicrousd)) throw failure('estimate_changed', 'The saved reservation differs from the verified prepared request estimate. A fresh quote is required.');
     const reconcile = async (checkpoint: ResponseCheckpoint, attemptId: string) => {
