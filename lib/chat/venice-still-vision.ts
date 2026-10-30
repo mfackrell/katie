@@ -105,6 +105,12 @@ export async function describeImageWithVenice(image:string,question:string,deps:
       deps.onStatus?.('Using saved Dolphin Venice observation');
       return decoded(attempt.response_checkpoint);
     }
+    if(attempt.state==='uncertain'&&await ledger.uncertainExposureAccepted(context.userId,attempt.id)){
+      // Authorized continuation consumes no additional Venice inference.
+      // The original reservation stays held and existing premium escalation
+      // may proceed independently under the same original request budget.
+      return null;
+    }
     if(attempt.state==='uncertain'||attempt.state==='dispatched'||attempt.state==='settled')
       throw Object.assign(new StandaloneAccountingError('outcome_unknown','The prior Venice request outcome is unresolved; no duplicate image analysis was submitted.'),{attemptId:attempt.id});
     if(attempt.state==='paused')
