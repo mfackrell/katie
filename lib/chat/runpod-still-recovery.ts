@@ -56,7 +56,7 @@ async function listPendingQwenJobs():Promise<SavedQwenJob[]>{
     .select('owner_id,actor_id,chat_id,request_id,provider_request_id,state')
     .eq('provider','runpod').eq('model',QWEN_STILL_POLICY.model)
     .eq('pricing_version',QWEN_STILL_POLICY.version).eq('state','dispatched')
-    .not('provider_request_id','is',null).is('response_checkpoint',null)
+    .is('response_checkpoint',null)
     .order('created_at',{ascending:true}).limit(30);
   if(error)throw new Error('Saved RunPod attempt lookup failed.');
   return (data??[]) as SavedQwenJob[];
