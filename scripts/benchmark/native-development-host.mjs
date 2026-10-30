@@ -25,7 +25,7 @@ if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId','resourceAmendmentId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');

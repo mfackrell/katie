@@ -47,7 +47,7 @@ test('actual production preflight rejects revoked, expired, wrong-owner, wrong-e
  const r=await preflight({approvalChange:{deadline:new Date(Date.now()+3600000).toISOString()}});assert.match(r.error?.message??'',/qualification/);assert.equal(r.calls.grants,0);
 });
 test('corrupt or changed capsule never reaches a database or execution grant',async()=>{
- for(const options of [{capsule:'corrupt'},{manifestChange:{productionRuntime:'different'}}]){
+ for(const options of [{capsule:'corrupt'},{manifestChange:{productionRuntime:'different'}},{manifestChange:{resourceAmendmentId:'substituted'}}]){
   const r=await preflight(options);assert.ok(r.error);assert.equal(r.calls.connections.length,0);assert.equal(r.calls.grants,0);
  }
 });
@@ -104,3 +104,4 @@ test('startup recovery rejects mismatched durable task, approval and deployed re
   assert.equal(r.calls.grants,0);assert.equal(r.calls.setup.length,0);
  }
 });
+
