@@ -52,7 +52,7 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  assert.equal(record.deadline.getTime()-record.created_at.getTime(),14400000);
  assert.equal((await db.query('select benchmark_effective_account_cap($1) n',[account])).rows[0].n,'550000');
  const after=await snapshot();assert.deepEqual(after.account,before.account);assert.deepEqual(after.calls,before.calls);
- for(const old of before.approvals)assert.deepEqual(after.approvals.find(x=>x.id===old.id),old);
+ for(const old of before.approvals){const updated=after.approvals.find(x=>x.id===old.id);if(old.id===plan.plan.previousApprovalId){assert.ok(updated.revoked_at);assert.deepEqual({...updated,revoked_at:old.revoked_at},old);assert.deepEqual(am.source_snapshot.approval,old);}else assert.deepEqual(updated,old);}
  for(const old of before.continuations)assert.deepEqual(after.continuations.find(x=>x.id===old.id),old);
  const fresh=(await db.query('select * from benchmark_native_spending_approvals where id=$1',[am.approval_id])).rows[0];assert.equal(Number(fresh.max_tokens),550000);
  assert.equal((await db.query('select benchmark_development_amendment_ready($1,$2) ok',[am.id,release])).rows[0].ok,true);
@@ -70,6 +70,16 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
   await db.query('begin');await db.query('update model_registry set '+sql+" where provider_name='openai' and model_id='gpt-5.3-codex'");
   await assert.rejects(native(db,100),/pricing|admission/);await db.query('rollback');
  }
+ // A transaction begun before expiry must fail if it waits past the deadline.
+ await db.query('reset role');
+ await db.query("update benchmark_execution_grants set deadline=clock_timestamp()+interval '500 milliseconds' where id=$1",[g.id]);
+ await db.query('set role service_role');
+ await db.query('begin');await db.query("select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))");
+ await rival.query('begin');
+ const delayed=native(rival,100).then(()=>({accepted:true}),error=>({error}));
+ await new Promise(resolve=>setTimeout(resolve,650));await db.query('commit');
+ const expired=await delayed;assert.ok(expired.error);assert.match(expired.error.message,/expired|unauthorized/);await rival.query('rollback');
+ await db.query('reset role');await db.query('update benchmark_execution_grants set deadline=$2 where id=$1',[g.id,g.deadline]);await db.query('set role service_role');
  // Dollar race: fixture raises historical provision to leave exactly one100token
  // hold. Two separate connections compete; exactly one may reserve.
  await db.query('reset role');
@@ -123,7 +133,7 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
 
  assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','completed','completed',$4) ok",[review.job.id,review.job.lease,{verdict:'pass'},'Synthetic independently reviewed fixture.'])).rows[0].ok,true);
  assert.equal((await db.query('select status from agent_missions where id=$1',[mission])).rows[0].status,'completed');
- const projectClaim=(await db.query('select claim_work_project() p')).rows[0].p;assert.equal(projectClaim.id,project);
+ const projectClaim=(await db.query('select claim_work_project() p')).rows[0].p;assert.equal(projectClaim.id,project);assert.equal(projectClaim.token_allowance,550000,'Coordinator must see effective cumulative cap');
  assert.equal((await db.query("select finish_work_project($1,$2,'advance',$3) ok",[project,projectClaim.lease,{head}])).rows[0].ok,true);
  assert.equal((await db.query('select verified_sha from work_projects where id=$1',[project])).rows[0].verified_sha,head);
  // Stand in for the separately tested deployment/browser receipt, then use the

@@ -52,3 +52,10 @@ test('owner API GET is read-only and amendment POST requires its explicit author
  assert.equal((await api.POST(request(body))).status,200);assert.equal(calls.at(-1).args.p_approve,true);assert.equal(calls.at(-1).args.p_runtime,'provider-input-count-v1');
 });
 
+
+test('coordinator accepts preserved amended development arithmetic before assessment',()=>{
+ const raw=readFileSync('lib/projects/worker.ts','utf8');const start=raw.indexOf('const valid=plan&&'),end=raw.indexOf('if(!valid)',start);
+ assert.ok(start>0&&end>start);const validate=new Function('plan','p','renewal',stripTypeScriptTypes(raw.slice(start,end))+'return valid;');
+ assert.equal(validate({specificationTokens:0,developmentTokens:373279,assessmentTokens:60000,developmentRemainingTokens:294059,developmentSpentTokens:79220,additionalTokenCap:354059},{phase:'assessment'},true),true);
+ assert.equal(validate({specificationTokens:0,developmentTokens:373279,assessmentTokens:60000,developmentRemainingTokens:294060,developmentSpentTokens:79220,additionalTokenCap:354059},{phase:'assessment'},true),false);
+});

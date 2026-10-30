@@ -37,10 +37,11 @@ begin
  select * into a from benchmark_budget_accounts where id=new.account_id for update;
  if a.arm<>'full' then return new;end if;
  select * into c from benchmark_full_continuations where id=new.continuation_id;
- if c.id is null or c.deadline<=clock_timestamp() or not benchmark_continuation_live(c.id,a.id,c.project_id)
+ if new.continuation_id is not null and (c.id is null or c.deadline<=clock_timestamp() or not benchmark_continuation_live(c.id,a.id,c.project_id))
  then raise exception 'Full monetary authority expired';end if;
+ if new.continuation_id is null and exists(select 1 from benchmark_production_qualifications q where q.experiment_id=a.experiment_id and (q.revoked_at is not null or q.deadline<=clock_timestamp())) then raise exception 'Full monetary qualification expired';end if;
  if new.model='gpt-5.3-codex' and not exists(select 1 from mission_calls mc join benchmark_execution_grants g on g.id=mc.lease
- where mc.id=new.legacy_mission_call_id and g.continuation_id=c.id and g.deadline>clock_timestamp() and g.stopped_at is null and g.revoked_at is null)
+ where mc.id=new.legacy_mission_call_id and g.continuation_id is not distinct from new.continuation_id and g.deadline>clock_timestamp() and g.stopped_at is null and g.revoked_at is null)
  then raise exception 'Full monetary execution grant expired';end if;
  select * into r from model_registry where provider_name='openai' and model_id='gpt-5.3-codex' for share;
  if new.state<>'reserved' or new.actual_tokens is not null or new.model not in ('gpt-5.3-codex','openai:gpt-5.3-codex')
@@ -222,6 +223,10 @@ begin
  if p_project is distinct from p.id or p_plan_hash is distinct from hash then raise exception 'Review exact current resource amendment plan';end if;
  insert into benchmark_full_continuations(owner_id,project_id,trial_id,account_id,source_mission_id,source_snapshot,source_snapshot_hash,plan,plan_hash,spent_at_approval,additional_token_cap,deadline,previous_continuation_id)
  values(p_owner,p.id,b.trial_id,acct.id,m.id,snap,snapshot_hash,plan,hash,acct.spent_tokens,remaining+60000,now()+interval '4 hours',prior.id) returning * into c;
+ -- Supersede the unused approval through its existing revocation marker, in
+ -- the SAME transaction. Its complete pre-amendment record remains in snap.
+ update benchmark_native_spending_approvals set revoked_at=now() where id=old.id and consumed_at is null and revoked_at is null;
+ if not found then raise exception 'Superseded approval changed';end if;
  insert into benchmark_native_spending_approvals(owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,continuation_id)
  values(old.owner_id,old.actor_id,old.chat_id,old.trial_id,old.account_id,old.repository,old.model,old.protocol_digest,550000,c.deadline,p.id,j.id,t.id,c.id) returning * into fresh;
  insert into benchmark_development_renewals(continuation_id,approval_id,previous_approval_id,task_id,mission_id,scope_hash,prior_run,receipt)
@@ -233,7 +238,7 @@ begin
  update mission_assignments set status='waiting_external',lease=null,lease_until=null,available_at=now(),updated_at=now() where id=j.id;
  update agent_missions set status='running',updated_at=now() where id=m.id;
  update work_projects set deadline=greatest(deadline,c.deadline),status='running',lease=null,lease_until=null,impediment=null,detail='Owner approved the displayed resource amendment with 550000 cumulative tokens, a cumulative $10 ceiling, and four hours from approval.',updated_at=now() where id=p.id;
- insert into project_events(project_id,event,data) values(p.id,'benchmark_resource_amendment_approved',jsonb_build_object('amendmentId',am.id,'planHash',hash,'deadline',c.deadline,'developmentLimit',373279,'callLimit',24));
+ insert into project_events(project_id,event,data) values(p.id,'benchmark_resource_amendment_approved',jsonb_build_object('amendmentId',am.id,'supersededApprovalId',old.id,'planHash',hash,'deadline',c.deadline,'developmentLimit',373279,'callLimit',24));
  return jsonb_build_object('approved',true,'id',c.id,'projectId',p.id,'trialId',b.trial_id,'accountId',acct.id,'deadline',c.deadline,'planHash',hash,'plan',plan,'spentTokens',acct.spent_tokens,'live',true,'sourceSnapshotHash',snapshot_hash);
 end $$;
 
@@ -280,3 +285,21 @@ alter table benchmark_full_continuations add constraint benchmark_full_continuat
  spent_at_approval+additional_token_cap<=350000 or
  (plan->>'version'='5' and plan->>'resourceAmendment'='true' and plan->>'cumulativeTokenCap'='550000' and spent_at_approval=195941 and additional_token_cap=354059)
 ) is true);
+-- Coordinator receives effective capacity, while the stored scope and original
+-- project allowance remain unchanged. Its subsequent SQL admission rechecks it.
+do $$ declare body text;begin
+ select pg_get_functiondef('claim_work_project()'::regprocedure) into body;
+ if position('return to_jsonb(p);' in body)=0 then raise exception 'Project claim capacity anchor missing';end if;
+ body:=replace(body,'return to_jsonb(p);',$p$return to_jsonb(p)||jsonb_build_object('token_allowance',benchmark_effective_project_cap(p.id));$p$);execute body;
+end $$;
+-- Revoking the fresh task approval also stops the later assessment; it cannot
+-- survive merely because the continuation record itself is append-only.
+do $$ declare body text;begin
+ select pg_get_functiondef('benchmark_continuation_live(uuid,uuid,uuid)'::regprocedure) into body;
+ if position('and a.arm=' in body)=0 then raise exception 'Continuation authority anchor missing';end if;
+ body:=replace(body,'and a.arm=',$p$and (c.plan->>'version' is distinct from '5' or exists(
+ select 1 from benchmark_development_resource_amendments am join benchmark_native_spending_approvals approval on approval.id=am.approval_id
+ where am.continuation_id=c.id and am.plan_hash=c.plan_hash and approval.continuation_id=c.id
+ and approval.revoked_at is null and approval.deadline=c.deadline and approval.max_tokens=550000))
+ and a.arm=$p$);execute body;
+end $$;
