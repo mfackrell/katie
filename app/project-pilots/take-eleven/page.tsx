@@ -44,7 +44,7 @@ export default function TakeEleven() {
   const act = (action: GameAction) => setGame(current => transition(current, action));
 
   return (
-    <main className="mx-auto flex min-h-[75vh] w-full max-w-2xl flex-col items-center justify-center px-5 py-12 text-center">
+    <main data-game-ready={loaded ? "true" : "false"} className="mx-auto flex min-h-[75vh] w-full max-w-2xl flex-col items-center justify-center px-5 py-12 text-center">
       <div className="w-full rounded-3xl border border-white/15 bg-zinc-900/80 p-6 shadow-2xl sm:p-10">
         <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-400">Two players · One winner</p>
         <h1 className="mt-3 text-4xl font-bold tracking-tight sm:text-5xl">Take Eleven</h1>
