@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {modules} from './helpers/load-project-modules.mjs';
+import {readFileSync} from 'node:fs';
 
 const owner='11111111-1111-4111-8111-111111111111';
 const guest='99999999-9999-4999-8999-999999999999';
@@ -117,3 +118,12 @@ test('guest chat creation uses isolated atomic enrollment, never generic saveCha
   assert.equal(calls[0].args.p_owner,guest);
 });
 
+
+test('guest cannot invoke executive, project or repository inspection execution',()=>{
+  const source=readFileSync('app/api/chat/route.ts','utf8');
+  assert.match(source,/if\(actorRole\.actor_kind==='executive'\)\{/);
+  assert.match(source,/if\(principal\.isAnonymous \|\| principal\.id!==process\.env\.KATIE_OWNER_AUTH_USER_ID\)/);
+  assert.match(source,/const selfInspectionRequest = !isGuestSession && isExplicitKatieSelfInspectionRequest\(message\)/);
+  assert.match(source,/const savedBenchmarkProject = !isGuestSession && !currentAgentTask\(\)/);
+  assert.match(source,/const projectReply = !isGuestSession && !pdfProgress\.projectClarification/);
+});
