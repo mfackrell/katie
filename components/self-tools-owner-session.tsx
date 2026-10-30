@@ -125,7 +125,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
     if (!client) return;
     const {error} = await client.auth.signOut();
     setNotice(error ? "Sign-out failed." : "Signed out of self-management tools.");
-    if(!error)window.dispatchEvent(new Event("katie-owner-session-changed"));
+    if(!error)window.dispatchEvent(new CustomEvent("katie-owner-session-changed",{detail:{guestReset:true}}));
   }
   return (
     <details aria-label="Katie optional account tools" className="shrink-0 border-t border-white/10 bg-zinc-900 px-4 py-2 text-sm text-zinc-100">
