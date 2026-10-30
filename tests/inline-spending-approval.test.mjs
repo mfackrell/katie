@@ -22,7 +22,11 @@ test('desktop and legacy chat share their existing usage reader with the inline 
   assert.match(usage, /createPortal\(inlinePendingContent, inlineTarget\)/);
   assert.match(usage, /if \(rail\) return <>\{inlinePortal\}<section/);
   assert.match(panel, /id="katie-inline-spending-approval"/);
-  assert.match(panel, /!spendingApprovalHostedExternally && <StandaloneUsage inlinePendingOnly/);
+  assert.match(panel, /spendingApprovalEnabled && !managedAgentId && !spendingApprovalHostedExternally && <StandaloneUsage inlinePendingOnly/);
+  assert.match(panel, /spendingApprovalEnabled = false/, 'unscoped direct chat mounts must not launch owner accounting');
+  assert.match(panel, /spendingApprovalEnabled && !managedAgentId && <div id="katie-inline-spending-approval"/);
+  assert.match(workspace, /spendingApprovalEnabled=\{!actor\.managedAgentId && actor\.actorKind !== 'executive'\}/);
+  assert.match(legacy, /spendingApprovalEnabled=\{Boolean\(activeActor && !activeActor\.managedAgentId && activeActor\.actorKind !== 'executive'\)\}/);
   assert.match(workspace, /spendingApprovalHostedExternally=\{railOpen && !actor\.managedAgentId/);
   assert.match(legacy, /spendingApprovalHostedExternally=\{Boolean\(activeActor/);
   assert.match(usage, /createRefreshFlight\(async signal =>/);
