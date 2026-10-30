@@ -23,7 +23,10 @@ export function isGenericVisionRefusal(text: string): boolean {
   if (!normalized || normalized.length > 1000) return false;
 
   const refusal = /^(?:(?:i(?:'m| am)\s+sorry|sorry|i\s+apologize)[,;:\s-]*(?:but\s+)?)?(?:i\s+(?:(?:can't|cannot|can not|won't|will not|am unable to)\s+(?:assist|help|comply|provide|describe|analy[sz]e|process|fulfill|fulfil|answer)|must\s+decline)|i(?:'m| am)\s+unable\s+to\s+(?:assist|help|comply|provide|describe|analy[sz]e|process|fulfill|fulfil|answer))\b/i;
-  if (!refusal.test(normalized)) return false;
+  const opening = normalized.match(refusal);
+  if (!opening) return false;
+  // A contrasting factual clause makes this a mixed answer, not a refusal-only reply.
+  if (/\bbut\s+(?:a|an|the|this|that|there|it)\b/i.test(normalized.slice(opening[0].length))) return false;
 
   // These are grounded visual assertions even if preceded by a limitation.
   // Err toward retaining evidence when the output is mixed or ambiguous.
