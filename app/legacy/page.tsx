@@ -626,6 +626,8 @@ export default function HomePage() {
           )}
           {activeActor && activeChatId && !activeActor.managedAgentId && activeActor.actorKind !== "executive" && <StandaloneUsage actorId={activeActorId} chatId={activeChatId} />}
           <ChatPanel key={activeChatId}
+            spendingApprovalHostedExternally={Boolean(activeActor && activeChatId && !activeActor.managedAgentId && activeActor.actorKind !== 'executive')}
+            spendingApprovalEnabled={Boolean(activeActor && !activeActor.managedAgentId && activeActor.actorKind !== 'executive')}
             actorId={activeActorId}
             chatId={activeChatId}
             managedAgentId={activeActor?.managedAgentId}

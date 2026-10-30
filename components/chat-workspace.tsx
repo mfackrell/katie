@@ -227,6 +227,8 @@ export default function ChatWorkspace({
       <ChatPanel
         key={chat.id}
         statusRailOpen={railOpen && railReady}
+        spendingApprovalHostedExternally={railOpen && !actor.managedAgentId && actor.actorKind !== 'executive'}
+        spendingApprovalEnabled={!actor.managedAgentId && actor.actorKind !== 'executive'}
         actorId={actor.id}
         chatId={chat.id}
         managedAgentId={actor.managedAgentId}

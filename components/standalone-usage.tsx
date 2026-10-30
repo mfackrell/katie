@@ -2,6 +2,7 @@
 
 import { createRefreshFlight } from '@/lib/standalone-accounting/refresh-flight';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ownerSessionBearer } from '@/lib/tools/browser-owner-session';
 import type { DailyAttempt, DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily';
 
@@ -10,7 +11,7 @@ interface Pending { id: string; requestId: string; provider: string; model: stri
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
 interface ActiveAttempt extends DecisionAttempt { createdAt?: string; provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
 interface Snapshot { workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
-interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
+interface Props { rail?: boolean; inlinePendingOnly?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
 function dollars(value: string) {
@@ -48,13 +49,19 @@ function ModelCost({model}: {model: UsageTotals & {provider: string}}) {
   return <>{dollars(model.estimatedCostMicrousd)}{model.unknownCostCount > 0 && ' + unknown'}</>;
 }
 
-export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false }: Props) {
+export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false, inlinePendingOnly = false }: Props) {
   const refreshSequence = useRef(0);
   const snapshotScope = useRef('');
   const automaticResumes = useRef(new Set<string>());
   const automaticRetryAfter = useRef(new Map<string,number>());
   const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
   const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
+  // Render the chat approval using this existing usage instance. A second
+  // mounted usage component would create overlapping accounting refreshes.
+  const [inlineTarget, setInlineTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!inlinePendingOnly) setInlineTarget(document.getElementById('katie-inline-spending-approval'));
+  }, [chatId, inlinePendingOnly]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
   const [usageOpen, setUsageOpen] = useState(false), [reviewOpen, setReviewOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false), [timezone, setTimezone] = useState(''), [callLimit, setCallLimit] = useState(''), [requestLimit, setRequestLimit] = useState('');
@@ -86,11 +93,11 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     flight.current=next;
     void next.refresh();
     const update=()=>{if(document.visibilityState!=='hidden')void next.refresh(true);};
-    const timer=window.setInterval(()=>{if(document.visibilityState!=='hidden')void next.refresh(false);},15000);
+    const timer=inlinePendingOnly ? undefined : window.setInterval(()=>{if(document.visibilityState!=='hidden')void next.refresh(false);},15000);
     window.addEventListener('focus',update);window.addEventListener('standalone-accounting-updated',update);
     document.addEventListener('visibilitychange',update);
-    return ()=>{next.dispose();invalidateRefresh();clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('standalone-accounting-updated',update);document.removeEventListener('visibilitychange',update);if(flight.current===next)flight.current=null;};
-  },[api,actorId,chatId,scope,workCursor,invalidateRefresh]);
+    return ()=>{next.dispose();invalidateRefresh();if(timer!==undefined)clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('standalone-accounting-updated',update);document.removeEventListener('visibilitychange',update);if(flight.current===next)flight.current=null;};
+  },[api,actorId,chatId,scope,workCursor,invalidateRefresh,inlinePendingOnly]);
   async function olderActivity(){
     if(historyBusy)return;
     setHistoryBusy(true);
@@ -124,7 +131,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     });
   }, [onResumeAttempt, actorId, chatId]);
   useEffect(() => {
-    if (busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
+    if (inlinePendingOnly || busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
     const candidate = snapshot?.active?.find(attempt => attempt.uncertainAutoAuthorized && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
       !automaticResumes.current.has(`${actorId}:${chatId}:${attempt.requestId}`) &&
       (automaticRetryAfter.current.get(`${actorId}:${chatId}:${attempt.requestId}`) ?? 0) <= Date.now() &&
@@ -142,7 +149,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
         setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.');
       })
       .finally(() => { setBusy(''); void refresh(); });
-  }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh]);
+  }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh, inlinePendingOnly]);
   async function resumeReserved(attempt: ActiveAttempt) {
     if (attempt.continuationActionable !== true || attempt.continuationBlockedReason || (attempt.state !== 'reserved' && !attempt.pollableRunpod)) return;
     setBusy(attempt.id); setError(''); setNotice('');
@@ -188,7 +195,32 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   const unresolved = activeAttempts.length;
   const alerts = snapshot?.alerts?.length ?? 0;
   const workNavigation = <div>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{snapshot?.workPage?.next && <button type="button" className="ml-3 underline" onClick={()=>{const next=snapshot.workPage?.next;if(next)setWorkCursor({key:`${actorId}:${chatId}`,...next});}}>Older active work</button>}</div>;
-  if (rail) return <section aria-label="Standalone daily usage" className="space-y-4 text-xs text-zinc-300">
+  // Surface the existing exact-attempt approval flow in the chat itself.
+  // Approval and continuation remain owned by the same audited endpoints.
+  const inlinePendingContent = snapshotScope.current === `${actorId}:${chatId}` && snapshot?.pending.length ? (
+    <section aria-label="Spending authorization required" role="region" className="shrink-0 max-h-[38dvh] space-y-3 overflow-y-auto border-t border-amber-400/30 bg-zinc-950 px-4 py-3 text-xs text-zinc-200 sm:px-6">
+      <h3 className="text-sm font-semibold text-amber-100">Approve the selected model to continue</h3>
+      {snapshot.pending.map(attempt => <div key={attempt.id} className="space-y-2 rounded-lg border border-amber-400/30 p-3">
+        <p>Selected model: <strong className="text-zinc-100">{attempt.provider} / {attempt.model}</strong> · {attempt.category}</p>
+        <p>Estimated reservation: <strong className="text-amber-100">{dollars(attempt.reservedMicrousd)}</strong> · automatic per-call threshold: <strong>{snapshot.configuration?.per_call_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.per_call_limit_microusd)}</strong></p>
+        <p>Original request: settled {dollars(attempt.requestExposure.estimatedCostMicrousd)} · pending (including this proposal) {dollars(attempt.requestExposure.pendingExposureMicrousd)} · uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)} · automatic request threshold {snapshot.configuration?.request_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
+        <p>Estimated input {attempt.preview.inputTokens.toLocaleString()} tokens · output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
+        {attempt.tradeoffs && <p className="text-amber-100">Changes in this proposal: {attempt.tradeoffs}</p>}
+        <p className="text-zinc-400">The estimate is not a guaranteed actual-cost ceiling. Your approval authorizes only this exact saved attempt, keeps your normal thresholds unchanged, and resumes the original request without repeating settled calls.</p>
+        <div className="flex flex-wrap gap-3">
+          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === attempt.id ? 'Processing…' : 'Approve selected model once'}</button>
+          {attempt.provider !== 'runpod' && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Review reduced-cost proposal</button>}
+          <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Cancel</button>
+        </div>
+      </div>)}
+      {error && <p role="alert" className="text-amber-200">{error}</p>}
+      {refreshError && <p role="alert" className="text-amber-200">{refreshError} Refresh to verify the current proposal.</p>}
+      {notice && <p role="status" className="text-amber-100">{notice}</p>}
+    </section>
+  ) : null;
+  if (inlinePendingOnly) return inlinePendingContent;
+  const inlinePortal = inlineTarget && inlinePendingContent ? createPortal(inlinePendingContent, inlineTarget) : null;
+  if (rail) return <>{inlinePortal}<section aria-label="Standalone daily usage" className="space-y-4 text-xs text-zinc-300">
     <section className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Daily usage</h3>
       <div className="flex flex-wrap gap-2"><label>Scope <select aria-label="Scope" className="rounded bg-zinc-900 p-1" value={scope} onChange={e=>setScope(e.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label><button type="button" className="underline" onClick={openSettings}>Budget & timezone</button><button type="button" className="underline" onClick={()=>void refresh()}>Refresh</button></div>
@@ -265,8 +297,8 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     </form>}
 
 
-  </section>;
-  return <section aria-label="Standalone daily usage" className="relative z-20 shrink-0 min-w-0 border-b border-white/10 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 sm:px-5">
+  </section></>;
+  return <>{inlinePortal}<section aria-label="Standalone daily usage" className="relative z-20 shrink-0 min-w-0 border-b border-white/10 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 sm:px-5">
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
       <span className="min-w-0 truncate" aria-live="polite">
         {daily ? <>Today {displayedCost(daily.totals)}{BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && ' including infrastructure estimate'} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · <Tokens totals={daily.totals} /></> : (error || refreshError) ? 'Usage unavailable' : 'Loading usage…'}
@@ -356,5 +388,5 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     </div>)}
 
     </div>}
-  </section>;
+  </section></>;
 }

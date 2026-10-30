@@ -35,6 +35,7 @@ import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel"
 import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
+import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 import { SelfToolsOwnerSession } from "@/components/self-tools-owner-session";
 import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
@@ -64,6 +65,8 @@ interface ChatPanelProps {
   activeRepoId: string;
   repoInjectionEnabled: boolean;
   statusRailOpen?: boolean;
+  spendingApprovalHostedExternally?: boolean;
+  spendingApprovalEnabled?: boolean;
 }
 
 type CollaborationParticipantUi = {
@@ -770,6 +773,8 @@ export function ChatPanel({
   activeRepoId,
   repoInjectionEnabled,
   statusRailOpen = false,
+  spendingApprovalHostedExternally = false,
+  spendingApprovalEnabled = false,
 }: ChatPanelProps) {
   const [statusMount, setStatusMount] = useState<HTMLElement | null>(null);
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
@@ -3119,6 +3124,8 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </section>
 
+      {spendingApprovalEnabled && !managedAgentId && <div id="katie-inline-spending-approval" className="shrink-0" />}
+      {spendingApprovalEnabled && !managedAgentId && !spendingApprovalHostedExternally && <StandaloneUsage inlinePendingOnly actorId={actorId} chatId={chatId} />}
       {accountingResumeFailure && <p role="alert" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 sm:mx-6">{accountingResumeFailure}</p>}
       {failoverNotice && (
         <p role="status" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:mx-6">
