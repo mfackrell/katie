@@ -39,7 +39,9 @@ function insufficient(text:string,coverage:string|undefined):boolean {
  */
 export function weakFocalPointDescription(text:string):boolean {
   const s=text.trim();
-  if(s.length<400)return true;
+  if(s.length<220)return true;
+  const sections=[/primary focal point/i,/detailed focal.point observations/i,/spatial relationships and interactions/i];
+  if(s.length>=350&&sections.filter(pattern=>pattern.test(s)).length>=2)return false;
   const focal=/\b(?:primary focal point|main subject|central subject|focal point|focus of (?:the )?image)\b/i.test(s);
   const detail=/\b(?:texture|contour|color|surface|orientation|position|shape|marking|fold|crease|edge|shadow|reflection|proportion)\w*\b/i.test(s);
   return (s.length<900&&!focal)||(s.length<1100&&!detail);
