@@ -124,7 +124,7 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
       submissionStage='http_response';
       submissionHttpStatus=submitted.status;
       if(!submitted.ok){
-        if([400,401,403,404,422,429].includes(submitted.status)){
+        if([400,401,403,404,409,422,429].includes(submitted.status)){
           await submitted.body?.cancel();
           await ledger.completeQwenRejection(context.userId,attempt.id,{status:submitted.status,statusText:'Rejected',headers:[],body:canonicalJson({status:'REJECTED',httpStatus:submitted.status})});
           throw Object.assign(new Error('RunPod still-image submission was definitively rejected.'),{qwenRejected:true});
