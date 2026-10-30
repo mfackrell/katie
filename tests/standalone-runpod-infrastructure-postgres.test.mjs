@@ -96,7 +96,10 @@ test('reviewed Qwen infrastructure reservation, durable job and estimated comple
   assert.equal(extendedReceipt.evidence.policyVersion,v2);
   assert.equal(extendedReceipt.reserved_microusd,'20000');
   const invalidV1=input('reject-invalid-v1','invalid-v1',{p_hash:extendedPrepared.hash,p_payload:extendedPrepared});
-  await assert.rejects(rpc(one,'admit',invalidV1),/POLICY_DENIED/,'original v1 policy may not accept widened v2 limits');
+  const invalidV1Attempt=await rpc(one,'admit',invalidV1);
+  assert.equal(invalidV1Attempt.state,'reserved','admission saves the immutable attempt before enforcement at dispatch');
+  await assert.rejects(rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:invalidV1Attempt.id}),/STANDALONE_INFRASTRUCTURE_POLICY_DENIED/,'historical v1 policy must reject widened v2 limits before paid dispatch');
+  assert.equal((await getAttempt('reject-invalid-v1','invalid-v1')).state,'reserved','rejected dispatch must not mark the attempt as submitted');
 
   // Normal per-call and original-request controls remain the final guards.
   config=await configure('10000','30000');
