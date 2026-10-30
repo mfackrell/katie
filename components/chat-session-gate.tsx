@@ -8,11 +8,11 @@ export function ChatSessionGate({children}:{children:React.ReactNode}){
   const [message,setMessage]=useState('');
   useEffect(()=>{
     let active=true;
-    async function bootstrap(){
+    async function bootstrap(resetToGuest=false){
       try{
-        const token=await ownerSessionBearer();
+        const token=resetToGuest?null:await ownerSessionBearer();
         const response=await fetch('/api/session',{method:'POST',credentials:'same-origin',
-          headers:{...(token?{Authorization:'Bearer '+token}:{})}});
+          headers:{...(token?{Authorization:'Bearer '+token}:{}),...(resetToGuest?{'x-katie-guest-reset':'1'}:{})}});
         if(!response.ok){
           const body=await response.json().catch(()=>({}));
           throw Error(body.error??'Automatic session could not be established.');
@@ -23,7 +23,10 @@ export function ChatSessionGate({children}:{children:React.ReactNode}){
       }
     }
     void bootstrap();
-    const onChanged=()=>{if(active){setState('loading');void bootstrap();}};
+    const onChanged=(event:Event)=>{
+      const resetToGuest=(event as CustomEvent<{guestReset?:boolean}>).detail?.guestReset===true;
+      if(active){setState('loading');void bootstrap(resetToGuest);}
+    };
     const refresh=()=>{if(active)void bootstrap();};
     // Proactively rotate the short-lived HttpOnly access cookie so ordinary
     // long conversations do not suddenly fail after thirty minutes.
