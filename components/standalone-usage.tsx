@@ -124,7 +124,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     });
   }, [onResumeAttempt, actorId, chatId]);
   useEffect(() => {
-    if (busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
+    if (inlinePendingOnly || busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
     const candidate = snapshot?.active?.find(attempt => attempt.uncertainAutoAuthorized && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
       !automaticResumes.current.has(`${actorId}:${chatId}:${attempt.requestId}`) &&
       (automaticRetryAfter.current.get(`${actorId}:${chatId}:${attempt.requestId}`) ?? 0) <= Date.now() &&
@@ -142,7 +142,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
         setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.');
       })
       .finally(() => { setBusy(''); void refresh(); });
-  }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh]);
+  }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh, inlinePendingOnly]);
   async function resumeReserved(attempt: ActiveAttempt) {
     if (attempt.continuationActionable !== true || attempt.continuationBlockedReason || (attempt.state !== 'reserved' && !attempt.pollableRunpod)) return;
     setBusy(attempt.id); setError(''); setNotice('');
