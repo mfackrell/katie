@@ -112,7 +112,7 @@ begin
    or jsonb_array_length(body->'choices')<>1
    or body#>>'{choices,0,finish_reason}' not in ('stop','length')
    or jsonb_typeof(body#>'{choices,0,message,content}')<>'string'
-   or coalesce(length(body#>>'{choices,0,message,content}'),0)>20000
+   or coalesce(length(body#>>'{choices,0,message,content}'),0)>300000
    then raise exception 'STANDALONE_VENICE_COMPLETION_INVALID';end if;
  else
   if body->>'status' is distinct from status::text then
