@@ -6,6 +6,8 @@ import { requireRunpodKey } from '@/lib/runpod/durable-results';
 const JOB_ID=/^[A-Za-z0-9-]{8,150}$/;
 const TERMINAL=new Set(['COMPLETED','FAILED','CANCELLED','TIMED_OUT']);
 const MAX_RESUMES_PER_TICK=1;
+const PAGE_SIZE=50;
+const MAX_ELIGIBLE_JOBS_PER_TICK=12;
 
 export type SavedQwenJob={
   owner_id:string;actor_id:string;chat_id:string;request_id:string;
@@ -51,15 +53,59 @@ export async function reconcileSavedQwenJobs(deps:QwenRecoveryDependencies):Prom
   return result;
 }
 
+/** Paginate past stale dispatched attempts before capping work. Filtering only
+ * the first 30 attempts can permanently starve a newly accepted job when
+ * old jobs have expired or their parent workflows have failed. */
+export async function selectRecoverableQwenJobs(
+  readPage:(offset:number,size:number)=>Promise<SavedQwenJob[]>,
+  filterEligible:(jobs:SavedQwenJob[])=>Promise<SavedQwenJob[]>,
+  maxEligible=MAX_ELIGIBLE_JOBS_PER_TICK,
+  pageSize=PAGE_SIZE,
+):Promise<SavedQwenJob[]>{
+  const selected:SavedQwenJob[]=[];
+  for(let offset=0;;offset+=pageSize){
+    const page=await readPage(offset,pageSize);
+    if(page.length===0)break;
+    const valid=page.filter(job=>JOB_ID.test(job.provider_request_id??''));
+    if(valid.length){
+      const eligible=await filterEligible(valid);
+      selected.push(...eligible.slice(0,Math.max(0,maxEligible-selected.length)));
+    }
+    if(selected.length>=maxEligible||page.length<pageSize)break;
+  }
+  return selected;
+}
+
 async function listPendingQwenJobs():Promise<SavedQwenJob[]>{
-  const {data,error}=await getSupabaseAdminClient().from('standalone_provider_attempts')
-    .select('owner_id,actor_id,chat_id,request_id,provider_request_id,state')
-    .eq('provider','runpod').eq('model',QWEN_STILL_POLICY.model)
-    .eq('pricing_version',QWEN_STILL_POLICY.version).eq('state','dispatched')
-    .is('response_checkpoint',null)
-    .order('created_at',{ascending:true}).limit(30);
-  if(error)throw new Error('Saved RunPod attempt lookup failed.');
-  return (data??[]) as SavedQwenJob[];
+  const db=getSupabaseAdminClient();
+  const key=(job:Pick<SavedQwenJob,'owner_id'|'actor_id'|'chat_id'|'request_id'>)=>
+    [job.owner_id,job.actor_id,job.chat_id,job.request_id].join(':');
+  return selectRecoverableQwenJobs(
+    async(offset,size)=>{
+      const {data,error}=await db.from('standalone_provider_attempts')
+        .select('owner_id,actor_id,chat_id,request_id,provider_request_id,state')
+        .eq('provider','runpod').eq('model',QWEN_STILL_POLICY.model)
+        .eq('pricing_version',QWEN_STILL_POLICY.version).eq('state','dispatched')
+        .is('response_checkpoint',null)
+        .order('created_at',{ascending:false}).range(offset,offset+size-1)
+        .returns<SavedQwenJob>();
+      if(error)throw new Error('Saved RunPod attempt lookup failed.');
+      return data??[];
+    },
+    async(page)=>{
+      const requestIds=[...new Set(page.map(job=>job.request_id))];
+      if(!requestIds.length)return [];
+      const {data,error}=await db.from('standalone_workflows')
+        .select('owner_id,actor_id,chat_id,request_id,status,error')
+        .eq('status','paused').in('request_id',requestIds)
+        .returns<{owner_id:string;actor_id:string;chat_id:string;request_id:string;status:string;error:string|null}>();
+      if(error)throw new Error('Saved RunPod workflow lookup failed.');
+      const allowed=new Set((data??[])
+        .filter(row=>row.error?.includes('standalone_runpod_in_progress'))
+        .map(row=>key(row)));
+      return page.filter(job=>allowed.has(key(job)));
+    },
+  );
 }
 
 async function eligibleSavedWorkflow(job:SavedQwenJob):Promise<boolean>{
