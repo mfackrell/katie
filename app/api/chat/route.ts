@@ -2,7 +2,10 @@ import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedA
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
-import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
+import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
+import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
@@ -3101,7 +3104,38 @@ ${chunkWorkflowSummary}`;
                   reason: error instanceof Error ? error.message : String(error)
                 });
               },
-              rerouteOnError: async ({ attempt, error }) => {
+              rerouteOnError: async ({ attempt, error, attemptedAttempts }) => {
+                const accounting = standaloneAccountingCause(error) as
+                  (Error & {code?:string;provider?:string;model?:string;outputAllowance?:number}) | undefined;
+                if (accounting && ['standalone_context_capacity_unverified','standalone_context_window_exceeded'].includes(accounting.code ?? '')) {
+                  // Context errors occur before paid dispatch. Preserve every
+                  // instruction, message, attachment and output allowance.
+                  // Only a newer SAME-family higher-capacity model qualifies.
+                  if (hasVideoInput || rerouteHasVisualInput ||
+                      accounting.provider !== attempt.provider.name ||
+                      accounting.model !== attempt.modelId ||
+                      !Number.isSafeInteger(accounting.outputAllowance) ||
+                      (accounting.outputAllowance ?? 0) <= 0) return null;
+                  const pricing = await loadStandalonePricing(createStandaloneLedger());
+                  const available = await attempt.provider.listModels();
+                  const upgrade = selectContextCapacityUpgrade({
+                    provider: attempt.provider.name,
+                    model: attempt.modelId,
+                    availableModels: available,
+                    pricing,
+                    outputAllowance: accounting.outputAllowance!,
+                    excludedModels: new Set(attemptedAttempts
+                      .filter(item => item.provider.name === attempt.provider.name)
+                      .map(item => item.modelId.toLowerCase())),
+                  });
+                  if (!upgrade) return null;
+                  console.info('[Context Upgrade] Same-family higher-capacity model selected', {
+                    requestId, previousModel: attempt.modelId, selectedModel: upgrade,
+                    provider: attempt.provider.name,
+                  });
+                  return { provider: attempt.provider, modelId: upgrade,
+                    routingSource: 'deterministic-fallback' as const };
+                }
                 if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
@@ -3604,8 +3638,25 @@ ${chunkWorkflowSummary}`;
 
           } catch (error: unknown) {
             if (isStandaloneAccountingError(error)) {
-              error=standaloneAccountingCause(error)??error;
-              emitChunk({type:"accounting_pause",code:standaloneAccountingCause(error)?.code??"standalone_approval_or_accounting_required",requestId,message:error instanceof Error?error.message:String(error)});
+              const cause = standaloneAccountingCause(error) ?? error;
+              const code = standaloneAccountingCause(error)?.code ?? "standalone_approval_or_accounting_required";
+              if (standaloneTechnicalBlocker(code)) {
+                const message = cause instanceof Error ? cause.message : String(cause);
+                // A context window is a physical model constraint, not an
+                // approvable charge. Persist an actionable terminal outcome and
+                // clear the tracked chat_request instead of stranding processing.
+                await finishChatFailure({
+                  requestId, chatId, message,
+                  save: (failure) => saveMessage(chatId, failure),
+                  markFailed: async (messageId) => {
+                    if (requestTracked) await failChatRequest(requestId, cause, messageId);
+                  },
+                  emit: (messageId) => emitChunk({...reasoningState.error(message,false),messageId,code}),
+                  close: () => { if (!streamCancelled) controller.close(); },
+                });
+                return;
+              }
+              emitChunk({type:"accounting_pause",code,requestId,message:cause instanceof Error?cause.message:String(cause)});
               if (!streamCancelled) controller.close();
               return;
             }
