@@ -87,7 +87,7 @@ end $$;
 create function public.standalone_complete_venice_estimate(
  p_owner uuid,p_attempt uuid,p_checkpoint jsonb,p_evidence jsonb) returns jsonb
 language plpgsql security definer set search_path=public,pg_temp as $$
-declare a public.standalone_provider_attempts; body jsonb; evidence jsonb; status integer;
+declare a public.standalone_provider_attempts; body jsonb; saved_evidence jsonb; status integer;
 begin
  perform 1 from standalone_owner_configuration where owner_id=p_owner for update;
  select * into a from standalone_provider_attempts where id=p_attempt and owner_id=p_owner for update;
@@ -120,17 +120,17 @@ begin
  end if;
  if a.response_checkpoint is not null and a.response_checkpoint is distinct from p_checkpoint
    then raise exception 'STANDALONE_CHECKPOINT_CONFLICT';end if;
- evidence:=jsonb_build_object('kind','estimated_vision_inference',
+ saved_evidence:=jsonb_build_object('kind','estimated_vision_inference',
   'policyVersion',a.pricing_version,'model',a.model,'status',status,
   'sourceHash',a.prepared_payload->>'sourceHash',
   'reservedMicrousd','100000','currency','USD','monetaryReceipt',false);
  if a.state='estimated' then
-   if a.evidence is distinct from evidence then
+   if a.evidence is distinct from saved_evidence then
      raise exception 'STANDALONE_VENICE_COMPLETION_CONFLICT';end if;
    return standalone_attempt_json(a);
  end if;
  update standalone_provider_attempts set state='estimated',
-   response_checkpoint=p_checkpoint,evidence=evidence,
+   response_checkpoint=p_checkpoint,evidence=saved_evidence,
    uncertainty_reason=null,settled_at=null
    where id=a.id returning * into a;
  return standalone_attempt_json(a);
