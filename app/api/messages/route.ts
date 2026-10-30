@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
 import { deleteSingleMessage, getChatById, getMessages } from "@/lib/data/persistence-store";
-import { authenticateStandaloneOwner, StandaloneAuthorizationError } from "@/lib/standalone-accounting/auth";
+import {
+  authenticateStandaloneOwner,
+  authenticateStandalonePrincipal,
+  authorizeStandaloneCaller,
+  StandaloneAuthorizationError,
+} from "@/lib/standalone-accounting/auth";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { resultStore } from "@/lib/runpod/durable-results";
 import { publishVideoChat, processNextGrokVideo } from "@/lib/runpod/video-orchestration";
@@ -18,6 +23,11 @@ export async function GET(request: NextRequest) {
     const { chatId } = chatIdParamSchema.parse({
       chatId: request.nextUrl.searchParams.get("chatId")
     });
+    const principal=await authenticateStandalonePrincipal(request);
+    const chat=await getChatById(chatId);
+    if(!chat)return NextResponse.json({error:"Conversation not found."},{status:404});
+    if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+      await authorizeStandaloneCaller(request,chat.actorId,chatId);
     const messages = await getMessages(chatId);
 
     const pendingRequests = [...new Set(messages

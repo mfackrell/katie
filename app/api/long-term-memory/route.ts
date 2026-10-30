@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { authorizeStandaloneActor } from "@/lib/standalone-accounting/auth";
 import { getActorById, getLongTermMemory, setLongTermMemory, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 
 const paramsSchema = z.object({ actorId: z.string().uuid(), chatId: z.string().uuid().optional() });
@@ -18,6 +19,7 @@ export async function GET(request: NextRequest) {
       actorId: request.nextUrl.searchParams.get("actorId"),
       chatId: request.nextUrl.searchParams.get("chatId") ?? undefined,
     });
+    await authorizeStandaloneActor(request,actorId);
     if (!await getActorById(actorId)) return NextResponse.json({ error: "Actor not found" }, { status: 404 });
     const [content, documents] = await Promise.all([getLongTermMemory(actorId, ""), listActorMemoryDocuments(actorId)]);
     return NextResponse.json({ actorId, scope: "actor", content, documents },
@@ -29,6 +31,7 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const { actorId, content } = editSchema.parse(await request.json());
+    await authorizeStandaloneActor(request,actorId);
     if (!await getActorById(actorId)) return NextResponse.json({ error: "Actor not found" }, { status: 404 });
     await setLongTermMemory(actorId, "", content);
     return NextResponse.json({ actorId, saved: true, content: await getLongTermMemory(actorId, "") });

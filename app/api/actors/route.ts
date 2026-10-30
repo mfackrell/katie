@@ -1,4 +1,5 @@
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
+import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import OpenAI from "openai";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { managedActor } from "@/lib/agents/store";
@@ -161,8 +162,22 @@ function buildActorId(): string {
   return `actor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export async function GET() {
-  const actors = await listActors();
+export async function GET(request:NextRequest) {
+  let principal;
+  try{principal=await authenticateStandalonePrincipal(request);}
+  catch{return NextResponse.json({error:"Session required."},{status:403});}
+  const allActors=await listActors();
+  let actors=allActors;
+  if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID){
+    const {data,error}=await getSupabaseAdminClient().rpc<string>('standalone_guest_workspace',{p_owner:principal.id});
+    if(error||!data)return NextResponse.json({error:"Actor access denied."},{status:403});
+    actors=allActors.filter(a=>a.id===data);
+  } else {
+    const {data,error}=await getSupabaseAdminClient().rpc<string[]>('standalone_guest_actor_ids',{});
+    if(error)return NextResponse.json({error:"Guest isolation unavailable."},{status:503});
+    const guestIds=new Set(data??[]);
+    actors=allActors.filter(a=>!guestIds.has(a.id));
+  }
 
   const { data: managed, error } = await getSupabaseAdminClient().from("managed_agents").select("id,actor_id").returns<{ id: string; actor_id: string }>();
   if (error) return NextResponse.json({ error: "Agent identities unavailable" }, { status: 503 });

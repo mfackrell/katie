@@ -32,5 +32,5 @@ test("explicit self inspection can override only current source gate, not genera
  assert.ok(src.includes("ownSourceInspectionAuthorized && activeRepoContext?.repositoryFullName === \"mfackrell/katie\""));
  assert.ok(src.includes('selfActor?.name?.trim().toLowerCase() === "katie" && selfActor.actor_kind === "standard"'));
  assert.ok(src.includes("ownSourceInspectionAuthorized && !activeRepoId"));
- assert.ok(src.includes("const repoInjectionEnabled = currentAgentTask() ? false : repoInjectionEnabledFromPayload !== false"));
+ assert.ok(src.includes("const repoInjectionEnabled = currentAgentTask() || isGuestSession ? false : repoInjectionEnabledFromPayload !== false"));
 });

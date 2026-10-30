@@ -112,7 +112,13 @@ test('unverified capability is commissioned, not configured or falsely activated
 });
 test('dedicated EO is routed outside ordinary Katie chat and project workflows',()=>{
  const route=readFileSync('app/api/chat/route.ts','utf8');
- assert.match(route,/if\(actorRole\.actor_kind==='executive'\)return runWithOrchestratorAccounting\(\(\)=>executeExecutiveCommand\(payload,request\)\)/);
+ const branch=route.indexOf("if(actorRole.actor_kind==='executive'){");
+ const ownerGuard=route.indexOf("if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)",branch);
+ const denied=route.indexOf("Owner authorization required for executive management.",ownerGuard);
+ const dispatch=route.indexOf("return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));",denied);
+ const ordinary=route.indexOf("const task = await authorizeManagedChat",dispatch);
+ assert.ok(branch>0 && ownerGuard>branch && denied>ownerGuard && dispatch>denied && ordinary>dispatch,
+   'Executive Orchestrator routing must reject guests before its dedicated transport');
  assert.match(route,/const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null/);
  assert.doesNotMatch(route,/const financeReply = !executiveReply/);
 });

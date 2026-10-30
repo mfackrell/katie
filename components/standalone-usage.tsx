@@ -60,8 +60,8 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   const [settingsOpen, setSettingsOpen] = useState(false), [timezone, setTimezone] = useState(''), [callLimit, setCallLimit] = useState(''), [requestLimit, setRequestLimit] = useState('');
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const bearer = await ownerSessionBearer();
-    if (!bearer) throw Error('Sign in as the owner to view usage and approve paid calls.');
-    const response = await fetch(`/api/standalone-accounting/${path}`, { ...init, cache: 'no-store', headers: { ...init?.headers, Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' } });
+    // The session is also available through a secure HttpOnly cookie for guests.
+    const response = await fetch(`/api/standalone-accounting/${path}`, { ...init, cache: 'no-store', headers: { ...init?.headers, ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), 'Content-Type': 'application/json' } });
     const body = await response.json();
     if (!response.ok) throw Error(body.error || 'Accounting is unavailable.');
     return body;

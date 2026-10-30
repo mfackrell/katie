@@ -811,8 +811,8 @@ export function ChatPanel({
       setStatusMessage("Resuming the saved approved attempt…");
       try {
         const bearer=await ownerSessionBearer();
-        if(!bearer)throw Error("Owner sign-in required to resume.");
-        const response=await fetch("/api/chat",{method:"POST",signal:resumeController.signal,headers:{"Content-Type":"application/json",Authorization:`Bearer ${bearer}`,"x-request-id":detail.requestId},body:JSON.stringify({actorId,chatId,standaloneResume:true})});
+        // Login-free guest sessions are verified by the server cookie.
+        const response=await fetch("/api/chat",{method:"POST",signal:resumeController.signal,headers:{"Content-Type":"application/json",...(bearer?{Authorization:`Bearer ${bearer}`}:{}),"x-request-id":detail.requestId},body:JSON.stringify({actorId,chatId,standaloneResume:true})});
         const text=await response.text();
         if(!response.ok){let message="Saved request could not resume.";try{message=JSON.parse(text).error??message;}catch{}throw Error(message);}
         const chunks=text.split("\n").filter(Boolean).map(line=>{try{return JSON.parse(line);}catch{return null;}});
