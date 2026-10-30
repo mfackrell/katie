@@ -36,13 +36,6 @@ declare a benchmark_budget_accounts;r model_registry;used numeric;rate numeric;c
 begin
  select * into a from benchmark_budget_accounts where id=new.account_id for update;
  if a.arm<>'full' then return new;end if;
- select * into c from benchmark_full_continuations where id=new.continuation_id;
- if new.continuation_id is not null and (c.id is null or c.deadline<=clock_timestamp() or not benchmark_continuation_live(c.id,a.id,c.project_id))
- then raise exception 'Full monetary authority expired';end if;
- if new.continuation_id is null and exists(select 1 from benchmark_production_qualifications q where q.experiment_id=a.experiment_id and (q.revoked_at is not null or q.deadline<=clock_timestamp())) then raise exception 'Full monetary qualification expired';end if;
- if new.model='gpt-5.3-codex' and not exists(select 1 from mission_calls mc join benchmark_execution_grants g on g.id=mc.lease
- where mc.id=new.legacy_mission_call_id and g.continuation_id is not distinct from new.continuation_id and g.deadline>clock_timestamp() and g.stopped_at is null and g.revoked_at is null)
- then raise exception 'Full monetary execution grant expired';end if;
  select * into r from model_registry where provider_name='openai' and model_id='gpt-5.3-codex' for share;
  if new.state<>'reserved' or new.actual_tokens is not null or new.model not in ('gpt-5.3-codex','openai:gpt-5.3-codex')
  or r.model_id is null or r.pricing_status is distinct from 'verified' or r.pricing_verified_at is null
@@ -54,10 +47,17 @@ begin
  then raise exception 'Full monetary history incomplete';end if;
  rate:=greatest(r.pricing_input_per_1m,r.pricing_output_per_1m);
  select coalesce(sum(exposure_microusd),0) into used from benchmark_dollar_exposures where account_id=a.id;
- if used+new.reserved_tokens*rate>10000000 then raise exception 'Full cumulative dollar ceiling exhausted';end if;
+ if used+ceil(new.reserved_tokens*rate)>10000000 then raise exception 'Full cumulative dollar ceiling exhausted';end if;
+ select * into c from benchmark_full_continuations where id=new.continuation_id;
+ if new.continuation_id is not null and (c.id is null or c.deadline<=clock_timestamp() or not benchmark_continuation_live(c.id,a.id,c.project_id))
+ then raise exception 'Full monetary authority expired';end if;
+ if new.continuation_id is null and exists(select 1 from benchmark_production_qualifications q where q.experiment_id=a.experiment_id and (q.revoked_at is not null or q.deadline<=clock_timestamp())) then raise exception 'Full monetary qualification expired';end if;
+ if new.model='gpt-5.3-codex' and not exists(select 1 from mission_calls mc join benchmark_execution_grants g on g.id=mc.lease
+ where mc.id=new.legacy_mission_call_id and g.continuation_id is not distinct from new.continuation_id and g.deadline>clock_timestamp() and g.stopped_at is null and g.revoked_at is null)
+ then raise exception 'Full monetary execution grant expired';end if;
  -- AFTER INSERT guarantees FK existence, but still rolls back the entire token
  -- reservation and counters on denial. No provider call occurs before commit.
- insert into benchmark_dollar_exposures values(new.id,a.id,new.reserved_tokens*rate,new.reserved_tokens*rate,rate,'reserved',
+ insert into benchmark_dollar_exposures values(new.id,a.id,ceil(new.reserved_tokens*rate),ceil(new.reserved_tokens*rate),rate,'reserved',
  jsonb_build_object('provider','openai','model','gpt-5.3-codex','serviceTier','default','inputPerMillion',r.pricing_input_per_1m,'outputPerMillion',r.pricing_output_per_1m,'verifiedAt',r.pricing_verified_at),now());
  return new;
 end $$;

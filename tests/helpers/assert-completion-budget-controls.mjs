@@ -70,16 +70,30 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
   await db.query('begin');await db.query('update model_registry set '+sql+" where provider_name='openai' and model_id='gpt-5.3-codex'");
   await assert.rejects(native(db,100),/pricing|admission/);await db.query('rollback');
  }
+ // Fractional prices reserve and settle with identical upward rounding.
+ await db.query('reset role');await db.query('begin');
+ const firstExposure=(await db.query('select call_id from benchmark_dollar_exposures where account_id=$1 order by call_id limit 1',[account])).rows[0].call_id;
+ const totalExposure=Number((await db.query('select sum(exposure_microusd) n from benchmark_dollar_exposures where account_id=$1',[account])).rows[0].n);
+ await db.query('update benchmark_dollar_exposures set exposure_microusd=exposure_microusd+$2 where call_id=$1',[firstExposure,10000000-13.5-totalExposure]);
+ await db.query("update model_registry set pricing_input_per_1m=1,pricing_output_per_1m=13.5 where provider_name='openai' and model_id='gpt-5.3-codex'");
+ await db.query('set role service_role');await db.query('savepoint fractional_limit');
+ await assert.rejects(native(db,1),/dollar ceiling/);await db.query('rollback to savepoint fractional_limit');
+ await db.query('reset role');await db.query('update benchmark_dollar_exposures set exposure_microusd=exposure_microusd-0.5 where call_id=$1',[firstExposure]);await db.query('set role service_role');
+ const fraction=(await native(db,1)).rows[0].id;
+ assert.equal(Number((await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[fraction])).rows[0].exposure_microusd),14);
+ await db.query('rollback');await db.query('set role service_role');
+ for(const lock of ["select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))","select * from model_registry where provider_name='openai' and model_id='gpt-5.3-codex' for update"]){
  // A transaction begun before expiry must fail if it waits past the deadline.
  await db.query('reset role');
  await db.query("update benchmark_execution_grants set deadline=clock_timestamp()+interval '500 milliseconds' where id=$1",[g.id]);
  await db.query('set role service_role');
- await db.query('begin');await db.query("select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))");
+ await db.query('begin');await db.query(lock);
  await rival.query('begin');
  const delayed=native(rival,100).then(()=>({accepted:true}),error=>({error}));
  await new Promise(resolve=>setTimeout(resolve,650));await db.query('commit');
  const expired=await delayed;assert.ok(expired.error);assert.match(expired.error.message,/expired|unauthorized/);await rival.query('rollback');
  await db.query('reset role');await db.query('update benchmark_execution_grants set deadline=(select deadline from benchmark_full_continuations where id=$2) where id=$1',[g.id,c.id]);await db.query('set role service_role');
+ }
  // Dollar race: fixture raises historical provision to leave exactly one100token
  // hold. Two separate connections compete; exactly one may reserve.
  await db.query('reset role');
@@ -100,7 +114,8 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  // Ten more native turns + initial race=eleven, with realistic full-size receipts.
  for(let i=0;i<10;i++){
   const id=(await native(db,22000)).rows[0].id;
-  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,false)',[id,'synthetic-completion-'+id,{input_tokens:15994,output_tokens:4096,total_tokens:20090}]);
+  const linked=(await db.query('select legacy_mission_call_id from benchmark_budget_calls where id=$1',[id])).rows[0].legacy_mission_call_id;
+  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-completion-'+id,{input_tokens:15994,output_tokens:4096,total_tokens:20090}]);
  }
  await assert.rejects(native(db,1),/closure capacity/);
  assert.equal((await db.query('select count(*)::int n from benchmark_budget_calls bc join mission_calls mc on mc.id=bc.legacy_mission_call_id join mission_assignments j on j.id=mc.job_id where j.mission_id=$1',[mission])).rows[0].n,20);
