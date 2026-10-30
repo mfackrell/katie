@@ -6,7 +6,7 @@ import ts from 'typescript';
 const source = fs.readFileSync('components/chat-panel.tsx', 'utf8');
 const section = source.slice(source.indexOf('class TerminalChatError'), source.indexOf('function readBlobAsDataUrl'));
 function polling(fetch) {
- const ctx = vm.createContext({ fetch, Date, Error, MOBILE_RECOVERY_WINDOW_MS: 1000, waitForRecoveryPoll: async () => {} });
+ const ctx = vm.createContext({ fetch, Date, Error, MOBILE_RECOVERY_WINDOW_MS: 1000, QWEN_RECOVERY_WINDOW_MS: 5000, QWEN_RECOVERY_POLL_INTERVAL_MS: 1000, MOBILE_RECOVERY_POLL_INTERVAL_MS: 10, waitForRecoveryPoll: async () => {} });
  vm.runInContext(ts.transpileModule(section + '\nglobalThis.poll = pollForPersistedAssistant;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, ctx);
  return ctx.poll;
 }
@@ -53,4 +53,20 @@ test('temporary not-found during server admission does not abort recovery', asyn
   const result = await poll('chat',{requestId:'pending',startedAt:new Date().toISOString(),content:'test'});
   assert.equal(result[0].content,'done');
   assert.equal(calls,4);
+});
+
+test('queued Qwen remains pending and recovers the saved answer without manual continuation', async () => {
+ let statusChecks=0;
+ const poll=polling(async url=>{
+  if(url.includes('/status')){
+   statusChecks++;
+   return {ok:true,json:async()=>statusChecks===1
+    ? {status:'processing',waitingForRunpod:true}
+    : {status:'completed',assistantMessageId:'qwen-answer'}};
+  }
+  return {ok:true,json:async()=>({messages:[{id:'qwen-answer',role:'assistant',content:'Actual visual description delivered'}]})};
+ });
+ const result=await poll('chat',{requestId:'saved-qwen',startedAt:new Date().toISOString(),content:'describe the image',waitingForRunpod:true});
+ assert.equal(result[0].content,'Actual visual description delivered');
+ assert.equal(statusChecks,2);
 });
