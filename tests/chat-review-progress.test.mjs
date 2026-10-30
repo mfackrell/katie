@@ -10,7 +10,7 @@ const end = source.indexOf('const IMAGE_OBSERVATION_STAGES', start);
 function statusMessage(review) {
   assert.ok(start >= 0 && end > start, 'review status formatter must exist');
   const context = vm.createContext({});
-  vm.runInContext(ts.transpileModule(source.slice(start, end) + '\\nglobalThis.formatReview = reviewStatusMessage;', {
+  vm.runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.formatReview = reviewStatusMessage;', {
     compilerOptions: {target: ts.ScriptTarget.ES2022}
   }).outputText, context);
   return context.formatReview(review);
@@ -28,6 +28,6 @@ test('both streamed and trailing review events are consumed before generic metad
   const trailing = source.indexOf('if (trailingChunk.type === "metadata" && trailingChunk.review)');
   assert.ok(stream >= 0 && generic > stream, 'review-only metadata must not clear selected model');
   assert.ok(trailing > generic, 'trailing review event must also update the status');
-  assert.match(source.slice(stream, generic), /setStatusMessage\\(reviewStatusMessage\\(chunk.review\\)\\)/);
-  assert.match(source.slice(trailing, trailing + 190), /setStatusMessage\\(reviewStatusMessage\\(trailingChunk.review\\)\\)/);
+  assert.match(source.slice(stream, generic), /setStatusMessage\(reviewStatusMessage\(chunk.review\)\)/);
+  assert.match(source.slice(trailing, trailing + 190), /setStatusMessage\(reviewStatusMessage\(trailingChunk.review\)\)/);
 });
