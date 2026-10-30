@@ -117,7 +117,7 @@ try{
   const args=sharedNativeContainerArgs({workspace:work,socketDir,arm:'full',phase,command,readOnly:reviewing,
    extraMounts:[...protectedNativeMounts(assertTrustedBoundary(work)),
     '--ro-bind',sdkRoot,'/work/node_modules','--dir','/trusted',
-    ...['native-development-child.mjs','shared-native-phase.mjs','shared-native-policy.mjs'].flatMap(f=>['--ro-bind',resolve('scripts/benchmark',f),'/trusted/'+f]),
+    ...['native-development-child.mjs','native-execution-evidence.mjs','shared-native-phase.mjs','shared-native-policy.mjs'].flatMap(f=>['--ro-bind',resolve('scripts/benchmark',f),'/trusted/'+f]),
     '--ro-bind',join(root,'AGENT_REQUEST.md'),'/trusted/AGENT_REQUEST.md','--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt'],
    extraEnv:['--setenv','KATIE_NATIVE_MODEL','gpt-5.3-codex','--setenv','KATIE_NATIVE_BRIDGE_TOKEN',token,'--setenv','KATIE_NATIVE_BASELINE_SHA',baseline]});
   const child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
@@ -163,6 +163,7 @@ try{
  }
  }
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
+
 
 
 

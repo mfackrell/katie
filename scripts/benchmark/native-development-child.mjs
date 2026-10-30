@@ -2,6 +2,7 @@
 // No Supabase service role or upstream provider secret enters this process.
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {summarizeNativeEvent,worktreeEvidence} from '/trusted/native-execution-evidence.mjs';
 import {executeSharedNativePhase,assertNativeArmPhase} from '/trusted/shared-native-phase.mjs';
 import {NATIVE_GATEWAY_URL,nativeCodexConfig,assertNativeEffectivePolicy} from '/trusted/shared-native-policy.mjs';
 // Public ESM entry of the pinned SDK; CommonJS resolution rejects its import-only exports.
@@ -34,9 +35,11 @@ const prompts={
 const reviewing=phase==='review'||phase==='final-review';
 const anchored=reviewing?prompts[phase]+' Independently inspect the complete diff with git diff '+baseline+'...HEAD. Verify that commit HEAD contains all reviewed changes.':prompts[phase];
 const {reviewMessage}=await executeSharedNativePhase({
- Codex,arm,phase,gateway,bearer,model,home,state,root,prompt:anchored
+ Codex,arm,phase,gateway,bearer,model,home,state,root,prompt:anchored,
+ onEvent:event=>{const safe=summarizeNativeEvent(event,[bearer]);if(safe&&event.type==='item.completed'&&['command_execution','file_change'].includes(event.item?.type))safe.worktree=worktreeEvidence(root,[bearer]);if(safe)process.stdout.write('NATIVE_EXECUTION_EVENT='+JSON.stringify(safe)+'\n');}
 });
 if(phase==='review'||phase==='final-review'){
  const verdict=/^PASS(?:\s|$)/.test(reviewMessage.trim())?'pass':'changes_requested';
  process.stdout.write('NATIVE_REVIEW_RESULT='+JSON.stringify({phase,verdict,findings:reviewMessage.slice(0,12000)})+'\n');
 }else process.stdout.write('NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION\n');
+

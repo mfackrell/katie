@@ -1,6 +1,7 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
+import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
@@ -670,7 +671,12 @@ export async function POST(request: NextRequest) {
     const {data:actorRole,error:actorRoleError}=await getSupabaseAdminClient()
       .from('actors').select('actor_kind').eq('id',payload.actorId).maybeSingle<{actor_kind:string}>();
     if(actorRoleError||!actorRole)return NextResponse.json({error:'Actor identity unavailable'},{status:503});
-    if(actorRole.actor_kind==='executive')return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));
+    if(actorRole.actor_kind==='executive'){
+      const principal=await authenticateStandalonePrincipal(request);
+      if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+        return NextResponse.json({error:'Owner authorization required for executive management.'},{status:403});
+      return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));
+    }
     const task = await authorizeManagedChat(request, payload);
     if (task) {
       const claimed = await agentRpc<boolean>("claim_agent_execution", { p_id: task.id, p_request: task.request_id });
@@ -700,6 +706,8 @@ async function executeChat(request: NextRequest) {
   let trackedRequestId: string | null = null;
   try {
     const payload = await parseIncomingPayload(request);
+    const isGuestSession=Boolean(currentStandaloneWorkflow()) && (await authenticateStandalonePrincipal(request)).isAnonymous;
+    if(isGuestSession && payload.activeRepoId)return NextResponse.json({error:'Repository controls require owner access.'},{status:403});
     const {
       actorId,
       chatId,
@@ -714,21 +722,21 @@ async function executeChat(request: NextRequest) {
     } = payload;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
-    const benchmarkIntake = !currentAgentTask() && startProjectIntent(message) && gameProjectIntent(message) &&
+    const benchmarkIntake = !isGuestSession && !currentAgentTask() && startProjectIntent(message) && gameProjectIntent(message) &&
       /take eleven|issue\s*#?715|#715/i.test(message) &&
       ['https://iytvavgbaainnsrecmcx.supabase.co','https://barclcqataqyvifoeyop.supabase.co']
         .includes((process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, ''));
-    const savedBenchmarkProject = !currentAgentTask() ? await projectForChat(actorId,chatId) : null;
+    const savedBenchmarkProject = !isGuestSession && !currentAgentTask() ? await projectForChat(actorId,chatId) : null;
     const benchmarkBinding = savedBenchmarkProject
       ? await loadFullBenchmarkBinding(getSupabaseAdminClient(),savedBenchmarkProject.id,process.env) : null;
     const benchmarkRelay = benchmarkIntake || Boolean(benchmarkBinding);
     if (benchmarkRelay && (fileReferences?.length || requestImages?.length))
       return NextResponse.json({error:'The frozen Take Eleven benchmark accepts its approved text requirements only. Attachments cannot enter an unmetered classification path.'},{status:400});
-    const repoInjectionEnabled = currentAgentTask() ? false : repoInjectionEnabledFromPayload !== false;
+    const repoInjectionEnabled = currentAgentTask() || isGuestSession ? false : repoInjectionEnabledFromPayload !== false;
     // Resolve Katie's own repository before either project control or model routing.
     // This does not grant new credentials: writes remain in the existing
     // audited project/developer workflow with its approval and verification.
-    const selfInspectionRequest = isExplicitKatieSelfInspectionRequest(message);
+    const selfInspectionRequest = !isGuestSession && isExplicitKatieSelfInspectionRequest(message);
     let selfRepoId: string | null = null;
     const selfToolRequest = selfInspectionRequest;
     const selfToolActor = selfToolRequest && !currentAgentTask()
@@ -1276,8 +1284,8 @@ async function executeChat(request: NextRequest) {
     // Standalone Katie only RELAYS explicit commands to the Developer project
     // controller. Status, scoped approvals and amendments stay durable there.
     const savedDeveloperCommand = /^(?:(?:(?:what(?:'s| is)|show|check|give me|tell me|how(?:'s| is))\b.{0,36})?(?:project\s+(?:status|progress)|(?:the|my|this)\s+project\s+(?:status|progress)|project\s+(?:note|context|answer)\s*:)|(?:please\s+)?(?:resume|pause|stop|approve)\s+(?:(?:the|my|this)\s+)?project\b|(?:please\s+)?(?:add|change|fix|remove|update|keep|retain|preserve|support|enable)\b.{0,180}\b(?:game|app|website|project|software|multiplayer|keyboard|undo|button)\b)/i.test(message.trim());
-    const explicitProjectControl = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand;
-    const projectReply = !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const explicitProjectControl = !isGuestSession && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand);
+    const projectReply = !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}

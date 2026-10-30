@@ -21,3 +21,4 @@ for(const [index,id]of ids.entries()){
   text:clean(item.content?.filter(c=>c.type==='output_text').map(c=>c.text).join('\n'))
  }))}));
 }
+

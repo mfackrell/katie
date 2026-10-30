@@ -55,6 +55,12 @@ jobs:
       - name: Verify same-task owner renewal in isolated PostgreSQL and Chromium
         run: node --test tests/benchmark-renewal-postgres.test.mjs tests/benchmark-development-renewal-browser.test.mjs
 
+      - name: Verify explicitly approved amendment successor without inference
+        env:
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
@@ -118,4 +124,5 @@ jobs:
 
       - name: Test Gemini Qwen Grok fallback
         run: npm run test:video-fallback
+
 
