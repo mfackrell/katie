@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   try {
     const input = decision.parse(await request.json());
     const { ownerId, ledger } = await accountingScope(request, input);
-    const snapshot = await ledger.snapshot(ownerId);
+    const snapshot = await ledger.attemptDetails(ownerId,input.attemptId);
     const attempt = snapshot.attempts.find(row => row.id === input.attemptId && row.actor_id === input.actorId && row.chat_id === input.chatId);
     if (!attempt) return NextResponse.json({ error: 'Attempt unavailable.' }, { status: 404, headers: noStore });
     if (attempt.prepared_hash !== input.preparedHash || attempt.pricing_version !== input.pricingVersion || (input.action === 'accept_exposure' ? snapshot.configuration?.budget_revision !== input.budgetRevision : attempt.budget_revision !== input.budgetRevision) || attempt.reserved_microusd !== input.reservedMicrousd) {

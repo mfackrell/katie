@@ -2,34 +2,29 @@ import { standaloneTechnicalBlocker } from '@/lib/standalone-accounting/context'
 import { QWEN_STILL_POLICY } from '@/lib/standalone-accounting/runpod-policy';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { summarizeDailyUsage, summarizeUsageTotals, type DailyAttempt } from '@/lib/standalone-accounting/daily';
+import { type DailyAttempt } from '@/lib/standalone-accounting/daily';
 import type { FrozenPreparedRequest, StandaloneEstimate } from '@/lib/standalone-accounting/estimate';
 import { accountingError, accountingScope, noStore, scopeSchema } from '../_shared';
 
 export async function GET(request: NextRequest) {
   try {
-    const scope = scopeSchema.extend({ scope: z.enum(['this-agent', 'all']).default('this-agent') }).parse(Object.fromEntries(request.nextUrl.searchParams));
+    const scope = scopeSchema.extend({ scope: z.enum(['this-agent', 'all']).default('this-agent'),before:z.string().datetime({offset:true}).optional(),beforeId:z.string().uuid().optional() }).refine(value=>Boolean(value.before)===Boolean(value.beforeId),'Both cursor fields are required.').parse(Object.fromEntries(request.nextUrl.searchParams));
     const { ownerId, ledger } = await accountingScope(request, scope);
-    const snapshot = await ledger.snapshot(ownerId);
+    const snapshot = await ledger.usageSnapshot(ownerId,scope.actorId,scope.chatId,scope.scope==='all',scope.before??null,scope.beforeId??null);
     const attempts: DailyAttempt[] = snapshot.attempts.map(attempt => ({ id: attempt.id, actor_id: attempt.actor_id, chat_id: attempt.chat_id, provider: attempt.provider, model: attempt.model, resolved_model: attempt.resolved_model, uncertainty_reason: 'uncertainty_reason' in attempt && typeof attempt.uncertainty_reason === 'string' ? attempt.uncertainty_reason : null, category: attempt.category, state: attempt.state, created_at: attempt.created_at, dispatched_at: attempt.dispatched_at, settled_at: attempt.settled_at, reserved_microusd: attempt.reserved_microusd, actual_microusd: attempt.actual_microusd, usage: attempt.usage as DailyAttempt['usage'] }));
-    const daily = snapshot.configuration ? summarizeDailyUsage(attempts, snapshot.configuration.timezone, scope.scope === 'this-agent' ? scope.actorId : undefined) : null;
-    const workflows = new Map(await Promise.all([...new Set(snapshot.attempts.filter(a=>a.actor_id===scope.actorId&&a.chat_id===scope.chatId&&['reserved','dispatched','uncertain'].includes(a.state)&&!a.cancelled_by_owner_at).map(a=>a.request_id))].map(async id=>{
-      const workflow=await ledger.workflowStatus(ownerId,id);
-      const reason=workflow?.error??workflow?.error_message;
-      return [id,{status:workflow?.status,reason:standaloneTechnicalBlocker(reason)?String(reason):undefined}] as const;
-    })));
-    const automatic = new Set((snapshot.events??[]).filter(event=>event.kind==='uncertain_exposure_auto_authorized').map(event=>event.attempt_id));
-    const accepted = new Map(await Promise.all(snapshot.attempts.filter(attempt=>attempt.state==='uncertain'&&attempt.actor_id===scope.actorId&&attempt.chat_id===scope.chatId).map(async attempt=>[attempt.id,await ledger.uncertainExposureAccepted(ownerId,attempt.id)] as const)));
-    const autoAuthorized = (id:string) => automatic.has(id) && accepted.get(id) === true;
+    const daily = snapshot.daily ? {...snapshot.daily,attempts:snapshot.daily.attempts.map(({id,actor_id,chat_id,provider,model,category,state,created_at,dispatched_at,settled_at,reserved_microusd,actual_microusd,usage})=>({id,actor_id,chat_id,provider,model,category,state,created_at,dispatched_at,settled_at,reserved_microusd,actual_microusd,usage}))} : null;
+    const workflows = new Map(snapshot.attempts.map(attempt=>{const flag=snapshot.flags[attempt.id];return [attempt.request_id,{status:flag?.status,reason:standaloneTechnicalBlocker(flag?.error)?flag.error:undefined}] as const;}));
+    const accepted = new Map(snapshot.attempts.map(attempt=>[attempt.id,snapshot.flags[attempt.id]?.accepted??false]));
+    const autoAuthorized = (id:string) => snapshot.flags[id]?.automatic === true && accepted.get(id) === true;
     const active = await Promise.all(snapshot.attempts.filter(attempt => attempt.actor_id === scope.actorId && attempt.chat_id === scope.chatId && ['reserved', 'dispatched', 'uncertain'].includes(attempt.state) && !attempt.cancelled_by_owner_at).map(async attempt => ({
-      id: attempt.id, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category, state: attempt.state,
+      id: attempt.id, createdAt:attempt.created_at, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category, state: attempt.state,
       preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision, reservedMicrousd: attempt.reserved_microusd,
       continuationBlockedReason: workflows.get(attempt.request_id)?.reason,
       parentStatus: workflows.get(attempt.request_id)?.status ?? 'unavailable',
       uncertainAutoAuthorized: autoAuthorized(attempt.id),
       cancellationActionable: !autoAuthorized(attempt.id) && (workflows.get(attempt.request_id)?.status === 'paused' || (workflows.get(attempt.request_id)?.status === 'running' && attempt.state !== 'uncertain')),
       continuationActionable: !autoAuthorized(attempt.id) && workflows.get(attempt.request_id)?.status === 'paused' && !workflows.get(attempt.request_id)?.reason,
-      pollableRunpod: attempt.provider==='runpod'&&attempt.model===QWEN_STILL_POLICY.model&&attempt.pricing_version===QWEN_STILL_POLICY.version&&!!attempt.provider_request_id&&/^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id)&&!attempt.response_checkpoint&&!snapshot.events?.some(event=>event.attempt_id===attempt.id&&['receipt_conflict','identifier_conflict','usage_conflict'].includes(event.kind)),
+      pollableRunpod: attempt.provider==='runpod'&&attempt.model===QWEN_STILL_POLICY.model&&attempt.pricing_version===QWEN_STILL_POLICY.version&&!!attempt.provider_request_id&&/^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id)&&!attempt.response_checkpoint&&!snapshot.flags[attempt.id]?.conflict,
       exposureAccepted: accepted.get(attempt.id) ?? false,
     })));
     // Only expose actionable attempts from this saved conversation. Daily aggregate can span standalone actors.
@@ -53,12 +48,13 @@ export async function GET(request: NextRequest) {
         Object.values(object).forEach(size);
       };
       size(prepared.payload);
-      const requestAttempts = snapshot.attempts.filter(row => row.request_id === attempt.request_id);
-      const requestExposure = summarizeUsageTotals(requestAttempts as DailyAttempt[]);
+      const savedPreview=(attempt as unknown as {preview?:{textBytes:number;imageCount:number;imageBytes:number}}).preview;
+      if(savedPreview){textBytes=savedPreview.textBytes;imageCount=savedPreview.imageCount;imageBytes=savedPreview.imageBytes;}
+      const requestExposure = snapshot.requestTotals[attempt.request_id];
       return {
-      id: attempt.id, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category,
+      id: attempt.id, createdAt:attempt.created_at, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category,
       preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision,
-      reservedMicrousd: attempt.reserved_microusd, reason: attempt.reason, pauseReason: attempt.pause_reason, resolvedModel: attempt.resolved_model, estimatorVersion: attempt.estimator_version, tradeoffs: attempt.tradeoffs, createdAt: attempt.created_at,
+      reservedMicrousd: attempt.reserved_microusd, reason: attempt.reason, pauseReason: attempt.pause_reason, resolvedModel: attempt.resolved_model, estimatorVersion: attempt.estimator_version, tradeoffs: attempt.tradeoffs,
       preview: { textBytes, imageCount, imageBytes, inputTokens: estimate.inputTokens, imageTokens: estimate.imageTokens, outputAllowance: estimate.outputAllowance, assumptions: estimate.assumptions, issues: estimate.issues, status: estimate.status },
       requestExposure,
     }; });
@@ -69,10 +65,13 @@ export async function GET(request: NextRequest) {
       if (attempt.state === 'uncertain') return [{ ...base, kind: 'uncertain', message: attempt.uncertainty_reason || 'Provider outcome or usage is unknown. Reservation remains held; automatic replay is blocked.', actualMicrousd: null, reservedMicrousd: attempt.reserved_microusd }];
       return [];
     });
-    for (const event of snapshot.events ?? []) {
+    alerts.push(...(snapshot.alerts??[]).filter(alert=>!alerts.some(existing=>existing.attemptId===alert.attemptId&&existing.kind===alert.kind)));
+    for (const event of snapshot.attempts.filter(a=>snapshot.flags[a.id]?.conflict).map(a=>({attempt_id:a.id,kind:'receipt_conflict'}))) {
       const attempt = scopedAttempts.find(row => row.id === event.attempt_id);
-      if (event.kind === 'receipt_conflict' && attempt) alerts.push({ attemptId: attempt.id, provider: attempt.provider, model: attempt.model, kind: 'receipt_conflict', message: 'Conflicting provider receipt evidence requires reconciliation. Saved costs were not silently overwritten.', actualMicrousd: attempt.actual_microusd, reservedMicrousd: attempt.reserved_microusd });
+      if (event.kind === 'receipt_conflict' && attempt && !alerts.some(a=>a.kind==='receipt_conflict'&&a.attemptId===attempt.id)) alerts.push({ attemptId: attempt.id, provider: attempt.provider, model: attempt.model, kind: 'receipt_conflict', message: 'Conflicting provider receipt evidence requires reconciliation. Saved costs were not silently overwritten.', actualMicrousd: attempt.actual_microusd, reservedMicrousd: attempt.reserved_microusd });
     }
-    return NextResponse.json({ configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts }, { headers: noStore });
+    const last=snapshot.attempts.length===100?snapshot.attempts[snapshot.attempts.length-1]:null;
+    const workPage={next:last?{before:last.created_at,beforeId:last.id}:null};
+    return NextResponse.json({ workPage, configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts }, { headers: noStore });
   } catch (error) { return accountingError(error); }
 }

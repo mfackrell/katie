@@ -18,6 +18,7 @@ export interface DailyAttempt {
 }
 
 export interface UsageTotals {
+  cachedInputTokens?: number;
   inputTokens: number;
   outputTokens: number;
   missingInputCount: number;

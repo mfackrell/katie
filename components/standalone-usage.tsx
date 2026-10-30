@@ -1,14 +1,15 @@
 'use client';
 
+import { createRefreshFlight } from '@/lib/standalone-accounting/refresh-flight';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ownerSessionBearer } from '@/lib/tools/browser-owner-session';
-import type { DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily';
+import type { DailyAttempt, DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily';
 
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
-interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
-interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
+interface ActiveAttempt extends DecisionAttempt { createdAt?: string; provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
+interface Snapshot { workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
@@ -65,22 +66,44 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     if (!response.ok) throw Error(body.error || 'Accounting is unavailable.');
     return body;
   }, []);
-  const refresh = useCallback(async () => {
-    const sequence = ++refreshSequence.current;
-    try {
-      const result = await api(`usage?${new URLSearchParams({ actorId, chatId, scope })}`) as Snapshot;
-      if (sequence !== refreshSequence.current) return;
-      snapshotScope.current = `${actorId}:${chatId}`;
-      setSnapshot(result); setRefreshError('');
-    } catch (failure) { if (sequence === refreshSequence.current) setRefreshError(failure instanceof Error ? failure.message : 'Accounting is unavailable.'); }
-  }, [api, actorId, chatId, scope]);
+  const [workCursor,setWorkCursor]=useState<{key:string;before:string;beforeId:string}|null>(null);
+  const [history,setHistory]=useState<DailyAttempt[]|null>(null);
+  const [historyEnd,setHistoryEnd]=useState(false);
+  const [historyBusy,setHistoryBusy]=useState(false);
+  const flight = useRef<ReturnType<typeof createRefreshFlight> | null>(null);
+  const refresh = useCallback(async () => { await flight.current?.refresh(true); }, []);
   useEffect(() => {
-    setSnapshot(null); void refresh();
-    const update = () => { void refresh(); };
-    const timer = window.setInterval(update, 15000);
-    window.addEventListener('focus', update); window.addEventListener('standalone-accounting-updated', update);
-    return () => { invalidateRefresh(); clearInterval(timer); window.removeEventListener('focus', update); window.removeEventListener('standalone-accounting-updated', update); };
-  }, [refresh, invalidateRefresh]);
+    const sequence = ++refreshSequence.current;
+    setSnapshot(null);setHistory(null);setHistoryEnd(false);setHistoryBusy(false);
+    const next = createRefreshFlight(async signal => {
+      try {
+        const result = await api(`usage?${new URLSearchParams({actorId,chatId,scope,...(workCursor?.key===`${actorId}:${chatId}`?{before:workCursor.before,beforeId:workCursor.beforeId}:{})})}`,{signal}) as Snapshot;
+        if(signal.aborted || sequence!==refreshSequence.current)return;
+        snapshotScope.current=`${actorId}:${chatId}`;
+        setSnapshot(result);setRefreshError('');
+      } catch(failure){if(!signal.aborted && sequence===refreshSequence.current)setRefreshError(failure instanceof Error?failure.message:'Accounting is unavailable.');}
+    });
+    flight.current=next;
+    void next.refresh();
+    const update=()=>{if(document.visibilityState!=='hidden')void next.refresh(true);};
+    const timer=window.setInterval(()=>{if(document.visibilityState!=='hidden')void next.refresh(false);},15000);
+    window.addEventListener('focus',update);window.addEventListener('standalone-accounting-updated',update);
+    document.addEventListener('visibilitychange',update);
+    return ()=>{next.dispose();invalidateRefresh();clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('standalone-accounting-updated',update);document.removeEventListener('visibilitychange',update);if(flight.current===next)flight.current=null;};
+  },[api,actorId,chatId,scope,workCursor,invalidateRefresh]);
+  async function olderActivity(){
+    if(historyBusy)return;
+    setHistoryBusy(true);
+    const sequence=refreshSequence.current;
+    const current=history??snapshot?.daily?.attempts??[];
+    const last=current[current.length-1];
+    try{
+      const result=await api(`history?${new URLSearchParams({actorId,chatId,scope,...(last?{before:last.created_at,beforeId:last.id}:{})})}`) as {attempts:DailyAttempt[];next:unknown};
+      if(sequence!==refreshSequence.current)return;
+      setHistory([...current,...result.attempts.filter(a=>!current.some(b=>b.id===a.id))]);setHistoryEnd(!result.next);
+    }catch(failure){if(sequence===refreshSequence.current)setError(failure instanceof Error?failure.message:'History could not load.');}
+    finally{if(sequence===refreshSequence.current)setHistoryBusy(false);}
+  }
   function openSettings() {
     const config = snapshot?.configuration;
     setTimezone(config?.timezone ?? ''); setCallLimit(decimal(config?.per_call_limit_microusd ?? null)); setRequestLimit(decimal(config?.request_limit_microusd ?? null));
@@ -164,6 +187,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   const approvals = snapshot?.pending.length ?? 0;
   const unresolved = activeAttempts.length;
   const alerts = snapshot?.alerts?.length ?? 0;
+  const workNavigation = <div>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{snapshot?.workPage?.next && <button type="button" className="ml-3 underline" onClick={()=>{const next=snapshot.workPage?.next;if(next)setWorkCursor({key:`${actorId}:${chatId}`,...next});}}>Older active work</button>}</div>;
   if (rail) return <section aria-label="Standalone daily usage" className="space-y-4 text-xs text-zinc-300">
     <section className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Daily usage</h3>
@@ -178,13 +202,14 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
       <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
         <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><>{model.provider === 'runpod' ? 'Infrastructure billing' : <Tokens totals={model}/>}</></td><td><ModelCost model={model}/></td></tr>)}</tbody></table></div>
-        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>
+        <p className="mt-2">Recent activity · 25 per page. Daily totals include the entire day.</p><ul className="mt-2 space-y-1">{(history??daily.attempts).map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}
       </details>
     </>}
 
 
       </details>
     </section>
+    {workNavigation}
     {(snapshot?.pending.length || activeAttempts.length) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
       <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
@@ -212,7 +237,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
       <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
       <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
-      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></details>
+      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}</details>
       {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
       <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
@@ -276,7 +301,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
       <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
         <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><>{model.provider === 'runpod' ? 'Infrastructure billing' : <Tokens totals={model}/>}</></td><td><ModelCost model={model}/></td></tr>)}</tbody></table></div>
-        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>
+        <p className="mt-2">Recent activity · 25 per page. Daily totals include the entire day.</p><ul className="mt-2 space-y-1">{(history??daily.attempts).map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}
       </details>
     </>}
 
@@ -297,6 +322,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       </div>
     {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
 
+    {workNavigation}
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
       <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
@@ -323,7 +349,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
       <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
       <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
-      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></details>
+      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}</details>
       {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
       <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
