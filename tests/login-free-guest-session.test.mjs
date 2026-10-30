@@ -127,3 +127,27 @@ test('guest cannot invoke executive, project or repository inspection execution'
   assert.match(source,/const savedBenchmarkProject = !isGuestSession && !currentAgentTask\(\)/);
   assert.match(source,/const projectReply = !isGuestSession && !pdfProgress\.projectClarification/);
 });
+
+test('explicit owner sign-out replaces the owner cookie instead of silently reusing it',async t=>{
+  environment(t);
+  t.mock.method(globalThis,'fetch',async()=>assert.fail('Old owner cookie must not be reused after sign-out'));
+  const route=modules({
+    '@supabase/supabase-js':{createClient:()=>({auth:{
+      signInAnonymously:async()=>({error:null,data:{
+        user:{id:guest,is_anonymous:true},
+        session:{access_token:'new-guest-access',refresh_token:'new-guest-refresh',expires_in:1800}
+      }})
+    }})},
+    '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({
+      rpc:async()=>({data:actor,error:null})
+    })}
+  })('@/app/api/session/route');
+  const response=await route.POST(sessionRequest({
+    cookie:'katie_session_access=still-valid-owner-token',
+    'x-katie-guest-reset':'1'
+  }));
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).guest,true);
+  assert.equal(response.cookies.get('katie_session_access').value,'new-guest-access');
+  assert.equal(response.cookies.get('katie_session_refresh').value,'new-guest-refresh');
+});
