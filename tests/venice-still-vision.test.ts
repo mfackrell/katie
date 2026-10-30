@@ -70,7 +70,7 @@ function fixture(){
 test('free catalog validation checks verified private vision capability and published price before paid traffic',async()=>{
   const f=fixture();f.modelSpec={privacy:'anonymized'};
   await assert.rejects(f.run(),VeniceUnavailable);assert.equal(f.sends,0);assert.equal(f.dispatches,0);
-  const bad=await assert.rejects(verifyVeniceVisionCatalog(key,async()=>Response.json(catalog({pricing:{input:{usd:5},output:{usd:9}}}))),VeniceUnavailable);
+  await assert.rejects(verifyVeniceVisionCatalog(key,async()=>Response.json(catalog({pricing:{input:{usd:5},output:{usd:9}}}))),VeniceUnavailable);
   assert.equal(f.sends,0);
 });
 test('one accounted Venice POST replays immutable successful description with zero additional charges',async()=>{
