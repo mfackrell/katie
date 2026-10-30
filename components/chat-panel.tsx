@@ -37,6 +37,7 @@ import { MessageReactions } from "@/components/message-reactions";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 import { SelfToolsOwnerSession } from "@/components/self-tools-owner-session";
+import { ReviewModeControl } from "@/components/review-mode-control";
 import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
@@ -2801,6 +2802,12 @@ export function ChatPanel({
                   ) : null}
                 </div>
               ) : null}
+              <ReviewModeControl
+                key={actorId}
+                actorId={actorId}
+                actorName={activeActorName}
+                managed={Boolean(managedAgentId)}
+              />
               <button
                 type="button"
                 onClick={() => setShowModelControls((current) => !current)}
