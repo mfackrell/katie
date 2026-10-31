@@ -712,7 +712,11 @@ async function executeChat(request: NextRequest) {
   let trackedRequestId: string | null = null;
   try {
     const payload = await parseIncomingPayload(request);
-    const isGuestSession=Boolean(currentStandaloneWorkflow()) && (await authenticateStandalonePrincipal(request)).isAnonymous;
+    const verifiedWorkflow=currentStandaloneWorkflow();
+    // Workflow admission has already authenticated the caller and bound the owner,
+    // actor, chat, and request in Postgres. Do not revalidate an expiring browser
+    // token during execution: that could pause an already-admitted request.
+    const isGuestSession=Boolean(verifiedWorkflow) && verifiedWorkflow!.workflow.owner_id!==process.env.KATIE_OWNER_AUTH_USER_ID;
     if(isGuestSession && payload.activeRepoId)return NextResponse.json({error:'Repository controls require owner access.'},{status:403});
     const {
       actorId,
