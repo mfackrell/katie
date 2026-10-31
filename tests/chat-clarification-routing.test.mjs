@@ -642,7 +642,7 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
     projectContext:{userMessageId:'missing-anchor',text:'Retained original project brief'},
     objective:{userMessageId:'missing-anchor',text:'Prepare a project deliverable'},
   };
-  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture'}={})=>{
+  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[]}={})=>{
     const reads=[],warnings=[];
     const result=await vm.runInNewContext(compile(`(async()=>{
       let history=currentHistory;
@@ -655,7 +655,7 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
       pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[snapshot]},
       contextProjects:[{id:'missing-anchor'}],currentAgentTask:()=>null,
       getChatById:async id=>{reads.push(['chat',id]);return sourceChatMissing?null:{actorId:ownerId};},
-      getMessages:async id=>{reads.push(['messages',id]);return [];},
+      getMessages:async id=>{reads.push(['messages',id]);return sourceHistory;},
       console:{warn:(...args)=>warnings.push(args)},
     });
     return {...plain(result),reads,warnings};
@@ -665,6 +665,12 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
   assert.deepEqual(casual.history,currentHistory);
   assert.equal(casual.savedProjectSourceWarning,null);
   assert.deepEqual(casual.warnings,[]);
+  const recovered=await run('Give three relevant examples.',{
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(recovered.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.equal(recovered.history[0].id,'missing-anchor');
+  assert.equal(recovered.savedProjectSourceWarning,null);
   const missing=await run('Resume the saved project',{explicit:true});
   assert.deepEqual(missing.reads,[['chat','source-chat'],['messages','source-chat']]);
   assert.deepEqual(missing.history,currentHistory,'Current conversation remains unchanged');
