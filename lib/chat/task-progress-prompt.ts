@@ -65,10 +65,12 @@ export function selectTaskProgressPrompt(input: TaskProgressPromptInput): TaskPr
   if (input.pendingReviewContinuation) return render("bound_review_continuation");
 
   const parent = input.progress.projectContext;
-  if (!parent || parent.userMessageId === input.currentUserMessageId ||
-      !hasProjectWorkAnchor(parent.text)) return omit("no_prior_work_anchor");
+  if (!parent || parent.userMessageId === input.currentUserMessageId)
+    return omit("no_prior_work_anchor");
 
   if (input.projectRelation === "new_project") return omit("different_project");
+  // Verified continuity outranks vocabulary heuristics. A real user-owned task
+  // need not begin with "build", "draft", "project", etc.
   if (input.projectRelation === "same_project") return render("confirmed_same_project");
 
   const intent = input.progress.lastUserIntent ?? classifyUserTurn(input.message);
@@ -79,6 +81,9 @@ export function selectTaskProgressPrompt(input: TaskProgressPromptInput): TaskPr
     return render("source_linked_answer");
   if (intent === "revision" && input.progress.workProduct?.projectId === parent.userMessageId)
     return render("active_work_revision");
+  // Only unbound, heuristic follow-ups require a recognizable work anchor.
+  // A source-linked answer or a confirmed same-project route does not.
+  if (!hasProjectWorkAnchor(parent.text)) return omit("no_confirmed_work_anchor");
   if (intent === "new_task" && explicitlyReferencesCurrentWork(input.message, parent.text))
     return render("scoped_work_request");
   if (intent === "continuation" &&
