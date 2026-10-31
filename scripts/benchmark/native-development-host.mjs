@@ -1,3 +1,4 @@
+import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
 import {recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
 import {createNativeWipCheckpointer} from './native-wip-checkpoint.mjs';
@@ -162,7 +163,7 @@ if(proof.resourceAmendmentId){
 // failed-run receipt and its immutable diagnostics authenticate the Git object.
 const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
 const priorRefs=recoveryRefs(boundary.root,task.id);
-let recoveryPlan=null;
+let recoveryPlan=null,priorCapacityObservations=[];
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
@@ -171,10 +172,23 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
+ priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  }
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
+// Advisory only. Recovery authentication above, grants/admission below remain
+// authoritative. Forecast errors never call denied() or change phase selection.
+const capacityObservations=[...priorCapacityObservations];
+let latestCapacityForecast,forecastGrantId=null;
+const capacityCompletedStages=new Set(recovery?.phase==='repair'?['implementation','initial_review']:[]),capacityNotRequiredStages=new Set();
+const forecastCapacity=async phase=>{
+ try{latestCapacityForecast=await readNativeLifecycleCapacity({db,task,project,approval,continuation,context:wipContext,recovery,phase,grantId:forecastGrantId,completedStages:[...capacityCompletedStages],notRequiredStages:[...capacityNotRequiredStages],observations:capacityObservations});}
+ catch{latestCapacityForecast={version:'lifecycle-capacity-v1',kind:'forecast_not_authorization',status:'indeterminate',uncertainties:['forecast_unavailable']};}
+ console.log('NATIVE_LIFECYCLE_CAPACITY='+JSON.stringify({status:latestCapacityForecast.status,shortages:latestCapacityForecast.shortages??[],phase:latestCapacityForecast.currentPhase??null}));
+};
+await forecastCapacity(recovery?.phase??'implementation');
+
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
 const {data:grantResult,error:issueError}=proof.resourceAmendmentId
@@ -196,10 +210,11 @@ const {data:grantResult,error:issueError}=proof.resourceAmendmentId
 const grantId=(proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.grantId:grantResult;
 const executionEpoch=(proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.executionEpoch:1;
 if(issueError||typeof grantId!=='string'||!Number.isSafeInteger(executionEpoch)||executionEpoch<1)denied('atomic owner grant issuance rejected');
+forecastGrantId=grantId;
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
-const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false};
+const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false,capacityForecasts:[latestCapacityForecast],capacityObservations};
 const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken,process.env.GH_TOKEN];
 const snapshot=label=>diagnostics.snapshots.push({label,...worktreeEvidence(boundary.root,diagnosticSecrets)});
 const saveDiagnostics=()=>{if(evidencePath&&evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))writeFileSync(evidencePath+'.diagnostics.json',JSON.stringify(diagnostics)+'\n',{mode:0o600});};
@@ -238,6 +253,7 @@ const commitCandidate=(label)=>{
   // another metered phase begins. GitHub credentials stay in the trusted host.
   git('push','origin',`HEAD:refs/heads/${checkpointBranch}`);
   trustedCheckpointSha=sha;
+  const measured=capacityObservations.at(-1);if(measured&&['implementation','repair'].includes(measured.stage)){measured.completed=true;capacityCompletedStages.add(measured.stage);}
   activeWipPhase=null;
   lastCompleted={...lastCompleted,checkpointSha:sha};
   return sha;
@@ -247,7 +263,7 @@ mkdirSync(sockdir,{mode:0o700});
 const perRequestCap=Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens));
 if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
 const upstream=createResponsesProvider({apiKey:providerKey});
-let gatewayFailure=null;
+let gatewayFailure=null,capacityPhase=null,capacityReceipts=[];
 const server=createNativeHttpBridge({
  beforeRequest:preserveWip,
  onFailure:classification=>{gatewayFailure??=classification;},
@@ -262,6 +278,7 @@ const server=createNativeHttpBridge({
   });
   if(error||!['settled','overrun'].includes(data))throw Error('NATIVE_LINKED_RECEIPT_NOT_RECONCILED');
   lastCompleted={...lastCompleted,modelCall:{requestKey,operationId,actualTokens,settlement:data}};
+  if(capacityPhase&&data==='settled')capacityReceipts.push({operationId,inputTokens:usage?.input_tokens,outputTokens:usage?.output_tokens});
  }
 });
 let child=null,stopTimer=null;
@@ -317,10 +334,24 @@ try{
   return decision;
  };
  const safelyRunPhase=async(phase,findings='')=>{
+  if(phase==='repair'){capacityCompletedStages.delete('verification');capacityNotRequiredStages.delete('repair');}
+  await forecastCapacity(phase);diagnostics.capacityForecasts.push(latestCapacityForecast);diagnostics.capacityForecasts=diagnostics.capacityForecasts.slice(-12);saveDiagnostics();
   // Retry only a positively identified process interruption. Any gateway denial,
   // uncertain upstream result, ordinary nonzero exit or intentional stop is final.
   for(let attempt=0;attempt<(ownerApprovedSuccessor?1:2);attempt++){
-   try{return await runPhase(phase,findings)}
+   try{
+     capacityPhase=phase;capacityReceipts=[];const phaseStarted=Date.now();
+     const result=await runPhase(phase,findings);
+     if(capacityReceipts.length&&capacityReceipts.every(r=>Number.isSafeInteger(r.inputTokens)&&Number.isSafeInteger(r.outputTokens))){
+      capacityObservations.push({id:process.env.GITHUB_RUN_ID+':'+phase+':'+attempt,source:'verified_phase_receipts',cohort:project.approved_hash,
+       binding:{projectId:project.id,scopeHash:project.approved_hash},stage:({'review':'initial_review','final-review':'final_review'})[phase]??phase,
+       completed:['review','final-review'].includes(phase),calls:capacityReceipts.length,inputTokens:capacityReceipts.reduce((n,r)=>n+r.inputTokens,0),outputTokens:capacityReceipts.reduce((n,r)=>n+r.outputTokens,0),
+       seconds:Math.ceil((Date.now()-phaseStarted)/1000),operationIds:capacityReceipts.map(r=>r.operationId)});
+      capacityObservations.splice(0,Math.max(0,capacityObservations.length-64));saveDiagnostics();
+     }
+     if(['review','final-review'].includes(phase))capacityCompletedStages.add(phase==='review'?'initial_review':'final_review');
+     capacityPhase=null;return result;
+    }
    catch(error){
     if(ownerApprovedSuccessor||attempt!==0||!nativeChildInterruptionRetryable(error?.nativeChildOutcome,gatewayFailure))
      throw error;
@@ -366,6 +397,7 @@ try{
   for(const stream of [verifier.stdout,verifier.stderr])stream.on('data',x=>{log=(log+x).slice(-16000);});
   const code=await new Promise((resolve,reject)=>{verifier.once('error',reject);verifier.once('close',resolve);});child=null;
   const result={passed:code===0,detail:sanitizeEvidence(log,diagnosticSecrets,12000)};
+  if(result.passed)capacityCompletedStages.add('verification');else capacityCompletedStages.delete('verification');
   diagnostics.verification??=[];diagnostics.verification.push({head:candidateHead,...result});saveDiagnostics();
   if(gatewayFailure||code===null)denied('deterministic verification interrupted');
   try{if(JSON.parse(readFileSync(failure,'utf8')).kind==='infrastructure')denied('deterministic verification infrastructure failed before candidate tests');}catch(error){if(error.message?.startsWith('NATIVE_HOST_DENIED'))throw error;}
@@ -373,7 +405,8 @@ try{
  };
  const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
-  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};}});
+  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
+ await forecastCapacity('do_completion');diagnostics.capacityForecasts.push(latestCapacityForecast);saveDiagnostics();
  if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
   denied('trusted evidence destination unavailable');
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),

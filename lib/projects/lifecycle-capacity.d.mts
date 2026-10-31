@@ -1,0 +1,31 @@
+export type Stage = 'implementation'|'initial_review'|'repair'|'verification'|'final_review'|'do_completion'|'assessment'|'browser_delivery';
+export type Pool = 'native'|'completion'|'assessment'|'deterministic';
+export type Binding = {taskId:string;projectId:string;baselineSha:string;scopeHash:string;contractHash:string};
+export type Pricing = {status:string;source:string;serviceTier:string;verifiedAt:number|null;inputUsdPerMillion:string|null;outputUsdPerMillion:string|null};
+export type Observation = {id:string;stage:Stage;source:'verified_phase_receipts';cohort:string;binding:{projectId:string;scopeHash:string};completed:boolean;calls:number|null;inputTokens:number|null;outputTokens:number|null;seconds:number|null};
+export type CapacityInput = {
+ binding:Binding;observedAt:number;cohort:string;
+ progress:{source:'authenticated_recovery'|'trusted_host';binding:Binding;phase:Stage;completedStages:Stage[];notRequiredStages?:Stage[];checkpointSha?:string|null};
+ work:{repairIterations:number|null;additionalRepairIterations:number|null};
+ observations:Observation[];pricing:Partial<Record<Pool,Pricing|null>>;otherApiCostMicrousd:Partial<Record<Stage,string|null>>;
+ authorization:{source:string;live:boolean|null;executionAuthorized:boolean|null;deadline:number|null;
+  tokens:{cumulativeLimit:number|null;accountEncumbered:number|null;developmentLimit:number|null;developmentEncumbered:number|null;completionReserveRemaining:number|null;assessmentReserveRemaining:number|null};
+  calls:{developmentLimit:number|null;developmentConsumed:number|null;completionReserveRemaining:number|null;assessmentLimit:number|null;assessmentConsumed:number|null};
+  money:{complete:boolean;ceilingMicrousd:string|null;exposureMicrousd:string|null}};
+};
+export type Measure = {expected:number|null;contingency:number|null;projected:number|null;samples:number;basis:string};
+export type CapacityAssessment = {
+ version:'lifecycle-capacity-v1';kind:'forecast_not_authorization';binding:Record<keyof Binding,string|null>;observedAt:number|null;
+ currentPhase:Stage|null;status:'sufficient'|'insufficient'|'indeterminate';shortages:string[];uncertainties:string[];
+ evidence:{source:string|null;checkpointSha:string|null;accountingSource:string|null;cohort:string|null};
+ stages:{stage:Stage;pool:Pool;status:'completed'|'not_required'|'in_progress'|'remaining';remainingUnits:number|null;minimumCalls:number;
+  metrics:Record<'calls'|'inputTokens'|'outputTokens'|'seconds',Measure>;cost:{unit:'microUSD';expected:string|null;projected:string|null};evidence:string[];confidence:string}[];
+ dimensions:Record<string,{unit:'calls'|'input_plus_output_tokens'|'microUSD'|'seconds';expectedRemaining:number|string|null;contingency:number|string|null;projectedRemaining:number|string|null;minimumRemaining:number|string;authorizedRemaining:number|string|null;currentlyUsable:number|string|null;status:'sufficient'|'insufficient'|'indeterminate';shortfall:number|string|null;minimumShortfall:number|string|null;headroom:number|string|null}>;
+ protectedReserves:{completionTokens:number|null;completionCalls:number|null;assessmentTokens:number|null};
+ authorization:{live:boolean|null;executionAuthorized:boolean|null;deadline:number|null;spendingPermission:'unchanged';snapshotOnly:true};
+ methodology:{minimumComparableObservations:number;expected:string;contingency:string;tokenAccounting:string;monetaryAccounting:string;guaranteed:false};
+};
+export const CAPACITY_VERSION:'lifecycle-capacity-v1';
+export const STAGES:Readonly<Record<Stage,Pool>>;
+export function assessLifecycleCapacity(input:CapacityInput):CapacityAssessment;
+export function modelCostMicrousd(inputTokens:number|null,outputTokens:number|null,pricing:Pricing|null,observedAt:number):string|null;

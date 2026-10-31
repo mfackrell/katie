@@ -86,7 +86,7 @@ test('actual host scope wrapper retains rejected scope and cannot commit or push
  for(const rejected of [false,true]){
   const diagnostics={scope:[]},commands=[],snapshots=[];let saved=0;
   const fn=vm.runInNewContext(source.slice(start,end)+';commitCandidate',{
-   trustedCheckpointSha:'a'.repeat(40),lastCompleted:{checkpointSha:'a'.repeat(40)},activeWipPhase:{phase:'implementation'},
+   capacityCompletedStages:new Set(),capacityObservations:[],trustedCheckpointSha:'a'.repeat(40),lastCompleted:{checkpointSha:'a'.repeat(40)},activeWipPhase:{phase:'implementation'},
    checkpointBranch:'synthetic',requestFile:'/trusted/request',boundary:{root:'/synthetic'},join,
    process:{cwd:()=>'/synthetic',env:{RUNNER_TEMP:'/scratch'}},rmSync:()=>{},
    git:(...args)=>{commands.push(args);return 'a'.repeat(40);},denied:message=>{throw Error(message);},
@@ -104,3 +104,4 @@ test('actual host scope wrapper retains rejected scope and cannot commit or push
   assert.deepEqual(snapshots,['before-scope']);
  }
 });
+
