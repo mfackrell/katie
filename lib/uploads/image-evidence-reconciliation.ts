@@ -43,7 +43,9 @@ export function reportedFocalSubject(text:string):string|null {
   const anchor=patterns.map(p=>p.exec(s)).find(Boolean);
   // Short Qwen observations commonly start "A cup on a table" without labels.
   // Only their first sentence can supply a fallback claimed subject.
-  const shortUnlabelled=!anchor&&s.length<240&&/^(?:a|an|the)\s+/i.test(s);
+  const shortUnlabelled=!anchor&&s.length<240&&
+    /^(?:a|an|the)\s+(?!(?:image|picture|photo|photograph|scene|frame|text|words|letters|writing|subject|detail|contents?)\b)/i.test(s)&&
+    !/\b(?:illegible|blurry|uncertain|unclear|unreadable|undiscernible|unrecognizable|unidentified|cannot|unable|indistinct|not visible|too small)\b/i.test(s);
   if(!anchor&&!shortUnlabelled)return null;
   let clause=anchor?s.slice(anchor.index+anchor[0].length,anchor.index+anchor[0].length+185):s.slice(0,185);
   clause=clause.split(/[.!?;:]/)[0];
