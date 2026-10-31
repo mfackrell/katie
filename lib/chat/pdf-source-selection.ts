@@ -122,7 +122,7 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   // and never permission to retrieve similarly named historical sources.
   // Scope the sole attached PDF by immutable fileId; ambiguous batches must
   // ask which file instead of silently inspecting or dropping all content.
-  if (/^\\s*\\[(?:file|files)\\]\\s*$/i.test(message)) {
+  if (/^\s*\[(?:file|files)\]\s*$/i.test(message)) {
     return fresh.length === 1 && pdfs.length === 1
       ? {fileIds:new Set([pdfs[0].fileId])}
       : none("Several files were attached. Which one should I inspect?");
