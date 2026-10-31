@@ -2,6 +2,7 @@ import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { ProviderSystemAudit } from "@/lib/providers/types";
 
 const MAX_SYSTEM_CHARS = 240_000;
+const MAX_AUTHORIZED_DIAGNOSTIC_CHARS = 750_000;
 
 export type StoredProviderSystemAudit = ProviderSystemAudit & {
   capturedAt: string;
@@ -25,6 +26,12 @@ export function boundProviderSystemAudit(audit: ProviderSystemAudit): StoredProv
     systemMessages,
     ...(typeof audit.imagePrompt === "string" ? { imagePrompt: audit.imagePrompt.slice(0, 2048) } : {}),
     ...(audit.contextSynthesis ? { contextSynthesis: audit.contextSynthesis } : {}),
+    ...(audit.requestDiagnostic ? (() => {
+      const charCount = JSON.stringify(audit.requestDiagnostic).length;
+      return { requestDiagnostic: charCount <= MAX_AUTHORIZED_DIAGNOSTIC_CHARS
+        ? audit.requestDiagnostic
+        : { status: "capture-too-large", charCount } };
+    })() : {}),
     capturedAt: new Date().toISOString(),
     truncated,
   };
