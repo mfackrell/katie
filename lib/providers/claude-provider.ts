@@ -448,6 +448,7 @@ export class ClaudeProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
+    if (params.providerPayloadCaptureTrace && (params.images?.length || params.attachments?.length)) throw new Error("Text-only diagnostic required.");
     const { selectedModel, system, messages, cacheablePrefix } = this.buildRequestContext(params);
     await params.onProviderSystemPrepared?.({
       provider: "anthropic", model: selectedModel,
@@ -538,6 +539,7 @@ export class ClaudeProvider implements LlmProvider {
     params: ChatGenerateParams,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
+    if (params.providerPayloadCaptureTrace && (params.images?.length || params.attachments?.length)) throw new Error("Text-only diagnostic required.");
     const { selectedModel, system, messages, cacheablePrefix } = this.buildRequestContext(params);
     await params.onProviderSystemPrepared?.({
       provider: "anthropic", model: selectedModel,
