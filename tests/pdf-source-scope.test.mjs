@@ -134,6 +134,31 @@ for (const excluded of [false,true]) test(`independent ordinary, saved-draft and
   assert.ok(!JSON.stringify(assessment).includes('CANDIDATE-DRAFT-LEAK'));
  }
 });
+test('bare [file] from the composer delivers the single fresh resume PDF, never an old copy',async()=>{
+ const fresh=pdf('fresh-resume','Resume-Mark-Fackrell (1).pdf');
+ const older=pdf('old-resume','Resume-Mark-Fackrell (1).pdf');
+ const result=await run('[file]',[fresh],false,undefined,[older]);
+ assert.deepEqual(result.inspected,['fresh-resume']);
+ assert.deepEqual(result.retained,['fresh-resume']);
+ assert.deepEqual(Array.from(result.params.attachments,file=>file.fileId),['fresh-resume']);
+ assert.equal(result.clarification,undefined);
+ assert.ok(JSON.stringify(result.params.attachments).includes('Resume-Mark-Fackrell (1).pdf'));
+ assert.ok(!JSON.stringify(result.params).includes('TEXT-old-resume'));
+});
+
+test('file-only marker accepts whitespace and plural marker only for one fresh PDF',async()=>{
+ const single=await run('  [files]  ',[pdf('one','resume.pdf')]);
+ assert.deepEqual(single.inspected,['one']);
+ const multiple=await run('[file]',[pdf('a','resume-a.pdf'),pdf('b','resume-b.pdf')]);
+ assert.deepEqual(multiple.inspected,[]);
+ assert.deepEqual(multiple.retained,['a','b']);
+ assert.equal(multiple.params.attachments.length,0);
+ assert.match(multiple.clarification,/Which one should I inspect/);
+ const mixed=await run('[file]',[pdf('a','resume.pdf'),{fileId:'note',fileName:'notes.txt',mimeType:'text/plain',preview:'TEXT-note',extractedText:'TEXT-note'}]);
+ assert.deepEqual(mixed.inspected,[]);
+ assert.match(mixed.clarification,/Which one should I inspect/);
+});
+
 test('non-PDF fresh inputs retain ordinary source identity and evidence',async()=>{
  const file={fileId:'text',fileName:'notes.txt',mimeType:'text/plain',preview:'TEXT-text',extractedText:'TEXT-text'};
  const result=await run('Summarize these notes',[file]);
