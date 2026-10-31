@@ -72,6 +72,42 @@ test("active CFO application and explicit same-project work still receive source
   assert.match(inferred.text, /CURRENT QUESTION OR DELIVERABLE/);
 });
 
+test("verified source-linked answers preserve unusual tasks without special vocabulary", () => {
+  const p = prior();
+  p.projectContext = {text:"Help me troubleshoot the intermittent database timeouts.",userMessageId:"debug-brief"};
+  p.objective = {text:p.projectContext.text,userMessageId:"debug-brief"};
+  p.lastUserIntent = "answer";
+  p.answered=[{
+    id:"question:1", assistantMessageId:"question", index:1,
+    text:"Which database version are you using?",
+    userMessageId:"current-user", answer:"PostgreSQL 16.",
+    exactNumberedMatch:false, projectId:"debug-brief",
+  }];
+  const answered=selectTaskProgressPrompt(input({
+    message:"PostgreSQL 16.",progress:p,projectRelation:undefined,
+    history:[{id:"debug-brief",role:"user"},{id:"question",role:"assistant"}],
+  }));
+  assert.equal(answered.reason,"source_linked_answer");
+  assert.match(answered.text,/KATIE_DURABLE_TASK_PROGRESS/);
+  assert.match(answered.text,/troubleshoot the intermittent database timeouts/);
+  assert.doesNotMatch(answered.text,/"answer":"PostgreSQL 16/);
+
+  const same=selectTaskProgressPrompt(input({
+    message:"Review that timeout trace.",progress:{...p,lastUserIntent:"new_task"},
+    projectRelation:"same_project",
+  }));
+  assert.equal(same.reason,"confirmed_same_project");
+
+  const revision=selectTaskProgressPrompt(input({
+    message:"Revise the diagnosis.",progress:{
+      ...p,lastUserIntent:"revision",
+      workProduct:{projectId:"debug-brief",assistantMessageId:"draft",
+        text:"Earlier diagnosis",request:{userMessageId:"debug-brief",text:p.projectContext.text}},
+    },projectRelation:undefined,
+  }));
+  assert.equal(revision.reason,"active_work_revision");
+});
+
 test("pending-review continuation, managed development, and explicit project work cannot lose state", () => {
   for (const scenario of [
     { pendingReviewContinuation: true, projectRelation: undefined },
