@@ -164,7 +164,7 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
     let taskProgress = pdfProgress;
     ${selectionBlock}
     ${collaborationGate}
-    return { taskProgress, reviewTaskProgress, pendingReviewClarification, verifyingSavedDraft,
+    return { taskProgress, reviewTaskProgress, companionOnlyTurn, pendingReviewClarification, verifyingSavedDraft,
       savedDraftOriginalTask, taskProgressContext, resumptionContext, responsePolicy,
       requiredReviewForRequest, collaborationEnabledForRequest };
   })()`), {
