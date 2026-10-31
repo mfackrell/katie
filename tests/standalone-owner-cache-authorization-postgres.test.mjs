@@ -60,6 +60,16 @@ test('unreviewed cache metadata requires one explicit owner authorization before
   assert.equal(dispatched.state,'dispatched');
   assert.deepEqual(dispatched.prepared_payload.payload,original,'same model and entire request untouched');
   assert.equal(await rpc(other,'claim_dispatch',{p_owner:owner,p_attempt:attempt.id}),null,'no repeat dispatch');
+  // Legacy pause occurred after Qwen had completed, without a paused OpenAI
+  // attempt. The scoped recovery function must find it without any upload.
+  const oldRequest='saved-unpriced-legacy';
+  const oldWf={...wf,p_request:oldRequest,p_hash:'c'.repeat(64)};
+  const oldLease=await rpc(one,'claim_workflow',oldWf);
+  await rpc(one,'finish_workflow',{p_owner:owner,p_request:oldRequest,p_lease:oldLease.lease_token,p_status:'paused',
+    p_result:{body:'{"type":"accounting_pause","code":"standalone_unsupported_billing","message":"No reviewed no-fee cache metadata policy for this exact model"}\\n',status:200,headers:[]}});
+  assert.deepEqual(await rpc(one,'owner_cache_authorization_recovery',{p_owner:owner,p_actor:actor,p_chat:chat}),{requestId:oldRequest});
+  await assert.rejects(rpc(other,'owner_cache_authorization_recovery',{p_owner:outsider,p_actor:actor,p_chat:chat}),/STANDALONE_SCOPE_DENIED/);
+
  } finally {
   await Promise.allSettled(connections.map(c=>c.end()));
   if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);
