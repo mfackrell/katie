@@ -95,6 +95,7 @@ export async function qualifyNativeRecovery(db,ids){
   const project=await one('work_projects','id',ids.project),scope=project.approved_hash;
   // Only disposable fixture setup changes its synthetic binding before execution.
   await db.query('reset role');
+  for(const name of ['20261030143925_benchmark_cumulative_execution_controls.sql','20261030173250_benchmark_owner_amendment_successor.sql'])await db.query(readFileSync(join(repo,'supabase/migrations',name),'utf8'));
   assert.equal((await one('benchmark_three_arm_trials','id',ids.trial)).baseline_sha,baseline);
   await db.query('update benchmark_mission_bindings set baseline_sha=$2 where mission_id=$1',[ids.mission,baseline]);
   await db.query('update project_runs set binding=$2 where mission_id=$1',[ids.mission,{...context,scopeHash:scope}]);
@@ -168,7 +169,16 @@ export async function qualifyNativeRecovery(db,ids){
   const failed={...ids.receipt,run_id:run};await db.query("update agent_tasks set status='blocked',external=jsonb_set(external,'{receipt}',$2::jsonb) where id=$1",[ids.task,failed]);
   const task=await one('agent_tasks','id',ids.task);
   const github=async(path,binary)=>binary?readFileSync(join(root,'artifact.zip')):path.includes('/artifacts?')?{total_count:1,artifacts:[artifact]}:workflow;
-  const beforeRestore=await ledger();rmSync(workspace,{recursive:true,force:true});assert.equal(existsSync(workspace),false);trace.push({stage:'runner-destroyed',path:workspace});
+  const beforeRestore=await ledger();
+  const originalGrant=await one('benchmark_execution_grants','id',record.grantId);
+  const reserve='select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6) id';
+  await assert.rejects(db.query(reserve,[originalGrant.token_digest,ids.trial,Number(originalGrant.execution_epoch),record.lastCompleted.modelCall.requestKey,'gpt-5.3-codex',10]),/duplicate/);
+  assert.deepEqual(await ledger(),beforeRestore);report.failures.push({case:'previously consumed model call',result:'real admission rejects replay; history unchanged'});
+  await db.query('begin');
+  const uncertain=randomUUID();await db.query(reserve,[originalGrant.token_digest,ids.trial,Number(originalGrant.execution_epoch),uncertain,'gpt-5.3-codex',100]);
+  await assert.rejects(db.query(reserve,[originalGrant.token_digest,ids.trial,Number(originalGrant.execution_epoch),uncertain,'gpt-5.3-codex',100]),/duplicate/);
+  await db.query('rollback');assert.deepEqual(await ledger(),beforeRestore);report.failures.push({case:'uncertain model request',result:'real reservation prevents replay; isolated injection rolled back'});
+  rmSync(workspace,{recursive:true,force:true});assert.equal(existsSync(workspace),false);trace.push({stage:'runner-destroyed',path:workspace});
   const fresh=()=>{const dir=join(root,'fresh-'+randomUUID());git(root,'clone','-q','--branch','baseline',remote,dir);return dir;};workspace=fresh();
   const authority=await one('work_projects','id',ids.project);
   for(const [label,change] of [

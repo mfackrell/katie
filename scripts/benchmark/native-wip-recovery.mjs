@@ -76,7 +76,7 @@ export function githubRecoveryReader(repository){
 
 // The saved service-owned receipt selects a completed, trusted workflow run.
 // Unsigned Git tags alone are never an authenticity anchor.
-export async function loadRecoveryDiagnostics({task,repository,github}){
+export async function loadRecoveryDiagnostics({task,repository,github,emptyBaselineSha=null}){
  const receipt=task.external?.receipt,runId=String(receipt?.run_id??'');
  if(!/^[1-9][0-9]*$/.test(runId)||receipt.repository!==repository||receipt.outcome!=='BLOCKED'||
     !Number.isSafeInteger(receipt.issue_number)||receipt.issue_number!==Number(task.external.issueNumber))fail('failed same-task run receipt required');
@@ -90,7 +90,19 @@ export async function loadRecoveryDiagnostics({task,repository,github}){
  if(matches.length!==1||matches[0].expired||!Number.isSafeInteger(matches[0].id)||matches[0].size_in_bytes>8*1024*1024||
     String(matches[0].workflow_run?.id)!==runId||matches[0].workflow_run?.head_sha!==run.head_sha)fail('missing, expired or ambiguous trusted diagnostics');
  const diagnostics=readRecoveryArtifact(await github(`/repos/${repository}/actions/artifacts/${matches[0].id}/zip`,true));
- if(diagnostics.taskId!==task.id||String(diagnostics.runId)!==runId||diagnostics.completed!==false||!diagnostics.wipCheckpoint)fail('diagnostics do not identify unfinished same-task WIP');
+ if(diagnostics.taskId!==task.id||String(diagnostics.runId)!==runId||diagnostics.completed!==false)fail('diagnostics do not identify unfinished same-task WIP');
+ if(!diagnostics.wipCheckpoint){
+  // A failed attempt can legitimately have produced no work. Only authenticated
+  // evidence of a clean original baseline establishes that; missing refs alone
+  // never authorize restarting implementation. The caller must also see no refs.
+  const final=diagnostics.snapshots?.filter(snapshot=>snapshot.label==='final')??[];
+  if(sha(emptyBaselineSha)&&!diagnostics.wipFailure&&final.length===1&&
+     final[0].head===emptyBaselineSha&&!final[0].unavailable&&Array.isArray(final[0].status)&&
+     final[0].status.every(path=>path==='?? AGENT_REQUEST.md')&&
+     !diagnostics.phases?.some(p=>['review','repair','final-review'].includes(p.phase))&&
+     !diagnostics.verification?.length)return {record:null,diagnostics};
+  fail('diagnostics do not identify unfinished same-task WIP');
+ }
  const record=diagnostics.wipCheckpoint;
  if(record.runId!==runId||record.runAttempt!==String(run.run_attempt))fail('checkpoint run attempt mismatch');
  const final=diagnostics.snapshots?.filter(snapshot=>snapshot.label==='final')??[];
