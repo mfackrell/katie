@@ -36,7 +36,7 @@ import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
-import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest } from "@/lib/uploads/still-image-observations";
+import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest, currentTurnImageGroundingContext } from "@/lib/uploads/still-image-observations";
 import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
@@ -1031,7 +1031,10 @@ async function executeChat(request: NextRequest) {
         const original=savedVideoSourceByFileId.get(file.fileId);
         const descriptor=original?(updatedSavedImageDescriptors.get(original.id)??original):undefined;
         const description=freshTaskDescriptions.get(file.fileId);
-        if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage)){
+        if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage||
+          description.observationAgreement!==descriptor.observationAgreement||
+          JSON.stringify(description.observationReports)!==JSON.stringify(descriptor.observationReports)||
+          JSON.stringify(description.observationLimitations)!==JSON.stringify(descriptor.observationLimitations))){
           const owner=await getChatById(descriptor.chatId??chatId);
           if(owner?.actorId!==actorId)throw new Error('Saved image source is not available to this actor.');
           updatedSavedImageDescriptors.set(descriptor.id,await updateSavedImageObservation(owner.id,descriptor,actorId,description));
@@ -1063,7 +1066,10 @@ async function executeChat(request: NextRequest) {
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
     const excludedPdfSourceIds = new Set<string>();
-    const selectionContext = () => timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
+    const currentImageGrounding = standaloneImageObservation
+      ? currentTurnImageGroundingContext(requestAttachments,freshTaskDescriptions,new Set(newAttachments.map(ref=>ref.fileId)))
+      : '';
+    const selectionContext = () => currentImageGrounding + '\\n' + timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
       + (standaloneImageObservation&&requestAttachments.some(file=>file.mimeType.startsWith('image/'))?'\nImage source retained privately; the current response model receives labelled textual visual observations. It has not directly inspected raw pixels.':'')
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
@@ -1078,7 +1084,7 @@ async function executeChat(request: NextRequest) {
         extractionCoverage: attachment.extractionCoverage ?? null,
       });
     });
-    let messageForGeneration = message;
+    let messageForGeneration = message + (currentImageGrounding ? '\\n\\n' + currentImageGrounding : '');
     const hasVideoInput = attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
     const suppliedRequestId = request.headers.get("x-request-id")?.trim();
@@ -1495,7 +1501,10 @@ async function executeChat(request: NextRequest) {
     });
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
-      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
+      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4).map(({role,content,createdAt,attachments})=>({
+        role,content,createdAt,
+        attachments:attachments?.map(file=>({id:file.id,fileName:file.fileName,observationSourceHash:file.observationSourceHash,observationAgreement:file.observationAgreement}))
+      })))}` : "",
       `Active project (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null : null)}`,
       `Current requested deliverable (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.objective?.text ?? null : null)}`,
       `Outstanding questions: ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })) : [])}`,
