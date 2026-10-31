@@ -3161,14 +3161,18 @@ ${chunkWorkflowSummary}`;
               },
               rerouteOnError: async ({ attempt, error, attemptedAttempts }) => {
                 const accounting = standaloneAccountingCause(error) as
-                  (Error & {code?:string;provider?:string;model?:string;outputAllowance?:number}) | undefined;
+                  (Error & {code?:string;provider?:string;model?:string;inputTokens?:number;inputCountSource?:string;outputAllowance?:number;maxContextTokens?:number}) | undefined;
                 if (accounting && ['standalone_context_capacity_unverified','standalone_context_window_exceeded'].includes(accounting.code ?? '')) {
-                  // Context errors occur before paid dispatch. Preserve every
-                  // instruction, message, attachment and output allowance.
-                  // Only a newer SAME-family higher-capacity model qualifies.
+                  // A context error occurs before paid generation dispatch. Keep
+                  // every instruction, message, attachment and output allowance.
+                  // The replacement must have reviewed capacity AND no lower
+                  // capability; its own exact prepared request still faces the
+                  // normal accounting and owner-approval gate.
                   if (hasVideoInput || rerouteHasVisualInput ||
                       accounting.provider !== attempt.provider.name ||
                       accounting.model !== attempt.modelId ||
+                      !Number.isSafeInteger(accounting.inputTokens) ||
+                      (accounting.inputTokens ?? -1) < 0 ||
                       !Number.isSafeInteger(accounting.outputAllowance) ||
                       (accounting.outputAllowance ?? 0) <= 0) return null;
                   const pricing = await loadStandalonePricing(createStandaloneLedger());
@@ -3178,15 +3182,25 @@ ${chunkWorkflowSummary}`;
                     model: attempt.modelId,
                     availableModels: available,
                     pricing,
+                    inputTokens: accounting.inputTokens!,
                     outputAllowance: accounting.outputAllowance!,
                     excludedModels: new Set(attemptedAttempts
                       .filter(item => item.provider.name === attempt.provider.name)
                       .map(item => item.modelId.toLowerCase())),
                   });
-                  if (!upgrade) return null;
-                  console.info('[Context Upgrade] Same-family higher-capacity model selected', {
+                  if (!upgrade) {
+                    console.warn('[Context Upgrade] No reviewed capability-preserving model fits the unchanged request', {
+                      requestId, provider: attempt.provider.name, model: attempt.modelId,
+                      inputTokens: accounting.inputTokens, outputAllowance: accounting.outputAllowance,
+                      maxContextTokens: accounting.maxContextTokens,
+                      inputCountSource: accounting.inputCountSource,
+                    });
+                    return null;
+                  }
+                  console.info('[Context Upgrade] Reviewed higher-capacity model selected', {
                     requestId, previousModel: attempt.modelId, selectedModel: upgrade,
-                    provider: attempt.provider.name,
+                    provider: attempt.provider.name, inputTokens: accounting.inputTokens,
+                    outputAllowance: accounting.outputAllowance, inputCountSource: accounting.inputCountSource,
                   });
                   return { provider: attempt.provider, modelId: upgrade,
                     routingSource: 'deterministic-fallback' as const };

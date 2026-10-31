@@ -311,12 +311,21 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     }
     if (estimate.issues.includes(contextIssue)) {
       const confirmed = estimate.inputCountSource === 'provider';
+      const maxContextTokens = getModelPrice(provider, prepared.model, pricing)?.maxContextTokens ?? null;
+      // Include only bounded numeric diagnostics; never log the private prompt.
+      console.warn('[Accounting] Prepared context requires a higher-capacity model', {
+        provider: prepared.provider, model: prepared.model,
+        inputTokens: estimate.inputTokens, outputAllowance: estimate.outputAllowance,
+        maxContextTokens, inputCountSource: estimate.inputCountSource,
+        nativeCountVerified: confirmed,
+      });
       throw Object.assign(failure(
         confirmed ? 'context_window_exceeded' : 'context_capacity_unverified',
         confirmed
           ? 'Provider-counted input plus the unchanged output allowance exceeds this model\'s reviewed context window. A higher-capacity model is required.'
           : 'This model cannot verify the full input token count, and its conservative estimate exceeds its reviewed context window. A higher-capacity model is required.'
-      ),{provider:prepared.provider,model:prepared.model,inputTokens:estimate.inputTokens,outputAllowance:estimate.outputAllowance});
+      ),{provider:prepared.provider,model:prepared.model,inputTokens:estimate.inputTokens,
+         outputAllowance:estimate.outputAllowance,maxContextTokens,inputCountSource:estimate.inputCountSource});
     }
     if (estimate.status !== 'estimated' || estimate.reservationMicrousd === null) throw Object.assign(failure('unsupported_billing', 'This provider request cannot be priced: '+estimate.issues.join('; ')), { issues: estimate.issues });
     if (attempt && attempt.state !== 'settled' && BigInt(attempt.reserved_microusd) !== BigInt(estimate.reservationMicrousd)) throw failure('estimate_changed', 'The saved reservation differs from the verified prepared request estimate. A fresh quote is required.');
