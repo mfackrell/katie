@@ -83,7 +83,8 @@ import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
-import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
+import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
+import { selectTaskProgressPrompt } from "@/lib/chat/task-progress-prompt";
 import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
@@ -1783,7 +1784,6 @@ async function executeChat(request: NextRequest) {
       objective: { text: savedDraftOriginalTask, userMessageId: pendingReviewClarification!.pending.binding?.taskId ?? pendingReviewClarification!.requestId },
       pending: [],
     } : taskProgress;
-    const taskProgressContext = formatTaskProgress(reviewTaskProgress);
     if (pendingReviewClarification) {
       console.info("[ReviewContinuity] Matched current task and question", {
         requestId, originalRequestId: pendingReviewClarification.requestId,
@@ -1798,6 +1798,19 @@ async function executeChat(request: NextRequest) {
       hasPendingDeliverable: Boolean(taskProgress.objective &&
         (taskProgress.lastUserIntent === "answer" || pendingReviewClarification)),
       explicitReviewRetry: verifyingSavedDraft,
+    });
+    const taskProgressPrompt = selectTaskProgressPrompt({
+      message, currentUserMessageId: taskProgressUserMessageId, history,
+      progress: reviewTaskProgress, responsePurpose: responsePolicy.purpose,
+      managedTask: Boolean(currentAgentTask()),
+      explicitProjectControl, explicitSavedProjectReference,
+      pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
+      projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+    });
+    const taskProgressContext = taskProgressPrompt.text;
+    console.info("[TaskProgress] Prompt scope", {
+      requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
+      historyTurnCount: history.length,
     });
     const resumptionContext = pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing
       ? buildReviewResumptionContext(pendingReviewClarification.pending, message) : "";
