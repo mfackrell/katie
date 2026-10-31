@@ -22,7 +22,7 @@ function dollars(value: string) {
 function cents(value: string) {
   const amount = BigInt(value);
   const rounded = (amount + 5_000n) / 10_000n;
-  return '
+  return String.fromCharCode(36) + (rounded / 100n).toString() + '.' + (rounded % 100n).toString().padStart(2, '0');
 }
 function compactTokens(value: number) {
   return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : value.toLocaleString();
