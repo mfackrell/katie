@@ -308,11 +308,14 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     resumeMode='completed';
     await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).click();
     await usage.getByRole('status').filter({hasText:'Saved work completed.'}).waitFor();
-    await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
+    await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
     await usage.getByRole('button', { name: 'Show model usage for runpod' }).focus();
     await providerTooltip.waitFor();
     assert.match(await providerTooltip.innerText(), /Qwen\/Qwen3-VL-8B-Instruct/);
     assert.doesNotMatch(await providerTooltip.innerText(), /gpt-4o/);
+    // Precise infrastructure estimates remain available on explicit disclosure.
+    await usage.getByText('Models, activity & earlier exposure').click();
+    await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
     assert.equal(resumes.length,6,'checking saved Qwen work resumes once; no new approval decision');
     const imageStages=rail.getByRole('list',{name:'Image analysis stages',exact:true});
     await imageStages.getByText('Qwen image analysis complete',{exact:true}).waitFor();
@@ -324,6 +327,8 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.match(infraText,/RunPod estimated infrastructure cost \$0\.02/);
     assert.doesNotMatch(infraText,/RunPod actual cost \$0.02/);
     await page.reload({waitUntil:'domcontentloaded'});
+    await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
+    await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
     assert.equal(resumes.length,6,'estimated infrastructure reload cannot dispatch');
     // A deterministic unsupported blocker cannot offer another unchanged retry.
@@ -431,7 +436,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     const newScope=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage'&&new URL(request.url()).searchParams.get('scope')==='all');
     await usage.getByLabel('Scope').selectOption('all');await newScope;
     holdUsage=false;heldUsage.splice(0).forEach(resolve=>resolve());
-    await usage.getByText(/In 999/).first().waitFor();
+    await usage.getByRole('button',{name:'Show model usage for openai'}).getByText('999 / 45 + ?',{exact:true}).waitFor();
     assert.equal(await usage.getByLabel('Scope').inputValue(),'all');
     pagedApprovals=true;proposals=Array.from({length:100},(_,i)=>pending('page-'+i));running=[];
     workPage={next:{before:'2026-10-28T10:00:00Z',beforeId:'44444444-4444-4444-8444-444444444444'}};
