@@ -22,10 +22,28 @@ function archive(value){
  const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,8);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+name.length,12);end.writeUInt32LE(local.length+name.length+body.length,16);
  return Buffer.concat([local,name,body,central,name,end]);
 }
+let baselineFixture;
+export function createNativeRecoveryBaseline(){
+ const root=mkdtempSync(join(tmpdir(),'native-recovery-e2e-')),remote=join(root,'remote.git');
+ const write=(base,path,content)=>{mkdirSync(dirname(join(base,path)),{recursive:true});writeFileSync(join(base,path),content);};
+  // Build a tiny trusted baseline, unrelated to the benchmark application.
+  const workspace=join(root,'runner-1');mkdirSync(workspace);git(root,'init','--bare','-q',remote);git(workspace,'init','-q');git(workspace,'config','user.name','Recovery qualification');git(workspace,'config','user.email','fixture@example.invalid');
+  const pkg=JSON.parse(readFileSync('package.json','utf8'));pkg.scripts={typecheck:'node --check verify.mjs','ci:gate':'node verify.mjs && next build'};
+  write(workspace,'package.json',JSON.stringify(pkg));write(workspace,'package-lock.json',readFileSync('package-lock.json'));
+  write(workspace,'.gitignore','node_modules/\n.next/\nnext-env.d.ts\ntsconfig.json\n');
+  write(workspace,'app/layout.tsx','export default function Layout({children}: {children: React.ReactNode}){return <html><body>{children}</body></html>}');
+  write(workspace,'app/page.tsx','export default function Page(){return <div>Recovery qualification</div>}');
+  write(workspace,'verify.mjs','import assert from "node:assert/strict"; import {value} from "./app/pilot/state.mjs";import {verification} from "./app/pilot/proof.mjs"; assert.equal(value,"Recovered");assert.equal(verification,"verified");');
+  // Next's generated TypeScript defaults must not mutate tracked files.
+  write(workspace,'next.config.mjs','export default {typescript:{ignoreBuildErrors:false},experimental:{cpus:1}};');
+  git(workspace,'add','.');git(workspace,'commit','-qm','Trusted synthetic baseline');const baseline=git(workspace,'rev-parse','HEAD');git(workspace,'remote','add','origin',remote);git(workspace,'push','origin','HEAD:refs/heads/baseline');
+ baselineFixture={root,remote,workspace,baseline};return baseline;
+}
 export async function qualifyNativeRecovery(db,ids){
- const root=mkdtempSync(join(tmpdir(),'native-recovery-e2e-')),repo=resolve('.'),remote=join(root,'remote.git');
+ assert.ok(baselineFixture,'Synthetic baseline must be bound before authorization');
+ const {root,remote,baseline}=baselineFixture,repo=resolve('.');
  const trace=[],report={version:1,qualification:'synthetic-only',paidInference:0,trace,failures:[]};
- let server,host,workspace,run=900001,recovering=false,phaseCounts=new Map(),providerCalls=0;
+ let server,host,workspace=baselineFixture.workspace,run=900001,recovering=false,phaseCounts=new Map(),providerCalls=0;
  const write=(base,path,content)=>{mkdirSync(dirname(join(base,path)),{recursive:true});writeFileSync(join(base,path),content);};
  const query=async(sql,args=[])=>(await db.query(sql,args)).rows;
  const one=async(table,column,value)=>(await query(`select * from ${table} where ${column}=$1`,[value]))[0];
@@ -72,23 +90,12 @@ export async function qualifyNativeRecovery(db,ids){
   return [['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],['response.output_item.added',{type:'response.output_item.added',output_index:0,item}],['response.output_item.done',{type:'response.output_item.done',output_index:0,item}],['response.completed',{type:'response.completed',response}]].map(([e,d])=>'event: '+e+'\ndata: '+JSON.stringify(d)+'\n\n').join('')+'data: [DONE]\n\n';
  };
  try{
-  // Build a tiny trusted baseline, unrelated to the benchmark application.
-  workspace=join(root,'runner-1');mkdirSync(workspace);git(root,'init','--bare','-q',remote);git(workspace,'init','-q');git(workspace,'config','user.name','Recovery qualification');git(workspace,'config','user.email','fixture@example.invalid');
-  const pkg=JSON.parse(readFileSync('package.json','utf8'));pkg.scripts={typecheck:'node --check verify.mjs','ci:gate':'node verify.mjs && next build'};
-  write(workspace,'package.json',JSON.stringify(pkg));write(workspace,'package-lock.json',readFileSync('package-lock.json'));
-  write(workspace,'.gitignore','node_modules/\n.next/\nnext-env.d.ts\ntsconfig.json\n');
-  write(workspace,'app/layout.tsx','export default function Layout({children}: {children: React.ReactNode}){return <html><body>{children}</body></html>}');
-  write(workspace,'app/page.tsx','export default function Page(){return <div>Recovery qualification</div>}');
-  write(workspace,'verify.mjs','import assert from "node:assert/strict"; import {value} from "./app/pilot/state.mjs";import {verification} from "./app/pilot/proof.mjs"; assert.equal(value,"Recovered");assert.equal(verification,"verified");');
-  // Next's generated TypeScript defaults must not mutate tracked files.
-  write(workspace,'next.config.mjs','export default {typescript:{ignoreBuildErrors:false},experimental:{cpus:1}};');
-  git(workspace,'add','.');git(workspace,'commit','-qm','Trusted synthetic baseline');const baseline=git(workspace,'rev-parse','HEAD');git(workspace,'remote','add','origin',remote);git(workspace,'push','origin','HEAD:refs/heads/baseline');
   const contract={path:'/pilot',scenarios:[{name:'recovered state',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]};
   const context={version:1,projectId:ids.project,baselineSha:baseline,baseSha:baseline,allowedPaths:['app/pilot/'],contractHash:contractHash(contract),contract};
   const project=await one('work_projects','id',ids.project),scope=project.approved_hash;
   // Only disposable fixture setup changes its synthetic binding before execution.
   await db.query('reset role');
-  await db.query('update benchmark_three_arm_trials set baseline_sha=$2 where id=$1',[ids.trial,baseline]);
+  assert.equal((await one('benchmark_three_arm_trials','id',ids.trial)).baseline_sha,baseline);
   await db.query('update benchmark_mission_bindings set baseline_sha=$2 where mission_id=$1',[ids.mission,baseline]);
   await db.query('update project_runs set binding=$2 where mission_id=$1',[ids.mission,{...context,scopeHash:scope}]);
   await db.query('update benchmark_development_dispatches set baseline_sha=$2,contract_hash=$3 where task_id=$1',[ids.task,baseline,context.contractHash]);
