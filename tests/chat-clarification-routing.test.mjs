@@ -625,6 +625,69 @@ test('actual route restores original drafts on resume and subsequent same-projec
 });
 
 
+test('missing saved-project sources cannot crash ordinary chat, but explicit recovery discloses retained evidence', async () => {
+  const recovery = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst).includes('!currentHistory.some') &&
+    node.expression.getText(routeAst).includes('pdfProgress.projectContext')), 'project history restoration');
+  const recoveryBlock = blockBetween(statement(declaration('recentProjectResumption')), recovery);
+  const notice = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst) === 'savedProjectSourceWarning' &&
+    node.getText(routeAst).includes('SAVED PROJECT SOURCE RECOVERY NOTICE')), 'source loss disclosure');
+  const currentHistory = [
+    {id:'resumption',role:'user',content:'Return to application A'},
+    {id:'reply',role:'assistant',content:'Ready to work on it.'},
+  ];
+  const snapshot = {
+    sourceChatId:'source-chat',
+    projectContext:{userMessageId:'missing-anchor',text:'Retained original project brief'},
+    objective:{userMessageId:'missing-anchor',text:'Prepare a project deliverable'},
+  };
+  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture'}={})=>{
+    const reads=[],warnings=[];
+    const result=await vm.runInNewContext(compile(`(async()=>{
+      let history=currentHistory;
+      ${recoveryBlock}
+      return {history,savedProjectSourceWarning};
+    })()`),{
+      Map,Set, actorId:'actor-fixture',chatId:'current-chat',requestId:'source-recovery-test',
+      message,currentHistory,taskProgressUserMessageId:'new-message',
+      explicitSavedProjectReference:explicit,contextClassification:null,
+      pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[snapshot]},
+      contextProjects:[{id:'missing-anchor'}],currentAgentTask:()=>null,
+      getChatById:async id=>{reads.push(['chat',id]);return sourceChatMissing?null:{actorId:ownerId};},
+      getMessages:async id=>{reads.push(['messages',id]);return [];},
+      console:{warn:(...args)=>warnings.push(args)},
+    });
+    return {...plain(result),reads,warnings};
+  };
+  const casual=await run('Legs feel awesome');
+  assert.deepEqual(casual.reads,[],'Unrelated conversational text must not load a saved project');
+  assert.deepEqual(casual.history,currentHistory);
+  assert.equal(casual.savedProjectSourceWarning,null);
+  assert.deepEqual(casual.warnings,[]);
+  const missing=await run('Resume the saved project',{explicit:true});
+  assert.deepEqual(missing.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.deepEqual(missing.history,currentHistory,'Current conversation remains unchanged');
+  assert.equal(missing.savedProjectSourceWarning.sourceMessageId,'missing-anchor');
+  assert.equal(missing.savedProjectSourceWarning.retainedContext,snapshot.projectContext.text);
+  assert.equal(missing.savedProjectSourceWarning.retainedObjective,snapshot.objective.text);
+  assert.equal(missing.warnings.length,1);
+  assert.match(missing.warnings[0][0],/Saved project source unavailable/);
+  const disclosed=await vm.runInNewContext(compile(`(async()=>{
+    let personaForGeneration='Katie';
+    ${code(notice)}
+    return personaForGeneration;
+  })()`),{savedProjectSourceWarning:missing.savedProjectSourceWarning});
+  assert.match(disclosed,/original message missing-anchor/);
+  assert.match(disclosed,/may be incomplete/);
+  assert.match(disclosed,/Retained original project brief/);
+  const missingChat=await run('Resume the saved project',{explicit:true,sourceChatMissing:true});
+  assert.deepEqual(missingChat.reads,[['chat','source-chat']]);
+  assert.equal(missingChat.savedProjectSourceWarning.sourceChatId,'source-chat');
+  await assert.rejects(run('Resume the saved project',{explicit:true,ownerId:'other-actor'}),
+    /does not belong to this actor/,'Ownership mismatch must remain a hard failure');
+});
+
 test('actual route resumes a named saved project after ambiguity and carries the current examples request', async () => {
   const f = fixture();
   const { progress, history } = await replayPosting(f);
