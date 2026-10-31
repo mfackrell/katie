@@ -165,7 +165,7 @@ test('conflicting Dolphin subject is retained for audit but never replaces the Q
   let qwen=0,venice=0,premium=0;
   const observations=await observeStandaloneStillImages([reference],{
     qwen:async()=>{qwen++;return{text:'The image shows a brown dog near a red fence.',model:'runpod:Qwen/Qwen3-VL-8B-Instruct',coverage:'full' as const};},
-    venice:async()=>{venice++;return{text:'Primary focal point: A red car parked near a fence, with a driver at the wheel. Detailed focal-point observations: The car is shiny and red.',model:'venice:'+policy.model,coverage:'full' as const};},
+    venice:async()=>{venice++;return{text:'Primary focal point: A red car parked near a fence, with a driver at the wheel. Detailed focal-point observations: The car is shiny and red, with reflections across the hood and square headlights facing toward the camera. Spatial relationships and interactions: The car occupies the foreground and sits next to a fence while the driver remains behind the front windshield. Secondary context: A paved driveway appears under the wheels. Uncertainties: The specific make and year cannot be confirmed from the image.',model:'venice:'+policy.model,coverage:'full' as const};},
     escalate:async()=>{premium++;throw Error('No premium call for contradictory high coverage');}
   });
   const o=observations.get('conflict')!;
