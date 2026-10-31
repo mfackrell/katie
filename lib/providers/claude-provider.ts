@@ -72,6 +72,22 @@ type ClaudeStreamEvent = {
 };
 
 const CLAUDE_MAX_OUTPUT_TOKENS = 16_384;
+
+function claudeWireRequestBody(params: {
+  model: string;
+  system: string;
+  cacheablePrefix?: string;
+  messages: ClaudeMessage[];
+  stream: boolean;
+}) {
+  return {
+    model: params.model,
+    max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+    system: claudeCachedSystem(params.system, params.cacheablePrefix),
+    messages: params.messages,
+    ...(params.stream ? { stream: true } : {}),
+  };
+}
 const CLAUDE_MAX_CONTINUATIONS = 3;
 const CLAUDE_TRUNCATION_NOTICE =
   "\n\n[Response reached the maximum output length and could not be fully completed.]";
@@ -259,11 +275,7 @@ export class ClaudeProvider implements LlmProvider {
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: params.model,
-        max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-        system: claudeCachedSystem(params.system, params.cacheablePrefix),
-        messages: params.messages,
-        ...(params.stream ? { stream: true } : {})
+        ...claudeWireRequestBody(params)
       })
     });
 
@@ -440,6 +452,11 @@ export class ClaudeProvider implements LlmProvider {
     await params.onProviderSystemPrepared?.({
       provider: "anthropic", model: selectedModel,
       endpoint: "/v1/messages", systemMessages: [system],
+      ...(params.providerPayloadCaptureTrace ? { requestDiagnostic: {
+        scope: "initial-provider-call" as const,
+        wireRequest: claudeWireRequestBody({ model: selectedModel, system, cacheablePrefix, messages, stream: false }),
+        source: params.providerPayloadCaptureTrace,
+      } } : {}),
     });
 
     let accumulatedText = "";
@@ -525,6 +542,11 @@ export class ClaudeProvider implements LlmProvider {
     await params.onProviderSystemPrepared?.({
       provider: "anthropic", model: selectedModel,
       endpoint: "/v1/messages", systemMessages: [system],
+      ...(params.providerPayloadCaptureTrace ? { requestDiagnostic: {
+        scope: "initial-provider-call" as const,
+        wireRequest: claudeWireRequestBody({ model: selectedModel, system, cacheablePrefix, messages, stream: true }),
+        source: params.providerPayloadCaptureTrace,
+      } } : {}),
     });
 
     let accumulatedText = "";
