@@ -585,6 +585,7 @@ test('actual route restores original drafts on resume and subsequent same-projec
     node.expression.getText(routeAst).includes('!currentHistory.some') &&
     node.expression.getText(routeAst).includes('pdfProgress.projectContext')),
     'project history restoration');
+  const restorationBlock = blockBetween(statement(declaration('activeProjectSnapshot')), resumeNode);
   const first = {id:'project-a',role:'user',content:'Original application A requirements'};
   const draft = {id:'draft-a',role:'assistant',content:'Unfinished draft A'};
   const other = {id:'project-b',role:'user',content:'Different application B requirements'};
@@ -593,11 +594,12 @@ test('actual route restores original drafts on resume and subsequent same-projec
     const reads=[];
     const output = await vm.runInNewContext(compile(`(async()=>{
       let history=currentHistory;
-      ${code(resumeNode)}
+      ${restorationBlock}
       return history;
     })()`), {
       Map, Set, currentAgentTask:()=>null, contextClassification:{projectTransition:transition},
-      taskProgressUserMessageId:currentUserId,
+      taskProgressUserMessageId:currentUserId, message:'Give three relevant examples.',
+      explicitSavedProjectReference:true, requestId:'test-project-recovery',
       actorId:ACTOR_ID, chatId:CHAT_ID, currentHistory:recentHistory,
       pdfProgress:{projectContext:{userMessageId:'project-a'},projects:[{projectContext:{userMessageId:'project-a'},sourceChatId:'original-chat'}]},
       contextProjects:[{id:'project-a'},{id:'project-b'}],
@@ -622,6 +624,108 @@ test('actual route restores original drafts on resume and subsequent same-projec
   await assert.rejects(run('different-actor'),/does not belong to this actor/);
 });
 
+
+test('missing saved-project sources cannot crash ordinary chat, but explicit recovery discloses retained evidence', async () => {
+  const recovery = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst).includes('!currentHistory.some') &&
+    node.expression.getText(routeAst).includes('pdfProgress.projectContext')), 'project history restoration');
+  const recoveryBlock = blockBetween(statement(declaration('activeProjectSnapshot')), recovery);
+  const notice = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst) === 'savedProjectSourceWarning' &&
+    node.getText(routeAst).includes('SAVED PROJECT SOURCE RECOVERY NOTICE')), 'source loss disclosure');
+  const currentHistory = [
+    {id:'resumption',role:'user',content:'Return to application A'},
+    {id:'reply',role:'assistant',content:'Ready to work on it.'},
+  ];
+  const snapshot = {
+    sourceChatId:'source-chat',
+    projectContext:{userMessageId:'missing-anchor',text:'Retained original project brief'},
+    objective:{userMessageId:'missing-anchor',text:'Prepare a project deliverable'},
+  };
+  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[],historyOverride,sourceChatId='source-chat'}={})=>{
+    const reads=[],warnings=[];
+    const suppliedHistory=historyOverride ?? currentHistory;
+    const result=await vm.runInNewContext(compile(`(async()=>{
+      let history=currentHistory;
+      ${recoveryBlock}
+      return {history,savedProjectSourceWarning};
+    })()`),{
+      Map,Set, actorId:'actor-fixture',chatId:'current-chat',requestId:'source-recovery-test',
+      message,currentHistory:suppliedHistory,taskProgressUserMessageId:'new-message',
+      explicitSavedProjectReference:explicit,contextClassification:null,
+      pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[{...snapshot,sourceChatId}]},
+      classifyUserTurn:fixture().helpers.classifyUserTurn,
+      contextProjects:[{id:'missing-anchor'}],currentAgentTask:()=>null,
+      getChatById:async id=>{reads.push(['chat',id]);return sourceChatMissing?null:{actorId:ownerId};},
+      getMessages:async id=>{reads.push(['messages',id]);return sourceHistory;},
+      console:{warn:(...args)=>warnings.push(args)},
+    });
+    return {...plain(result),reads,warnings};
+  };
+  const casual=await run('Legs feel awesome');
+  assert.deepEqual(casual.reads,[],'Unrelated conversational text must not load a saved project');
+  assert.deepEqual(casual.history,currentHistory);
+  assert.equal(casual.savedProjectSourceWarning,null);
+  assert.deepEqual(casual.warnings,[]);
+  const recovered=await run('Give three relevant examples.',{
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(recovered.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.equal(recovered.history[0].id,'missing-anchor');
+  assert.equal(recovered.savedProjectSourceWarning,null);
+  // The project source must still restore even after the explicit resume turn
+  // has scrolled out of recent history; no four-turn time-to-live.
+  const longHistory=Array.from({length:7},(_,index)=>({id:'followup-'+index,role:'user',content:'Project conversation turn '+index}));
+  const longRunning=await run('List the requirements we agreed on',{
+    historyOverride:longHistory,
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(longRunning.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.equal(longRunning.history[0].id,'missing-anchor');
+  const sameChat=await run('Give three relevant examples.',{
+    historyOverride:longHistory,sourceChatId:'current-chat',
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(sameChat.reads,[['chat','current-chat'],['messages','current-chat']]);
+  assert.equal(sameChat.history[0].id,'missing-anchor',
+    'A valid active project from the current chat must keep its older source');
+  const unrelated=await run('Write me a poem',{historyOverride:longHistory});
+  assert.deepEqual(unrelated.reads,[],
+    'A new unrelated deliverable must not restore a stale saved project');
+  const ordinaryAfterMany=await run('Legs feel awesome',{historyOverride:longHistory});
+  assert.deepEqual(ordinaryAfterMany.reads,[]);
+  assert.deepEqual(ordinaryAfterMany.history,longHistory);
+  const missing=await run('Resume the saved project',{explicit:true});
+  assert.deepEqual(missing.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.deepEqual(missing.history,currentHistory,'Current conversation remains unchanged');
+  assert.equal(missing.savedProjectSourceWarning.sourceMessageId,'missing-anchor');
+  assert.equal(missing.savedProjectSourceWarning.retainedContext,snapshot.projectContext.text);
+  assert.equal(missing.savedProjectSourceWarning.retainedObjective,snapshot.objective.text);
+  assert.equal(missing.warnings.length,1);
+  assert.match(missing.warnings[0][0],/Saved project source unavailable/);
+  const repoAssignment=unique(findNodes(node=>ts.isBinaryExpression(node) &&
+    ts.isIdentifier(node.left) && node.left.text === 'personaForGeneration' &&
+    node.right.getText(routeAst).includes('repoGenerationContextLine')),
+    'repository context assignment');
+  assert.ok(notice.pos > repoAssignment.pos,'Source-loss disclosure must follow repository context assignment');
+  const disclosed=await vm.runInNewContext(compile(`(async()=>{
+    let personaForGeneration='Katie';
+    const personaWithRepoContext='Katie plus selected repository';
+    const repoGenerationContextLine='Repository metadata';
+    ${code(statement(repoAssignment))}
+    ${code(notice)}
+    return personaForGeneration;
+  })()`),{savedProjectSourceWarning:missing.savedProjectSourceWarning});
+  assert.match(disclosed,/Repository metadata/);
+  assert.match(disclosed,/original message missing-anchor/);
+  assert.match(disclosed,/may be incomplete/);
+  assert.match(disclosed,/Retained original project brief/);
+  const missingChat=await run('Resume the saved project',{explicit:true,sourceChatMissing:true});
+  assert.deepEqual(missingChat.reads,[['chat','source-chat']]);
+  assert.equal(missingChat.savedProjectSourceWarning.sourceChatId,'source-chat');
+  await assert.rejects(run('Resume the saved project',{explicit:true,ownerId:'other-actor'}),
+    /does not belong to this actor/,'Ownership mismatch must remain a hard failure');
+});
 
 test('actual route resumes a named saved project after ambiguity and carries the current examples request', async () => {
   const f = fixture();
