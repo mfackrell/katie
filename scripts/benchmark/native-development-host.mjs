@@ -1,3 +1,5 @@
+import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
+import {recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
 import {createNativeWipCheckpointer} from './native-wip-checkpoint.mjs';
 import {sanitizeEvidence,worktreeEvidence,NATIVE_EXECUTION_EVIDENCE_VERSION} from './native-execution-evidence.mjs';
 import {NATIVE_ADMISSION_DIAGNOSTICS_VERSION} from './native-request-admission.mjs';
@@ -156,6 +158,19 @@ if(proof.resourceAmendmentId){
  const amendment=await readOne('benchmark_development_resource_amendments','id',proof.resourceAmendmentId);
  if(amendment.renewal_id!==proof.developmentRenewalId||amendment.approval_id!==proof.approvalId||amendment.task_id!==proof.taskId||amendment.continuation_id!==proof.continuationId||amendment.release_sha!==process.env.GITHUB_SHA||amendment.runtime_version!==NATIVE_INPUT_COUNT_VERSION||task.external?.resourceAmendmentId!==amendment.id)denied('resource amendment identity or release mismatch');
 }
+// Inspect recovery before consuming a fresh owner grant. The service-owned
+// failed-run receipt and its immutable diagnostics authenticate the Git object.
+const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
+const priorRefs=recoveryRefs(boundary.root,task.id);
+let recoveryPlan=null;
+if(priorRefs.length){
+ const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});
+ const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
+ await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});
+ recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
+}
+// Source restoration is nonbillable and must succeed before consuming consent.
+const recovery=recoveryPlan?.restore()??null;
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
 const {data:grantResult,error:issueError}=proof.resourceAmendmentId
@@ -180,7 +195,6 @@ if(issueError||typeof grantId!=='string'||!Number.isSafeInteger(executionEpoch)|
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
-const decisions=[];
 const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false};
 const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken,process.env.GH_TOKEN];
 const snapshot=label=>diagnostics.snapshots.push({label,...worktreeEvidence(boundary.root,diagnosticSecrets)});
@@ -188,8 +202,8 @@ const saveDiagnostics=()=>{if(evidencePath&&evidencePath.startsWith(process.env.
 snapshot('initial');saveDiagnostics();
 const git=(...args)=>execFileSync('git',[...protectedGitConfig,...args],{cwd:boundary.root,encoding:'utf8',timeout:20000}).trim();
 let trustedCheckpointSha=git('rev-parse','HEAD');
-const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
-let activeWipPhase=null,lastCompleted={checkpointSha:trustedCheckpointSha};
+let activeWipPhase=null,lastCompleted=recovery?.lastCompleted??{checkpointSha:trustedCheckpointSha};
+if(recovery){diagnostics.recovery={verification:'unverified',phase:recovery.phase,checkpointSha:recovery.checkpointSha,completedCheckpointSha:trustedCheckpointSha};saveDiagnostics();}
 const wip=createNativeWipCheckpointer({workspace:boundary.root,tempRoot:root,
  toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,
  identity:{taskId:proof.taskId,projectId:proof.projectId,trialId:proof.trialId,
@@ -296,7 +310,6 @@ try{
      typeof decision.findings!=='string'||!decision.findings.trim())
     denied('invalid independent review verdict');
   decision.findings=sanitizeEvidence(decision.findings,diagnosticSecrets,12000);
-  decisions.push(decision);
   return decision;
  };
  const safelyRunPhase=async(phase,findings='')=>{
@@ -337,11 +350,9 @@ try{
       !p.approved_hash||p.approved_hash!==p.approval_hash){gatewayFailure??='host-stop';child?.kill('SIGKILL');}
   }catch{gatewayFailure??='host-stop';child?.kill('SIGKILL')}
  },3000);
- await safelyRunPhase('implementation');
- let candidateHead=commitCandidate('native: checkpoint approved implementation');
  // Run the existing trusted deterministic/build/browser verifier before the
  // one paid correction. Candidate commands remain inside its credential-free sandbox.
- const verifyCandidate=async()=>{
+ const verifyCandidate=async(candidateHead)=>{
   const output=join(root,'project-acceptance.json');
   const failure=join(root,'project-verification-failure.json');
   rmSync(output,{force:true});rmSync(failure,{force:true});
@@ -357,25 +368,14 @@ try{
   return result;
  };
  const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true;
- let verification=qualifiedLifecycle?await verifyCandidate():{passed:true,detail:''};
- const first=await safelyRunPhase('review',qualifiedLifecycle?'Trusted deterministic verification: '+JSON.stringify(verification):'');
- let repairPerformed=false;
- if(first.verdict!=='pass'||!verification.passed){
-  await safelyRunPhase('repair',first.findings+'\nTrusted deterministic verification: '+JSON.stringify(verification));
-  repairPerformed=true;
-  candidateHead=commitCandidate('native: checkpoint bounded repair');
-  if(qualifiedLifecycle){verification=await verifyCandidate();if(!verification.passed)denied('bounded repair failed deterministic acceptance');}
- }
- if(repairPerformed||qualifiedLifecycle){
-  const final=await safelyRunPhase('final-review',qualifiedLifecycle?'Trusted deterministic verification: '+JSON.stringify(verification):'');
-  if(final.verdict!=='pass')denied('independent final review requires changes');
- }
+ const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
+  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};}});
  if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
   denied('trusted evidence destination unavailable');
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),
-  approvalId:proof.approvalId,projectId:proof.projectId,review:decisions[0],
-  finalReview:decisions.at(-1),repairPerformed,
-  metered:true,completed:true,reviewedHeadSha:candidateHead})+'\n',{mode:0o600,flag:'wx'});
+  approvalId:proof.approvalId,projectId:proof.projectId,review:lifecycle.review,
+  finalReview:lifecycle.finalReview,repairPerformed:lifecycle.repairPerformed,repairVerification:lifecycle.repairVerification,
+  metered:true,completed:true,reviewedHeadSha:lifecycle.candidateHead})+'\n',{mode:0o600,flag:'wx'});
  diagnostics.completed=true;
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');
  console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');

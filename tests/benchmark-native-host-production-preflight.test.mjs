@@ -14,7 +14,7 @@ const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8'
 const prefix=source.slice(0,source.indexOf('const clientToken=')).replace(/^import .*;\n/gm,'');
 const key='synthetic-production-preflight-signing-key';
 const ids=['11111111','22222222','33333333','44444444'].map(p=>`${p}-1111-4111-8111-111111111111`);
-async function preflight({production=true,qualification={},capsule,manifestChange={},approvalChange={},envChange={},delegated=false,provenance=true,setupError=false,setupRunner,startupRecoveryId,recoveryError=false,recoveryEpoch=2,childStartupError=false,recoveryChange={},taskChange={}}={}){
+async function preflight({production=true,qualification={},capsule,manifestChange={},approvalChange={},envChange={},delegated=false,provenance=true,setupError=false,setupRunner,startupRecoveryId,recoveryError=false,recoveryEpoch=2,childStartupError=false,recoveryChange={},taskChange={},recoveryFailure=false,restoreFailure=false}={}){
  const expiresAt=Date.now()+600000,deadline=new Date(expiresAt).toISOString();
  const p={taskId:ids[0],trialId:ids[1],approvalId:ids[2],projectId:ids[3],contractHash:'a'.repeat(64),benchmarkContractHash:'b'.repeat(64),baselineSha:'c'.repeat(40),expiresAt,...(startupRecoveryId?{startupRecoveryId}:{})};
  if(production)p.productionRuntime=capsule??sealNativeProductionRuntime('synthetic-prod-key',p,key);
@@ -30,10 +30,10 @@ async function preflight({production=true,qualification={},capsule,manifestChang
  model_registry:{pricing_status:'verified',pricing_input_per_1m:1.75,pricing_output_per_1m:14}};
  const calls={connections:[],grants:0,masks:[],setup:[],rpcNames:[]};
  const db={from:table=>({select(){return this},eq(){return this},abortSignal(signal){assert.ok(signal instanceof AbortSignal);return this},async maybeSingle(){return {data:rows[table],error:null}}}),rpc:async(name,args)=>{calls.rpcNames.push(name);if(name==='benchmark_full_task_provenance'){assert.equal(args.p_task,p.taskId);assert.equal(args.p_project,p.projectId);return {data:provenance,error:null}}calls.grants++;if(name==='benchmark_issue_startup_recovery_grant'){assert.equal(args.p_recovery,startupRecoveryId);assert.equal(args.p_approval,p.approvalId);assert.equal(args.p_task,p.taskId);assert.equal(args.p_release,'d'.repeat(40));assert.match(args.p_digest,/^[a-f0-9]{64}$/);return {data:recoveryError?null:{grantId:'successor-grant',executionEpoch:recoveryEpoch},error:recoveryError?{message:'denied'}:null};}return {data:'grant-id',error:null}}};
- const context={preflightNativeChild:()=>{if(childStartupError)throw Error('child startup failed');},assertTrustedBoundary:()=>({root:'/trusted'}),execFileSync:(command,args,options)=>{calls.setup.push({command,args,options});if(setupError)throw Error('git setup failed');if(setupRunner)setupRunner(command,args,options);},readNativeHandoff,openNativeProductionRuntime,assertBenchmarkDollarCeiling,readVerifiedBenchmarkPricing,tokenDigest,randomBytes,
+ const context={recoveryRefs:()=>recoveryFailure||restoreFailure?[{ref:'untrusted'}]:[],githubRecoveryReader:()=>()=>{},loadRecoveryDiagnostics:async()=>{if(restoreFailure)return {record:{},diagnostics:{}};throw Error('NATIVE_WIP_RECOVERY_DENIED: missing trusted evidence');},recoveryCompletedEvidence:()=>({}),validateRecoveryRecords:async()=>{},prepareRecovery:()=>({restore:()=>{throw Error('NATIVE_WIP_RECOVERY_DENIED: unsafe restoration destination');}}),preflightNativeChild:()=>{if(childStartupError)throw Error('child startup failed');},assertTrustedBoundary:()=>({root:'/trusted'}),execFileSync:(command,args,options)=>{if(command==='node'){assert.ok(args[0].endsWith('project-context.mjs'));return JSON.stringify({projectId:p.projectId,baseSha:p.baselineSha,baselineSha:p.baselineSha});}calls.setup.push({command,args,options});if(setupError)throw Error('git setup failed');if(setupRunner)setupRunner(command,args,options);},readNativeHandoff,openNativeProductionRuntime,assertBenchmarkDollarCeiling,readVerifiedBenchmarkPricing,tokenDigest,randomBytes,
   createRequire:()=>()=>({createClient:(url,secret)=>{calls.connections.push({url,secret});return db}}),join:(...p)=>p.join('/'),
   readFileSync:path=>path==='request'?body:JSON.stringify(manifest),
-  process:{argv:['node','host','request','manifest','child'],cwd:()=>'/trusted',stdout:{write:v=>calls.masks.push(v)},env:{PATH:'/usr/bin',HOME:'/runner',GH_TOKEN:'synthetic-github-token',KATIE_NATIVE_CHECKPOINT_BRANCH:'agent/issue-829-123-1',KATIE_BENCHMARK_PAID_EXECUTION:'enabled',KATIE_NATIVE_HANDOFF_HMAC_KEY:key,GITHUB_REPOSITORY:'mfackrell/katie',NEXT_PUBLIC_SUPABASE_URL:'https://iytvavgbaainnsrecmcx.supabase.co',KATIE_BENCHMARK_SERVICE_ROLE_KEY:'synthetic-stage-key',OPENAI_API_KEY:'synthetic-provider-key',GITHUB_RUN_ID:'123',GITHUB_SHA:'d'.repeat(40),KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS:'1000',KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION:'28000000',...envChange}}};
+  process:{execPath:'node',argv:['node','host','request','manifest','child'],cwd:()=>'/trusted',stdout:{write:v=>calls.masks.push(v)},env:{PATH:'/usr/bin',HOME:'/runner',GH_TOKEN:'synthetic-github-token',KATIE_NATIVE_CHECKPOINT_BRANCH:'agent/issue-829-123-1',KATIE_BENCHMARK_PAID_EXECUTION:'enabled',KATIE_NATIVE_HANDOFF_HMAC_KEY:key,GITHUB_REPOSITORY:'mfackrell/katie',NEXT_PUBLIC_SUPABASE_URL:'https://iytvavgbaainnsrecmcx.supabase.co',KATIE_BENCHMARK_SERVICE_ROLE_KEY:'synthetic-stage-key',OPENAI_API_KEY:'synthetic-provider-key',GITHUB_RUN_ID:'123',GITHUB_SHA:'d'.repeat(40),KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS:'1000',KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION:'28000000',...envChange}}};
  try{const authority=await vm.runInNewContext(`(async()=>{${prefix};return {grantId,executionEpoch};})()`,context);return {calls,authority}}catch(error){return {calls,error}}
 }
 test('actual trusted-host preflight uses production capsule only for live matching qualification; legacy stays staging',async()=>{
@@ -105,3 +105,12 @@ test('startup recovery rejects mismatched durable task, approval and deployed re
  }
 });
 
+
+
+test('untrusted recovery evidence blocks before consuming a fresh owner grant',async()=>{
+ const r=await preflight({recoveryFailure:true});assert.match(r.error?.message??'',/NATIVE_WIP_RECOVERY_DENIED/);assert.equal(r.calls.grants,0);
+});
+
+test('restoration failure cannot consume fresh owner authorization',async()=>{
+ const r=await preflight({restoreFailure:true});assert.match(r.error?.message??'',/unsafe restoration destination/);assert.equal(r.calls.grants,0);
+});

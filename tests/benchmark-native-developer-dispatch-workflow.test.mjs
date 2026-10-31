@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
 const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+const lifecycle=readFileSync('scripts/benchmark/native-development-lifecycle.mjs','utf8');
 const handoff=readFileSync('lib/agents/development.ts','utf8');
 const child=readFileSync('scripts/benchmark/native-development-child.mjs','utf8');
 const grant=readFileSync('supabase/migrations/20261025211500_benchmark_approved_dispatch_activation.sql','utf8');
@@ -49,11 +50,12 @@ test('native engineering cannot invoke unmetered review, repair, or final-review
 });
 
 test('native independent reviewers are isolated and every phase shares the metered host gateway',()=>{
- assert.match(host,/await safelyRunPhase\('implementation'\)/);
- assert.match(host,/await safelyRunPhase\('review',qualifiedLifecycle/);
- assert.match(host,/await safelyRunPhase\('repair',first\.findings\+/);
- assert.match(host,/await safelyRunPhase\('final-review',qualifiedLifecycle/);
- assert.match(host,/if\(final\.verdict!=='pass'\)denied/);
+ assert.match(lifecycle,/await runPhase\('implementation'\)/);
+ assert.match(lifecycle,/await runPhase\('review',qualifiedLifecycle/);
+ assert.match(lifecycle,/await runPhase\('repair',recovery\?\.phase==='repair'\?recovery.reviewFindings:first\.findings\+/);
+ assert.match(lifecycle,/await runPhase\('final-review',qualifiedLifecycle/);
+ assert.match(lifecycle,/if\(final\.verdict!=='pass'\)throw Error/);
+ assert.match(host,/executeNativeDevelopmentLifecycle\(\{recovery,runPhase:safelyRunPhase/);
  assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
  assert.match(host,/--ro-bind',requestFile,'\/trusted\/AGENT_REQUEST\.md'/);
@@ -65,10 +67,10 @@ test('native independent reviewers are isolated and every phase shares the meter
 });
 
 test('native completion evidence is pinned to reviewed commit and separately tested head',()=>{
- assert.match(host,/commitCandidate\('native: checkpoint approved implementation'\)/);
- assert.match(host,/commitCandidate\('native: checkpoint bounded repair'\)/);
+ assert.match(lifecycle,/commitCandidate\('native: checkpoint approved implementation'\)/);
+ assert.match(lifecycle,/commitCandidate\('native: checkpoint bounded repair'\)/);
  assert.match(host,/project-scope\.mjs/);
- assert.match(host,/reviewedHeadSha:candidateHead/);
+ assert.match(host,/reviewedHeadSha:lifecycle.candidateHead/);
  assert.match(workflow,/project-scope\.mjs" "\$RUNNER_TEMP\/agent-task\/AGENT_REQUEST\.md" --verify-committed/);
  assert.match(workflow,/\.reviewedHeadSha == \$head/);
  assert.match(workflow,/\.projectId == \$project/);
@@ -121,4 +123,5 @@ test('Full and the three contained comparison arms share the exact SDK phase eng
  assert.match(probe,/join\(workRoot,arm\)/);
  assert.match(probe,/reservations\.length,selectedArms\.length\*4/);
 });
+
 

@@ -11,6 +11,7 @@ on:
         required: true
 
 permissions:
+  actions: read # Read the same task's retained, trusted recovery diagnostics.
   contents: write
   pull-requests: write
   issues: write
@@ -87,7 +88,7 @@ jobs:
           # Ordinary owner-authored projects must not depend on benchmark files.
           if grep -Eq '<!--[[:space:]]*katie-native-benchmark:' "$RUNNER_TEMP/original-agent-request.md"; then
             mkdir -p "$RUNNER_TEMP/native-host"
-            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-execution-evidence,native-wip-checkpoint,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
+            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-execution-evidence,native-wip-checkpoint,native-wip-recovery,native-development-lifecycle,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
             node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
           else
             echo '{"native":false}' > "$RUNNER_TEMP/native-benchmark.json"
@@ -673,12 +674,18 @@ jobs:
                 (.review.verdict == "pass" or .review.verdict == "changes_requested") and
                 .finalReview.verdict == "pass" and
                 ((.repairPerformed == false and .review.verdict == "pass") or
-                 (.repairPerformed == true and .review.verdict == "changes_requested"))
+                 (.repairPerformed == true and
+                   (.review.verdict == "changes_requested" or
+                    (.review.verdict == "pass" and
+                     .repairVerification.before.passed == false and
+                     (.repairVerification.before.head | type == "string" and test("^[a-f0-9]{40}$")) and
+                     .repairVerification.before.head != $head and
+                     .repairVerification.after.passed == true and .repairVerification.after.head == $head))))
               ' "$evidence" >/dev/null 2>&1; then
               reviewed_head="$TEST_HEAD"
               tested_head="$TEST_HEAD"
               if [[ "$(jq -r '.repairPerformed' "$evidence")" == true ]]; then
-                REVIEW='changes_requested'; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
+                REVIEW="$(jq -r '.review.verdict' "$evidence")"; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
               else
                 REVIEW='pass'; REPAIR='skipped'; RETEST=''; FINAL=''
               fi
