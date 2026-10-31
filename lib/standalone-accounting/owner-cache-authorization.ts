@@ -15,7 +15,9 @@ export function proposeSelectedModelUncached(
       original.payload.prompt_cache_key === undefined && original.payload.prompt_cache_retention === undefined) return null;
   const first = estimatePreparedRequest(original, pricing);
   if (!first.issues.includes(UNREVIEWED_CACHE)) return null;
-  const { prompt_cache_key: _key, prompt_cache_retention: _retention, ...uncachedPayload } = original.payload;
+  const uncachedPayload = { ...original.payload };
+  delete uncachedPayload.prompt_cache_key;
+  delete uncachedPayload.prompt_cache_retention;
   const replacement = freezePreparedRequest(original.provider, original.model, original.endpoint, uncachedPayload);
   // Other unsupported dimensions and models remain blocked; approval is not a
   // generic escape hatch for missing prices, capacity or unsafe transports.
