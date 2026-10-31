@@ -1,4 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
+import { documentRequest, answeredDocumentRequest, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
@@ -727,6 +728,7 @@ async function executeChat(request: NextRequest) {
       activeRepoId,
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
+    let documentProduction = documentRequest(message);
     // One-turn owner diagnostic from the normal chat composer, without client changes.
     const captureCommand = /^\\s*!capture-claude(?:\\s|$)/i.test(message);
     const providerPayloadCapture = explicitPayloadCapture === true || captureCommand;
@@ -1777,6 +1779,8 @@ async function executeChat(request: NextRequest) {
       isSavedDraftVerificationRetry(pendingReviewClarification.pending, message));
     const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
       ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
+    documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
+    documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
@@ -2322,13 +2326,13 @@ ${savedProjectSourceWarning.retainedObjective}`;
 
             await saveTaskProgress(actorId, chatId, taskProgress);
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
-            const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask();
+            const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask() && !documentProduction;
             if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
             const presentationFilter = presentationEnabled ? new PresentationStreamFilter() : null;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
-              if (reviewMode === "always") return;
+              if (reviewMode === "always" || documentProduction) return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -2398,6 +2402,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
               ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), providerPayloadCaptureTrace: ownerCaptureTrace, ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
+                  ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
                   ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
@@ -2685,7 +2690,12 @@ ${chunkWorkflowSummary}`;
                   resolvedRequestIntent
                 );
 
-                const generation = (selfToolsEnabled && selfInspectionRequest)
+                const generation = documentProduction
+                  ? await (async () => {
+                      const result = await provider.generate(finalParams);
+                      return { result, streamedText: '' };
+                    })()
+                  : (selfToolsEnabled && selfInspectionRequest)
                   ? await (async () => {
                       const result = await runSelfInspection({ request, actorId, chatId, requestId, provider,
                         params: finalParams, deadlineMs: executionDeadlineMs,
@@ -3490,6 +3500,7 @@ ${chunkWorkflowSummary}`;
                   savedSourceTurns: pendingReviewClarification?.pending.sourceTurns,
                 }),
                 observedEvidence: [
+                  documentProduction ? DOCUMENT_REVIEW_GUIDANCE : '',
                   hasVideoInput ? buildVideoTimingEvidence(attachments.filter(isVideoAttachment)) : "",
                   mediaMemory?.context ?? "", timelineContext ?? "",
                 ].filter(Boolean).join("\n\n"),
@@ -3515,6 +3526,8 @@ ${chunkWorkflowSummary}`;
                 },
               });
               result = reviewed.result;
+              if (documentProduction && !['approved', 'revised', 'needs_user_input'].includes(reviewed.audit.status))
+                throw new Error('Document content review did not pass. No files were delivered.');
               streamedText = result.text;
               reviewCompleted = reviewed.audit.status === "approved" || reviewed.audit.status === "revised";
               reviewHasPendingClarification = Boolean(reviewed.audit.pendingClarification);
@@ -3589,6 +3602,14 @@ ${chunkWorkflowSummary}`;
                 status: inspection.status,
                 subjects: visualContinuity.references.map(ref => ref.key),
               } });
+            }
+
+            if (documentProduction && !reviewHasPendingClarification) {
+              const { deliverDocument } = await import('@/lib/documents/service');
+              result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
+                params: createParams(result.model), actorId, chatId, requestId,
+                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs });
+              streamedText = result.text;
             }
 
             const imageAssets =
