@@ -240,6 +240,9 @@ export async function qualifyNativeRecovery(db,ids){
   assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completed=JSON.parse(readFileSync(second.evidence));assert.equal(completed.completed,true);assert.equal(completed.finalReview.verdict,'pass');assert.equal(completed.review.verdict,'changes_requested');
   const finalDiagnostics=JSON.parse(readFileSync(second.evidence+'.diagnostics.json'));assert.deepEqual(finalDiagnostics.phases.map(p=>p.phase),['repair','final-review']);assert.equal(finalDiagnostics.verification?.length,1);assert.equal(finalDiagnostics.verification[0].passed,true);assert.equal(finalDiagnostics.verification[0].head,completed.reviewedHeadSha);
+  assert.ok(finalDiagnostics.capacityForecasts.length>=3);assert.ok(finalDiagnostics.capacityForecasts.every(f=>f.version==='lifecycle-capacity-v1'&&f.kind==='forecast_not_authorization'));
+  assert.equal(finalDiagnostics.capacityForecasts.at(-1).currentPhase,'do_completion');
+  assert.equal(finalDiagnostics.capacityForecasts.at(-1).authorization.spendingPermission,'unchanged');
   const after=await ledger();for(const old of historicalCalls)assert.deepEqual(after.calls.find(c=>c.id===old.id),old,'Historical receipt changed');assert.equal(Number(after.mission.calls),Number(beforeRestore.mission.calls)+4);assert.equal(Number(after.account.spent_tokens),Number(beforeRestore.account.spent_tokens)+20);
   for(const old of beforeRestore.missionCalls)assert.deepEqual(after.missionCalls.find(c=>c.id===old.id),old);
   for(const old of beforeRestore.approvals)assert.deepEqual(after.approvals.find(c=>c.id===old.id),old);
