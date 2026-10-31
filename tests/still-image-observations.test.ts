@@ -212,6 +212,28 @@ test('Qwen factual subject survives a limited refusal with zero Dolphin or premi
   assert.match(evidence,/Reconciliation: policy-limited/);
   assert.doesNotMatch(evidence,/I cannot fulfill this request/);
 });
+test('refusal-only Qwen reply preserves a truthful limitation and never fails chat or dispatches another vision model',async()=>{
+  const ref=image('refusal-only'),calls:string[]=[];
+  const descriptions=await observeStandaloneStillImages([ref],{
+    question:'What is in this image?',
+    qwen:async()=>{calls.push('qwen');return {text:"I'm sorry, but I cannot fulfill this request because of the content policy.",model,coverage:'full' as const};},
+    venice:async()=>{calls.push('venice');throw Error('Policy refusal does not authorize Venice');},
+    escalate:async()=>{calls.push('premium');throw Error('Policy refusal does not authorize premium');}
+  });
+  assert.deepEqual(calls,['qwen']);
+  const observation=descriptions.get(ref.fileId)!;
+  assert.equal(observation.summaryCoverage,'metadata');
+  assert.equal(observation.observationAgreement,'policy-limited');
+  assert.equal(observation.observedSummary,undefined);
+  assert.equal(observation.observationReports?.[0].disposition,'policy-limited');
+  const grounding=currentTurnImageGroundingContext([ref],descriptions,new Set([ref.fileId]));
+  assert.match(grounding,/"evidenceAvailable":false/);
+  assert.match(grounding,/acknowledge receipt but explain that visual analysis was unavailable/);
+  const text=imageObservationAsText(ref,observation).extractedText??'';
+  assert.match(text,/IMAGE ANALYSIS UNAVAILABLE/);
+  assert.match(text,/image content is unknown/i);
+  assert.doesNotMatch(text,/I cannot fulfill this request/);
+});
 test('current image grounding is isolated by source ID and supersedes stale assistant image statements',async()=>{
   const one=image('new','new pixels'),old=image('old','old pixels');
   const observed=await observeStandaloneStillImages([one],{
