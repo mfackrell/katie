@@ -448,6 +448,8 @@ test('actual route resolves identity before historical attachment retrieval and 
     pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
     mediaMemory: null, savedVideoFollowUp: null,
     responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
+    explicitProjectControl: false, explicitSavedProjectReference: false,
+    resolvedRoutingIntentForReroute: { complexity: 'low' },
     reviewMode: 'always', attachments: [], images: [], storedWebsite: {fresh:false},
   });
   assert.deepEqual(events, ['resolve-identity', 'select-historical-evidence']);
