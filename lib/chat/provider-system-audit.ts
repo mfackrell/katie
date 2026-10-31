@@ -67,6 +67,15 @@ export async function saveProviderSystemAudit(
       reason: error.message,
     });
   } else {
+    if (audit.requestDiagnostic) {
+      const readBack = await getSupabaseAdminClient().from("chat_requests")
+        .select("provider_system_audit").eq("request_id", requestId)
+        .eq("actor_id", actorId).eq("chat_id", chatId)
+        .maybeSingle<{ provider_system_audit: StoredProviderSystemAudit }>();
+      if (readBack.error || !readBack.data?.provider_system_audit?.requestDiagnostic) {
+        throw new Error("Owner diagnostic write could not be verified.");
+      }
+    }
     console.info("[Prompt Inspection] provider system messages captured", {
       requestId, provider: audit.provider, model: audit.model,
       endpoint: audit.endpoint, count: bounded.systemMessages.length,
