@@ -6,6 +6,7 @@ import { getAccountingScope, nextStandaloneAttempt } from './context';
 import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION, type StandaloneEstimate } from './estimate';
 import { countNativePreparedInput } from './native-token-count';
 import { cachedWorkflowValue } from './workflow';
+import { OWNER_SELECTED_UNCACHED, ownerSelectedUncachedEstimate, proposeSelectedModelUncached } from './owner-cache-authorization';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
 import type { ResponseCheckpoint } from './types';
 
@@ -230,6 +231,10 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const { attemptKey } = nextStandaloneAttempt()!;
     const ledger = ledgerFactory();
     let attempt = await ledger.lookupAttempt(context.userId, context.requestId, attemptKey);
+    let pricing = await loadStandalonePricing(ledger, attempt?.pricing_version);
+    await ledger.registerPricing(pricing.version, pricing);
+    let ownerSelectedUncached = (attempt?.preflight_estimate as StandaloneEstimate | undefined)?.ownerApprovalRequired === OWNER_SELECTED_UNCACHED;
+    const stampOwnerApproval = (quote: StandaloneEstimate) => ownerSelectedUncachedEstimate(quote, ownerSelectedUncached);
     let prepared;
     if (attempt && context.resumed) {
       // Resume is bound to the server-loaded original workflow. Mutable routing
@@ -244,6 +249,15 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     } else {
       payload=await freezeStoredImages(payload);
       prepared = prepareStandaloneRequest(provider, model, url.pathname, payload);
+      if (!attempt) {
+        const sameModel = proposeSelectedModelUncached(prepared, pricing);
+        if (sameModel) {
+          // Preparing an approval quote is not permission to transmit.
+          // The SQL ledger will force a pause even below normal thresholds.
+          prepared = sameModel;
+          ownerSelectedUncached = true;
+        }
+      }
       if (attempt && (attempt.source_prepared_hash ?? attempt.prepared_hash) !== prepared.hash) throw failure('replay_mismatch', 'The prepared request changed. Resume requires the exact approved request.');
       if (attempt) {
         const saved = attempt.prepared_payload as unknown as typeof prepared;
@@ -252,9 +266,11 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
           || prepared.model !== model && !attempt.supersedes_attempt_id) throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
       }
     }
-    let pricing=await loadStandalonePricing(ledger,attempt?.pricing_version);
-    await ledger.registerPricing(pricing.version,pricing);
-    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    if (ownerSelectedUncached && (prepared.provider !== 'openai' ||
+      prepared.payload.prompt_cache_key !== undefined || prepared.payload.prompt_cache_retention !== undefined)) {
+      throw failure('replay_mismatch', 'Owner-approved uncached preparation must not include unreviewed cache metadata.');
+    }
+    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
     // Persisted native counts are immutable evidence for the exact hash and model.
     // Resume must not silently recalculate or substitute a different reservation.
     const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
@@ -271,13 +287,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       const oldPrice=getModelPrice(provider,prepared.model,pricing),currentPrice=getModelPrice(provider,prepared.model,current);
       if(!currentPrice)throw failure('unsupported_billing','The current validated catalog has no applicable price for this exact model. The saved attempt remains held.');
       if(!oldPrice||canonicalJson(oldPrice)!==canonicalJson(currentPrice)){
-        const quote=estimatePreparedRequest(prepared,current,countedInput);
+        const quote=stampOwnerApproval(estimatePreparedRequest(prepared,current,countedInput));
         if(quote.status!=='estimated'||quote.reservationMicrousd===null)throw failure('unsupported_billing','Updated pricing cannot estimate this request: '+quote.issues.join('; '));
         attempt=await ledger.reprice(context.userId,attempt.id,current.version,quote as unknown as Record<string,unknown>);
         pricing=current;
       }
     }
-    let estimate = estimatePreparedRequest(prepared,pricing,countedInput);
+    let estimate = stampOwnerApproval(estimatePreparedRequest(prepared,pricing,countedInput));
     const contextIssue = 'Estimated input plus output exceeds supported context window';
     // Exact input counting is worth the free provider preflight for large
     // prompts, especially whenever the byte-based heuristic would reject the
@@ -290,7 +306,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         () => countNativePreparedInput(prepared,transport,headers,signal),
       );
       if (nativeCount !== null) {
-        estimate = estimatePreparedRequest(prepared,pricing,{inputTokens:nativeCount,requestHash:prepared.hash});
+        estimate = stampOwnerApproval(estimatePreparedRequest(prepared,pricing,{inputTokens:nativeCount,requestHash:prepared.hash}));
       }
     }
     if (estimate.issues.includes(contextIssue)) {
