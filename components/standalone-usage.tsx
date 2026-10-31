@@ -215,7 +215,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     <section aria-label="Spending authorization required" role="region" className="shrink-0 max-h-[38dvh] space-y-3 overflow-y-auto border-t border-amber-400/30 bg-zinc-950 px-4 py-3 text-xs text-zinc-200 sm:px-6">
       <h3 className="text-sm font-semibold text-amber-100">Approve the selected model to continue</h3>
       {snapshot.recoverable && <div className="space-y-2 rounded-lg border border-amber-400/30 p-3">
-        <p>The saved image analysis completed, but Katie stopped before generating the reply because the selected model's optional cache-billing policy was not reviewed.</p>
+        <p>The saved image analysis completed, but Katie stopped before generating the reply because the selected model&apos;s optional cache-billing policy was not reviewed.</p>
         <p>No new model call will be sent until you review and approve the same-model standard-rate quote.</p>
         <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === 'recover:'+snapshot.recoverable.requestId ? 'Preparing…' : 'Prepare saved authorization'}</button>
       </div>}
