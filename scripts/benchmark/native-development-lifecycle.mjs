@@ -14,7 +14,11 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
   verification=qualifiedLifecycle?await verifyCandidate(candidateHead):{passed:true,detail:''};
   first=await runPhase('review',qualifiedLifecycle?'Trusted deterministic verification: '+JSON.stringify(verification):'');
  }
- onCompleted({phase:'review',review:first,verification:{...verification,head:candidateHead}});
+ // Full repair instructions already live in reviewFindings. Do not duplicate
+ // two 12 KB messages inside the existing 24 KB checkpoint metadata envelope.
+ const summary=value=>Buffer.from(String(value??''),'utf8').subarray(0,1600).toString('utf8');
+ onCompleted({phase:'review',review:{phase:'review',verdict:first.verdict,findings:summary(first.findings)},
+  verification:{passed:verification.passed,detail:summary(verification.detail),head:candidateHead}});
  if(recovery?.phase==='repair'||first.verdict!=='pass'||!verification.passed){
   await runPhase('repair',recovery?.phase==='repair'?recovery.reviewFindings:first.findings+'\nTrusted deterministic verification: '+JSON.stringify(verification));
   repairPerformed=true;
