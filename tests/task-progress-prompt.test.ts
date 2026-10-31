@@ -47,6 +47,28 @@ test("ordinary conversation never receives stale project progress even when poli
   assert.equal(selectTaskProgressPrompt(input({ message: "Good morning!", responsePurpose: "conversation" })).text, "");
 });
 
+test("misclassified same-project uploads and greetings never revive a stale task", () => {
+  const stale=prior();
+  stale.projectContext={text:"Good. What's up?",userMessageId:"old-greeting"};
+  stale.objective={text:"An unrelated earlier request",userMessageId:"old-request"};
+  for (const message of ["[image]","[file]","[video]","[files]","Hi Katie!"]) {
+    const r=selectTaskProgressPrompt(input({
+      message, progress:stale, projectRelation:"same_project",responsePurpose:"deliverable",
+    }));
+    assert.equal(r.text,"",message);
+    assert.equal(r.reason,"ordinary_or_upload_only_turn");
+  }
+  // A bound review remains eligible when the user is providing requested
+  // source evidence; managed tasks retain their explicit work authority.
+  assert.match(selectTaskProgressPrompt(input({
+    message:"[file]",progress:stale, projectRelation:"same_project",
+    pendingReviewContinuation:true,
+  })).text,/KATIE_DURABLE_TASK_PROGRESS/);
+  assert.match(selectTaskProgressPrompt(input({
+    message:"[image]",progress:stale,projectRelation:"same_project",managedTask:true,
+  })).text,/KATIE_DURABLE_TASK_PROGRESS/);
+});
+
 test("a genuinely new non-project request does not drag in the prior work assignment", () => {
   const p = prior();
   p.projectContext = { text: "Write me a poem about the sea.", userMessageId: "current-user" };
