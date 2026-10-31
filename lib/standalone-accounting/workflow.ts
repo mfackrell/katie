@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeStandaloneCaller } from './auth';
+import { verifiedReactionOwner } from '@/lib/chat/reaction-internal-authorization';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { assertCronAuth } from '@/lib/runpod/durable-results';
@@ -54,9 +55,10 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
   const requestId=request.headers.get('x-request-id')?.trim();
   if(!requestId||!/^[A-Za-z0-9._:-]{1,128}$/.test(requestId))throw new StandaloneAccountingError('request_id_required','A stable original request ID is required before paid processing.');
   const resumed=payload.standaloneResume===true;
-  const ownerId=resumed&&assertCronAuth(request)
+  const reactionOwner = verifiedReactionOwner(actorId,chatId,requestId,resumed);
+  const ownerId=reactionOwner ?? (resumed&&assertCronAuth(request)
     ? await verifiedCronQwenOwner(actorId,chatId,requestId)
-    : await authorizeStandaloneCaller(request,actorId,chatId);
+    : await authorizeStandaloneCaller(request,actorId,chatId));
   if(resumed) {
     const saved=await rpc<Workflow|null>('load_workflow',{p_owner:ownerId,p_request:requestId});
     if(!saved||saved.actor_id!==actorId||saved.chat_id!==chatId)throw new StandaloneAccountingError('resume_denied','Saved request not found for this owner and conversation.');
