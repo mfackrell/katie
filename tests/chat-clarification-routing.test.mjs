@@ -147,7 +147,7 @@ function fixture() {
     return exports;
   };
   const helpers = Object.assign({}, ...[
-    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
+    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/task-progress-prompt', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
     'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
@@ -177,6 +177,7 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
     selectControlPlaneDecisionModels: () => [],
     resolveProjectTransition: f.globals.resolveProjectTransition ?? (async () => undefined),
     projectRelationHint: projectRelation, responsePurposeHint: responsePurpose,
+    explicitProjectControl: false, explicitSavedProjectReference: false,
     resolvedRequestIntent: 'general-text', resolvedRoutingIntentForReroute: { complexity: 'low' },
     reviewMode, attachments: [], images: [], storedWebsite: { fresh: false },
     timelineActive: false, mediaMemory: null, overrideProvider: null, overrideModel: null, hasVideoInput: false,
