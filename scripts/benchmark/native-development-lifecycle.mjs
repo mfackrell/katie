@@ -11,8 +11,8 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  }else{
   await runPhase('implementation');
   candidateHead=commitCandidate('native: checkpoint approved implementation');
-  verification=qualifiedLifecycle?await verifyCandidate(candidateHead):{passed:true,detail:''};
-  first=await runPhase('review',qualifiedLifecycle?'Trusted deterministic verification: '+JSON.stringify(verification):'');
+  verification=qualifiedLifecycle||recovery?await verifyCandidate(candidateHead):{passed:true,detail:''};
+  first=await runPhase('review',qualifiedLifecycle||recovery?'Trusted deterministic verification: '+JSON.stringify(verification):'');
  }
  // Full repair instructions already live in reviewFindings. Do not duplicate
  // two 12 KB messages inside the existing 24 KB checkpoint metadata envelope.

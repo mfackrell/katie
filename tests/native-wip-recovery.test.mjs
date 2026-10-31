@@ -86,6 +86,14 @@ test('unfinished implementation restores source and starts in implementation, ne
  assert.deepEqual(phases,['implementation','review','final-review']);assert.equal(readFileSync(join(f.workspace,'app/pilot/new/nested.mjs'),'utf8'),'third new file');
 });
 
+test('recovered implementation verifies and repairs actual failures under older authorization plans too',async()=>{
+ const phases=[],verifications=[];let checks=0;
+ const result=await executeNativeDevelopmentLifecycle({recovery:{phase:'implementation'},qualifiedLifecycle:false,
+  runPhase:async(phase,findings)=>{phases.push(phase);if(phase==='review')assert.match(findings,/"passed":false/);if(phase==='repair')assert.match(findings,/actual deterministic failure/);return {phase,verdict:'pass',findings:'PASS source review'};},
+  commitCandidate:()=> 'a'.repeat(40),verifyCandidate:async head=>{verifications.push(head);return {passed:checks++>0,detail:'actual deterministic failure'};}});
+ assert.deepEqual(phases,['implementation','review','repair','final-review']);assert.equal(verifications.length,2);assert.equal(result.repairPerformed,true);
+});
+
 test('cross-task/project/baseline/scope/contract and historical call/grant mismatches reject without touching trusted HEAD',async t=>{
  for(const [target,key,value] of [['record','taskId','other'],['record','projectId','other'],['record','originalBaselineSha','b'.repeat(40)],['record','approvedScopeHash','other'],['record','approvedScope',{}],['record','completedCheckpointSha','b'.repeat(40)],['grant','mission_assignment_id','other'],['grant','execution_epoch',99],['call','actual_tokens',999],['call','request_key','other'],['binding','contractHash','other'],['binding','allowedPaths',['lib/']]]){
   const f=fixture(t);f.fresh();const object=target==='record'?f.record:target==='grant'?f.rows.benchmark_execution_grants:target==='call'?f.rows.benchmark_budget_calls:f.rows.project_runs.binding;object[key]=value;
