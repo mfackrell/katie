@@ -71,7 +71,7 @@ test('native OpenAI Responses and Gemini counts operate on input and reject malf
   assert.equal(await countNativePreparedInput(freezePreparedRequest('grok','grok-4.7','/v1/chat/completions',{model:'grok-4.7',messages:[],max_tokens:100}),async()=>{throw Error('must not call provider');},{}),null);
 });
 
-test('context upgrade chooses only newer same-family higher-context and output-capable model',()=>{
+test('context upgrade requires a reviewed, fitting model without reducing capability',()=>{
   const old=getModelPrice('anthropic','claude-sonnet-4-5')!;
   const newPrice=getModelPrice('anthropic','claude-sonnet-4-6')!;
   const snapshot={...PRICING_SNAPSHOT,models:[...PRICING_SNAPSHOT.models,
@@ -79,10 +79,44 @@ test('context upgrade chooses only newer same-family higher-context and output-c
     {...newPrice,model:'claude-sonnet-5'},
   ]};
   const options=['claude-haiku-5-5','claude-sonnet-4-5-20250929','claude-sonnet-4-6','claude-sonnet-5','claude-opus-4-6'];
-  assert.equal(selectContextCapacityUpgrade({provider:'anthropic',model:'claude-sonnet-4-5-20250929',availableModels:options,pricing:snapshot,outputAllowance:16384}), 'claude-sonnet-5');
-  assert.equal(selectContextCapacityUpgrade({provider:'anthropic',model:'claude-sonnet-4-5-20250929',availableModels:options,pricing:snapshot,outputAllowance:16384,excludedModels:new Set(['claude-sonnet-5'])}), 'claude-sonnet-4-6');
-  assert.equal(selectContextCapacityUpgrade({provider:'anthropic',model:'claude-sonnet-4-5-20250929',availableModels:options,pricing:snapshot,outputAllowance:128001}), null);
-  assert.equal(selectContextCapacityUpgrade({provider:'anthropic',model:'claude-sonnet-4-5-20250929',availableModels:['claude-haiku-5-5','claude-opus-4-6'],pricing:snapshot,outputAllowance:16384}),null);
+  const base={provider:'anthropic' as const,model:'claude-sonnet-4-5-20250929',pricing:snapshot,inputTokens:190000,outputAllowance:16384};
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:options}), 'claude-sonnet-5');
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:options,excludedModels:new Set(['claude-sonnet-5'])}), 'claude-sonnet-4-6');
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:options,outputAllowance:128001}), null);
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:['claude-haiku-5-5','claude-opus-4-6']}),'claude-opus-4-6','a higher Anthropic tier is allowed');
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:['claude-haiku-5-5']}),null,'never downgrade from Sonnet');
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:options,inputTokens:1000000}),null,'verified context must fit the unchanged full input');
+});
+
+test('BTG resume context overflow promotes GPT-5.4 Mini to full GPT-5.4, without spending or truncation',()=>{
+  // Dynamic catalog includes this Mini identity; the static fallback snapshot
+  // deliberately does not. All candidates still require an exact reviewed row.
+  const mini={...getModelPrice('openai','gpt-5-mini')!,model:'gpt-5.4-mini',maxContextTokens:128000};
+  const snapshot={...PRICING_SNAPSHOT,models:[...PRICING_SNAPSHOT.models,mini]};
+  const base={provider:'openai' as const,model:'gpt-5.4-mini',pricing:snapshot,
+    inputTokens:300000,outputAllowance:16384,
+    availableModels:['gpt-5-mini','gpt-5.4-mini','gpt-5.4-pro','gpt-5.4','gpt-5.5-pro']};
+  assert.equal(selectContextCapacityUpgrade(base),'gpt-5.4');
+  assert.equal(selectContextCapacityUpgrade({...base,excludedModels:new Set(['gpt-5.4'])}),'gpt-5.4-pro');
+  assert.equal(selectContextCapacityUpgrade({...base,inputTokens:1100000}),null,'an oversized quote is not dispatched');
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:['gpt-5-mini','gpt-5.4-mini','unknown-alias']}),null);
+  assert.equal(selectContextCapacityUpgrade({...base,availableModels:['gpt-5.5-pro']}),null,'nonstreaming candidate is not eligible');
+
+  const oversized=freezePreparedRequest('openai','gpt-5.4-mini','/v1/responses',{
+    model:'gpt-5.4-mini',input:[{role:'user',content:'x'.repeat(130000)}],max_output_tokens:16384,stream:true,
+  });
+  assert.equal(estimatePreparedRequest(oversized,snapshot).status,'unsupported');
+  const native=estimatePreparedRequest(oversized,snapshot,{requestHash:oversized.hash,inputTokens:20000});
+  assert.equal(native.status,'estimated','provider-native input count can avoid escalation');
+  assert.equal(native.inputCountSource,'provider');
+  // A higher-capacity model goes through the normal ledger and owner's cost
+  // threshold; this is a quote, NOT approval to transmit the request.
+  const expensive=freezePreparedRequest('openai','gpt-5.4','/v1/responses',{
+    model:'gpt-5.4',input:[{role:'user',content:'x'.repeat(300000)}],max_output_tokens:16384,stream:true,
+  });
+  const quote=estimatePreparedRequest(expensive,snapshot);
+  assert.equal(quote.status,'estimated');
+  assert.ok(BigInt(quote.reservationMicrousd!)>1000000n,'an expensive upgrade must reach the existing approval gate');
 });
 
 test('only technical pre-dispatch context errors reroute; approval/uncertain spending never retries',async()=>{
