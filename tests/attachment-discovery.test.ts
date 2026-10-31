@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import sharp from "sharp";
 import * as XLSX from "xlsx";
-import { selectStoredAttachments, loadSelectedAttachmentSources, rankAttachmentCandidates } from "../lib/chat/attachment-selection";
+import { selectStoredAttachments, loadSelectedAttachmentSources, rankAttachmentCandidates, parseAttachmentSelectorResponse } from "../lib/chat/attachment-selection";
 import { attachmentAccessContext, type ConversationAttachment } from "../lib/chat/attachment-continuity";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
 import { buildImageReference, imageFileFromDataUrl } from "../lib/uploads/image-reference";
@@ -14,6 +14,24 @@ import type { Message } from "../lib/types/chat";
 const doc: ConversationAttachment = { id: "11111111-1111-4111-8111-111111111111", fileName: "plan.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", observedSummary: "A warehouse relocation proposal comparing Harbor and Ridge sites, with lease costs and moving schedules.", summaryCoverage: "full", createdAt: "2020-01-01" };
 const sheet: ConversationAttachment = { ...doc, id: "22222222-2222-4222-8222-222222222222", fileName: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", observedSummary: "Forecast with Revenue and Expenses sheets; quarter ending September 2026." };
 const full: FileReference = { fileId: doc.id, fileName: doc.fileName, mimeType: doc.mimeType, preview: "first page", extractedText: "Entire body, including the precise lease amount 92741." };
+
+test("a blocked Gemini attachment selector is not mistaken for invalid selection JSON", async () => {
+  assert.throws(() => parseAttachmentSelectorResponse({
+    promptFeedback:{blockReason:'PROHIBITED_CONTENT'},
+    text:undefined,
+    candidates:[],
+  }),/SelectorProviderBlocked/);
+  assert.throws(() => parseAttachmentSelectorResponse({
+    candidates:[{finishReason:'MAX_TOKENS'}],text:'{}',
+  }),/SelectorOutputTruncated/);
+  assert.throws(() => parseAttachmentSelectorResponse({text:undefined}),/SelectorEmptyResponse/);
+  assert.deepEqual(parseAttachmentSelectorResponse({text:'{"selections":[]}'}),{selections:[]});
+  const decision=await selectStoredAttachments('Unrelated question', [doc], [], async()=>{
+    throw new Error('SelectorProviderBlocked');
+  });
+  assert.equal(decision.method,'fallback');
+  assert.equal(decision.selections.length,0,'blocked selector must not attach an unrelated old source');
+});
 
 test("semantic discovery finds an older document without a filename or recent attachment history", async () => {
   const result = await selectStoredAttachments("What was the relocation proposal about?", [doc, sheet], [], async prompt => {
