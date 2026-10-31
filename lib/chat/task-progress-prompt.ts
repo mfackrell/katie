@@ -41,7 +41,7 @@ function isConversationalProjectOrigin(text: string): boolean {
   // Older conversational uploads could be promoted to a synthetic project
   // after their observed-media wrapper was appended to the first user turn.
   // This is historical evidence, not an explicit work assignment.
-  if (/^(?:ok(?:ay)?\\s*,?\\s*)?(?:fine[.!]?\\s*)?how about (?:this|that|one)\\?/i.test(text) &&
+  if (/^(?:ok(?:ay)?\\s*,?\\s*)?(?:fine[.!]?\\s*)?how about (?:this(?: one)?|that(?: one)?|one)\\?/i.test(text) &&
       /FRESH USER-SUPPLIED SOURCE EVIDENCE/.test(text)) return true;
   return classifyUserTurn(text) === "conversation" || classifyUserTurn(plain) === "conversation";
 }
