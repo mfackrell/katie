@@ -41,7 +41,7 @@ function isConversationalProjectOrigin(text: string): boolean {
   // Older conversational uploads could be promoted to a synthetic project
   // after their observed-media wrapper was appended to the first user turn.
   // This is historical evidence, not an explicit work assignment.
-  if (/^(?:ok(?:ay)?\\s*,?\\s*)?(?:fine[.!]?\\s*)?how about (?:this(?: one)?|that(?: one)?|one)\\?/i.test(text) &&
+  if (/^(?:ok(?:ay)?\s*,?\s*)?(?:fine[.!]?\s*)?how about (?:this(?: one)?|that(?: one)?|one)\?/i.test(text) &&
       /FRESH USER-SUPPLIED SOURCE EVIDENCE/.test(text)) return true;
   return classifyUserTurn(text) === "conversation" || classifyUserTurn(plain) === "conversation";
 }
@@ -78,14 +78,18 @@ export function selectTaskProgressPrompt(input: TaskProgressPromptInput): TaskPr
   if (input.explicitProjectControl || input.explicitSavedProjectReference) return render("explicit_project");
   if (input.responsePurpose === "conversation") return omit("conversation");
   if (input.pendingReviewContinuation) return render("bound_review_continuation");
-  // A bare upload is evidence supplied this turn, not authorization to revive
-  // the prior conversational project's objective; the router may call it a
-  // same-project deliverable based solely on stale task metadata.
-  if (/^\s*\[(?:image|images|file|files|video|audio)\]\s*$/i.test(input.message) ||
-      classifyUserTurn(input.message) === "conversation")
+  // Social acknowledgments have no managed-task authority merely because an
+  // earlier assistant question was classified as a deliverable.
+  if (classifyUserTurn(input.message) === "conversation")
     return omit("ordinary_or_upload_only_turn");
 
   const parent = input.progress.projectContext;
+  // Bare uploads can be legitimate source-linked answers in active projects.
+  // Suppress only when there is no prior project or the prior project was
+  // synthesized from casual conversation/media evidence.
+  const bareUpload = /^\s*\[(?:image|images|file|files|video|audio)\]\s*$/i.test(input.message);
+  if (bareUpload && (!parent || isConversationalProjectOrigin(parent.text)))
+    return omit("ordinary_or_upload_only_turn");
   if (!parent || parent.userMessageId === input.currentUserMessageId)
     return omit("no_prior_work_anchor");
   if (isConversationalProjectOrigin(parent.text))
