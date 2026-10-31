@@ -32,6 +32,7 @@ beforeEach(() => {
     },
     async rpc(name: string, args: Record<string, unknown>) {
       calls.push({ name, args });
+      if(name==='standalone_owner_cache_authorization_recovery')return{data:null,error:null};
       if(name==='standalone_load_workflow')return{data:{status:parentStatus,error:parentError},error:null};
       if (name === 'standalone_uncertain_exposure_accepted') return {data:exposureAccepted,error:null};
       if (name === 'standalone_accept_uncertain_exposure') return {data:{accepted_at:'2026-10-29T20:00:00Z'},error:null};
@@ -243,7 +244,7 @@ test('configuration reads one row and history requires an explicit keyset cursor
 test('usage uses a bounded server summary and does not enumerate workflows or authorizations with extra RPCs',async()=>{
  row.state='uncertain';
  const response=await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`));assert.equal(response.status,200);
- assert.deepEqual(calls.map(call=>call.name),['standalone_authorize_scope','standalone_usage_snapshot']);
+ assert.deepEqual(calls.map(call=>call.name),['standalone_authorize_scope','standalone_usage_snapshot','standalone_owner_cache_authorization_recovery']);
  assert.ok(!JSON.stringify(await response.json()).includes('prepared_payload'));
 });
 
