@@ -147,6 +147,8 @@ export async function qualifyNativeRecovery(db,ids){
    const timer=setTimeout(()=>host.kill('SIGKILL'),900000);
    const code=await new Promise((resolve,reject)=>{host.once('error',reject);host.once('close',resolve);});clearTimeout(timer);host=null;
    write(root,'host-'+run+'.log',log);
+   if(existsSync(evidence+'.diagnostics.json')){const d=JSON.parse(readFileSync(evidence+'.diagnostics.json'));report.runs??=[];report.runs.push({run,code,phases:d.phases.map(p=>({phase:p.phase,outcome:p.outcome,terminalEvent:p.terminalEvent})),verification:d.verification,scope:d.scope,failure:d.failure});}
+   if(existsSync(join(runtime,'qualification-browser-acceptance.json')))report.browserAcceptance=JSON.parse(readFileSync(join(runtime,'qualification-browser-acceptance.json')));
    return {code,log,evidence,requestFile};
   };
   trace.push({stage:'authorized-task',task:ids.task,project:ids.project,baseline});
@@ -233,7 +235,7 @@ export async function qualifyNativeRecovery(db,ids){
   const absent=await launch({successor:successor.id,release});assert.notEqual(absent.code,0);assert.match(absent.log,/latest remote checkpoint/);assert.deepEqual(await ledger(),beforeMissing);assert.equal(phaseCounts.size,0);
   for(const ref of refs)git(root,'--git-dir',remote,'update-ref',ref.ref,ref.checkpointSha);
   report.failures.push({case:'missing WIP refs in actual host',result:'no implementation restart; no grant consumed'});
-  const second=await launch({successor:successor.id,release});assert.equal(second.code,0,second.log);
+  const second=await launch({successor:successor.id,release});assert.equal(second.code,0,second.log+'\n'+JSON.stringify(report.runs?.at(-1)));
   assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completed=JSON.parse(readFileSync(second.evidence));assert.equal(completed.completed,true);assert.equal(completed.finalReview.verdict,'pass');assert.equal(completed.review.verdict,'changes_requested');
   const finalDiagnostics=JSON.parse(readFileSync(second.evidence+'.diagnostics.json'));assert.deepEqual(finalDiagnostics.phases.map(p=>p.phase),['repair','final-review']);assert.equal(finalDiagnostics.verification?.length,1);assert.equal(finalDiagnostics.verification[0].passed,true);assert.equal(finalDiagnostics.verification[0].head,completed.reviewedHeadSha);
