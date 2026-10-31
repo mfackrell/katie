@@ -94,6 +94,7 @@ export interface ProviderPayloadCaptureTrace {
   actorId: string;
   chatId: string;
   requestId: string;
+  currentUserMessageId: string;
   historySource: "stm" | "recent_messages";
   stmVersion: number | null;
   stmExchangeCount: number;
