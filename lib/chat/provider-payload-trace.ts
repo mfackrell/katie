@@ -5,6 +5,7 @@ type Input = {
   actorId: string;
   chatId: string;
   requestId: string;
+  currentUserMessageId: string;
   historySource: "stm" | "recent_messages";
   shortTermMemory: Record<string, unknown>;
   recentMessages: Message[];
@@ -38,7 +39,7 @@ export function buildProviderPayloadCaptureTrace(input: Input): ProviderPayloadC
     }
     pendingUser = null;
   }
-  if (pendingUser) excludedTurns.push({ id: pendingUser.id, role: "user", reason: "awaiting-assistant" });
+  if (pendingUser && pendingUser.id !== input.currentUserMessageId) excludedTurns.push({ id: pendingUser.id, role: "user", reason: "awaiting-assistant" });
 
   const exchanges = Array.isArray(input.shortTermMemory.exchanges) ? input.shortTermMemory.exchanges : [];
   const lastExchange = exchanges.at(-1) as { assistant?: { id?: unknown } } | undefined;
@@ -48,6 +49,7 @@ export function buildProviderPayloadCaptureTrace(input: Input): ProviderPayloadC
     actorId: input.actorId,
     chatId: input.chatId,
     requestId: input.requestId,
+    currentUserMessageId: input.currentUserMessageId,
     historySource: input.historySource,
     stmVersion: typeof input.shortTermMemory.version === "number" ? input.shortTermMemory.version : null,
     stmExchangeCount: exchanges.length,
