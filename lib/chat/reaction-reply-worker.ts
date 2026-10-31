@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getChatRequest } from "@/lib/chat/request-idempotency";
 import { POST as executeNormalChat } from "@/app/api/chat/route";
+import { runWithVerifiedReactionReply } from "@/lib/chat/reaction-internal-authorization";
 
 type Job={id:number;event_id:number;actor_id:string;chat_id:string;message_id:string;request_id:string;attempts:number};
 export async function processReactionReply(jobId?:number,origin="https://katie-mu.vercel.app") {
@@ -39,7 +40,7 @@ export async function processReactionReply(jobId?:number,origin="https://katie-m
      method:"POST",headers:{"content-type":"application/json","x-request-id":job.request_id},
      body:JSON.stringify({actorId:job.actor_id,chatId:job.chat_id,message})
    });
-   const response=await executeNormalChat(request);
+   const response=await runWithVerifiedReactionReply(job,()=>executeNormalChat(request));
    // Consume streaming response so the model generation and persistence finish
    // without relying on an open browser connection.
    const output=await response.text();

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getChatById } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { reactionNames } from "@/lib/chat/message-reactions";
+import { authorizeStandaloneCaller } from "@/lib/standalone-accounting/auth";
 
 export const runtime="nodejs";
 const chatSchema=z.object({actorId:z.string().uuid(),chatId:z.string().uuid()});
@@ -30,6 +31,8 @@ export async function POST(req:NextRequest) {
   if(!parsed.success)return NextResponse.json({error:"Invalid reaction."},{status:400});
   const {actorId,chatId,messageId,reaction}=parsed.data;
   if(!await validChat(actorId,chatId))return NextResponse.json({error:"Conversation unavailable."},{status:404});
+  try { await authorizeStandaloneCaller(req,actorId,chatId); }
+  catch { return NextResponse.json({error:"Conversation authorization required."},{status:403}); }
   const db=getSupabaseAdminClient();
   const {data:message,error:lookupError}=await db.from("messages").select("id")
     .eq("id",messageId).eq("actor_id",actorId).eq("chat_id",chatId).eq("role","assistant").maybeSingle();
