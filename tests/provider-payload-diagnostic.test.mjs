@@ -7,6 +7,7 @@ const claude = readFileSync("lib/providers/claude-provider.ts", "utf8");
 
 test("owner-only test capture requires an explicit request and grant", () => {
   assert.ok(route.includes("providerPayloadCapture: z.literal(true).optional()"));
+  assert.ok(route.includes("!capture-claude"));
   assert.ok(route.includes("await authorizeSelfToolCaller(request, actorId, chatId)"));
   assert.ok(route.includes('overrideProvider !== "anthropic"'));
 });
