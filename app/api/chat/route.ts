@@ -4,6 +4,7 @@ import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
@@ -1296,11 +1297,18 @@ async function executeChat(request: NextRequest) {
     const explicitProjectControl = !isGuestSession && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand);
     const projectReply = !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
+    // A verified, file-only PDF upload has no drafting instruction. Respond
+    // with a truthful, source-bound receipt before paid model routing. The
+    // original is persisted below; never use a historical attachment here.
+    const fileOnlyPdfReceipt = !benchmarkRelay && !currentAgentTask() && !timelineActive &&
+      !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
+      ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
+      : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
-      : projectReply ? {reason: "project" as const,text:projectReply} : benchmarkRelay ? {reason: "project" as const,text:"This conversation is bound to the Take Eleven benchmark. Ask for project status or use the saved project scope and task approval controls; unmetered chat inference is disabled."} : await resolveLocalKatieResponse({
+      : projectReply ? {reason: "project" as const,text:projectReply} : benchmarkRelay ? {reason: "project" as const,text:"This conversation is bound to the Take Eleven benchmark. Ask for project status or use the saved project scope and task approval controls; unmetered chat inference is disabled."} : fileOnlyPdfReceipt ? {reason: "upload-receipt" as const,text:fileOnlyPdfReceipt} : await resolveLocalKatieResponse({
       actorId,
       chatId,
       message,
@@ -1314,10 +1322,10 @@ async function executeChat(request: NextRequest) {
         chatId,
       });
 
-      const localUserMessageId = pdfProgress.projectClarification ? taskProgressUserMessageId : crypto.randomUUID();
-      const localAssistantMessageId = pdfProgress.projectClarification ? taskProgressAssistantMessageId : crypto.randomUUID();
+      const localUserMessageId = pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();
+      const localAssistantMessageId = pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();
       const clarificationAttachments: ConversationAttachment[] = [];
-      if (pdfProgress.projectClarification) {
+      if (pdfProgress.projectClarification || fileOnlyPdfReceipt) {
         for (const [index, attachment] of newAttachments.entries()) {
           const saved = retainedImageDescriptors.get(attachment.fileId) ?? await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken,
             {description: freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment,{standaloneImages:standaloneImageObservation,question:message}),
@@ -1332,6 +1340,10 @@ async function executeChat(request: NextRequest) {
         ...(clarificationAttachments.length ? {attachments: clarificationAttachments} : {}),
       });
 
+      if (fileOnlyPdfReceipt) console.info("[Chat API] Verified file-only PDF receipt saved", {
+        requestId, attachmentCount: clarificationAttachments.length,
+        hasReadableText: Boolean(newAttachments[0].extractedText?.trim() || newAttachments[0].extractedChunks?.some(chunk => chunk.text.trim())),
+      });
       if (pdfProgress.projectClarification) await saveTaskProgress(actorId, chatId, pdfProgress);
       const localResponseText = localKatieResponse.reason === "memory-update"
         ? await handleExplicitMemoryMutation(actorId, chatId, localUserMessageId, message)
