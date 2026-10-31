@@ -18,13 +18,25 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  let authorizedOwnerId:string;
   try{
     const principal=await authenticateStandalonePrincipal(request);
     const chat=await getChatById(chatId);
     if(!chat)return NextResponse.json({error:"Conversation not found."},{status:404});
+    authorizedOwnerId=principal.id;
     if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
-      await authorizeStandaloneCaller(request,chat.actorId,chatId);
+      authorizedOwnerId=await authorizeStandaloneCaller(request,chat.actorId,chatId);
   }catch{return NextResponse.json({error:"Conversation access denied."},{status:403});}
+  const savedWorkflow=async(actorId:string)=>{
+    const {data,error}=await getSupabaseAdminClient().rpc<{
+      status:string;error:string|null;updated_at:string;actor_id:string;chat_id:string;owner_id:string
+    }|null>('standalone_load_workflow',{p_owner:authorizedOwnerId,p_request:requestId});
+    if(error)throw new Error('Saved request status unavailable.');
+    // Owner/request alone is not permission to disclose another chat's state.
+    if(data&&(data.chat_id!==chatId||data.actor_id!==actorId||data.owner_id!==authorizedOwnerId))
+      throw new Error('Saved request context mismatch.');
+    return data;
+  };
   const record = await getChatRequest(requestId);
   const chat = await getChatById(chatId);
   if (!record || record.chatId !== chatId || chat?.actorId !== record.actorId) {
@@ -32,11 +44,9 @@ export async function GET(request: NextRequest) {
     // RunPod job can legitimately be running for several minutes here.
     // Report the durable workflow rather than falsely saying no POST arrived.
     if (chat && !record) {
-      const {data:workflow,error:workflowError}=await getSupabaseAdminClient()
-        .from('standalone_workflows').select('status,error,updated_at,actor_id')
-        .eq('request_id',requestId).eq('chat_id',chatId).eq('actor_id',chat.actorId)
-        .maybeSingle<{status:string;error:string|null;updated_at:string;actor_id:string}>();
-      if(workflowError)return NextResponse.json({error:'Saved request status unavailable.'},{status:503});
+      let workflow:Awaited<ReturnType<typeof savedWorkflow>>;
+      try{ workflow=await savedWorkflow(chat.actorId); }
+      catch{return NextResponse.json({error:'Saved request status unavailable.'},{status:503});}
       if(workflow){
         const waitingForRunpod=workflow.status==='paused'&&
           Boolean(workflow.error?.includes('standalone_runpod_in_progress'));
@@ -69,14 +79,9 @@ export async function GET(request: NextRequest) {
   // The workflow is authoritative for recovery; never poll it as live work.
   // This is status-only: no provider retry, spending approval or state update.
   if (record.status === "processing") {
-    const { data: saved, error: savedError } = await getSupabaseAdminClient()
-      .from("standalone_workflows")
-      .select("status,error,updated_at")
-      .eq("request_id", requestId)
-      .eq("chat_id", chatId)
-      .eq("actor_id", record.actorId)
-      .maybeSingle<{ status: string; error: string | null; updated_at: string }>();
-    if (!savedError && saved) {
+    let saved:Awaited<ReturnType<typeof savedWorkflow>>|null=null;
+    try{saved=await savedWorkflow(record.actorId);}catch{/* Existing chat receipt remains authoritative when status lookup is unavailable. */}
+    if (saved) {
       const recovery = classifyPausedChatWorkflow(record.status, saved);
       if (recovery) {
         return NextResponse.json({
