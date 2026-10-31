@@ -81,3 +81,12 @@ test('skipped repair is not required, while new findings after completed repair 
  const f=fixture();f.progress.notRequiredStages=['repair'];f.work.repairIterations=0;assert.equal(stage(assessLifecycleCapacity(f),'repair').status,'not_required');
  f.progress.completedStages=['implementation','initial_review','repair'];f.progress.notRequiredStages=[];f.work.additionalRepairIterations=1;const r=assessLifecycleCapacity(f);assert.equal(stage(r,'repair').remainingUnits,1);assert.equal(stage(r,'repair').metrics.calls.projected,4);
 });
+
+test('planned repairs include each required verification run in deadline demand',()=>{
+ const f=fixture();f.authorization.calls.developmentLimit=100;f.authorization.deadline=now+1000000;
+ let r=assessLifecycleCapacity(f);assert.equal(stage(r,'verification').remainingUnits,2);assert.equal(stage(r,'verification').metrics.seconds.projected,240);assert.equal(r.dimensions.time.projectedRemaining,1080);assert.ok(r.shortages.includes('time'));
+ f.progress.completedStages=['implementation','verification'];r=assessLifecycleCapacity(f);assert.equal(stage(r,'verification').remainingUnits,1);assert.equal(stage(r,'verification').metrics.seconds.projected,120);
+ f.progress.completedStages=['implementation','initial_review'];f.progress.phase='repair';r=assessLifecycleCapacity(f);assert.equal(stage(r,'verification').remainingUnits,1);
+ f.work.additionalRepairIterations=2;r=assessLifecycleCapacity(f);assert.equal(stage(r,'verification').remainingUnits,3);
+ f.work.additionalRepairIterations=0;f.progress.completedStages.push('repair','verification');r=assessLifecycleCapacity(f);assert.equal(stage(r,'verification').remainingUnits,0);
+});

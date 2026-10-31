@@ -46,9 +46,12 @@ export function assessLifecycleCapacity(input){
  if(now===null)uncertainties.push('missing_snapshot_time');
  const repairs=known(input.work?.repairIterations);
  const extras=known(input.work?.additionalRepairIterations);
+ const remainingRepairs=waived.includes('repair')?0:completed.includes('repair')?extras:add([repairs,extras]);
  const stages=Object.entries(STAGES).map(([stage,pool])=>{
-  const done=(completed.includes(stage)||waived.includes(stage))&&!(stage==='repair'&&extras>0);
-  const units=done?0:stage==='repair'?(completed.includes(stage)?extras:add([repairs,extras])):1;
+  // Each planned repair invalidates verification, even if the initial verifier passed.
+  const verificationUnits=remainingRepairs===null?null:remainingRepairs>0?add([remainingRepairs,!completed.includes('verification')&&!completed.includes('initial_review')?1:0]):completed.includes('verification')?0:1;
+  const done=stage==='verification'?verificationUnits===0:(completed.includes(stage)||waived.includes(stage))&&!(stage==='repair'&&extras>0);
+  const units=stage==='verification'?verificationUnits:done?0:stage==='repair'?remainingRepairs:1;
   const samples=(input.observations??[]).filter(s=>s?.stage===stage&&s.completed===true&&s.source==='verified_phase_receipts'&&text(input.cohort)&&s.cohort===input.cohort&&text(s.id)&&s.binding?.projectId===binding.projectId&&s.binding?.scopeHash===binding.scopeHash);
   const unique=new Set(samples.map(s=>s.id));if(unique.size!==samples.length)samples.length=0;
   const metrics=Object.fromEntries(['calls','inputTokens','outputTokens','seconds'].map(k=>[k,measure(samples,k,units)]));

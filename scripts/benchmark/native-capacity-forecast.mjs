@@ -19,15 +19,15 @@ export async function readNativeLifecycleCapacity({db,task,project,approval,cont
   // not assumed free; their absence remains explicit rather than invented.
   otherApiCostMicrousd:Object.fromEntries(Object.keys(STAGES).map(k=>[k,k==='browser_delivery'?null:'0']))};
  try{
-  const get=async query=>{const {data,error}=await query.abortSignal(AbortSignal.timeout(2500));if(error||data===null)throw Error('snapshot_unavailable');return data;};
+  const get=async(query,allowNull=false)=>{const {data,error}=await query.abortSignal(AbortSignal.timeout(2500));if(error||data===null&&!allowNull)throw Error('snapshot_unavailable');return data;};
   const one=(table,id)=>get(db.from(table).select('*').eq('id',id).maybeSingle());
-  const rpc=(name,args)=>get(db.rpc(name,args));
+  const rpc=(name,args,allowNull=false)=>get(db.rpc(name,args),allowNull);
   const list=async(table,column,value,fields='*')=>{const rows=await get(db.from(table).select(fields).eq(column,value).limit(1000));if(!Array.isArray(rows)||rows.length>=1000)throw Error('bounded_history_incomplete');return rows;};
   const assignment=await one('mission_assignments',task.id);
   const snapshot=async()=>{
    const [account,mission,calls,assignments,control,limit,callLimit,live,currentApproval,currentProject]=await Promise.all([
     one('benchmark_budget_accounts',approval.account_id),one('agent_missions',assignment.mission_id),list('benchmark_budget_calls','account_id',approval.account_id),list('mission_assignments','mission_id',assignment.mission_id),
-    rpc('benchmark_full_monetary_control',{p_account:approval.account_id,p_continuation:continuation?.id}),
+    rpc('benchmark_full_monetary_control',{p_account:approval.account_id,p_continuation:continuation?.id},true),
     rpc('benchmark_effective_mission_allowance',{p_mission:assignment.mission_id,p_continuation:continuation?.id}),
     rpc('benchmark_effective_mission_call_limit',{p_mission:assignment.mission_id,p_continuation:continuation?.id}),
     rpc('benchmark_continuation_live',{p_id:continuation?.id,p_account:approval.account_id,p_project:project.id}),
@@ -41,7 +41,7 @@ export async function readNativeLifecycleCapacity({db,task,project,approval,cont
   // and report unknown instead of presenting a mixture as authoritative capacity.
   const first=await snapshot(),s=await snapshot();if(canonical(first)!==canonical(s))throw Error('snapshot_changed');
   const plan=continuation?.plan;
-  if(![5,6].includes(plan?.version)||s.control?.version!=='atomic-exposure-v1')throw Error('unsupported_capacity_contract');
+  if(![5,6].includes(plan?.version)||(s.control!==null&&s.control?.version!=='atomic-exposure-v1'))throw Error('unsupported_capacity_contract');
   if(s.account.id!==approval.account_id||s.mission.project_id!==project.id||s.currentProject.approved_hash!==project.approved_hash||s.currentProject.approval_hash!==project.approved_hash||s.currentApproval.task_id!==task.id||s.currentApproval.project_id!==project.id)throw Error('snapshot_identity_mismatch');
   const jobIds=new Set(s.jobCalls.map(x=>x.id));
   const developmentCalls=s.calls.filter(c=>jobIds.has(c.legacy_mission_call_id??c.request_key));
@@ -56,9 +56,9 @@ export async function readNativeLifecycleCapacity({db,task,project,approval,cont
   const grantLive=grantId?Boolean(grant&&grant.account_id===approval.account_id&&grant.project_id===project.id&&grant.mission_assignment_id===task.id&&grant.continuation_id===continuation.id&&typeof approval.trial_id==='string'&&grant.trial_id===approval.trial_id&&!grant.revoked_at&&!grant.stopped_at&&stamp(grant.deadline)>now):null;
   if(grantId){const grantDeadline=stamp(grant?.deadline);deadline=deadline!==null&&grantDeadline!==null?Math.min(deadline,grantDeadline):null;}
   input.authorization={executionAuthorized:grantLive,source:'existing_effective_budget_rpcs_and_accounting_rows',live:s.live===true&&!s.account.frozen_at&&!s.currentApproval.revoked_at&&s.currentProject.status==='running',deadline,
-   tokens:{cumulativeLimit:number(s.control.cumulativeTokenCap),accountEncumbered:accountUsed,developmentLimit:number(s.limit),developmentEncumbered:developmentUsed,completionReserveRemaining:number(plan.developmentClosureTokens),assessmentReserveRemaining:number(plan.assessmentTokens)},
+   tokens:{cumulativeLimit:number(s.control?.cumulativeTokenCap),accountEncumbered:accountUsed,developmentLimit:number(s.limit),developmentEncumbered:developmentUsed,completionReserveRemaining:number(plan.developmentClosureTokens),assessmentReserveRemaining:number(plan.assessmentTokens)},
    calls:{developmentLimit:number(s.callLimit),developmentConsumed:developmentCalls.length,completionReserveRemaining:number(plan.developmentClosureCalls),assessmentLimit:null,assessmentConsumed:null},
-   money:{complete:true,ceilingMicrousd:numericString(s.control.dollarCeilingMicrousd),exposureMicrousd:numericString(s.control.exposureMicrousd)}};
+   money:{complete:s.control!==null,ceilingMicrousd:numericString(s.control?.dollarCeilingMicrousd),exposureMicrousd:numericString(s.control?.exposureMicrousd)}};
   let prices=null;try{prices=await get(db.from('model_registry').select('model_id,pricing_status,pricing_input_per_1m::text,pricing_output_per_1m::text,pricing_verified_at').eq('provider_name','openai').eq('model_id',approval.model).maybeSingle());}catch{}
   if(prices)input.pricing.native={status:prices.pricing_status,source:'verified_model_registry',serviceTier:plan.serviceTier,verifiedAt:stamp(prices.pricing_verified_at),inputUsdPerMillion:numericString(prices.pricing_input_per_1m),outputUsdPerMillion:numericString(prices.pricing_output_per_1m)};
   // Completion/assessment routing has not yet selected a model. Do not reuse

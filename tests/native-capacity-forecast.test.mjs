@@ -30,7 +30,7 @@ test('unverified pricing does not erase established call shortage or monetary he
  const f=setup();f.rows.model_registry[0].pricing_status='unverified';const r=await readNativeLifecycleCapacity(f.args);assert.ok(r.shortages.includes('nativeCalls'));assert.equal(r.dimensions.money.projectedRemaining,null);assert.equal(r.dimensions.money.authorizedRemaining,'5000000');
 });
 test('expired authority reports unusable resources without mutations',async()=>{
- const f=setup();f.rpcs.benchmark_continuation_live=false;f.args.continuation.deadline=new Date(f.args.now-1).toISOString();const before=structuredClone(f.rows),r=await readNativeLifecycleCapacity(f.args);assert.ok(r.shortages.includes('executionAuthority'));assert.equal(r.dimensions.completionCalls.currentlyUsable,0);assert.deepEqual(f.rows,before);
+ const f=setup();f.rpcs.benchmark_continuation_live=false;f.rpcs.benchmark_full_monetary_control=null;f.args.continuation.deadline=new Date(f.args.now-1).toISOString();const before=structuredClone(f.rows),r=await readNativeLifecycleCapacity(f.args);assert.ok(r.shortages.includes('executionAuthority'));assert.equal(r.dimensions.completionCalls.currentlyUsable,0);assert.deepEqual(f.rows,before);
 });
 test('receipt mismatches cannot calibrate phase forecasts',async()=>{
  const f=setup();f.args.observations=[0,1,2].map(i=>({id:'observation'+i,source:'verified_phase_receipts',completed:true,stage:'repair',binding:{projectId:'project',scopeHash:f.args.project.approved_hash},cohort:f.args.project.approved_hash,calls:1,operationIds:['missing'+i],inputTokens:10,outputTokens:10,seconds:10}));
@@ -60,4 +60,9 @@ test('trusted workflow stages the complete relative import closure',async()=>{
 
 test('execution time is bounded by the live grant, not just the later owner window',async()=>{
  const f=setup();f.args.grantId='grant';f.rows.benchmark_execution_grants[0].deadline=new Date(f.args.now+30000).toISOString();const r=await readNativeLifecycleCapacity(f.args);assert.equal(r.authorization.executionAuthorized,true);assert.equal(r.dimensions.time.authorizedRemaining,30);
+});
+
+test('revoked continuation preserves known authority denial when monetary RPC returns null',async()=>{
+ const f=setup();f.rpcs.benchmark_continuation_live=false;f.rpcs.benchmark_full_monetary_control=null;f.rows.benchmark_native_spending_approvals[0].revoked_at='revoked';const before=structuredClone(f.rows);
+ const r=await readNativeLifecycleCapacity(f.args);assert.equal(r.status,'insufficient');assert.ok(r.shortages.includes('executionAuthority'));assert.equal(r.authorization.live,false);assert.equal(r.dimensions.money.authorizedRemaining,null);assert.equal(r.dimensions.money.currentlyUsable,'0');assert.equal(r.dimensions.nativeCalls.currentlyUsable,0);assert.deepEqual(f.rows,before);
 });
