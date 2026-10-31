@@ -140,7 +140,7 @@ export async function qualifyNativeRecovery(db,ids){
    proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);
    const request=projectMarker(context)+'\nSynthetic recovery qualification only.\n'+encodeNativeHandoff(proof,signing);
    const requestFile=join(runtime,'request.md'),manifestFile=join(runtime,'manifest.json');writeFileSync(requestFile,request);writeFileSync(manifestFile,JSON.stringify(readNativeHandoff(request,signing)));
-   rmSync(join(runtime,'qualification-browser-acceptance.json'),{force:true});
+   rmSync(join(runtime,'qualification-browser-acceptance.json'),{force:true});rmSync(join(runtime,'qualification-verifier-tail.json'),{force:true});
    const evidence=join(runtime,'native-metered-review.json');rmSync(evidence,{force:true});rmSync(evidence+'.diagnostics.json',{force:true});
    let log='';host=spawn(process.execPath,['--import',join(repo,'tests/helpers/native-recovery-fetch.mjs'),join(runtime,'native-host/native-development-host.mjs'),requestFile,manifestFile,join(runtime,'native-host/native-development-child.mjs')],{
     cwd:workspace,env:{PATH:bin+':'+process.env.PATH,HOME:root,RUNNER_TEMP:runtime,GITHUB_REPOSITORY:'mfackrell/katie',GITHUB_RUN_ID:String(run),GITHUB_RUN_ATTEMPT:'1',GITHUB_SHA:release,GH_TOKEN:'synthetic-git',OPENAI_API_KEY:'synthetic-provider-key-no-real-access',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_NATIVE_CHECKPOINT_BRANCH:`agent/issue-829-${run}-1`,KATIE_NATIVE_EVIDENCE_FILE:evidence,KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS:'enabled',KATIE_RECOVERY_FIXTURE_ENDPOINT:'http://127.0.0.1:'+server.address().port},stdio:['ignore','pipe','pipe']});
@@ -150,6 +150,7 @@ export async function qualifyNativeRecovery(db,ids){
    write(root,'host-'+run+'.log',log);
    if(existsSync(evidence+'.diagnostics.json')){const d=JSON.parse(readFileSync(evidence+'.diagnostics.json'));report.runs??=[];report.runs.push({run,code,phases:d.phases.map(p=>({phase:p.phase,outcome:p.outcome,terminalEvent:p.terminalEvent})),verification:d.verification,scope:d.scope,failure:d.failure});}
    if(existsSync(join(runtime,'qualification-browser-acceptance.json')))report.browserAcceptance=JSON.parse(readFileSync(join(runtime,'qualification-browser-acceptance.json')));
+   if(code!==0&&existsSync(join(runtime,'qualification-verifier-tail.json')))report.verifierFailure=JSON.parse(readFileSync(join(runtime,'qualification-verifier-tail.json')));
    return {code,log,evidence,requestFile};
   };
   trace.push({stage:'authorized-task',task:ids.task,project:ids.project,baseline});
@@ -236,7 +237,7 @@ export async function qualifyNativeRecovery(db,ids){
   const absent=await launch({successor:successor.id,release});assert.notEqual(absent.code,0);assert.match(absent.log,/latest remote checkpoint/);assert.deepEqual(await ledger(),beforeMissing);assert.equal(phaseCounts.size,0);
   for(const ref of refs)git(root,'--git-dir',remote,'update-ref',ref.ref,ref.checkpointSha);
   report.failures.push({case:'missing WIP refs in actual host',result:'no implementation restart; no grant consumed'});
-  const second=await launch({successor:successor.id,release});assert.equal(second.code,0,second.log+'\n'+JSON.stringify(report.runs?.at(-1)));
+  const second=await launch({successor:successor.id,release});assert.equal(second.code,0,second.log+'\n'+JSON.stringify(report.runs?.at(-1))+'\n'+JSON.stringify(report.verifierFailure));
   assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completed=JSON.parse(readFileSync(second.evidence));assert.equal(completed.completed,true);assert.equal(completed.finalReview.verdict,'pass');assert.equal(completed.review.verdict,'changes_requested');
   const finalDiagnostics=JSON.parse(readFileSync(second.evidence+'.diagnostics.json'));assert.deepEqual(finalDiagnostics.phases.map(p=>p.phase),['repair','final-review']);assert.equal(finalDiagnostics.verification?.length,1);assert.equal(finalDiagnostics.verification[0].passed,true);assert.equal(finalDiagnostics.verification[0].head,completed.reviewedHeadSha);

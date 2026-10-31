@@ -26,4 +26,20 @@ fs.rmSync=function(path,options){
  }
  }finally{remove.call(this,path,options);}
 };
+// Keep the final verifier error in this synthetic fixture: the production bounded
+// diagnostic may begin before the end of a verbose build log. Observe only;
+// preserve the real subprocess, exit status, verifier and cleanup unchanged.
+import childProcess from 'node:child_process';
+const spawn=childProcess.spawn;
+childProcess.spawn=function(command,args,options){
+ const child=spawn.call(this,command,args,options);
+ if(args?.[0]===join(process.env.RUNNER_TEMP,'project-tools','project-ci.mjs')){
+  let tail='';
+  for(const stream of [child.stdout,child.stderr])stream?.on('data',chunk=>{tail=(tail+chunk).slice(-8000);});
+  child.once('close',(code,signal)=>{
+   fs.writeFileSync(join(process.env.RUNNER_TEMP,'qualification-verifier-tail.json'),JSON.stringify({code,signal,tail}));
+  });
+ }
+ return child;
+};
 syncBuiltinESMExports();
