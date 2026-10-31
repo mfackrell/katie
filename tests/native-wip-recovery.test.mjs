@@ -209,3 +209,14 @@ test('untrusted, missing, expired and ambiguous run artifacts cannot authenticat
  assert.throws(()=>readRecoveryArtifact(Buffer.alloc(8*1024*1024+1)),/bounds/);
  assert.throws(()=>readRecoveryArtifact(Buffer.from('not a ZIP')),/unavailable/);
 });
+
+test('the original owner-issue dispatch and manual successor dispatch share the same provenance checks',async t=>{
+ const f=fixture(t);
+ for(const event of ['issues','workflow_dispatch']){
+  f.workflow.event=event;
+  assert.deepEqual((await loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github})).record,f.record);
+  f.task.external.receipt.issue_number=830;
+  await assert.rejects(loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github}),/same-task run receipt/);
+  f.task.external.receipt.issue_number=829;
+ }
+});

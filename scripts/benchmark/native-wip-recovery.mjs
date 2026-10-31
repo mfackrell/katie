@@ -74,7 +74,7 @@ export async function loadRecoveryDiagnostics({task,repository,github}){
     !Number.isSafeInteger(receipt.issue_number)||receipt.issue_number!==Number(task.external.issueNumber))fail('failed same-task run receipt required');
  const run=await github(`/repos/${repository}/actions/runs/${runId}`);
  if(String(run.id)!==runId||run.status!=='completed'||!['failure','cancelled','timed_out'].includes(run.conclusion)||
-    run.event!=='workflow_dispatch'||run.path!=='.github/workflows/autonomous-development.yml'||run.head_branch!=='main'||
+    !['workflow_dispatch','issues'].includes(run.event)||run.path!=='.github/workflows/autonomous-development.yml'||run.head_branch!=='main'||
     run.repository?.full_name!==repository||run.head_repository?.full_name!==repository||!sha(run.head_sha)||!Number.isSafeInteger(run.run_attempt)||run.run_attempt<1)fail('untrusted recovery workflow run');
  const list=await github(`/repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`);
  if(!Array.isArray(list.artifacts)||list.total_count>100)fail('ambiguous recovery artifacts');
