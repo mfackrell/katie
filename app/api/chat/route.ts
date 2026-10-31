@@ -2369,7 +2369,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             }
             const ownerCaptureTrace = providerPayloadCapture
               ? buildProviderPayloadCaptureTrace({
-                  actorId, chatId, requestId,
+                  actorId, chatId, requestId, currentUserMessageId: taskProgressUserMessageId,
                   historySource: messagesFromShortTermMemory(shortTermMemory, chatId) !== null ? "stm" : "recent_messages",
                   shortTermMemory,
                   recentMessages: await getRecentMessages(chatId, 64),
