@@ -154,6 +154,35 @@ test("2026-10-31 production 'yep' keeps conversational history without reviving 
   assert.match(resumed.text,/KATIE_DURABLE_TASK_PROGRESS/);
 });
 
+test("real project source upload retains the bound question and durable project context", () => {
+  const p = prior();
+  p.projectContext = {
+    text:"Analyze our forecast and reconcile it to the approved budget.",
+    userMessageId:"role-brief",
+  };
+  p.lastUserIntent="answer";
+  p.answered=[{
+    id:"forecast-upload:1",assistantMessageId:"source-request",
+    userMessageId:"current-user",index:1,
+    text:"Can you upload the forecast spreadsheet?",
+    answer:"[file]",projectId:"role-brief",exactNumberedMatch:false,
+  }];
+  for(const relation of ["same_project" as const,undefined]){
+    const outgoing=selectTaskProgressPrompt(input({
+      message:"[file]",progress:p,projectRelation:relation,
+      responsePurpose:"deliverable",
+      history:[{id:"source-request",role:"assistant"}],
+    }));
+    assert.equal(outgoing.reason,relation==="same_project"?"confirmed_same_project":"source_linked_answer");
+    assert.match(outgoing.text,/Analyze our forecast/);
+    assert.match(outgoing.text,/KATIE_DURABLE_TASK_PROGRESS/);
+  }
+  assert.equal(selectTaskProgressPrompt(input({
+    message:"[file]",progress:p,projectRelation:undefined,
+    responsePurpose:"conversation",
+  })).text,"","an actual conversation classification remains authoritative");
+});
+
 test("a genuinely new non-project request does not drag in the prior work assignment", () => {
   const p = prior();
   p.projectContext = { text: "Write me a poem about the sea.", userMessageId: "current-user" };
