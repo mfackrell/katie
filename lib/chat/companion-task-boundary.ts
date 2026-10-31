@@ -34,7 +34,7 @@ export function scopeCompanionTaskProgress(previous:TaskProgressState):TaskProgr
     ? projects.find(entry=>entry.projectContext.userMessageId===previous.projectContext?.userMessageId)
     : undefined;
   if(active)return {...previous,projects};
-  return {...emptyTaskProgress(),
+  return {...emptyTaskProgress(),projectContext:null,
     ...(projects.length?{projects}:{}),
     lastUserMessageId:previous.lastUserMessageId,
     lastAssistantMessageId:previous.lastAssistantMessageId,
@@ -69,7 +69,7 @@ export function recordCompanionConversationTurn(
   previous:TaskProgressState,input:{messageId:string;text:string}
 ):TaskProgressState {
   const cleared=scopeCompanionTaskProgress(previous);
-  return {...emptyTaskProgress(),
+  return {...emptyTaskProgress(),projectContext:null,
     ...(cleared.projects?.length?{projects:cleared.projects}:{}),
     lastUserMessageId:input.messageId,
     lastAssistantMessageId:cleared.lastAssistantMessageId,
