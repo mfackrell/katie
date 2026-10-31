@@ -1417,18 +1417,20 @@ async function executeChat(request: NextRequest) {
     const activeProjectSnapshot = pdfProgress.projectContext
       ? pdfProgress.projects?.find(project => project.projectContext.userMessageId === pdfProgress.projectContext!.userMessageId)
       : undefined;
-    // External saved projects retain a source binding across arbitrarily many
-    // follow-up turns. A four-message recency limit cannot represent that.
-    const activeExternalProject = Boolean(activeProjectSnapshot?.sourceChatId && activeProjectSnapshot.sourceChatId !== chatId);
+    // Do not time-limit valid source restoration to four user turns: projects
+    // from both this chat and an earlier chat retain their active source.
+    // Require task-related signals; a fresh unrelated request ("Write a poem")
+    // must not reopen a stale saved project.
     const recentProjectResumption = currentHistory.filter(turn => turn.role === "user").slice(-4).some(turn =>
       /\b(?:resume|return to|back to|go back to|continue)\b.{0,100}\b(?:project|app|application|game|website)\b/i.test(turn.content));
-    const projectRelatedFollowup =
-      /^(?:please\s+)?(?:give|list|write|draft|revise|review|explain|compare|show|summarize|outline|assess|evaluate|expand|continue|finish|add|update|change|fix|answer)\b/i.test(message.trim()) ||
-      /\b(?:project|application|proposal|posting|deliverable|requirements|draft|milestone|scope|work product)\b/i.test(message);
+    const projectTopicCue = /\b(?:project|application|proposal|posting|deliverable|requirements|draft|milestone|scope|work product|relevant examples|contract|the role|the assignment)\b/i.test(message);
+    const projectActionVerb = /^(?:please\s+)?(?:give|list|write|draft|revise|review|explain|compare|show|summarize|outline|assess|evaluate|expand|continue|finish|add|update|change|fix|answer)\b/i.test(message.trim());
+    const projectRelatedFollowup = projectTopicCue ||
+      (projectActionVerb && classifyUserTurn(message) !== "new_task");
     const restoreSavedProjectSource = explicitSavedProjectReference ||
       contextClassification?.projectTransition?.action === "resume" ||
       contextClassification?.projectTransition?.action === "amend" ||
-      (projectRelatedFollowup && (activeExternalProject || recentProjectResumption));
+      Boolean(pdfProgress.projectContext && (projectRelatedFollowup || (recentProjectResumption && projectActionVerb)));
     let savedProjectSourceWarning: {
       sourceChatId: string; sourceMessageId: string; retainedContext: string; retainedObjective: string;
     } | null = null;
