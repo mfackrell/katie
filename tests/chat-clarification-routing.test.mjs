@@ -585,7 +585,7 @@ test('actual route restores original drafts on resume and subsequent same-projec
     node.expression.getText(routeAst).includes('!currentHistory.some') &&
     node.expression.getText(routeAst).includes('pdfProgress.projectContext')),
     'project history restoration');
-  const restorationBlock = blockBetween(statement(declaration('recentProjectResumption')), resumeNode);
+  const restorationBlock = blockBetween(statement(declaration('activeProjectSnapshot')), resumeNode);
   const first = {id:'project-a',role:'user',content:'Original application A requirements'};
   const draft = {id:'draft-a',role:'assistant',content:'Unfinished draft A'};
   const other = {id:'project-b',role:'user',content:'Different application B requirements'};
@@ -629,7 +629,7 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
   const recovery = unique(findNodes(node => ts.isIfStatement(node) &&
     node.expression.getText(routeAst).includes('!currentHistory.some') &&
     node.expression.getText(routeAst).includes('pdfProgress.projectContext')), 'project history restoration');
-  const recoveryBlock = blockBetween(statement(declaration('recentProjectResumption')), recovery);
+  const recoveryBlock = blockBetween(statement(declaration('activeProjectSnapshot')), recovery);
   const notice = unique(findNodes(node => ts.isIfStatement(node) &&
     node.expression.getText(routeAst) === 'savedProjectSourceWarning' &&
     node.getText(routeAst).includes('SAVED PROJECT SOURCE RECOVERY NOTICE')), 'source loss disclosure');
