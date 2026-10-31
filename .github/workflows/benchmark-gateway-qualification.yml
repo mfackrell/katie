@@ -231,6 +231,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat postgresql-16
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Fetch immutable assignment baseline
+        run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
       - name: Actual host interruption and fresh-runner continuation with real isolated accounting
         run: node --test tests/benchmark-renewal-postgres.test.mjs
       - name: Retain bounded nonbillable recovery evidence

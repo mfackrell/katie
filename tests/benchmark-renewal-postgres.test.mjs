@@ -80,13 +80,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   await db.query('set role service_role');
   const created=(await db.query('select benchmark_create_full_game_project($1,$2,$3,$4,$5,$6,$7,$8,$9) p',
    [project,'continuation-'+project,actor,chat,'Build Take Eleven from approved original issue 650',repo,trial,protocol.baselineSha,'gpt-5.3-codex'])).rows[0].p;
-  if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'){
-   // Initialize the unrelated synthetic assignment BEFORE any continuation,
-   // approval, model call or immutable history exists for this new fixture.
-   protocol.baselineSha=(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline();
-   await db.query('update benchmark_three_arm_trials set baseline_sha=$2 where id=$1',[trial,protocol.baselineSha]);
-   await db.query('update benchmark_full_project_bindings set baseline_sha=$2 where project_id=$1',[project,protocol.baselineSha]);
-  }
+  if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline(protocol.baselineSha);
   const failedMission=randomUUID();
   await db.query('select create_mission($1,$2,$3,120,null)',[failedMission,'Synthetic failed specification',created.team]);
   // Synthetic historical failure setup only; actual continuation uses owner RPC and DO child creation.

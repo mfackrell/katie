@@ -23,20 +23,13 @@ function archive(value){
  return Buffer.concat([local,name,body,central,name,end]);
 }
 let baselineFixture;
-export function createNativeRecoveryBaseline(){
- const root=mkdtempSync(join(tmpdir(),'native-recovery-e2e-')),remote=join(root,'remote.git');
- const write=(base,path,content)=>{mkdirSync(dirname(join(base,path)),{recursive:true});writeFileSync(join(base,path),content);};
-  // Build a tiny trusted baseline, unrelated to the benchmark application.
-  const workspace=join(root,'runner-1');mkdirSync(workspace);git(root,'init','--bare','-q',remote);git(workspace,'init','-q');git(workspace,'config','user.name','Recovery qualification');git(workspace,'config','user.email','fixture@example.invalid');
-  const pkg=JSON.parse(readFileSync('package.json','utf8'));pkg.scripts={typecheck:'node --check verify.mjs','ci:gate':'node verify.mjs && next build'};
-  write(workspace,'package.json',JSON.stringify(pkg));write(workspace,'package-lock.json',readFileSync('package-lock.json'));
-  write(workspace,'.gitignore','node_modules/\n.next/\nnext-env.d.ts\ntsconfig.json\n');
-  write(workspace,'app/layout.tsx','export default function Layout({children}: {children: React.ReactNode}){return <html><body>{children}</body></html>}');
-  write(workspace,'app/page.tsx','export default function Page(){return <div>Recovery qualification</div>}');
-  write(workspace,'verify.mjs','import assert from "node:assert/strict"; import {value} from "./app/pilot/state.mjs";import {verification} from "./app/pilot/proof.mjs"; assert.equal(value,"Recovered");assert.equal(verification,"verified");');
-  // Next's generated TypeScript defaults must not mutate tracked files.
-  write(workspace,'next.config.mjs','export default {typescript:{ignoreBuildErrors:false},experimental:{cpus:1}};');
-  git(workspace,'add','.');git(workspace,'commit','-qm','Trusted synthetic baseline');const baseline=git(workspace,'rev-parse','HEAD');git(workspace,'remote','add','origin',remote);git(workspace,'push','origin','HEAD:refs/heads/baseline');
+export function createNativeRecoveryBaseline(baseline){
+ assert.match(baseline,/^[a-f0-9]{40}$/);
+ const root=mkdtempSync(join(tmpdir(),'native-recovery-e2e-')),remote=join(root,'remote.git'),workspace=join(root,'runner-1');
+ git(root,'init','--bare','-q',remote);
+ git(root,'clone','--no-hardlinks','--no-checkout',resolve('.'),workspace);
+ git(workspace,'fetch',resolve('.'),baseline);git(workspace,'checkout','--detach',baseline);
+ git(workspace,'remote','set-url','origin',remote);git(workspace,'push','origin','HEAD:refs/heads/baseline');
  baselineFixture={root,remote,workspace,baseline};return baseline;
 }
 export async function qualifyNativeRecovery(db,ids){
@@ -46,7 +39,7 @@ export async function qualifyNativeRecovery(db,ids){
  let server,host,workspace=baselineFixture.workspace,run=900001,recovering=false,phaseCounts=new Map(),providerCalls=0;
  const write=(base,path,content)=>{mkdirSync(dirname(join(base,path)),{recursive:true});writeFileSync(join(base,path),content);};
  const query=async(sql,args=[])=>(await db.query(sql,args)).rows;
- const one=async(table,column,value)=>(await query(`select * from ${table} where ${column}=$1`,[value]))[0];
+ const one=async(table,column,value)=>(await query(`select to_jsonb(r) value from ${table} r where ${column}=$1`,[value]))[0]?.value;
  const ledger=async()=>(await query(`select jsonb_build_object(
  'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),
  'calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),
@@ -55,21 +48,21 @@ export async function qualifyNativeRecovery(db,ids){
  'grants',(select jsonb_agg(to_jsonb(g) order by id) from benchmark_execution_grants g where account_id=$1),
  'approvals',(select jsonb_agg(to_jsonb(a) order by id) from benchmark_native_spending_approvals a where account_id=$1)) value`,[ids.account,ids.task,ids.mission]))[0].value;
  const initialFiles={
-  'app/pilot/state.mjs':'export const value = "Broken";\n',
+  'app/pilot/state.ts':'export const value = "Broken";\n',
   'app/pilot/page.tsx':'export default function Page(){return <div id="state">Broken</div>}\n',
   'app/pilot/obsolete.mjs':'export const obsolete = true;\n'
  };
  const repairFiles={
-  'app/pilot/state.mjs':'export const value = "Recovered";\n',
-  'app/pilot/page.tsx':'import {value} from "./state.mjs"; export default function Page(){return <div id="state">{value}</div>}\n',
-  'app/pilot/proof.mjs':'export const verification = "unverified";\n'
+  'app/pilot/state.ts':'export const value = "Recovered";\n',
+  'app/pilot/page.tsx':'import {value} from "./state"; export default function Page(){return <div id="state">{value}</div>}\n',
+  'tests/native-recovery-synthetic.test.mjs':'import assert from "node:assert/strict"; import {readFileSync} from "node:fs"; assert.match(readFileSync("app/pilot/state.ts","utf8"),/Pending/);\n'
  };
  const commandFor=(phase)=>{
   if(phase==='implementation')return 'node -e '+quote(`const f=require('node:fs');f.mkdirSync('app/pilot',{recursive:true});for(const [p,c] of Object.entries(${JSON.stringify(initialFiles)}))f.writeFileSync(p,c);console.log('IMPLEMENTATION_WRITTEN')`);
   if(phase==='repair')return 'node -e '+quote(recovering?
-   `const f=require('node:fs'),a=require('node:assert/strict');for(const [p,c] of Object.entries(${JSON.stringify(repairFiles)}))a.equal(f.readFileSync(p,'utf8'),c);a.equal(f.existsSync('app/pilot/obsolete.mjs'),false);a.match(f.readFileSync('/trusted/review-findings.txt','utf8'),/Fix state and render/);f.writeFileSync('app/pilot/proof.mjs',${JSON.stringify('export const verification = "verified";\n')});console.log('RESTORED_REPAIR_CONTINUED')`:
+   `const f=require('node:fs'),a=require('node:assert/strict');for(const [p,c] of Object.entries(${JSON.stringify(repairFiles)}))a.equal(f.readFileSync(p,'utf8'),c);a.equal(f.existsSync('app/pilot/obsolete.mjs'),false);a.match(f.readFileSync('/trusted/review-findings.txt','utf8'),/Fix state and render/);f.writeFileSync('tests/native-recovery-synthetic.test.mjs',${JSON.stringify('import assert from "node:assert/strict"; import {readFileSync} from "node:fs"; assert.match(readFileSync("app/pilot/state.ts","utf8"),/Recovered/);\n')});console.log('RESTORED_REPAIR_CONTINUED')`:
    `const f=require('node:fs');for(const [p,c] of Object.entries(${JSON.stringify(repairFiles)}))f.writeFileSync(p,c);f.unlinkSync('app/pilot/obsolete.mjs');console.log('UNFINISHED_REPAIR_WRITTEN')`);
-  return 'node -e '+quote(`const f=require('node:fs'),a=require('node:assert/strict');a.match(f.readFileSync('app/pilot/state.mjs','utf8'),/${phase==='review'?'Broken':'Recovered'}/);console.log('INDEPENDENT_SOURCE_INSPECTED')`);
+  return 'node -e '+quote(`const f=require('node:fs'),a=require('node:assert/strict');a.match(f.readFileSync('app/pilot/state.ts','utf8'),/${phase==='review'?'Broken':'Recovered'}/);console.log('INDEPENDENT_SOURCE_INSPECTED')`);
  };
  const classify=body=>{
   const text=JSON.stringify(body.input);
@@ -91,7 +84,7 @@ export async function qualifyNativeRecovery(db,ids){
  };
  try{
   const contract={path:'/pilot',scenarios:[{name:'recovered state',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]};
-  const context={version:1,projectId:ids.project,baselineSha:baseline,baseSha:baseline,allowedPaths:['app/pilot/'],contractHash:contractHash(contract),contract};
+  const context={version:1,projectId:ids.project,baselineSha:baseline,baseSha:baseline,allowedPaths:['app/pilot/','tests/native-recovery-synthetic.test.mjs'],contractHash:contractHash(contract),contract};
   const project=await one('work_projects','id',ids.project),scope=project.approved_hash;
   // Only disposable fixture setup changes its synthetic binding before execution.
   await db.query('reset role');
@@ -101,13 +94,20 @@ export async function qualifyNativeRecovery(db,ids){
   await db.query('update project_runs set binding=$2 where mission_id=$1',[ids.mission,{...context,scopeHash:scope}]);
   await db.query('update benchmark_development_dispatches set baseline_sha=$2,contract_hash=$3 where task_id=$1',[ids.task,baseline,context.contractHash]);
   await db.query("update work_projects set deadline=now()+interval '2 hours' where id=$1",[ids.project]);
-  await db.query("update agent_tasks set external=(external-'receipt')||jsonb_build_object('issueNumber',829,'developmentRenewalId',$2::text) where id=$1",[ids.task,ids.renewal.id]);
+  await db.query("update agent_tasks set external=external||jsonb_build_object('issueNumber',829,'developmentRenewalId',$2::text) where id=$1",[ids.task,ids.renewal.id]);
   await db.query('set role service_role');
   const trial=await one('benchmark_three_arm_trials','id',ids.trial);
   const signing='synthetic-only-handoff-key-with-no-production-value';
   const runtime=join(root,'runtime');mkdirSync(runtime);cpSync(join(repo,'scripts'),join(runtime,'project-tools'),{recursive:true});cpSync(join(repo,'scripts/benchmark'),join(runtime,'native-host'),{recursive:true});
   const bin=join(root,'bin');mkdirSync(bin);
   write(bin,'gh',`#!/usr/bin/env node\nconst fs=require('node:fs'),p=require('node:path');if(process.argv[2]==='auth')process.exit(0);const path=process.argv[3];const root=${JSON.stringify(root)};if(path.endsWith('/zip'))process.stdout.write(fs.readFileSync(p.join(root,'artifact.zip')));else if(path.includes('/artifacts?'))process.stdout.write(fs.readFileSync(p.join(root,'artifacts.json')));else process.stdout.write(fs.readFileSync(p.join(root,'workflow.json')));`);execFileSync('chmod',['700',join(bin,'gh')]);
+  // Preserve the original failed receipt. Its synthetic historical model calls
+  // produced no source, as attested by this separate immutable artifact fixture.
+  const originalTask=await one('agent_tasks','id',ids.task),priorRun=originalTask.external.receipt.run_id;
+  write(root,'workflow.json',JSON.stringify({id:priorRun,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:ids.release,run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}}));
+  const priorDiagnostics={taskId:ids.task,runId:String(priorRun),completed:false,phases:[],snapshots:[{label:'final',head:baseline,status:[]}]};
+  write(root,'artifact.zip',archive(priorDiagnostics));
+  write(root,'artifacts.json',JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:priorRun,head_sha:ids.release}}]}));
   const allowedTables=new Set(['benchmark_native_spending_approvals','benchmark_three_arm_trials','work_projects','benchmark_budget_accounts','benchmark_production_qualifications','agent_tasks','benchmark_development_dispatches','model_registry','benchmark_development_renewals','benchmark_development_paid_successors','benchmark_amendment_successor_consents','mission_assignments','project_runs','benchmark_execution_grants','benchmark_budget_calls','mission_calls']);
   const allowedRpcs=new Set(['benchmark_continuation_live','benchmark_active_full_continuation','benchmark_full_task_provenance','benchmark_issue_development_renewal_grant','benchmark_issue_development_paid_successor_grant','benchmark_gateway_execution_live','benchmark_full_native_reserve','benchmark_reconcile_provider_usage']);
   server=createServer(async(req,res)=>{
@@ -128,15 +128,15 @@ export async function qualifyNativeRecovery(db,ids){
     }else{
      assert.equal(req.method,'GET');assert.ok(allowedTables.has(name));const args=[],where=[];
      for(const [k,v] of url.searchParams){if(k==='select'||k==='limit')continue;assert.match(k,/^[a-z_]+$/);assert.ok(v.startsWith('eq.'));args.push(v.slice(3));where.push(k+'=$'+args.length);}
-     const rows=await query(`select * from ${name}${where.length?' where '+where.join(' and '):''}`,args);data=req.headers.accept?.includes('object')?(rows[0]??null):rows;
+     const rows=(await query(`select to_jsonb(r) value from ${name} r${where.length?' where '+where.join(' and '):''}`,args)).map(r=>r.value);data=req.headers.accept?.includes('object')?(rows[0]??null):rows;
     }
     res.setHeader('content-type','application/json');res.end(JSON.stringify(data));
    }catch(error){res.statusCode=400;res.setHeader('content-type','application/json');res.end(JSON.stringify({message:String(error.message),code:error.code??'FIXTURE'}));}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  const launch=async({successor,release=ids.release}={})=>{
+  const launch=async({successor,release=ids.release,approvalId=ids.renewal.approval_id}={})=>{
    rmSync(join(workspace,'node_modules'),{recursive:true,force:true});mkdirSync(join(workspace,'node_modules'),{recursive:true});execFileSync('cp',['-al',join(repo,'node_modules','.'),join(workspace,'node_modules')]);
-   const proof={taskId:ids.task,trialId:ids.trial,approvalId:ids.renewal.approval_id,projectId:ids.project,contractHash:context.contractHash,benchmarkContractHash:trial.contract_sha256,baselineSha:baseline,expiresAt:Date.now()+25*60000,continuationId:ids.continuation.id,developmentRenewalId:ids.renewal.id,...(successor?{paidSuccessorId:successor}:{})};
+   const proof={taskId:ids.task,trialId:ids.trial,approvalId,projectId:ids.project,contractHash:context.contractHash,benchmarkContractHash:trial.contract_sha256,baselineSha:baseline,expiresAt:Date.now()+25*60000,continuationId:ids.continuation.id,developmentRenewalId:ids.renewal.id,...(successor?{paidSuccessorId:successor}:{})};
    proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);
    const request=projectMarker(context)+'\nSynthetic recovery qualification only.\n'+encodeNativeHandoff(proof,signing);
    const requestFile=join(runtime,'request.md'),manifestFile=join(runtime,'manifest.json');writeFileSync(requestFile,request);writeFileSync(manifestFile,JSON.stringify(readNativeHandoff(request,signing)));
@@ -155,6 +155,7 @@ export async function qualifyNativeRecovery(db,ids){
    const denied=await launch();assert.notEqual(denied.code,0);assert.match(denied.log,/owner spending approval/);assert.equal(providerCalls,0);await db.query('rollback');assert.deepEqual(await ledger(),before);
    report.failures.push({case:mutation.includes('revoked')?'missing authority':'expired authority',result:'actual host denied before model dispatch; ledger unchanged'});
   }
+  const missing=await launch({approvalId:randomUUID()});assert.notEqual(missing.code,0);assert.match(missing.log,/required durable benchmark_native_spending_approvals record missing/);assert.equal(providerCalls,0);report.failures.push({case:'missing approval record',result:'actual host rejected before grant or dispatch'});
   const first=await launch();assert.notEqual(first.code,0,first.log);assert.match(first.log,/native repair failed/,first.log);
   assert.deepEqual([...phaseCounts], [['implementation',2],['review',2],['repair',1]]);
   const diagnostics=JSON.parse(readFileSync(first.evidence+'.diagnostics.json')),record=diagnostics.wipCheckpoint;assert.ok(record);assert.equal(record.phase,'repair');assert.equal(record.verification,'unverified');
@@ -193,6 +194,16 @@ export async function qualifyNativeRecovery(db,ids){
   const prepare=(recordOverride=record,refs=recoveryRefs(workspace,ids.task))=>prepareRecovery({workspace,tempRoot:runtime,toolsRoot:join(runtime,'project-tools'),requestFile:first.requestFile,context,record:recordOverride,refs});
   assert.throws(()=>prepare({...record,sourceTreeSha:'a'.repeat(40)}),/forged|altered|tree/);report.failures.push({case:'corrupted checkpoint',result:'rejected'});
   assert.throws(()=>prepare(record,[...recoveryRefs(workspace,ids.task),{ref:`refs/tags/katie-wip/${ids.task}/999999-1/1`,checkpointSha:record.checkpointSha}]),/latest remote checkpoint/);report.failures.push({case:'concurrent unanchored checkpoint',result:'ambiguity rejected'});
+  // A structurally consistent but unsafe Git tree still fails the unchanged
+  // scope gates even when all its task metadata is copied from trusted evidence.
+  prepare();git(workspace,'read-tree',record.sourceTreeSha);write(workspace,'OUTSIDE_SCOPE.txt','forbidden');git(workspace,'add','OUTSIDE_SCOPE.txt');
+  const unsafeTree=git(workspace,'write-tree'),{checkpointSha:discarded,ref:oldRef,...metadata}=record;
+  const unsafeSha=execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit-tree',unsafeTree,'-p',record.completedCheckpointSha],{cwd:workspace,input:JSON.stringify({...metadata,sourceTreeSha:unsafeTree}),encoding:'utf8'}).trim();
+  const unsafeRef=`refs/tags/katie-wip/${ids.task}/${record.runId}-1/999999`;
+  git(workspace,'push','origin',unsafeSha+':'+unsafeRef);rmSync(workspace,{recursive:true,force:true});workspace=fresh();
+  assert.throws(()=>prepare({...record,ref:unsafeRef,checkpointSha:unsafeSha,sourceTreeSha:unsafeTree}),/scope gates/);
+  git(root,'--git-dir',remote,'update-ref','-d',unsafeRef);rmSync(workspace,{recursive:true,force:true});workspace=fresh();
+  report.failures.push({case:'out-of-scope checkpoint tree',result:'unchanged cumulative scope gates rejected'});
   const interrupted=prepare();write(workspace,'.git/HEAD.lock','synthetic interruption');
   assert.throws(()=>interrupted.restore(),/lock|update-ref/);assert.equal(git(workspace,'rev-parse','HEAD'),baseline);assert.deepEqual(await ledger(),beforeRestore);
   rmSync(workspace,{recursive:true,force:true});workspace=fresh();
@@ -201,7 +212,7 @@ export async function qualifyNativeRecovery(db,ids){
   for(const [p,c]of Object.entries(repairFiles))assert.equal(hash(readFileSync(join(workspace,p))),hash(c));assert.equal(existsSync(join(workspace,'app/pilot/obsolete.mjs')),false);
   assert.deepEqual(await ledger(),beforeRestore);trace.push({stage:'fresh-runner-restored',head:git(workspace,'rev-parse','HEAD'),hashes:report.files});
   // Destroy a partially recovered runner and repeat solely from durable evidence.
-  write(workspace,'app/pilot/state.mjs','partial local recovery lost');rmSync(workspace,{recursive:true,force:true});workspace=fresh();prepare().restore();assert.equal(hash(readFileSync(join(workspace,'app/pilot/state.mjs'))),report.files['app/pilot/state.mjs']);assert.deepEqual(await ledger(),beforeRestore);
+  write(workspace,'app/pilot/state.ts','partial local recovery lost');rmSync(workspace,{recursive:true,force:true});workspace=fresh();prepare().restore();assert.equal(hash(readFileSync(join(workspace,'app/pilot/state.ts'))),report.files['app/pilot/state.ts']);assert.deepEqual(await ledger(),beforeRestore);
   report.failures.push({case:'interrupted recovery',result:'fresh runner restores original durable WIP; ledger unchanged'});
   // Retention is authoritative artifact expiry, not a local timestamp heuristic.
   await assert.rejects(loadRecoveryDiagnostics({task,repository:'mfackrell/katie',github:async(path,binary)=>path.includes('/artifacts?')?{total_count:0,artifacts:[]}:github(path,binary)}),/missing/);report.failures.push({case:'missing trusted evidence',result:'rejected'});
