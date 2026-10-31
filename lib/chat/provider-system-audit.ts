@@ -4,7 +4,8 @@ import type { ProviderSystemAudit } from "@/lib/providers/types";
 const MAX_SYSTEM_CHARS = 240_000;
 const MAX_AUTHORIZED_DIAGNOSTIC_CHARS = 750_000;
 
-export type StoredProviderSystemAudit = ProviderSystemAudit & {
+export type StoredProviderSystemAudit = Omit<ProviderSystemAudit, "requestDiagnostic"> & {
+  requestDiagnostic?: ProviderSystemAudit["requestDiagnostic"] | { status: "capture-too-large"; charCount: number };
   capturedAt: string;
   truncated: boolean;
 };
@@ -38,8 +39,9 @@ export function boundProviderSystemAudit(audit: ProviderSystemAudit): StoredProv
 }
 
 /**
- * Snapshots only literal provider system messages, never Authorization
- * headers, user image bytes, file objects, provider tokens or raw requests.
+ * Ordinary snapshots contain system messages only. A separate, explicit, owner-
+ * authorized text-only diagnostic may also capture the prepared first-pass body.
+ * Never capture authorization headers, image bytes, provider tokens, or files.
  * It is bound to a request ID, actor AND chat, with no cross-chat lookup.
  */
 export async function saveProviderSystemAudit(
@@ -97,7 +99,10 @@ export async function latestProviderSystemAudit(actorId: string, chatId: string)
     if (!Array.isArray(a.systemMessages) || !a.systemMessages.every(section => typeof section === "string") ||
         typeof a.provider !== "string" || typeof a.model !== "string" ||
         typeof a.endpoint !== "string") continue;
-    return { requestId: row.request_id, snapshot: a as StoredProviderSystemAudit };
+    // Generic prompt inspection must not expose the opt-in owner-only wire payload.
+    const { requestDiagnostic: _privateDiagnostic, ...safeAudit } = a;
+    void _privateDiagnostic;
+    return { requestId: row.request_id, snapshot: safeAudit as StoredProviderSystemAudit };
   }
   return null;
 }
