@@ -59,7 +59,8 @@ import {
   failChatRequest,
   fingerprintChatRequest,
 } from "@/lib/chat/request-idempotency";
-import { refreshShortTermMemory } from "@/lib/memory/short-term";
+import { refreshShortTermMemory, messagesFromShortTermMemory } from "@/lib/memory/short-term";
+import { buildProviderPayloadCaptureTrace } from "@/lib/chat/provider-payload-trace";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
 import { handleExplicitMemoryMutation } from "@/lib/memory/explicit-memory";
 import { saveProviderSystemAudit } from "@/lib/chat/provider-system-audit";
@@ -182,6 +183,7 @@ const requestSchema = z.object({
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
   routingTraceEnabled: z.boolean().optional(),
+  providerPayloadCapture: z.literal(true).optional(),
   activeRepoId: z.string().min(1).optional(),
   repoInjectionEnabled: z.boolean().optional(),
 });
@@ -720,11 +722,22 @@ async function executeChat(request: NextRequest) {
       overrideProvider,
       overrideModel,
       routingTraceEnabled,
+      providerPayloadCapture,
       activeRepoId,
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    // Exact outbound payload capture is explicitly requested, text-only and owner-grant scoped.
+    // This never records ordinary conversations and never grants diagnostic access to guests.
+    if (providerPayloadCapture) {
+      if (isGuestSession || currentAgentTask() || overrideProvider !== "anthropic" ||
+          (requestImages?.length ?? 0) > 0 || (fileReferences?.length ?? 0) > 0) {
+        return NextResponse.json({ error: "Owner-only Anthropic text diagnostic required." }, { status: 403 });
+      }
+      try { await authorizeSelfToolCaller(request, actorId, chatId); }
+      catch { return NextResponse.json({ error: "Owner diagnostic authorization denied." }, { status: 403 }); }
+    }
     const benchmarkIntake = !isGuestSession && !currentAgentTask() && startProjectIntent(message) && gameProjectIntent(message) &&
       /take eleven|issue\s*#?715|#715/i.test(message) &&
       ['https://iytvavgbaainnsrecmcx.supabase.co','https://barclcqataqyvifoeyop.supabase.co']
@@ -1410,7 +1423,7 @@ async function executeChat(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, cacheablePersona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
+    const { name, persona, cacheablePersona, summary, history: currentHistory, shortTermMemory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
     let history = currentHistory;
     // Saved projects are durable reference material, not standing instructions
     // for ordinary chat. Restore their original source only for project turns.
@@ -2354,8 +2367,18 @@ ${savedProjectSourceWarning.retainedObjective}`;
             if (attachmentDecision.clarification) {
               for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf")) pdf.pdfContextBlocked=true;
             }
+            const ownerCaptureTrace = providerPayloadCapture
+              ? buildProviderPayloadCaptureTrace({
+                  actorId, chatId, requestId,
+                  historySource: messagesFromShortTermMemory(shortTermMemory, chatId) !== null ? "stm" : "recent_messages",
+                  shortTermMemory,
+                  recentMessages: await getRecentMessages(chatId, 64),
+                  history,
+                  summary,
+                })
+              : undefined;
             const createParams = (selectedModelId: string, forReview = false) =>
-              ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
+              ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), providerPayloadCaptureTrace: ownerCaptureTrace, ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
