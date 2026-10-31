@@ -1,3 +1,4 @@
+import {createNativeWipCheckpointer} from './native-wip-checkpoint.mjs';
 import {sanitizeEvidence,worktreeEvidence,NATIVE_EXECUTION_EVIDENCE_VERSION} from './native-execution-evidence.mjs';
 import {NATIVE_ADMISSION_DIAGNOSTICS_VERSION} from './native-request-admission.mjs';
 import {preflightNativeChild} from './native-child-preflight.mjs';
@@ -187,6 +188,21 @@ const saveDiagnostics=()=>{if(evidencePath&&evidencePath.startsWith(process.env.
 snapshot('initial');saveDiagnostics();
 const git=(...args)=>execFileSync('git',[...protectedGitConfig,...args],{cwd:boundary.root,encoding:'utf8',timeout:20000}).trim();
 let trustedCheckpointSha=git('rev-parse','HEAD');
+const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
+let activeWipPhase=null,lastCompleted={checkpointSha:trustedCheckpointSha};
+const wip=createNativeWipCheckpointer({workspace:boundary.root,tempRoot:root,
+ toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,
+ identity:{taskId:proof.taskId,projectId:proof.projectId,trialId:proof.trialId,
+  approvalId:proof.approvalId,grantId,executionEpoch,approvedScopeHash:project.approved_hash,
+  runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT||'1'},
+ secrets:diagnosticSecrets,expectedHead:()=>trustedCheckpointSha});
+const preserveWip=()=>{
+ if(!activeWipPhase)return;
+ try{
+  const checkpoint=wip.save({...activeWipPhase,lastCompleted});
+  if(checkpoint){diagnostics.wipCheckpoint=checkpoint;saveDiagnostics();}
+ }catch{diagnostics.wipFailure='NATIVE_WIP_CHECKPOINT_DENIED';saveDiagnostics();throw Error('NATIVE_WIP_CHECKPOINT_DENIED');}
+};
 const commitCandidate=(label)=>{
   if(git('rev-parse','HEAD')!==trustedCheckpointSha)
    denied('native agent changed protected Git commit ancestry');
@@ -204,6 +220,8 @@ const commitCandidate=(label)=>{
   // another metered phase begins. GitHub credentials stay in the trusted host.
   git('push','origin',`HEAD:refs/heads/${checkpointBranch}`);
   trustedCheckpointSha=sha;
+  activeWipPhase=null;
+  lastCompleted={...lastCompleted,checkpointSha:sha};
   return sha;
 };
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
@@ -213,6 +231,7 @@ if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen
 const upstream=createResponsesProvider({apiKey:providerKey});
 let gatewayFailure=null;
 const server=createNativeHttpBridge({
+ beforeRequest:preserveWip,
  onFailure:classification=>{gatewayFailure??=classification;},
  requireInputCount:true,
  db,grantToken,trialId:proof.trialId,executionEpoch,
@@ -224,6 +243,7 @@ const server=createNativeHttpBridge({
    p_provider_request:providerRequestId,p_usage:usage
   });
   if(error||!['settled','overrun'].includes(data))throw Error('NATIVE_LINKED_RECEIPT_NOT_RECONCILED');
+  lastCompleted={...lastCompleted,modelCall:{requestKey,operationId,actualTokens,settlement:data}};
  }
 });
 let child=null,stopTimer=null;
@@ -234,6 +254,7 @@ try{
   // A fresh Codex process/thread is required for independent reviews.
   if(findings)writeFileSync(join(root,'review-findings.txt'),findings,{mode:0o600});
   const reviewing=phase==='review'||phase==='final-review';
+  activeWipPhase=reviewing?null:{phase,reviewFindings:findings};
   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
   const args=sharedNativeContainerArgs({
    workspace:boundary.root,socketDir:sockdir,arm:'full',phase,command,
@@ -263,7 +284,9 @@ try{
    child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));
   });
   child=null;phaseEvidence.outcome=outcome;snapshot('after-'+phase);saveDiagnostics();
+  preserveWip();
   if(outcome.code!==0)throw Object.assign(new Error('NATIVE_HOST_DENIED: native '+phase+' failed; spending holds retained'),{nativeChildOutcome:outcome});
+  lastCompleted={...lastCompleted,phase};
   if(!reviewing)return null;
   const marker=output.split('\n').filter(x=>x.startsWith('NATIVE_REVIEW_RESULT=')).at(-1);
   if(!marker)denied('missing independent '+phase+' decision');
@@ -294,7 +317,8 @@ try{
     });
     if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');
     // Only commit-stable source is eligible for retry; partial interrupted
-    // edits are discarded. All new provider attempts require fresh admission.
+    // edits are retained in separate unverified WIP tags before reset.
+    // All new provider attempts still require fresh admission.
     snapshot('before-interruption-reset');saveDiagnostics();
     git('reset','--hard',trustedCheckpointSha);
     git('clean','-fd');snapshot('after-interruption-reset');saveDiagnostics();
@@ -356,14 +380,10 @@ try{
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');
  console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');
 }catch(error){diagnostics.failure=sanitizeEvidence(error.message,diagnosticSecrets);throw error;}finally{
+ try{preserveWip();}catch{/* Failure is retained; never masks the original denial. */}
  snapshot('final');saveDiagnostics();
  if(stopTimer)clearInterval(stopTimer);
  if(child&&!child.killed)child.kill('SIGKILL');
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
 }
-
-
-
-
-
