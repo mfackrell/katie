@@ -478,11 +478,16 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   const definition=name=>unique(findNodes(node=>
     ts.isFunctionDeclaration(node)&&node.name?.text===name ||
     ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>ts.isIdentifier(declaration.name)&&declaration.name.text===name),ast),`image helper ${name}`).getText(ast).replace(/^export\s+/,'');
-  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','imageObservationAsText'].map(definition).join('\n');
+  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
   const events=[];
   const image={fileId:'profile-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
   const context=identityFixture(f,progress,history,[image],async()=>{throw Error('Ordinary profile evidence must not become project intake');},async()=>{throw Error('Legacy Gemini/Grok observation must not run before Qwen');});
-  Object.assign(context,{
+  // Load the actual source reconciliation module into this isolated route VM,
+  // not a copied/relaxed implementation of the production quality guard.
+  const reconciliationExports={};
+  vm.runInNewContext(compile(readFileSync('lib/uploads/image-evidence-reconciliation.ts','utf8')),
+    {exports:reconciliationExports,module:{exports:reconciliationExports},console:quietConsole});
+  Object.assign(context,reconciliationExports,{
     createHash:nativeRequire('node:crypto').createHash,
     getAccountingScope:()=>({kind:'standalone'}),
     message:'Write a playful opener for this profile',
