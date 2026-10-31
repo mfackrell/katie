@@ -88,7 +88,7 @@ jobs:
           # Ordinary owner-authored projects must not depend on benchmark files.
           if grep -Eq '<!--[[:space:]]*katie-native-benchmark:' "$RUNNER_TEMP/original-agent-request.md"; then
             mkdir -p "$RUNNER_TEMP/native-host"
-            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-execution-evidence,native-wip-checkpoint,native-wip-recovery,native-development-lifecycle,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
+            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-capacity-forecast,lifecycle-capacity,native-development-child,native-execution-evidence,native-wip-checkpoint,native-wip-recovery,native-development-lifecycle,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
             node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
           else
             echo '{"native":false}' > "$RUNNER_TEMP/native-benchmark.json"
@@ -745,3 +745,4 @@ jobs:
           name: agent-completion
           path: ${{ runner.temp }}/agent-result.json
           if-no-files-found: ignore
+
