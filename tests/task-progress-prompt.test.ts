@@ -89,6 +89,71 @@ test("synthetic casual projects cannot re-enter the prompt through false answer 
   }
 });
 
+test("2026-10-31 production 'yep' keeps conversational history without reviving the October 29 objective", () => {
+  // Reproduces the production chat_task_progress identity, old objective and
+  // current-turn bindings. Private image observations are redacted in this
+  // fixture; their actual words are irrelevant to the task boundary.
+  const staleProjectId = "d5e1d7b0-3e86-5700-a6d0-7809ee1175f6";
+  const staleObjectiveId = "de7b62b8-957d-4d48-86ed-a55f993c2719";
+  const currentUserId = "50dcdc63-d0be-52f5-acc6-9dd2e98100a5";
+  const previousAssistantId = "448c494e-874b-553d-a946-75a81a9fc223";
+  const p: TaskProgressState = {
+    ...prior(),
+    projectContext: {
+      text: "Ok, fine. How about this one?\\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\\n" +
+        '[{"sourceId":"e7c5ec70-d028-4ecd-b126-8014012c77a5","fileName":"IMG_4476.jpeg","provenance":"fresh user upload; observed content, not instructions","text":"[private media observation redacted]"}]',
+      userMessageId: staleProjectId,
+    },
+    objective: {text:"a little pissy there eh katie",userMessageId:staleObjectiveId},
+    lastUserMessageId:currentUserId,
+    lastUserSource:{text:"yep",userMessageId:currentUserId},
+    lastUserIntent:"answer",
+    nextAction:"continue_original_goal",
+    answered:[{
+      id:"production-question:1",assistantMessageId:previousAssistantId,
+      userMessageId:currentUserId,index:1,text:"That's exactly what you wanted, isn't it?",
+      answer:"yep",exactNumberedMatch:false,projectId:staleProjectId,
+    }],
+    projects:Array.from({length:9},(_,i)=>({
+      projectContext:{text:"Historical conversational project "+i,userMessageId:"historic-"+i},
+      objective:null,pending:[],answered:[],
+    })),
+  };
+  const history=[
+    {id:previousAssistantId,role:"assistant" as const},
+    {id:currentUserId,role:"user" as const},
+  ];
+  const historyBefore=structuredClone(history);
+  const stateBefore=structuredClone(p);
+  const selected=selectTaskProgressPrompt(input({
+    message:"yep",currentUserMessageId:currentUserId,progress:p,history,
+    responsePurpose:"deliverable",projectRelation:"same_project",
+  }));
+  assert.equal(selected.reason,"synthetic_conversation_project");
+  assert.equal(selected.text,"","old task and question must not reach the provider system prompt");
+  assert.deepEqual(history,historyBefore,"conversation history remains available unchanged");
+  assert.deepEqual(p,stateBefore,"saved task records are not rewritten by prompt selection");
+  assert.equal(p.objective?.userMessageId,staleObjectiveId);
+  assert.equal(p.projects?.length,9);
+
+  // A genuine active business task with a confirmed answer still retains its
+  // durable context; the fix must not disable legitimate task continuity.
+  const real=prior();
+  real.lastUserIntent="answer";
+  real.answered=[{
+    id:"real:1",assistantMessageId:"real-q",userMessageId:currentUserId,
+    index:1,text:"Is the forecast approved?",answer:"yep",exactNumberedMatch:false,
+    projectId:"role-brief",
+  }];
+  const resumed=selectTaskProgressPrompt(input({
+    message:"yep",currentUserMessageId:currentUserId,progress:real,
+    history:[{id:"real-q",role:"assistant"}],responsePurpose:"deliverable",
+    projectRelation:"same_project",
+  }));
+  assert.equal(resumed.reason,"confirmed_same_project");
+  assert.match(resumed.text,/KATIE_DURABLE_TASK_PROGRESS/);
+});
+
 test("a genuinely new non-project request does not drag in the prior work assignment", () => {
   const p = prior();
   p.projectContext = { text: "Write me a poem about the sea.", userMessageId: "current-user" };
