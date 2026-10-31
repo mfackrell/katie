@@ -585,6 +585,7 @@ test('actual route restores original drafts on resume and subsequent same-projec
     node.expression.getText(routeAst).includes('!currentHistory.some') &&
     node.expression.getText(routeAst).includes('pdfProgress.projectContext')),
     'project history restoration');
+  const restorationBlock = blockBetween(statement(declaration('recentProjectResumption')), resumeNode);
   const first = {id:'project-a',role:'user',content:'Original application A requirements'};
   const draft = {id:'draft-a',role:'assistant',content:'Unfinished draft A'};
   const other = {id:'project-b',role:'user',content:'Different application B requirements'};
@@ -593,11 +594,12 @@ test('actual route restores original drafts on resume and subsequent same-projec
     const reads=[];
     const output = await vm.runInNewContext(compile(`(async()=>{
       let history=currentHistory;
-      ${code(resumeNode)}
+      ${restorationBlock}
       return history;
     })()`), {
       Map, Set, currentAgentTask:()=>null, contextClassification:{projectTransition:transition},
-      taskProgressUserMessageId:currentUserId,
+      taskProgressUserMessageId:currentUserId, message:'Give three relevant examples.',
+      explicitSavedProjectReference:true, requestId:'test-project-recovery',
       actorId:ACTOR_ID, chatId:CHAT_ID, currentHistory:recentHistory,
       pdfProgress:{projectContext:{userMessageId:'project-a'},projects:[{projectContext:{userMessageId:'project-a'},sourceChatId:'original-chat'}]},
       contextProjects:[{id:'project-a'},{id:'project-b'}],
