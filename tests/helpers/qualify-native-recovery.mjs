@@ -135,7 +135,7 @@ export async function qualifyNativeRecovery(db,ids){
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const launch=async({successor,release=ids.release,approvalId=ids.renewal.approval_id}={})=>{
-   rmSync(join(workspace,'node_modules'),{recursive:true,force:true});mkdirSync(join(workspace,'node_modules'),{recursive:true});execFileSync('cp',['-al',join(repo,'node_modules','.'),join(workspace,'node_modules')]);
+   rmSync(join(workspace,'node_modules'),{recursive:true,force:true});mkdirSync(join(workspace,'node_modules'),{recursive:true});execFileSync('cp',['-al',join(repo,'node_modules')+'/.',join(workspace,'node_modules')]);
    const proof={taskId:ids.task,trialId:ids.trial,approvalId,projectId:ids.project,contractHash:context.contractHash,benchmarkContractHash:trial.contract_sha256,baselineSha:baseline,expiresAt:Date.now()+25*60000,continuationId:ids.continuation.id,developmentRenewalId:ids.renewal.id,...(successor?{paidSuccessorId:successor}:{})};
    proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);
    const request=projectMarker(context)+'\nSynthetic recovery qualification only.\n'+encodeNativeHandoff(proof,signing);
@@ -236,13 +236,15 @@ export async function qualifyNativeRecovery(db,ids){
   const second=await launch({successor:successor.id,release});assert.equal(second.code,0,second.log);
   assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completed=JSON.parse(readFileSync(second.evidence));assert.equal(completed.completed,true);assert.equal(completed.finalReview.verdict,'pass');assert.equal(completed.review.verdict,'changes_requested');
-  const finalDiagnostics=JSON.parse(readFileSync(second.evidence+'.diagnostics.json'));assert.deepEqual(finalDiagnostics.phases.map(p=>p.phase),['repair','final-review']);assert.ok(finalDiagnostics.verification?.every(v=>v.passed));
+  const finalDiagnostics=JSON.parse(readFileSync(second.evidence+'.diagnostics.json'));assert.deepEqual(finalDiagnostics.phases.map(p=>p.phase),['repair','final-review']);assert.equal(finalDiagnostics.verification?.length,1);assert.equal(finalDiagnostics.verification[0].passed,true);assert.equal(finalDiagnostics.verification[0].head,completed.reviewedHeadSha);
   const after=await ledger();for(const old of historicalCalls)assert.deepEqual(after.calls.find(c=>c.id===old.id),old,'Historical receipt changed');assert.equal(Number(after.mission.calls),Number(beforeRestore.mission.calls)+4);assert.equal(Number(after.account.spent_tokens),Number(beforeRestore.account.spent_tokens)+20);
   for(const old of beforeRestore.missionCalls)assert.deepEqual(after.missionCalls.find(c=>c.id===old.id),old);
   for(const old of beforeRestore.approvals)assert.deepEqual(after.approvals.find(c=>c.id===old.id),old);
   assert.equal(after.grants.length,beforeRestore.grants.length+1);
   for(const old of beforeRestore.grants){const current=after.grants.find(g=>g.id===old.id);assert.deepEqual({...current,stopped_at:old.stopped_at},old);}
-  report.completion=completed;report.accounting={beforeHash:hash(JSON.stringify(beforeRestore)),afterHash:hash(JSON.stringify(after)),historicalCallsPreserved:historicalCalls.length,newSyntheticCalls:4,newSyntheticTokens:20,providerCalls};report.verification=finalDiagnostics.verification;
+  const browser=JSON.parse(readFileSync(join(runtime,'qualification-browser-acceptance.json'),'utf8'));
+  assert.equal(browser.passed,true);assert.equal(browser.headSha,completed.reviewedHeadSha);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.projectId,ids.project);assert.equal(browser.checks.length,1);assert.ok(browser.checks.every(c=>c.passed));
+  report.browserAcceptance=browser;report.completion=completed;report.accounting={beforeHash:hash(JSON.stringify(beforeRestore)),afterHash:hash(JSON.stringify(after)),historicalCallsPreserved:historicalCalls.length,newSyntheticCalls:4,newSyntheticTokens:20,providerCalls};report.verification=finalDiagnostics.verification;
   report.limitations=['Admission-denial termination is qualified. Abrupt host SIGKILL before final artifact upload remains fail-closed, not claimed recovered.','Private acceptance uses the actual network-isolated project verifier and Chromium, not an external Vercel Preview.','Synthetic SDK responses establish execution mechanics, not real-model compliance.'];
   console.log('NATIVE_RECOVERY_LIFECYCLE_PASS='+JSON.stringify(report));
  }finally{
