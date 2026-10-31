@@ -642,7 +642,7 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
     projectContext:{userMessageId:'missing-anchor',text:'Retained original project brief'},
     objective:{userMessageId:'missing-anchor',text:'Prepare a project deliverable'},
   };
-  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[],historyOverride}={})=>{
+  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[],historyOverride,sourceChatId='source-chat'}={})=>{
     const reads=[],warnings=[];
     const suppliedHistory=historyOverride ?? currentHistory;
     const result=await vm.runInNewContext(compile(`(async()=>{
@@ -653,7 +653,8 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
       Map,Set, actorId:'actor-fixture',chatId:'current-chat',requestId:'source-recovery-test',
       message,currentHistory:suppliedHistory,taskProgressUserMessageId:'new-message',
       explicitSavedProjectReference:explicit,contextClassification:null,
-      pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[snapshot]},
+      pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[{...snapshot,sourceChatId}]},
+      classifyUserTurn:fixture().helpers.classifyUserTurn,
       contextProjects:[{id:'missing-anchor'}],currentAgentTask:()=>null,
       getChatById:async id=>{reads.push(['chat',id]);return sourceChatMissing?null:{actorId:ownerId};},
       getMessages:async id=>{reads.push(['messages',id]);return sourceHistory;},
@@ -681,6 +682,16 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
   });
   assert.deepEqual(longRunning.reads,[['chat','source-chat'],['messages','source-chat']]);
   assert.equal(longRunning.history[0].id,'missing-anchor');
+  const sameChat=await run('Give three relevant examples.',{
+    historyOverride:longHistory,sourceChatId:'current-chat',
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(sameChat.reads,[['chat','current-chat'],['messages','current-chat']]);
+  assert.equal(sameChat.history[0].id,'missing-anchor',
+    'A valid active project from the current chat must keep its older source');
+  const unrelated=await run('Write me a poem',{historyOverride:longHistory});
+  assert.deepEqual(unrelated.reads,[],
+    'A new unrelated deliverable must not restore a stale saved project');
   const ordinaryAfterMany=await run('Legs feel awesome',{historyOverride:longHistory});
   assert.deepEqual(ordinaryAfterMany.reads,[]);
   assert.deepEqual(ordinaryAfterMany.history,longHistory);
