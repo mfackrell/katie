@@ -51,4 +51,30 @@ begin
 end $$;
 revoke all on function public.standalone_admit(uuid,uuid,uuid,text,text,text,jsonb,text,text,text,numeric,text,jsonb,text,text) from public,anon,authenticated;
 grant execute on function public.standalone_admit(uuid,uuid,uuid,text,text,text,jsonb,text,text,text,numeric,text,jsonb,text,text) to service_role;
+
+-- The existing Qwen job finished before an OpenAI price-policy pause, so
+-- there is no paused provider attempt to render. Expose only its request ID
+-- to its verified owner; the original workflow body never leaves the server.
+create or replace function public.standalone_owner_cache_authorization_recovery(p_owner uuid,p_actor uuid,p_chat uuid) returns jsonb
+language plpgsql stable security definer set search_path=public,pg_temp as $$
+declare saved_request text;
+begin
+ if not standalone_verify_scope(p_owner,p_actor,p_chat) then raise exception 'STANDALONE_SCOPE_DENIED'; end if;
+ select w.request_id into saved_request
+ from standalone_workflows w
+ where w.owner_id=p_owner and w.actor_id=p_actor and w.chat_id=p_chat
+   and w.status='paused'
+   and coalesce(w.result->>'body','') like '%"type":"accounting_pause"%'
+   and coalesce(w.result->>'body','') like '%"code":"standalone_unsupported_billing"%'
+   and coalesce(w.result->>'body','') like '%No reviewed no-fee cache metadata policy for this exact model%'
+   and not exists(
+     select 1 from standalone_provider_attempts a
+     where a.owner_id=p_owner and a.request_id=w.request_id and a.state='paused'
+   )
+ order by w.updated_at desc limit 1;
+ if saved_request is null then return null; end if;
+ return jsonb_build_object('requestId',saved_request);
+end $$;
+revoke all on function public.standalone_owner_cache_authorization_recovery(uuid,uuid,uuid) from public,anon,authenticated,service_role;
+grant execute on function public.standalone_owner_cache_authorization_recovery(uuid,uuid,uuid) to service_role;
 commit;
