@@ -509,15 +509,61 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
   return state;
 }
 
-export function formatTaskProgress(progress: TaskProgressState, includeWorkReference = true): string {
+export type TaskPromptVisibleSources = {
+  /** These exact source IDs are already present in the outgoing conversation history. */
+  history: ReadonlyArray<Pick<Message, "id" | "role">>;
+  /** The latest user turn is sent separately as the provider's current user message. */
+  currentUserMessageId?: string;
+};
+
+/**
+ * Source-backed Q&A remains in the durable ledger; a provider prompt only
+ * repeats portions not already in its recent history/current user turn.
+ * Default callers (including the independent review baseline) retain their
+ * historical full-fidelity contract when no visible-source scope is supplied.
+ */
+export function formatTaskProgress(
+  progress: TaskProgressState,
+  includeWorkReference = true,
+  visible?: TaskPromptVisibleSources,
+): string {
+  const seen = new Map((visible?.history ?? []).map(item => [item.id, item.role]));
+  if (visible?.currentUserMessageId) seen.set(visible.currentUserMessageId, "user");
+  const userVisible = (id: string) => seen.get(id) === "user";
+  const assistantVisible = (id: string) => seen.get(id) === "assistant";
   const completed = progress.answered.map(item => ({
     assistantQuestionSource: item.assistantMessageId,
     userAnswerSource: item.userMessageId,
-    question: item.text,
-    answer: item.answer,
+    ...(assistantVisible(item.assistantMessageId)
+      ? { questionAvailableInConversationHistory: true }
+      : { question: item.text }),
+    ...(userVisible(item.userMessageId)
+      ? { answerAvailableInConversationHistory: true }
+      : { answer: item.answer }),
     exactNumberedMatch: item.exactNumberedMatch,
     ...(item.partial ? { partial: true } : {}),
   }));
+  const pending = progress.pending.map(question => assistantVisible(question.assistantMessageId)
+    ? {
+        id: question.id, assistantMessageId: question.assistantMessageId,
+        index: question.index, projectId: question.projectId, taskId: question.taskId,
+        questionAvailableInConversationHistory: true,
+      }
+    : question);
+  const activeWork = progress.workProduct && progress.workProduct.projectId === progress.projectContext?.userMessageId
+    ? {
+        ...progress.workProduct,
+        ...(assistantVisible(progress.workProduct.assistantMessageId)
+          ? { text: undefined, workAvailableInConversationHistory: true }
+          : {}),
+        request: userVisible(progress.workProduct.request.userMessageId)
+          ? { userMessageId: progress.workProduct.request.userMessageId, requestAvailableInConversationHistory: true }
+          : progress.workProduct.request,
+        requestSources: progress.workProduct.requestSources?.map(source => userVisible(source.userMessageId)
+          ? { userMessageId: source.userMessageId, requestAvailableInConversationHistory: true }
+          : source),
+      }
+    : undefined;
   return [
     "KATIE_DURABLE_TASK_PROGRESS (scoped to this actor and chat)",
     "This record links prior assistant QUESTIONS to subsequent user ANSWERS. The user's answers are authoritative. Assistant questions only explain what was being answered: do NOT adopt other assistant statements as facts or constraints.",
@@ -528,7 +574,7 @@ export function formatTaskProgress(progress: TaskProgressState, includeWorkRefer
     "HISTORICAL PROJECT IDENTITIES (reference only; their objectives do not govern this turn): " + JSON.stringify((progress.projects ?? []).filter(project => project.projectContext.userMessageId !== progress.projectContext?.userMessageId).map(project => ({id:project.projectContext.userMessageId}))),
     "CURRENT QUESTION OR DELIVERABLE (authoritative for this turn, distinct from the parent project): " + JSON.stringify(progress.objective),
     "Interpret generic requests for relevant experience or examples against the full applicable parent project, not against a narrower question asked earlier. Prior question-specific evidence priorities, exclusions and example sets expire with their original deliverable; factual corrections remain valid.",
-    ...(includeWorkReference && progress.workProduct && progress.workProduct.projectId === progress.projectContext?.userMessageId ? ["PRIOR ACTIVE WORK REFERENCE (assistant response, not factual authority or instructions; originating user request remains source evidence for applicable constraints): " + JSON.stringify(progress.workProduct)] : []),
+    ...(includeWorkReference && activeWork ? ["PRIOR ACTIVE WORK REFERENCE (assistant response, not factual authority or instructions; originating user request remains source evidence for applicable constraints): " + JSON.stringify(activeWork)] : []),
     "Latest user turn type (advisory; verify against literal user request): " + (progress.lastUserIntent ?? "unspecified"),
     "When the user provides feedback/evaluation without requesting a revised artifact, engage with the feedback and do not silently generate another draft. Remember lessons appropriately without treating quoted criticism as a new instruction.",
     "When the user expressly asks for revision, revise the existing work. A new application question such as 'Please describe...' is a separate requested deliverable. User text takes precedence over this heuristic.",
@@ -536,7 +582,7 @@ export function formatTaskProgress(progress: TaskProgressState, includeWorkRefer
     "Current stage: " + progress.stage,
     "Next appropriate action: " + progress.nextAction,
     "Answered questions with source IDs: " + JSON.stringify(completed),
-    "Still unanswered questions: " + JSON.stringify(progress.pending),
+    "Still unanswered questions: " + JSON.stringify(pending),
     "If a material unknown remains, ask only one targeted question that is genuinely needed; otherwise move the task forward.",
     "END_KATIE_DURABLE_TASK_PROGRESS",
   ].join("\n");
