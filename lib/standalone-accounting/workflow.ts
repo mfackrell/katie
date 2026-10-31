@@ -5,7 +5,6 @@ import { authorizeStandaloneCaller } from './auth';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { assertCronAuth } from '@/lib/runpod/durable-results';
-import { QWEN_STILL_POLICY } from './runpod-policy';
 import { runWithStandaloneAccounting, isStandaloneAccountingError, standaloneAccountingCause, standaloneFailureDetails, standaloneTechnicalBlocker } from './context';
 import { canonicalJson, type JsonValue } from './estimate';
 
