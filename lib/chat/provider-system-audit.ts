@@ -31,7 +31,7 @@ export function boundProviderSystemAudit(audit: ProviderSystemAudit): StoredProv
       const charCount = JSON.stringify(audit.requestDiagnostic).length;
       return { requestDiagnostic: charCount <= MAX_AUTHORIZED_DIAGNOSTIC_CHARS
         ? audit.requestDiagnostic
-        : { status: "capture-too-large", charCount } };
+        : { status: "capture-too-large" as const, charCount } };
     })() : {}),
     capturedAt: new Date().toISOString(),
     truncated,
