@@ -153,6 +153,12 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByLabel('Per request approval threshold (USD)').fill('0.05');
     await usage.getByRole('button', { name: 'Save settings' }).click();
     await usage.getByText('$0.25', { exact: true }).first().waitFor();
+    // Provider tooltip exposes only that provider's model statistics.
+    const providerTooltip = usage.getByRole('tooltip');
+    await usage.getByRole('button', { name: 'Show model usage for openai' }).hover();
+    await providerTooltip.waitFor();
+    assert.match(await providerTooltip.innerText(), /gpt-4o/);
+    await page.mouse.move(0, 0);
     // The same rail usage snapshot must make approval actionable in the chat,
     // without mounting a second usage reader or a second polling flight.
     const inlineApproval = page.getByRole('region', { name: 'Spending authorization required' });
@@ -274,7 +280,10 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(running[0].state, 'uncertain'); assert.equal(running[0].reservedMicrousd, '3584');
     assert.equal(resumes.length, 4);
     // Usage details are directly accessible in the rail.
-    assert.match(await usage.innerText(), /Uncertain \$0.003584/);
+    const dailySpendTiles = usage.getByLabel('Daily spending summary');
+    assert.match(await dailySpendTiles.innerText(), /Uncertain\s+\$0\.00/);
+    // The approval receipt remains exact even though the overview rounds to cents.
+    assert.match(await active.innerText(), /Uncertain exposure accepted · \$0\.003584 retained/);
     // Usage remains available in the rail.
     running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
     // Usage details are directly accessible in the rail.
@@ -299,6 +308,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     resumeMode='completed';
     await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).click();
     await usage.getByRole('status').filter({hasText:'Saved work completed.'}).waitFor();
+    await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
+    await usage.getByRole('button', { name: 'Show model usage for runpod' }).focus();
+    await providerTooltip.waitFor();
+    assert.match(await providerTooltip.innerText(), /Qwen\/Qwen3-VL-8B-Instruct/);
+    assert.doesNotMatch(await providerTooltip.innerText(), /gpt-4o/);
+    // Precise infrastructure estimates remain available on explicit disclosure.
+    await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
     assert.equal(resumes.length,6,'checking saved Qwen work resumes once; no new approval decision');
     const imageStages=rail.getByRole('list',{name:'Image analysis stages',exact:true});
@@ -306,9 +322,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.match(await imageStages.innerText(),/Using saved Qwen observation/);
     assert.equal(await active.count(),0,'estimated completion is not pending or uncertain active work');
     const infraText=await usage.innerText();
-    assert.match(infraText,/Today \$0.27 including infrastructure estimate/);assert.match(infraText,/RunPod estimated infrastructure cost \$0.02/);
+    assert.match(infraText,/Spent\s+\$0\.27/);
+    assert.match(infraText,/Includes estimated infrastructure cost; actual RunPod cost unconfirmed/);
+    assert.match(infraText,/RunPod estimated infrastructure cost \$0\.02/);
     assert.doesNotMatch(infraText,/RunPod actual cost \$0.02/);
     await page.reload({waitUntil:'domcontentloaded'});
+    await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
+    await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
     assert.equal(resumes.length,6,'estimated infrastructure reload cannot dispatch');
     // A deterministic unsupported blocker cannot offer another unchanged retry.
@@ -416,7 +436,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     const newScope=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage'&&new URL(request.url()).searchParams.get('scope')==='all');
     await usage.getByLabel('Scope').selectOption('all');await newScope;
     holdUsage=false;heldUsage.splice(0).forEach(resolve=>resolve());
-    await usage.getByText(/In 999/).first().waitFor();
+    await usage.getByRole('button',{name:'Show model usage for openai'}).getByText('999 / 45 + ?',{exact:true}).waitFor();
     assert.equal(await usage.getByLabel('Scope').inputValue(),'all');
     pagedApprovals=true;proposals=Array.from({length:100},(_,i)=>pending('page-'+i));running=[];
     workPage={next:{before:'2026-10-28T10:00:00Z',beforeId:'44444444-4444-4444-8444-444444444444'}};

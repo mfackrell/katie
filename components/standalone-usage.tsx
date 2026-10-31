@@ -18,6 +18,18 @@ function dollars(value: string) {
   const amount = BigInt(value), fraction = (amount % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
   return `$${(amount / 1_000_000n).toString()}${fraction ? `.${fraction}` : '.00'}`;
 }
+// Presentation only: ledger values retain their full micro-USD precision.
+function cents(value: string) {
+  const amount = BigInt(value);
+  const rounded = (amount + 5_000n) / 10_000n;
+  return String.fromCharCode(36) + (rounded / 100n).toString() + '.' + (rounded % 100n).toString().padStart(2, '0');
+}
+function compactTokens(value: number) {
+  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : value.toLocaleString();
+}
+function summaryTokens(totals: UsageTotals) {
+  return `${compactTokens(totals.inputTokens)}${totals.missingInputCount ? ' + ?' : ''} / ${compactTokens(totals.outputTokens)}${totals.missingOutputCount ? ' + ?' : ''}`;
+}
 function decimal(value: string | null) { return value === null ? '' : dollars(value).slice(1); }
 function parseDollars(value: string) {
   if (!/^\d+(?:\.\d{1,6})?$/.test(value)) throw Error('Enter a nonnegative USD amount with up to six decimal places.');
@@ -244,7 +256,44 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     <section className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Daily usage</h3>
       <div className="flex flex-wrap gap-2"><label>Scope <select aria-label="Scope" className="rounded bg-zinc-900 p-1" value={scope} onChange={e=>setScope(e.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label><button type="button" className="underline" onClick={openSettings}>Budget & timezone</button><button type="button" className="underline" onClick={()=>void refresh()}>Refresh</button></div>
-      {daily ? <div className="space-y-1"><p>Today <strong>{displayedCost(daily.totals)}</strong>{BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && ' including infrastructure estimate'}</p><p>Pending {dollars(daily.totals.pendingExposureMicrousd)}</p><p>Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p><p><Tokens totals={daily.totals}/></p>{daily.totals.estimatedInfrastructureMicrousd !== '0' && <p><InfrastructureEstimate totals={daily.totals}/></p>}{daily.providers.map(provider=><p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div> : <p>{error || refreshError || "Loading usage…"}</p>}
+      {daily ? <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2" aria-label="Daily spending summary">
+          {[
+            { label: 'Spent', amount: (BigInt(daily.totals.estimatedCostMicrousd) + BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0')).toString() },
+            { label: 'Pending', amount: daily.totals.pendingExposureMicrousd },
+            { label: 'Uncertain', amount: daily.totals.uncertainExposureMicrousd },
+          ].map(item => <div key={item.label} className="min-w-0 rounded-lg bg-zinc-900 px-2 py-2">
+            <p className="text-[11px] text-zinc-400">{item.label}</p>
+            <p className="text-sm font-semibold tabular-nums text-white">{cents(item.amount)}</p>
+          </div>)}
+        </div>
+        <div className="space-y-2" aria-label="Usage by provider">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] gap-2 border-b border-white/10 pb-1 text-[11px] text-zinc-400">
+            <span>Provider</span><span className="text-right">In / Out</span><span className="text-right">Cost</span>
+          </div>
+          {daily.providers.map(provider => <div key={provider.provider} className="group relative">
+            <button type="button" aria-label={`Show model usage for ${provider.provider}`} className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-center gap-2 rounded py-1 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400" >
+              <span className="min-w-0 truncate capitalize text-zinc-200">{provider.provider}</span>
+              <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{provider.provider === 'runpod' ? 'Infrastructure' : summaryTokens(provider)}</span>
+              <span className="whitespace-nowrap text-right font-medium tabular-nums text-white">{cents((BigInt(provider.estimatedCostMicrousd) + BigInt(provider.estimatedInfrastructureMicrousd ?? '0')).toString())}{provider.unknownCostCount > 0 ? '*' : ''}</span>
+            </button>
+            <div role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-50 mb-1 hidden w-[min(340px,calc(100vw-32px))] max-w-none rounded-lg border border-white/20 bg-zinc-950 p-3 text-zinc-200 shadow-2xl group-hover:block group-focus-within:block">
+              <p className="mb-2 font-semibold capitalize">{provider.provider} · model usage</p>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-2">
+                <span className="text-zinc-400">Model</span><span className="text-right text-zinc-400">In / Out</span><span className="text-right text-zinc-400">Cost</span>
+                {daily.models.filter(model => model.provider === provider.provider).map(model => <div key={JSON.stringify([model.provider,model.model,model.category])} className="col-span-3 grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-3">
+                  <span className="min-w-0 break-words">{model.model}<span className="block text-[10px] text-zinc-500">{model.category}</span></span>
+                  <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{model.provider === 'runpod' ? 'Infrastructure' : summaryTokens(model)}</span>
+                  <span className="whitespace-nowrap text-right tabular-nums">{cents((BigInt(model.estimatedCostMicrousd) + BigInt(model.estimatedInfrastructureMicrousd ?? '0')).toString())}{model.unknownCostCount > 0 ? '*' : ''}</span>
+                </div>)}
+              </div>
+              {provider.unknownCostCount > 0 && <p className="mt-2 text-amber-200">* Some model costs remain unconfirmed.</p>}
+            </div>
+          </div>)}
+        </div>
+        {(daily.totals.unknownCostCount > 0 || daily.totals.missingInputCount > 0 || daily.totals.missingOutputCount > 0) && <p className="text-[11px] text-amber-200">* Some costs or token counts are unconfirmed. Details below.</p>}
+        {BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && <p className="text-[11px] text-zinc-400">Includes estimated infrastructure cost; actual RunPod cost unconfirmed.</p>}
+      </div> : <p>{error || refreshError || "Loading usage…"}</p>}
       <details className="rounded border border-white/10 p-2"><summary className="cursor-pointer">Models, activity & earlier exposure</summary>
     {daily && <>
       <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {displayedCost(daily.totals)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
