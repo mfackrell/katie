@@ -55,9 +55,28 @@ export async function GET(request: NextRequest) {
       id: attempt.id, createdAt:attempt.created_at, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category,
       preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision,
       reservedMicrousd: attempt.reserved_microusd, reason: attempt.reason, pauseReason: attempt.pause_reason, resolvedModel: attempt.resolved_model, estimatorVersion: attempt.estimator_version, tradeoffs: attempt.tradeoffs,
-      preview: { textBytes, imageCount, imageBytes, inputTokens: estimate.inputTokens, imageTokens: estimate.imageTokens, outputAllowance: estimate.outputAllowance, assumptions: estimate.assumptions, issues: estimate.issues, status: estimate.status },
+      preview: { textBytes, imageCount, imageBytes, inputTokens: estimate.inputTokens, imageTokens: estimate.imageTokens, outputAllowance: estimate.outputAllowance, assumptions: estimate.assumptions, issues: estimate.issues, status: estimate.status, ownerApprovalRequired: estimate.ownerApprovalRequired ?? null },
       requestExposure,
     }; });
+    // Recover the previously paused request without re-uploading an image.
+    // Only request IDs already bound to this owner/actor/chat are queried;
+    // scope is verified by accountingScope and every workflow read is an
+    // owner-authorized RPC rather than direct table access.
+    const recentRequestIds = [...new Set(snapshot.attempts
+      .filter(attempt => attempt.actor_id === scope.actorId && attempt.chat_id === scope.chatId)
+      .map(attempt => attempt.request_id))].slice(0, 8);
+    const candidates = await Promise.all(recentRequestIds.map(async requestId => ({
+      requestId,
+      workflow: await ledger.workflowStatus(ownerId, requestId) as {status:string;result?:{body?:string}|null}|null,
+    })));
+    const recoverable = candidates.find(candidate => {
+      const body = candidate.workflow?.result?.body ?? '';
+      return candidate.workflow?.status === 'paused' &&
+        !pending.some(attempt => attempt.requestId === candidate.requestId) &&
+        body.includes('"type":"accounting_pause"') &&
+        body.includes('"code":"standalone_unsupported_billing"') &&
+        body.includes('No reviewed no-fee cache metadata policy for this exact model');
+    });
     const scopedAttempts = attempts.filter(attempt => scope.scope === 'all' || attempt.actor_id === scope.actorId);
     const alerts = scopedAttempts.flatMap<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }>(attempt => {
       const base = { attemptId: attempt.id, provider: attempt.provider, model: attempt.model };
@@ -72,6 +91,6 @@ export async function GET(request: NextRequest) {
     }
     const last=snapshot.attempts.length===100?snapshot.attempts[snapshot.attempts.length-1]:null;
     const workPage={next:last?{before:last.created_at,beforeId:last.id}:null};
-    return NextResponse.json({ workPage, configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts }, { headers: noStore });
+    return NextResponse.json({ workPage, configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts, recoverable: recoverable ? {requestId:recoverable.requestId} : null }, { headers: noStore });
   } catch (error) { return accountingError(error); }
 }
