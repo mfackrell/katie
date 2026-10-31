@@ -231,7 +231,7 @@ test('both raw model reports stay bound to their original image, but only reconc
   const ref=image('grounded-dog','dog pixels');
   const observations=await observeStandaloneStillImages([ref],{
     qwen:async()=>({text:'The image shows a brown dog near a fence.',model,coverage:'full' as const}),
-    venice:async()=>({text:'Primary focal point: A car near a fence. Detailed focal-point observations: A shiny sedan parked beside a fence.',model:'venice:venice-uncensored-1-2',coverage:'full' as const}),
+    venice:async()=>({text:'Primary focal point: A car near a fence. Detailed focal-point observations: A shiny sedan has a polished hood, silver rims, a front grille, tinted windows, and reflections across the red bodywork. Spatial relationships and interactions: The vehicle sits adjacent to a wooden fence, with its wheels on the driveway and the cabin partially visible through a windshield. Secondary context: Dark gravel and a small garden appear in the background. Uncertainties: Its exact make and year remain unverified.',model:'venice:venice-uncensored-1-2',coverage:'full' as const}),
     escalate:async()=>{throw Error('No premium dispatch')}
   });
   const o=observations.get(ref.fileId)!;
