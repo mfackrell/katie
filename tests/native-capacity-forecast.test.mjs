@@ -57,3 +57,7 @@ test('trusted workflow stages the complete relative import closure',async()=>{
  assert.ok(names.includes('lifecycle-capacity.mjs'));assert.ok(names.includes('native-capacity-forecast.mjs'));
  for(const name of names){const source=readFileSync('scripts/benchmark/'+name,'utf8');for(const m of source.matchAll(/from ['"]\.\/([^'"]+)['"]/g))assert.ok(names.includes(m[1]),name+' missing staged dependency '+m[1]);}
 });
+
+test('execution time is bounded by the live grant, not just the later owner window',async()=>{
+ const f=setup();f.args.grantId='grant';f.rows.benchmark_execution_grants[0].deadline=new Date(f.args.now+30000).toISOString();const r=await readNativeLifecycleCapacity(f.args);assert.equal(r.authorization.executionAuthorized,true);assert.equal(r.dimensions.time.authorizedRemaining,30);
+});

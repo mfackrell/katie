@@ -51,9 +51,10 @@ export async function readNativeLifecycleCapacity({db,task,project,approval,cont
   const actual=number(s.mission.actual_tokens),reserved=number(s.mission.reserved_tokens);
   const developmentUsed=actual===null||reserved===null?null:Math.max(actual,reserved);
   const deadlines=[s.currentApproval.deadline,s.currentProject.deadline,continuation.deadline].map(stamp);
-  const deadline=deadlines.every(x=>x!==null)?Math.min(...deadlines):null;
+  let deadline=deadlines.every(x=>x!==null)?Math.min(...deadlines):null;
   const grant=grantId?await one('benchmark_execution_grants',grantId):null;
   const grantLive=grantId?Boolean(grant&&grant.account_id===approval.account_id&&grant.project_id===project.id&&grant.mission_assignment_id===task.id&&grant.continuation_id===continuation.id&&typeof approval.trial_id==='string'&&grant.trial_id===approval.trial_id&&!grant.revoked_at&&!grant.stopped_at&&stamp(grant.deadline)>now):null;
+  if(grantId){const grantDeadline=stamp(grant?.deadline);deadline=deadline!==null&&grantDeadline!==null?Math.min(deadline,grantDeadline):null;}
   input.authorization={executionAuthorized:grantLive,source:'existing_effective_budget_rpcs_and_accounting_rows',live:s.live===true&&!s.account.frozen_at&&!s.currentApproval.revoked_at&&s.currentProject.status==='running',deadline,
    tokens:{cumulativeLimit:number(s.control.cumulativeTokenCap),accountEncumbered:accountUsed,developmentLimit:number(s.limit),developmentEncumbered:developmentUsed,completionReserveRemaining:number(plan.developmentClosureTokens),assessmentReserveRemaining:number(plan.assessmentTokens)},
    calls:{developmentLimit:number(s.callLimit),developmentConsumed:developmentCalls.length,completionReserveRemaining:number(plan.developmentClosureCalls),assessmentLimit:null,assessmentConsumed:null},
