@@ -36,22 +36,16 @@ async function rpc<T>(name:string,args:Record<string,unknown>):Promise<T> {
  * because RunPod was still processing. It cannot create work, approve spending,
  * change the request, or bypass the original actor/chat authorization. */
 async function verifiedCronQwenOwner(actorId:string,chatId:string,requestId:string):Promise<string> {
-  const db=getSupabaseAdminClient();
-  const {data:workflow,error:workflowError}=await db.from('standalone_workflows')
-    .select('owner_id,actor_id,chat_id,status,error')
-    .eq('request_id',requestId).eq('actor_id',actorId).eq('chat_id',chatId)
-    .maybeSingle<{owner_id:string;actor_id:string;chat_id:string;status:string;error:string|null}>();
-  if(workflowError||!workflow||workflow.status!=='paused'||!workflow.error?.includes('standalone_runpod_in_progress'))
+  // The original ledger tables are intentionally not selectable by service_role.
+  // Keep the existing cron bearer check in executeStandaloneWorkflow, and use
+  // only the narrow security-definer lookup for a paused, accepted Qwen job.
+  const {data:ownerId,error}=await getSupabaseAdminClient().rpc<string|null>(
+    'standalone_verified_cron_qwen_owner',
+    {p_actor:actorId,p_chat:chatId,p_request:requestId},
+  );
+  if(error||!ownerId)
     throw new StandaloneAccountingError('resume_denied','No paused Qwen workflow is eligible for automatic continuation.');
-  const {data:attempts,error:attemptError}=await db.from('standalone_provider_attempts')
-    .select('id,provider_request_id').eq('owner_id',workflow.owner_id).eq('request_id',requestId)
-    .eq('actor_id',actorId).eq('chat_id',chatId).eq('provider','runpod')
-    .eq('model',QWEN_STILL_POLICY.model).eq('pricing_version',QWEN_STILL_POLICY.version)
-    .eq('state','dispatched').is('response_checkpoint',null).limit(10);
-  if(attemptError||!attempts?.some(attempt=>
-      /^[A-Za-z0-9-]{8,150}$/.test((attempt as {provider_request_id?:string|null}).provider_request_id??'')))
-    throw new StandaloneAccountingError('resume_denied','No accepted, uncompleted Qwen job is eligible for automatic continuation.');
-  return workflow.owner_id;
+  return ownerId;
 }
 
 /** Persist original user input before any paid preparation. Each resume runs under
