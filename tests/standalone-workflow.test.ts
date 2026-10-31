@@ -132,14 +132,15 @@ test('authenticated cron can resume only a paused accepted Qwen job, never creat
   assert.equal(stored.status,'paused');stored.error='StandaloneAccountingError: standalone_runpod_in_progress: Qwen still processing';
   let hasJob=true;
   const admin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ as unknown as Record<string,unknown>;
-  admin.from=(table:string)=>{
-   const chain:Record<string,unknown>={};
-   for(const name of ['select','eq','not','is'])chain[name]=()=>chain;
-   chain.maybeSingle=async()=>({data:table==='standalone_workflows'?{
-     owner_id:owner,actor_id:actorId,chat_id:chatId,status:stored.status,error:stored.error
-   }:null,error:null});
-   chain.limit=async()=>({data:table==='standalone_provider_attempts'&&hasJob?[{id:'qwen-job',provider_request_id:'job-accepted-123'}]:[],error:null});
-   return chain;
+  const previousRpc=admin.rpc as (name:string,args:any)=>Promise<{data:any;error:unknown}>;
+  admin.rpc=async(name:string,args:any)=>{
+    if(name==='standalone_verified_cron_qwen_owner'){
+      const valid=hasJob&&stored.status==='paused'&&
+        stored.error?.includes('standalone_runpod_in_progress')&&
+        args.p_actor===actorId&&args.p_chat===chatId&&args.p_request==='original-request';
+      return {data:valid?owner:null,error:null};
+    }
+    return previousRpc(name,args);
   };
   const cronRequest=()=>new NextRequest('http://localhost/api/chat',{method:'POST',headers:{
    authorization:'Bearer '+process.env.CRON_SECRET,'content-type':'application/json','x-request-id':'original-request'
