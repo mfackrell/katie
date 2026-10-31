@@ -156,7 +156,7 @@ test('Dolphin is delayed until after the existing Qwen checkpoint on resume',asy
     qwen:async()=>{qwen++;throw Error('Must not resubmit Qwen');},
     venice:async()=>{venice++;return{text:good,model:'venice:'+policy.model,coverage:'full' as const};}});
   assert.equal(qwen,1);assert.equal(venice,1);
-  assert.equal(second.get('image-one')?.observationAgreement,'corroborated');
+  assert.equal(second.get('image-one')?.observationAgreement,'unverified', 'brief Qwen output has no identified subject to corroborate');
   assert.equal(second.get('image-one')?.observationReports?.length,2);
 });
 
