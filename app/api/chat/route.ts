@@ -739,7 +739,7 @@ async function executeChat(request: NextRequest) {
     // authorization or source access. A failed optional identity lookup must
     // not stop ordinary chat.
     let companionActor=false;
-    if(!currentAgentTask() && !isGuestSession) {
+    if(!currentAgentTask()) {
       try {
         const {data,error}=await getSupabaseAdminClient().from('actors')
           .select('name,system_prompt').eq('id',actorId)
