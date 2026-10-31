@@ -43,10 +43,10 @@ export async function qualifyNativeRecovery(db,ids){
  const ledger=async()=>(await query(`select jsonb_build_object(
  'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),
  'calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),
- 'missionCalls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=$3)),
- 'mission',(select jsonb_build_object('calls',calls,'routing_calls',routing_calls,'actual_tokens',actual_tokens,'reserved_tokens',reserved_tokens,'max_calls',max_calls,'token_allowance',token_allowance) from agent_missions where id=$3),
+ 'missionCalls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=$2)),
+ 'mission',(select jsonb_build_object('calls',calls,'routing_calls',routing_calls,'actual_tokens',actual_tokens,'reserved_tokens',reserved_tokens,'max_calls',max_calls,'token_allowance',token_allowance) from agent_missions where id=$2),
  'grants',(select jsonb_agg(to_jsonb(g) order by id) from benchmark_execution_grants g where account_id=$1),
- 'approvals',(select jsonb_agg(to_jsonb(a) order by id) from benchmark_native_spending_approvals a where account_id=$1)) value`,[ids.account,ids.task,ids.mission]))[0].value;
+ 'approvals',(select jsonb_agg(to_jsonb(a) order by id) from benchmark_native_spending_approvals a where account_id=$1)) value`,[ids.account,ids.mission]))[0].value;
  const initialFiles={
   'app/pilot/state.ts':'export const value = "Broken";\n',
   'app/pilot/page.tsx':'export default function Page(){return <div id="state">Broken</div>}\n',
