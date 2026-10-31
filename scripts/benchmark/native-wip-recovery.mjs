@@ -85,6 +85,9 @@ export async function loadRecoveryDiagnostics({task,repository,github}){
  if(diagnostics.taskId!==task.id||String(diagnostics.runId)!==runId||diagnostics.completed!==false||!diagnostics.wipCheckpoint)fail('diagnostics do not identify unfinished same-task WIP');
  const record=diagnostics.wipCheckpoint;
  if(record.runId!==runId||record.runAttempt!==String(run.run_attempt))fail('checkpoint run attempt mismatch');
+ const final=diagnostics.snapshots?.filter(snapshot=>snapshot.label==='final')??[];
+ if(final.length!==1||!sha(final[0].head)||final[0].unavailable||final[0].head!==record.completedCheckpointSha)
+  fail('unfinished WIP is unproven or superseded by a completed checkpoint; do not repeat completed engineering');
  return {record,diagnostics};
 }
 

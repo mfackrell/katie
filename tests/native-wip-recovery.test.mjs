@@ -43,7 +43,7 @@ function fixture(t,{phase='repair',legacy=false,attributes=false}={}){
  file('app/pilot/a.mjs','unfinished repair a');file('app/pilot/b.mjs','unfinished repair b');file('app/pilot/new/nested.mjs','third new file');if(phase==='repair')rmSync(join(workspace,'app/pilot/deleted.mjs'));
  if(attributes)file('app/pilot/.gitattributes','*.mjs filter=sentinel working-tree-encoding=UTF-16LE\n');
  const record=wip.save({phase,reviewFindings:phase==='repair'?'CHANGES_REQUESTED Fix a and b\nTrusted deterministic verification: two deterministic findings':'',lastCompleted});
- const diagnostics={taskId:task.id,runId:'123',completed:false,wipCheckpoint:record};
+ const diagnostics={taskId:task.id,runId:'123',completed:false,wipCheckpoint:record,snapshots:[{label:'final',head:completed}]};
  const rows={mission_assignments:{id:task.id,mission_id:'mission'},project_runs:{project_id:project.id,binding:{...context,scopeHash:'scope'}},
   benchmark_native_spending_approvals:{id:'approval',task_id:task.id,project_id:project.id,trial_id:'trial',account_id:'account',consumed_at:'2026-10-31',actor_id:'owner',protocol_digest:'protocol',model:'gpt-5.3-codex'},
   benchmark_execution_grants:{id:'grant',mission_assignment_id:task.id,project_id:project.id,trial_id:'trial',account_id:'account',execution_epoch:2,owner_actor_id:'owner',repository:'mfackrell/katie',protocol_digest:'protocol',model:'gpt-5.3-codex',deadline:'2026-10-30'},
@@ -218,5 +218,19 @@ test('the original owner-issue dispatch and manual successor dispatch share the 
   f.task.external.receipt.issue_number=830;
   await assert.rejects(loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github}),/same-task run receipt/);
   f.task.external.receipt.issue_number=829;
+ }
+});
+
+test('a later completed repair commit or missing final evidence cannot restart older WIP',async t=>{
+ const f=fixture(t);
+ f.git('add','app/pilot');f.git('commit','-qm','completed repair before final-review interruption');
+ const repaired=f.git('rev-parse','HEAD');f.git('push','origin','HEAD:refs/heads/completed');
+ f.diagnostics.snapshots=[{label:'final',head:repaired}];
+ await assert.rejects(loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github}),/superseded by a completed checkpoint/);
+ assert.equal(f.git('rev-parse','HEAD'),repaired);
+ assert.equal(f.git('ls-remote','--refs','origin',f.record.ref).split(/\s/)[0],f.record.checkpointSha);
+ for(const snapshots of [[],[{label:'final',unavailable:true}],[{label:'final',head:f.completed},{label:'final',head:f.completed}]]){
+  f.diagnostics.snapshots=snapshots;
+  await assert.rejects(loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github}),/unfinished WIP is unproven/);
  }
 });
