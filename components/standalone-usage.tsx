@@ -271,10 +271,24 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] gap-2 border-b border-white/10 pb-1 text-[11px] text-zinc-400">
             <span>Provider</span><span className="text-right">In / Out</span><span className="text-right">Cost</span>
           </div>
-          {daily.providers.map(provider => <div key={provider.provider} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-center gap-2">
-            <span className="min-w-0 truncate capitalize text-zinc-200" title={provider.provider}>{provider.provider}</span>
-            <span className="whitespace-nowrap text-right tabular-nums text-zinc-400" title={`Input ${provider.inputTokens.toLocaleString()}, output ${provider.outputTokens.toLocaleString()}; unknown counts preserved in details`}>{provider.provider === 'runpod' ? 'Infrastructure' : summaryTokens(provider)}</span>
-            <span className="whitespace-nowrap text-right font-medium tabular-nums text-white">{cents((BigInt(provider.estimatedCostMicrousd) + BigInt(provider.estimatedInfrastructureMicrousd ?? '0')).toString())}{provider.unknownCostCount > 0 ? '*' : ''}</span>
+          {daily.providers.map(provider => <div key={provider.provider} className="group relative">
+            <button type="button" aria-label={`Show model usage for ${provider.provider}`} className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-center gap-2 rounded py-1 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400" >
+              <span className="min-w-0 truncate capitalize text-zinc-200">{provider.provider}</span>
+              <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{provider.provider === 'runpod' ? 'Infrastructure' : summaryTokens(provider)}</span>
+              <span className="whitespace-nowrap text-right font-medium tabular-nums text-white">{cents((BigInt(provider.estimatedCostMicrousd) + BigInt(provider.estimatedInfrastructureMicrousd ?? '0')).toString())}{provider.unknownCostCount > 0 ? '*' : ''}</span>
+            </button>
+            <div role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-50 mb-1 hidden w-[min(340px,calc(100vw-32px))] max-w-none rounded-lg border border-white/20 bg-zinc-950 p-3 text-zinc-200 shadow-2xl group-hover:block group-focus-within:block">
+              <p className="mb-2 font-semibold capitalize">{provider.provider} · model usage</p>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-2">
+                <span className="text-zinc-400">Model</span><span className="text-right text-zinc-400">In / Out</span><span className="text-right text-zinc-400">Cost</span>
+                {daily.models.filter(model => model.provider === provider.provider).map(model => <div key={JSON.stringify([model.provider,model.model,model.category])} className="col-span-3 grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-3">
+                  <span className="min-w-0 break-words">{model.model}<span className="block text-[10px] text-zinc-500">{model.category}</span></span>
+                  <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{model.provider === 'runpod' ? 'Infrastructure' : summaryTokens(model)}</span>
+                  <span className="whitespace-nowrap text-right tabular-nums">{cents((BigInt(model.estimatedCostMicrousd) + BigInt(model.estimatedInfrastructureMicrousd ?? '0')).toString())}{model.unknownCostCount > 0 ? '*' : ''}</span>
+                </div>)}
+              </div>
+              {provider.unknownCostCount > 0 && <p className="mt-2 text-amber-200">* Some model costs remain unconfirmed.</p>}
+            </div>
           </div>)}
         </div>
         {(daily.totals.unknownCostCount > 0 || daily.totals.missingInputCount > 0 || daily.totals.missingOutputCount > 0) && <p className="text-[11px] text-amber-200">* Some costs or token counts are unconfirmed. Details below.</p>}
