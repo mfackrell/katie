@@ -1,7 +1,7 @@
 // Phase control shared by the real host and nonbillable recovery qualification.
 // The caller must complete the existing live-authority checks before invoking.
 export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,onCompleted=()=>{}}){
- let candidateHead,verification,first,repairPerformed=false;
+ let candidateHead,verification,first,repairPerformed=false,repairVerification=null;
  if(recovery?.phase==='repair'){
   candidateHead=recovery.completedCheckpointSha;
   verification=recovery.lastCompleted.verification;
@@ -20,12 +20,14 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  onCompleted({phase:'review',review:{phase:'review',verdict:first.verdict,findings:summary(first.findings)},
   verification:{passed:verification.passed,detail:summary(verification.detail),head:candidateHead}});
  if(recovery?.phase==='repair'||first.verdict!=='pass'||!verification.passed){
+  const failedVerification=!verification.passed?{head:candidateHead,passed:false}:null;
   await runPhase('repair',recovery?.phase==='repair'?recovery.reviewFindings:first.findings+'\nTrusted deterministic verification: '+JSON.stringify(verification));
   repairPerformed=true;
   candidateHead=commitCandidate('native: checkpoint bounded repair');
   if(qualifiedLifecycle||recovery){
    verification=await verifyCandidate(candidateHead);
    if(!verification.passed)throw Error('NATIVE_HOST_DENIED: bounded repair failed deterministic acceptance');
+   if(failedVerification)repairVerification={before:failedVerification,after:{head:candidateHead,passed:true}};
   }
  }
  let final=first;
@@ -33,5 +35,5 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
   final=await runPhase('final-review',qualifiedLifecycle||recovery?'Trusted deterministic verification: '+JSON.stringify(verification):'');
   if(final.verdict!=='pass')throw Error('NATIVE_HOST_DENIED: independent final review requires changes');
  }
- return {candidateHead,review:first,finalReview:final,repairPerformed};
+ return {candidateHead,review:first,finalReview:final,repairPerformed,repairVerification};
 }

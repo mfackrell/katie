@@ -373,7 +373,7 @@ try{
   denied('trusted evidence destination unavailable');
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),
   approvalId:proof.approvalId,projectId:proof.projectId,review:lifecycle.review,
-  finalReview:lifecycle.finalReview,repairPerformed:lifecycle.repairPerformed,
+  finalReview:lifecycle.finalReview,repairPerformed:lifecycle.repairPerformed,repairVerification:lifecycle.repairVerification,
   metered:true,completed:true,reviewedHeadSha:lifecycle.candidateHead})+'\n',{mode:0o600,flag:'wx'});
  diagnostics.completed=true;
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');

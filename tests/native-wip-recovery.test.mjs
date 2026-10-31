@@ -94,6 +94,25 @@ test('recovered implementation verifies and repairs actual failures under older 
  assert.deepEqual(phases,['implementation','review','repair','final-review']);assert.equal(verifications.length,2);assert.equal(result.repairPerformed,true);
 });
 
+test('actual workflow completion accepts trusted deterministic repair without falsifying the initial review',async()=>{
+ let checks=0,commits=0;
+ const lifecycle=await executeNativeDevelopmentLifecycle({recovery:{phase:'implementation'},qualifiedLifecycle:false,
+  runPhase:async phase=>({phase,verdict:'pass',findings:'PASS independent source review'}),
+  commitCandidate:()=> (++commits===1?'a':'b').repeat(40),verifyCandidate:async()=>({passed:checks++>0,detail:'synthetic deterministic result'})});
+ const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
+ const predicate=workflow.match(/jq -e --arg head "\$TEST_HEAD" --arg project "\$PROJECT_ID" '([\s\S]+?)'\s+"\$evidence"/)?.[1];assert.ok(predicate);
+ const evidence={version:1,metered:true,completed:true,projectId:'project',reviewedHeadSha:lifecycle.candidateHead,...lifecycle};
+ const accepted=value=>{try{execFileSync('jq',['-e','--arg','head',lifecycle.candidateHead,'--arg','project','project',predicate],{input:JSON.stringify(value),stdio:['pipe','pipe','pipe']});return true;}catch{return false;}};
+ assert.equal(evidence.review.verdict,'pass');assert.equal(accepted(evidence),true);
+ assert.match(workflow,/REVIEW="\$\(jq -r '\.review.verdict' "\$evidence"\)"/);
+ for(const alter of [e=>delete e.repairVerification,e=>e.repairVerification.before.passed=true,e=>e.repairVerification.before.head=e.reviewedHeadSha,
+  e=>e.repairVerification.after.head='c'.repeat(40),e=>e.repairVerification.after.passed=false,e=>e.finalReview.verdict='changes_requested']){
+  const invalid=structuredClone(evidence);alter(invalid);assert.equal(accepted(invalid),false);
+ }
+ const reviewRequested=structuredClone(evidence);reviewRequested.review.verdict='changes_requested';delete reviewRequested.repairVerification;
+ assert.equal(accepted(reviewRequested),true,'existing independently requested repair contract remains valid');
+});
+
 test('cross-task/project/baseline/scope/contract and historical call/grant mismatches reject without touching trusted HEAD',async t=>{
  for(const [target,key,value] of [['record','taskId','other'],['record','projectId','other'],['record','originalBaselineSha','b'.repeat(40)],['record','approvedScopeHash','other'],['record','approvedScope',{}],['record','completedCheckpointSha','b'.repeat(40)],['grant','mission_assignment_id','other'],['grant','execution_epoch',99],['call','actual_tokens',999],['call','request_key','other'],['binding','contractHash','other'],['binding','allowedPaths',['lib/']]]){
   const f=fixture(t);f.fresh();const object=target==='record'?f.record:target==='grant'?f.rows.benchmark_execution_grants:target==='call'?f.rows.benchmark_budget_calls:f.rows.project_runs.binding;object[key]=value;

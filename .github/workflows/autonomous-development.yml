@@ -674,12 +674,18 @@ jobs:
                 (.review.verdict == "pass" or .review.verdict == "changes_requested") and
                 .finalReview.verdict == "pass" and
                 ((.repairPerformed == false and .review.verdict == "pass") or
-                 (.repairPerformed == true and .review.verdict == "changes_requested"))
+                 (.repairPerformed == true and
+                   (.review.verdict == "changes_requested" or
+                    (.review.verdict == "pass" and
+                     .repairVerification.before.passed == false and
+                     (.repairVerification.before.head | type == "string" and test("^[a-f0-9]{40}$")) and
+                     .repairVerification.before.head != $head and
+                     .repairVerification.after.passed == true and .repairVerification.after.head == $head))))
               ' "$evidence" >/dev/null 2>&1; then
               reviewed_head="$TEST_HEAD"
               tested_head="$TEST_HEAD"
               if [[ "$(jq -r '.repairPerformed' "$evidence")" == true ]]; then
-                REVIEW='changes_requested'; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
+                REVIEW="$(jq -r '.review.verdict' "$evidence")"; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
               else
                 REVIEW='pass'; REPAIR='skipped'; RETEST=''; FINAL=''
               fi
