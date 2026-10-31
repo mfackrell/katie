@@ -14,6 +14,8 @@ test('principal subject extraction prefers explicitly identified focal point and
   assert.equal(reportedFocalSubject('Primary focal point: A blue ceramic cup occupies the center.'),'cup');
   assert.equal(reportedFocalSubject('A cup on a table.'),'cup');
   assert.equal(reportedFocalSubject('The image shows a person’s erect penis, which is the primary focal point.'),'penis');
+  assert.equal(reportedFocalSubject('The image does not contain any text, logos, or discernible writing. The image shows a close-up view of a hand holding a dog.'),'hand');
+  assert.equal(reportedFocalSubject('The image contains no recognizable text. The image clearly shows a brown dog sitting on grass.'),'dog');
   assert.equal(reportedFocalSubject('The image shows a hand holding a black camera in a car.'),'hand');
   assert.equal(reportedFocalSubject('The image has an uncertain object.'),null);
   assert.equal(reportedFocalSubject('Small text is illegible.'),null);
