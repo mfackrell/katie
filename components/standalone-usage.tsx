@@ -7,10 +7,10 @@ import { ownerSessionBearer } from '@/lib/tools/browser-owner-session';
 import type { DailyAttempt, DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily';
 
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
-interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
+interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string; ownerApprovalRequired?: "selected_model_uncached" | null }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
 interface ActiveAttempt extends DecisionAttempt { createdAt?: string; provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
-interface Snapshot { workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
+interface Snapshot { recoverable?: { requestId:string } | null; workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; inlinePendingOnly?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
@@ -176,6 +176,20 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     }
     finally { await refresh(); setBusy(''); }
   }
+  async function prepareSavedAuthorization(requestId: string) {
+    setBusy('recover:'+requestId);setError('');setNotice('');
+    try {
+      // This only replays the original owner-bound workflow. The ledger will
+      // prepare an exact-model quote and STOP before a new paid model call.
+      await requestSavedResume({attemptId:'',requestId});
+      setNotice('Saved request completed.');
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Saved authorization could not be prepared.';
+      if (/standalone_approval_required|spending approval|approval required/i.test(message)) {
+        setNotice('Authorization proposal prepared. Review the selected model and choose whether to approve.');
+      } else setError(message);
+    } finally { await refresh();setBusy(''); }
+  }
   async function decide(attempt: DecisionAttempt, action: 'approve_once' | 'reduce_cost' | 'cancel') {
     setBusy(attempt.id); setError(''); setNotice('');
     try {
@@ -191,24 +205,30 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   const daily = snapshot?.daily;
   const activeAttempts = snapshot?.active ?? [];
   const configurationComplete = snapshot?.configuration && snapshot.configuration.per_call_limit_microusd !== null && snapshot.configuration.request_limit_microusd !== null;
-  const approvals = snapshot?.pending.length ?? 0;
+  const approvals = (snapshot?.pending.length ?? 0) + (snapshot?.recoverable ? 1 : 0);
   const unresolved = activeAttempts.length;
   const alerts = snapshot?.alerts?.length ?? 0;
   const workNavigation = <div>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{snapshot?.workPage?.next && <button type="button" className="ml-3 underline" onClick={()=>{const next=snapshot.workPage?.next;if(next)setWorkCursor({key:`${actorId}:${chatId}`,...next});}}>Older active work</button>}</div>;
   // Surface the existing exact-attempt approval flow in the chat itself.
   // Approval and continuation remain owned by the same audited endpoints.
-  const inlinePendingContent = snapshotScope.current === `${actorId}:${chatId}` && snapshot?.pending.length ? (
+  const inlinePendingContent = snapshotScope.current === `${actorId}:${chatId}` && (snapshot?.pending.length || snapshot?.recoverable) ? (
     <section aria-label="Spending authorization required" role="region" className="shrink-0 max-h-[38dvh] space-y-3 overflow-y-auto border-t border-amber-400/30 bg-zinc-950 px-4 py-3 text-xs text-zinc-200 sm:px-6">
       <h3 className="text-sm font-semibold text-amber-100">Approve the selected model to continue</h3>
+      {snapshot.recoverable && <div className="space-y-2 rounded-lg border border-amber-400/30 p-3">
+        <p>The saved image analysis completed, but Katie stopped before generating the reply because the selected model&apos;s optional cache-billing policy was not reviewed.</p>
+        <p>No new model call will be sent until you review and approve the same-model standard-rate quote.</p>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === 'recover:'+snapshot.recoverable.requestId ? 'Preparing…' : 'Prepare saved authorization'}</button>
+      </div>}
       {snapshot.pending.map(attempt => <div key={attempt.id} className="space-y-2 rounded-lg border border-amber-400/30 p-3">
         <p>Selected model: <strong className="text-zinc-100">{attempt.provider} / {attempt.model}</strong> · {attempt.category}</p>
         <p>Estimated reservation: <strong className="text-amber-100">{dollars(attempt.reservedMicrousd)}</strong> · automatic per-call threshold: <strong>{snapshot.configuration?.per_call_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.per_call_limit_microusd)}</strong></p>
         <p>Original request: settled {dollars(attempt.requestExposure.estimatedCostMicrousd)} · pending (including this proposal) {dollars(attempt.requestExposure.pendingExposureMicrousd)} · uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)} · automatic request threshold {snapshot.configuration?.request_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
         <p>Estimated input {attempt.preview.inputTokens.toLocaleString()} tokens · output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
+         {attempt.preview.ownerApprovalRequired === 'selected_model_uncached' && <p className="font-semibold text-amber-100">Owner decision required: keep this exact OpenAI model and complete prompt, but omit the optional unreviewed cache hints. The amount above uses standard uncached rates. Nothing is sent until you authorize this one request.</p>}
         {attempt.tradeoffs && <p className="text-amber-100">Changes in this proposal: {attempt.tradeoffs}</p>}
         <p className="text-zinc-400">The estimate is not a guaranteed actual-cost ceiling. Your approval authorizes only this exact saved attempt, keeps your normal thresholds unchanged, and resumes the original request without repeating settled calls.</p>
         <div className="flex flex-wrap gap-3">
-          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === attempt.id ? 'Processing…' : 'Approve selected model once'}</button>
+          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === attempt.id ? 'Processing…' : attempt.preview.ownerApprovalRequired === 'selected_model_uncached' ? 'Authorize selected model at uncached rate' : 'Approve selected model once'}</button>
           {attempt.provider !== 'runpod' && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Review reduced-cost proposal</button>}
           <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Cancel</button>
         </div>
@@ -242,7 +262,11 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       </details>
     </section>
     {workNavigation}
-    {(snapshot?.pending.length || activeAttempts.length) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
+    {(snapshot?.pending.length || activeAttempts.length || snapshot?.recoverable) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
+      {snapshot?.recoverable && <div className="rounded border border-amber-400/30 p-2">
+        <p>The saved image request needs a same-model uncached quote before approval.</p>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="mt-2 rounded border border-amber-300 px-2 py-1 disabled:opacity-50">Prepare saved authorization</button>
+      </div>}
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
       <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
@@ -266,6 +290,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
       <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
       <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
+       {attempt.preview.ownerApprovalRequired === 'selected_model_uncached' && <p className="mt-1 font-semibold text-amber-100">Explicit owner choice: use this same model and full prompt without unreviewed optional cache hints, at the quoted standard uncached rates. No call will be sent before approval.</p>}
       <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
       <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
       <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>

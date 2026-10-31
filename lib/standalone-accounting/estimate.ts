@@ -11,7 +11,7 @@ export type FrozenPreparedRequest = Readonly<{schemaVersion:"standalone-request-
 export type StandaloneEstimate = {
   status:"estimated"|"unsupported";pricingVersion:string;estimatorVersion:string;requestHash:string;currency:"USD";isCeiling:false;
   estimatedCostMicrousd:string|null;reservationMicrousd:string|null;inputTokens:number;outputAllowance:number;imageTokens:number;cacheWriteInputAllowance:number;cacheWriteTtl:"5m"|"30m"|"12h"|null;
-  issues:string[];assumptions:string[];inputCountSource?:"provider"|"heuristic";breakdown:Array<{dimension:string;tokens:number;costMicrousd:string}>;
+  issues:string[];assumptions:string[];ownerApprovalRequired?:"selected_model_uncached";inputCountSource?:"provider"|"heuristic";breakdown:Array<{dimension:string;tokens:number;costMicrousd:string}>;
 };
 export function canonicalJson(value: unknown): string {
   if (value===null||typeof value==="string"||typeof value==="boolean") return JSON.stringify(value);
