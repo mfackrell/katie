@@ -51,6 +51,9 @@ export async function saveProviderSystemAudit(
   audit: ProviderSystemAudit,
 ): Promise<void> {
   const bounded = boundProviderSystemAudit(audit);
+  if (audit.requestDiagnostic && bounded.requestDiagnostic && "status" in bounded.requestDiagnostic) {
+    throw new Error("Authorized diagnostic exceeds safe capture size; no provider request sent.");
+  }
   try {
   const { error } = await getSupabaseAdminClient().from("chat_requests")
     .eq("request_id", requestId)
@@ -58,6 +61,7 @@ export async function saveProviderSystemAudit(
     .eq("chat_id", chatId)
     .update({ provider_system_audit: bounded });
   if (error) {
+    if (audit.requestDiagnostic) throw new Error("Authorized provider capture could not be stored.");
     console.warn("[Prompt Inspection] Could not persist provider system audit", {
       requestId,
       reason: error.message,
@@ -70,6 +74,7 @@ export async function saveProviderSystemAudit(
     });
   }
   } catch (error) {
+    if (audit.requestDiagnostic) throw error;
     // Transparency is diagnostic and must never block an otherwise valid
     // user request or trigger a provider reroute on database timeouts.
     console.warn("[Prompt Inspection] audit write unavailable", {
