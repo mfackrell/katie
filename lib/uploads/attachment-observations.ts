@@ -8,7 +8,7 @@ import { GrokProvider } from "@/lib/providers/grok-provider";
 import { selectGrokVisionFallback } from "@/lib/chat/vision-refusal-fallback";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 
-type Description = Pick<ConversationAttachment, "observedSummary" | "summaryModel" | "summaryCoverage" | "observationSourceHash" | "observationSetHash" | "observationQuestion" | "observationVersion" | "observationAt" | "observationLimitations">;
+type Description = Pick<ConversationAttachment, "observedSummary" | "summaryModel" | "summaryCoverage" | "observationSourceHash" | "observationSetHash" | "observationQuestion" | "observationVersion" | "observationAt" | "observationLimitations" | "observationReports" | "observationAgreement">;
 
 export function sampleAttachmentText(reference: FileReference): { text: string; coverage: "full" | "sampled" | "metadata" } {
   const text = reference.extractedText ?? reference.extractedChunks?.map(chunk => chunk.text).join("\n") ?? "";
