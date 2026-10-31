@@ -247,6 +247,35 @@ export async function qualifyNativeRecovery(db,ids){
   for(const old of beforeRestore.grants){const current=after.grants.find(g=>g.id===old.id);assert.deepEqual({...current,stopped_at:old.stopped_at},old);}
   const browser=JSON.parse(readFileSync(join(runtime,'qualification-browser-acceptance.json'),'utf8'));
   assert.equal(browser.passed,true);assert.equal(browser.headSha,completed.reviewedHeadSha);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.projectId,ids.project);assert.equal(browser.checks.length,1);assert.ok(browser.checks.every(c=>c.passed));
+  // Finish the ORIGINAL synthetic development assignment through the existing
+  // mission commit boundary, carrying the actual immutable-head/browser proof.
+  await db.query('update mission_assignments set available_at=now() where id=$1',[ids.task]);
+  const completionClaim=(await query('select claim_mission_work() c'))[0].c;
+  assert.equal(completionClaim.job.id,ids.task);
+  const verification={testedHeadSha:completed.reviewedHeadSha,reviewedHeadSha:completed.reviewedHeadSha,observedHeadSha:git(workspace,'rev-parse','HEAD'),projectAcceptance:browser};
+  const nativeReceipt={kind:'synthetic-native-development-completion',taskId:ids.task,projectId:ids.project,runId:run,verification,nativeReview:completed};
+  const team=(await one('agent_missions','id',ids.mission)).team;
+  const children=[{key:'recovery_compose',role:'compose',agent_id:team[0].id,instruction:'Summarize verified synthetic recovery evidence.',dependencies:[completionClaim.job.job_key],payload:{}},{key:'recovery_review',role:'review',agent_id:team[1].id,instruction:'Independently verify synthetic completion evidence.',dependencies:['recovery_compose'],payload:{}}];
+  assert.equal((await query("select commit_mission_work($1,$2,$3,$4,'completed',null,null) ok",[ids.task,completionClaim.job.lease,{verification,receipt:nativeReceipt},JSON.stringify(children)]))[0].ok,true);
+  assert.equal((await one('mission_assignments','id',ids.task)).status,'completed');
+  // Normal DO completion admissions/receipts use the same authoritative ledger.
+  // Their synthetic responses summarize the actual native/browser proof above.
+  for(const role of ['compose','review']){
+   const claim=(await query('select claim_mission_work() c'))[0].c;assert.equal(claim.job.role,role);
+   for(const routing of [true,false]){
+    const call=randomUUID();assert.ok((await query('select benchmark_reserve_mission_call($1,$2,$3,$4,100,$5) id',[claim.job.id,claim.job.lease,call,'openai:gpt-5.3-codex',routing]))[0].id);
+    assert.equal((await query('select benchmark_reconcile_provider_usage($1,$2,$3,true) settled',[call,'synthetic-completion-'+call,{input_tokens:3,output_tokens:2,total_tokens:5}]))[0].settled,'settled');
+   }
+   const result=role==='review'?{verdict:completed.finalReview.verdict,verification}:{text:'Verified synthetic recovery at '+verification.observedHeadSha,verification};
+   assert.equal((await query("select commit_mission_work($1,$2,$3,'[]','completed',$4,$5) ok",[claim.job.id,claim.job.lease,result,role==='review'?'completed':null,role==='review'?'Nonbillable synthetic native recovery independently verified.':null]))[0].ok,true);
+   trace.push({stage:'DO completion '+role,task:claim.job.id,head:verification.observedHeadSha,syntheticCalls:2});
+  }
+  assert.equal((await one('agent_missions','id',ids.mission)).status,'completed');
+  const closed=await ledger();for(const old of after.calls)assert.deepEqual(closed.calls.find(c=>c.id===old.id),old);
+  assert.equal(Number(closed.mission.calls),Number(after.mission.calls)+4);assert.equal(Number(closed.account.spent_tokens),Number(after.account.spent_tokens)+20);
+  report.closureAccounting={calls:4,tokens:20,snapshotHash:hash(JSON.stringify(closed))};
+  trace.push({stage:'original-development-assignment-completed',task:ids.task,mission:ids.mission,head:verification.observedHeadSha});
+  report.assignmentCompletion=nativeReceipt;
   report.browserAcceptance=browser;report.completion=completed;report.accounting={beforeHash:hash(JSON.stringify(beforeRestore)),afterHash:hash(JSON.stringify(after)),historicalCallsPreserved:historicalCalls.length,newSyntheticCalls:4,newSyntheticTokens:20,providerCalls};report.verification=finalDiagnostics.verification;
   report.limitations=['Admission-denial termination is qualified. Abrupt host SIGKILL before final artifact upload remains fail-closed, not claimed recovered.','Private acceptance uses the actual network-isolated project verifier and Chromium, not an external Vercel Preview.','Synthetic SDK responses establish execution mechanics, not real-model compliance.'];
   console.log('NATIVE_RECOVERY_LIFECYCLE_PASS='+JSON.stringify(report));

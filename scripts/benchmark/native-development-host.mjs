@@ -166,7 +166,7 @@ let recoveryPlan=null;
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
- const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:priorRefs.length?null:wipContext.baseSha});
+ const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});
