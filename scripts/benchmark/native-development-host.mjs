@@ -163,7 +163,7 @@ if(proof.resourceAmendmentId){
 const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
 const priorRefs=recoveryRefs(boundary.root,task.id);
 let recoveryPlan=null;
-if(priorRefs.length){
+if(priorRefs.length||task.external?.receipt?.outcome==='BLOCKED'){
  const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});

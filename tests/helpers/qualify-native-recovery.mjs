@@ -30,12 +30,12 @@ export async function qualifyNativeRecovery(db,ids){
  const query=async(sql,args=[])=>(await db.query(sql,args)).rows;
  const one=async(table,column,value)=>(await query(`select * from ${table} where ${column}=$1`,[value]))[0];
  const ledger=async()=>(await query(`select jsonb_build_object(
-+ 'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),
-+ 'calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),
-+ 'missionCalls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id=$2),
-+ 'mission',(select jsonb_build_object('calls',calls,'actual_tokens',actual_tokens,'reserved_tokens',reserved_tokens,'max_calls',max_calls,'token_allowance',token_allowance) from agent_missions where id=$3),
-+ 'grants',(select jsonb_agg(to_jsonb(g) order by id) from benchmark_execution_grants g where account_id=$1),
-+ 'approvals',(select jsonb_agg(to_jsonb(a) order by id) from benchmark_native_spending_approvals a where account_id=$1)) value`.replaceAll('\n+','\n'),[ids.account,ids.task,ids.mission]))[0].value;
+ 'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),
+ 'calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),
+ 'missionCalls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id=$2),
+ 'mission',(select jsonb_build_object('calls',calls,'actual_tokens',actual_tokens,'reserved_tokens',reserved_tokens,'max_calls',max_calls,'token_allowance',token_allowance) from agent_missions where id=$3),
+ 'grants',(select jsonb_agg(to_jsonb(g) order by id) from benchmark_execution_grants g where account_id=$1),
+ 'approvals',(select jsonb_agg(to_jsonb(a) order by id) from benchmark_native_spending_approvals a where account_id=$1)) value`,[ids.account,ids.task,ids.mission]))[0].value;
  const initialFiles={
   'app/pilot/state.mjs':'export const value = "Broken";\n',
   'app/pilot/page.tsx':'export default function Page(){return <div id="state">Broken</div>}\n',
@@ -127,7 +127,7 @@ export async function qualifyNativeRecovery(db,ids){
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const launch=async({successor,release=ids.release}={})=>{
-   mkdirSync(join(workspace,'node_modules'),{recursive:true});execFileSync('cp',['-al',join(repo,'node_modules','.'),join(workspace,'node_modules')]);
+   rmSync(join(workspace,'node_modules'),{recursive:true,force:true});mkdirSync(join(workspace,'node_modules'),{recursive:true});execFileSync('cp',['-al',join(repo,'node_modules','.'),join(workspace,'node_modules')]);
    const proof={taskId:ids.task,trialId:ids.trial,approvalId:ids.renewal.approval_id,projectId:ids.project,contractHash:context.contractHash,benchmarkContractHash:trial.contract_sha256,baselineSha:baseline,expiresAt:Date.now()+25*60000,continuationId:ids.continuation.id,developmentRenewalId:ids.renewal.id,...(successor?{paidSuccessorId:successor}:{})};
    proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);
    const request=projectMarker(context)+'\nSynthetic recovery qualification only.\n'+encodeNativeHandoff(proof,signing);
@@ -142,6 +142,11 @@ export async function qualifyNativeRecovery(db,ids){
    return {code,log,evidence,requestFile};
   };
   trace.push({stage:'authorized-task',task:ids.task,project:ids.project,baseline});
+  for(const mutation of ["update benchmark_native_spending_approvals set revoked_at=now() where id=$1","update benchmark_native_spending_approvals set deadline=now()-interval '1 second' where id=$1"]){
+   const before=await ledger();await db.query('begin');await db.query(mutation,[ids.renewal.approval_id]);
+   const denied=await launch();assert.notEqual(denied.code,0);assert.match(denied.log,/owner spending approval/);assert.equal(providerCalls,0);await db.query('rollback');assert.deepEqual(await ledger(),before);
+   report.failures.push({case:mutation.includes('revoked')?'missing authority':'expired authority',result:'actual host denied before model dispatch; ledger unchanged'});
+  }
   const first=await launch();assert.notEqual(first.code,0,first.log);assert.match(first.log,/native repair failed/,first.log);
   assert.deepEqual([...phaseCounts], [['implementation',2],['review',2],['repair',1]]);
   const diagnostics=JSON.parse(readFileSync(first.evidence+'.diagnostics.json')),record=diagnostics.wipCheckpoint;assert.ok(record);assert.equal(record.phase,'repair');assert.equal(record.verification,'unverified');
@@ -158,9 +163,23 @@ export async function qualifyNativeRecovery(db,ids){
   const github=async(path,binary)=>binary?readFileSync(join(root,'artifact.zip')):path.includes('/artifacts?')?{total_count:1,artifacts:[artifact]}:workflow;
   const beforeRestore=await ledger();rmSync(workspace,{recursive:true,force:true});assert.equal(existsSync(workspace),false);trace.push({stage:'runner-destroyed',path:workspace});
   const fresh=()=>{const dir=join(root,'fresh-'+randomUUID());git(root,'clone','-q','--branch','baseline',remote,dir);return dir;};workspace=fresh();
+  const authority=await one('work_projects','id',ids.project);
+  for(const [label,change] of [
+   ['wrong task',{taskId:randomUUID()}],['wrong project',{projectId:randomUUID()}],
+   ['changed original baseline',{originalBaselineSha:'a'.repeat(40)}],
+   ['expanded scope',{approvedScope:{...record.approvedScope,allowedPaths:['app/']}}],
+   ['changed contract',{approvedScope:{...record.approvedScope,contractHash:'b'.repeat(64)}}],
+   ['missing execution provenance',{lastCompleted:{...record.lastCompleted,modelCall:null}}]
+  ]){await assert.rejects(validateRecoveryRecords({record:{...record,...change},task,context,project:authority,trialId:ids.trial,accountId:ids.account,readOne:one}));report.failures.push({case:label,result:'rejected against PostgreSQL task provenance'});}
   const restored=await loadRecoveryDiagnostics({task,repository:'mfackrell/katie',github});
   await validateRecoveryRecords({record:restored.record,task,context,project:await one('work_projects','id',ids.project),trialId:ids.trial,accountId:ids.account,readOne:one});
   const prepare=(recordOverride=record,refs=recoveryRefs(workspace,ids.task))=>prepareRecovery({workspace,tempRoot:runtime,toolsRoot:join(runtime,'project-tools'),requestFile:first.requestFile,context,record:recordOverride,refs});
+  assert.throws(()=>prepare({...record,sourceTreeSha:'a'.repeat(40)}),/forged|altered|tree/);report.failures.push({case:'corrupted checkpoint',result:'rejected'});
+  assert.throws(()=>prepare(record,[...recoveryRefs(workspace,ids.task),{ref:`refs/tags/katie-wip/${ids.task}/999999-1/1`,checkpointSha:record.checkpointSha}]),/latest remote checkpoint/);report.failures.push({case:'concurrent unanchored checkpoint',result:'ambiguity rejected'});
+  const interrupted=prepare();write(workspace,'.git/HEAD.lock','synthetic interruption');
+  assert.throws(()=>interrupted.restore(),/lock|update-ref/);assert.equal(git(workspace,'rev-parse','HEAD'),baseline);assert.deepEqual(await ledger(),beforeRestore);
+  rmSync(workspace,{recursive:true,force:true});workspace=fresh();
+  report.failures.push({case:'recovery interrupted before HEAD promotion',result:'CAS failed; original HEAD and durable WIP retained; fresh restoration succeeds'});
   const state=prepare().restore();assert.equal(state.phase,'repair');assert.equal(state.verification,'unverified');assert.equal(state.reviewFindings,record.reviewFindings);
   for(const [p,c]of Object.entries(repairFiles))assert.equal(hash(readFileSync(join(workspace,p))),hash(c));assert.equal(existsSync(join(workspace,'app/pilot/obsolete.mjs')),false);
   assert.deepEqual(await ledger(),beforeRestore);trace.push({stage:'fresh-runner-restored',head:git(workspace,'rev-parse','HEAD'),hashes:report.files});
@@ -168,6 +187,7 @@ export async function qualifyNativeRecovery(db,ids){
   write(workspace,'app/pilot/state.mjs','partial local recovery lost');rmSync(workspace,{recursive:true,force:true});workspace=fresh();prepare().restore();assert.equal(hash(readFileSync(join(workspace,'app/pilot/state.mjs'))),report.files['app/pilot/state.mjs']);assert.deepEqual(await ledger(),beforeRestore);
   report.failures.push({case:'interrupted recovery',result:'fresh runner restores original durable WIP; ledger unchanged'});
   // Retention is authoritative artifact expiry, not a local timestamp heuristic.
+  await assert.rejects(loadRecoveryDiagnostics({task,repository:'mfackrell/katie',github:async(path,binary)=>path.includes('/artifacts?')?{total_count:0,artifacts:[]}:github(path,binary)}),/missing/);report.failures.push({case:'missing trusted evidence',result:'rejected'});
   artifact.expired=true;await assert.rejects(loadRecoveryDiagnostics({task,repository:'mfackrell/katie',github}),/expired/);artifact.expired=false;
   report.failures.push({case:'seven-day trusted artifact expiry',result:'fail closed; Git WIP survives; automatic recovery unavailable'});
   rmSync(workspace,{recursive:true,force:true});workspace=fresh();assert.throws(()=>prepare(record,[]),/checkpoint/);report.failures.push({case:'missing checkpoint',result:'rejected'});
@@ -180,11 +200,20 @@ export async function qualifyNativeRecovery(db,ids){
   assert.equal((await query('select benchmark_claim_development_paid_successor($1,$2) ok',[successor.id,release]))[0].ok,true);
   // Explicit disposable authority is separate from restoration; no reset.
   const historicalCalls=beforeRestore.calls;run++;recovering=true;phaseCounts=new Map();
+  const refs=recoveryRefs(workspace,ids.task),beforeMissing=await ledger();
+  for(const ref of refs)git(root,'--git-dir',remote,'update-ref','-d',ref.ref);
+  const absent=await launch({successor:successor.id,release});assert.notEqual(absent.code,0);assert.match(absent.log,/latest remote checkpoint/);assert.deepEqual(await ledger(),beforeMissing);assert.equal(phaseCounts.size,0);
+  for(const ref of refs)git(root,'--git-dir',remote,'update-ref',ref.ref,ref.checkpointSha);
+  report.failures.push({case:'missing WIP refs in actual host',result:'no implementation restart; no grant consumed'});
   const second=await launch({successor:successor.id,release});assert.equal(second.code,0,second.log);
   assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completed=JSON.parse(readFileSync(second.evidence));assert.equal(completed.completed,true);assert.equal(completed.finalReview.verdict,'pass');assert.equal(completed.review.verdict,'changes_requested');
   const finalDiagnostics=JSON.parse(readFileSync(second.evidence+'.diagnostics.json'));assert.deepEqual(finalDiagnostics.phases.map(p=>p.phase),['repair','final-review']);assert.ok(finalDiagnostics.verification?.every(v=>v.passed));
   const after=await ledger();for(const old of historicalCalls)assert.deepEqual(after.calls.find(c=>c.id===old.id),old,'Historical receipt changed');assert.equal(Number(after.mission.calls),Number(beforeRestore.mission.calls)+4);assert.equal(Number(after.account.spent_tokens),Number(beforeRestore.account.spent_tokens)+20);
+  for(const old of beforeRestore.missionCalls)assert.deepEqual(after.missionCalls.find(c=>c.id===old.id),old);
+  for(const old of beforeRestore.approvals)assert.deepEqual(after.approvals.find(c=>c.id===old.id),old);
+  assert.equal(after.grants.length,beforeRestore.grants.length+1);
+  for(const old of beforeRestore.grants){const current=after.grants.find(g=>g.id===old.id);assert.deepEqual({...current,stopped_at:old.stopped_at},old);}
   report.completion=completed;report.accounting={beforeHash:hash(JSON.stringify(beforeRestore)),afterHash:hash(JSON.stringify(after)),historicalCallsPreserved:historicalCalls.length,newSyntheticCalls:4,newSyntheticTokens:20,providerCalls};report.verification=finalDiagnostics.verification;
   report.limitations=['Admission-denial termination is qualified. Abrupt host SIGKILL before final artifact upload remains fail-closed, not claimed recovered.','Private acceptance uses the actual network-isolated project verifier and Chromium, not an external Vercel Preview.','Synthetic SDK responses establish execution mechanics, not real-model compliance.'];
   console.log('NATIVE_RECOVERY_LIFECYCLE_PASS='+JSON.stringify(report));
