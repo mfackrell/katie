@@ -207,7 +207,8 @@ test('Qwen factual subject survives a limited refusal with zero Dolphin or premi
   const grounding=currentTurnImageGroundingContext([ref],result,new Set([ref.fileId]));
   assert.match(grounding,/uploaded this turn/);
   assert.match(grounding,/penis/);
-  assert.match(grounding,/Do not say no image was received/);
+  assert.match(grounding,/"evidenceAvailable":true/);
+  assert.match(grounding,/When evidenceAvailable=true do not ask for another upload/);
   const evidence=imageObservationAsText(ref,observation).extractedText??'';
   assert.match(evidence,/Reconciliation: policy-limited/);
   assert.doesNotMatch(evidence,/I cannot fulfill this request/);
