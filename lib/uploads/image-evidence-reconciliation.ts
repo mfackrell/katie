@@ -41,9 +41,11 @@ export function reportedFocalSubject(text:string):string|null {
     /\b(?:image|photo|photograph|picture)\b.{0,48}?\b(?:shows?|depicts?|features?|contains?)\s*/i
   ];
   const anchor=patterns.map(p=>p.exec(s)).find(Boolean);
-  // Avoid inferring a focal subject from arbitrary background sentences.
-  if(!anchor)return null;
-  let clause=s.slice(anchor.index+anchor[0].length,anchor.index+anchor[0].length+185);
+  // Short Qwen observations commonly start "A cup on a table" without labels.
+  // Only their first sentence can supply a fallback claimed subject.
+  const shortUnlabelled=!anchor&&s.length<240&&/^(?:a|an|the)\s+/i.test(s);
+  if(!anchor&&!shortUnlabelled)return null;
+  let clause=anchor?s.slice(anchor.index+anchor[0].length,anchor.index+anchor[0].length+185):s.slice(0,185);
   clause=clause.split(/[.!?;:]/)[0];
   clause=clause.replace(/^(?:a|an|the)\s+(?:close[- ]up\s+(?:of|view|perspective)\s+(?:of\s+)?|first[- ]person\s+perspective\s+of\s+)+/i,'');
   clause=clause.replace(/^\s*(?:a|an|the|this|one|some)\s+/i,'');
