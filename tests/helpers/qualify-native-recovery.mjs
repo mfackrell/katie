@@ -43,8 +43,8 @@ export async function qualifyNativeRecovery(db,ids){
  const ledger=async()=>(await query(`select jsonb_build_object(
  'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),
  'calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),
- 'missionCalls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id=$2),
- 'mission',(select jsonb_build_object('calls',calls,'actual_tokens',actual_tokens,'reserved_tokens',reserved_tokens,'max_calls',max_calls,'token_allowance',token_allowance) from agent_missions where id=$3),
+ 'missionCalls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=$3)),
+ 'mission',(select jsonb_build_object('calls',calls,'routing_calls',routing_calls,'actual_tokens',actual_tokens,'reserved_tokens',reserved_tokens,'max_calls',max_calls,'token_allowance',token_allowance) from agent_missions where id=$3),
  'grants',(select jsonb_agg(to_jsonb(g) order by id) from benchmark_execution_grants g where account_id=$1),
  'approvals',(select jsonb_agg(to_jsonb(a) order by id) from benchmark_native_spending_approvals a where account_id=$1)) value`,[ids.account,ids.task,ids.mission]))[0].value;
  const initialFiles={
@@ -272,7 +272,7 @@ export async function qualifyNativeRecovery(db,ids){
   }
   assert.equal((await one('agent_missions','id',ids.mission)).status,'completed');
   const closed=await ledger();for(const old of after.calls)assert.deepEqual(closed.calls.find(c=>c.id===old.id),old);
-  assert.equal(Number(closed.mission.calls),Number(after.mission.calls)+4);assert.equal(Number(closed.account.spent_tokens),Number(after.account.spent_tokens)+20);
+  assert.equal(Number(closed.mission.calls),Number(after.mission.calls)+2);assert.equal(Number(closed.mission.routing_calls),Number(after.mission.routing_calls)+2);assert.equal(closed.calls.length,after.calls.length+4);assert.equal(closed.missionCalls.length,after.missionCalls.length+4);assert.equal(Number(closed.account.spent_tokens),Number(after.account.spent_tokens)+20);
   report.closureAccounting={calls:4,tokens:20,snapshotHash:hash(JSON.stringify(closed))};
   trace.push({stage:'original-development-assignment-completed',task:ids.task,mission:ids.mission,head:verification.observedHeadSha});
   report.assignmentCompletion=nativeReceipt;
