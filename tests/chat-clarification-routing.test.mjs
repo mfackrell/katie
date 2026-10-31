@@ -124,7 +124,7 @@ function fixture() {
     return Response.json(matches.slice(0, Number(url.searchParams.get('limit') ?? matches.length)));
   };
   const modules = new Map();
-  const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
+  const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, companionActor:false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
     // These protocol fixtures exercise route decisions; durable accounting and
     // authenticated resume are covered by the standalone workflow tests.
     workflowTimestamp: () => '2026-10-28T00:00:00.000Z',
@@ -147,7 +147,7 @@ function fixture() {
     return exports;
   };
   const helpers = Object.assign({}, ...[
-    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
+    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/companion-task-boundary', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
     'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
@@ -182,6 +182,33 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
     timelineActive: false, mediaMemory: null, overrideProvider: null, overrideModel: null, hasVideoInput: false,
   });
 }
+
+test('real route task selection clears companion image-only state without erasing source history',async()=>{
+  const f=fixture();
+  const older=f.helpers.rebuildTaskProgress([
+    {id:'hello',role:'user',content:'Hi Katie'},
+    {id:'hello-reply',role:'assistant',content:'What is on your mind?'},
+    {id:'conversation',role:'user',content:"Good. What's up?"},
+    {id:'conversation-reply',role:'assistant',content:'Tell me more.'},
+    {id:'old-description',role:'user',content:'Describe this photo'},
+    {id:'old-reply',role:'assistant',content:'Would you show me the image?'},
+  ]);
+  assert.equal(older.projectContext?.userMessageId,'conversation');
+  assert.equal(older.objective?.userMessageId,'old-description');
+  const savedHistory=[{id:'h1',role:'user',content:'Earlier user message.'},
+                      {id:'h2',role:'assistant',content:'Earlier assistant message.'}];
+  const original=plain(savedHistory);
+  f.globals.companionActor=true;
+  const result=await select(f,{message:'[image]',messageId:'current-photo',
+    priorTaskProgress:f.helpers.scopeCompanionTaskProgress(older),
+    history:savedHistory,responsePurpose:'conversation',reviewMode:'off'});
+  assert.equal(result.taskProgress.objective,null);
+  assert.equal(result.taskProgress.projectContext,null);
+  assert.deepEqual(plain(result.taskProgress.pending),[]);
+  assert.equal(result.taskProgress.lastUserMessageId,'current-photo');
+  assert.equal(result.taskProgressContext,'');
+  assert.deepEqual(savedHistory,original,'STM/source history stays intact');
+});
 
 async function replayPosting(f) {
   const before = f.helpers.rebuildTaskProgress(f.history);
