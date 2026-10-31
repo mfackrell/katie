@@ -22,3 +22,18 @@ test('browser only refreshes persisted replies, never owns generation',()=>{
  assert.doesNotMatch(panel,/void onSubmit\(\{ preventDefault\(\) \{\} \} as FormEvent, reactionTurn\)/);
  assert.match(reactions,/onReaction\(next\)/);
 });
+
+test('reaction replies use verified job-scoped internal owner without weakening ordinary chat',()=>{
+ const authorization=fs.readFileSync('lib/chat/reaction-internal-authorization.ts','utf8');
+ const workflow=fs.readFileSync('lib/standalone-accounting/workflow.ts','utf8');
+ const migration=fs.readFileSync('supabase/migrations/20261031174500_reaction_reply_internal_owner.sql','utf8');
+ assert.match(worker,/runWithVerifiedReactionReply\(job,\(\)=>executeNormalChat\(request\)\)/);
+ assert.match(authorization,/standalone_reaction_reply_owner/);
+ assert.match(authorization,/scope\.run\(Object\.freeze/);
+ assert.match(authorization,/current\.actorId !== actorId \|\| current\.chatId !== chatId/);
+ assert.match(workflow,/verifiedReactionOwner\(actorId,chatId,requestId,resumed\)/);
+ assert.match(workflow,/authorizeStandaloneCaller\(request,actorId,chatId\)/);
+ assert.match(migration,/j\.status='processing' and j\.lease_until>now\(\)/);
+ assert.match(migration,/standalone_verify_scope\(b\.owner_id,j\.actor_id,j\.chat_id\)/);
+ assert.match(migration,/revoke all on function public\.standalone_reaction_reply_owner/);
+});
