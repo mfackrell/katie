@@ -3169,7 +3169,7 @@ export function ChatPanel({
         </p>
       )}
       {managedAgentId && <p className="border-t border-white/10 px-4 py-3 text-sm text-zinc-300">This is a managed agent workspace. <a href={`/agents?chat=${encodeURIComponent(chatId)}`} className="underline">Open Agents management to continue the saved task.</a></p>}
-      {!managedAgentId && activeActorName.trim().toLowerCase() === 'katie' && <SelfToolsOwnerSession chatId={chatId} />}
+      {!managedAgentId && <SelfToolsOwnerSession chatId={chatId} />}
       <form hidden={Boolean(managedAgentId)} onSubmit={onSubmit} className="shrink-0 border-t border-white/10 bg-zinc-950/92 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] backdrop-blur-xl sm:bg-transparent sm:px-6 sm:py-4 sm:backdrop-blur-none">
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
