@@ -85,6 +85,7 @@ import { getPendingReviewClarification, resolvePendingReviewClarification } from
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
 import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
 import { selectTaskProgressPrompt } from "@/lib/chat/task-progress-prompt";
+import { isCompanionActorIdentity, scopeCompanionTaskProgress, shouldTrackCompanionProject, recordCompanionConversationTurn, finishCompanionConversationTurn } from "@/lib/chat/companion-task-boundary";
 import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
@@ -739,6 +740,17 @@ async function executeChat(request: NextRequest) {
     const overrideModel = captureCommand ? "claude-sonnet-5" : suppliedOverrideModel;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    // Companion scoping does not alter authorization or session access.
+    let companionActor = false;
+    if (!currentAgentTask()) {
+      try {
+        const { data, error } = await getSupabaseAdminClient().from("actors")
+          .select("name,system_prompt").eq("id", actorId)
+          .maybeSingle<{ name: string; system_prompt: string }>();
+        if (error) console.warn("[CompanionTask] identity lookup unavailable");
+        else if (data) companionActor = isCompanionActorIdentity({ name: data.name, systemPrompt: data.system_prompt });
+      } catch { console.warn("[CompanionTask] identity lookup unavailable"); }
+    }
     // Exact outbound payload capture is explicitly requested, text-only and owner-grant scoped.
     // This never records ordinary conversations and never grants diagnostic access to guests.
     if (providerPayloadCapture) {
@@ -842,10 +854,11 @@ async function executeChat(request: NextRequest) {
     // durable task/question binding as review resumption before borrowing scope.
     const taskProgressUserMessageId = workflowMessageId("user") ?? crypto.randomUUID();
     const taskProgressAssistantMessageId = workflowMessageId("assistant") ?? crypto.randomUUID();
-    const priorTaskProgress = mergeTaskProjects(
+    const loadedTaskProgress = mergeTaskProjects(
       syncTaskProgress(await cachedWorkflowValue("task-progress", () => loadTaskProgress(actorId, chatId)), attachmentHistory),
       currentAgentTask() ? [] : await cachedWorkflowValue("actor-projects", () => loadActorTaskProjects(actorId)),
     );
+    const priorTaskProgress = companionActor ? scopeCompanionTaskProgress(loadedTaskProgress) : loadedTaskProgress;
     // Resolve task identity from firsthand text BEFORE historical files can
     // influence routing. The later model router cannot silently replace it.
     let contextClassification: Awaited<ReturnType<typeof inferRequestClassification>> | undefined;
@@ -911,12 +924,20 @@ async function executeChat(request: NextRequest) {
       contextClassification = { ...(contextClassification ?? {intent: "general-text", preferredProvider: null}),
         projectTransition: {action: "ambiguous", clarification: "I could not read this upload well enough to identify its task. Does it start a new project or belong to the current one?"} };
     }
-    const pdfProgress = isProjectStopRequest ? {...priorTaskProgress, projectClarification: undefined} : applyUserToTaskProgress(priorTaskProgress, {
-      messageId: taskProgressUserMessageId, text: taskIdentityText,
-      projectRelation: contextClassification?.projectRelation,
+    const companionOnlyTurn = companionActor && !shouldTrackCompanionProject({
+      message, previous: priorTaskProgress,
+      explicitProjectIntent: explicitUploadProjectIntent,
       projectTransition: contextClassification?.projectTransition,
     });
-    const pdfReviewContinuation = await getPendingReviewClarification(actorId, chatId, {
+    const pdfProgress = isProjectStopRequest ? {...priorTaskProgress, projectClarification: undefined} :
+      companionOnlyTurn ? recordCompanionConversationTurn(priorTaskProgress, {
+        messageId: taskProgressUserMessageId, text: message,
+      }) : applyUserToTaskProgress(priorTaskProgress, {
+        messageId: taskProgressUserMessageId, text: taskIdentityText,
+        projectRelation: contextClassification?.projectRelation,
+        projectTransition: contextClassification?.projectTransition,
+      });
+    const pdfReviewContinuation = companionOnlyTurn ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: pdfProgress, history: attachmentHistory,
     });
     const pdfTaskContext = pdfReviewContinuation &&
@@ -1775,7 +1796,7 @@ async function executeChat(request: NextRequest) {
     // Routing selects execution capabilities, not a different parent task.
     taskProgress = pdfProgress;
     projectRelationHint = contextClassification?.projectRelation;
-    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId, {
+    const pendingReviewClarification = companionOnlyTurn ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: taskProgress, history, projectRelation: projectRelationHint,
     });
     const verifyingSavedDraft = Boolean(pendingReviewClarification &&
@@ -1803,14 +1824,16 @@ async function executeChat(request: NextRequest) {
         (taskProgress.lastUserIntent === "answer" || pendingReviewClarification)),
       explicitReviewRetry: verifyingSavedDraft,
     });
-    const taskProgressPrompt = selectTaskProgressPrompt({
-      message, currentUserMessageId: taskProgressUserMessageId, history,
-      progress: reviewTaskProgress, responsePurpose: responsePolicy.purpose,
-      managedTask: Boolean(currentAgentTask()),
-      explicitProjectControl, explicitSavedProjectReference,
-      pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
-      projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
-    });
+    const taskProgressPrompt = companionOnlyTurn
+      ? { text: "", reason: "companion_conversation" }
+      : selectTaskProgressPrompt({
+        message, currentUserMessageId: taskProgressUserMessageId, history,
+        progress: reviewTaskProgress, responsePurpose: responsePolicy.purpose,
+        managedTask: Boolean(currentAgentTask()),
+        explicitProjectControl, explicitSavedProjectReference,
+        pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
+        projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+      });
     const taskProgressContext = taskProgressPrompt.text;
     console.info("[TaskProgress] Prompt scope", {
       requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
@@ -3681,9 +3704,11 @@ ${chunkWorkflowSummary}`;
                 assistantAssets: imageAssets,
               });
             }
-            taskProgress = applyAssistantToTaskProgress(taskProgress, {
-              messageId: assistantMessageId, text: assistantText, responsePurpose: responsePolicy.purpose,
-            });
+            taskProgress = companionOnlyTurn
+              ? finishCompanionConversationTurn(taskProgress, assistantMessageId)
+              : applyAssistantToTaskProgress(taskProgress, {
+                messageId: assistantMessageId, text: assistantText, responsePurpose: responsePolicy.purpose,
+              });
             const taskProgressSaved = await saveTaskProgress(actorId, chatId, taskProgress);
             if (currentAgentTask()) {
               if (!taskProgressSaved) throw new Error("Managed task progress could not be saved");
