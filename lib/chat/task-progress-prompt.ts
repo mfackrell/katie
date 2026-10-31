@@ -37,7 +37,7 @@ function hasProjectWorkAnchor(text: string): boolean {
  * conversational answer as a task continuation.
  */
 function isConversationalProjectOrigin(text: string): boolean {
-  const plain = text.trim().replace(/^(?:good|great|okay|ok|nice|indeed)[.!?,\\s]+/i, "").trim();
+  const plain = text.trim().replace(/^(?:good|great|okay|ok|nice|indeed)[.!?,\s]+/i, "").trim();
   return classifyUserTurn(text) === "conversation" || classifyUserTurn(plain) === "conversation";
 }
 
