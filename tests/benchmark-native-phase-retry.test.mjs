@@ -25,7 +25,7 @@ test('positive process interruption still needs settled ledger and live grant',a
  assert.equal((await runLoop({signal:'SIGKILL',code:null,live:false})).runs,1);
 });
 test('watchdog state failure and read uncertainty latch a nonretryable host stop before kill',async()=>{
- const watchdog=host.slice(host.indexOf(' stopTimer=setInterval'),host.indexOf(" await safelyRunPhase('implementation')"));
+ const watchdog=host.slice(host.indexOf(' stopTimer=setInterval'),host.indexOf(" const verifyCandidate="));
  for(const mode of ['stopped','read-error']){
   let callback,killed=0;
   const context={stopTimer:null,gatewayFailure:null,setInterval:fn=>{callback=fn;return 1;},grantId:'grant',proof:{projectId:'project'},child:{kill:()=>killed++},readOne:async table=>{if(mode==='read-error')throw Error('unavailable');return table==='benchmark_execution_grants'?{stopped_at:'stopped',deadline:'2099-01-01'}:{status:'running',deadline:'2099-01-01',approved_hash:'scope',approval_hash:'scope'};}};
@@ -33,7 +33,7 @@ test('watchdog state failure and read uncertainty latch a nonretryable host stop
  }
 });
 test('amendment host gate binds record identity, runtime and claimed release',async()=>{
- const gate=host.slice(host.indexOf('if(proof.resourceAmendmentId){'),host.indexOf('const grantToken=randomBytes'));
+ const gate=host.slice(host.indexOf('if(proof.resourceAmendmentId){'),host.indexOf('// Inspect recovery before consuming'));
  const proof={resourceAmendmentId:'amendment',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task',continuationId:'continuation'};
  const row={id:'amendment',renewal_id:'renewal',approval_id:'approval',task_id:'task',continuation_id:'continuation',release_sha:'release',runtime_version:'provider-input-count-v1'};
  const run=async change=>vm.runInNewContext('(async()=>{'+gate+'})()',{proof,productionRuntime:{},NATIVE_INPUT_COUNT_VERSION:'provider-input-count-v1',process:{env:{GITHUB_SHA:'release'}},task:{external:{resourceAmendmentId:'amendment'}},readOne:async()=>({...row,...change}),denied:message=>{throw Error(message);}});
@@ -55,3 +55,4 @@ test('owner-approved successor never retries even a settled live process interru
   assert.equal(r.error?.message,'child failed');
  }
 });
+
