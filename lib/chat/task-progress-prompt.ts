@@ -63,6 +63,12 @@ export function selectTaskProgressPrompt(input: TaskProgressPromptInput): TaskPr
   if (input.explicitProjectControl || input.explicitSavedProjectReference) return render("explicit_project");
   if (input.responsePurpose === "conversation") return omit("conversation");
   if (input.pendingReviewContinuation) return render("bound_review_continuation");
+  // A bare upload is evidence supplied this turn, not authorization to revive
+  // the prior conversational project's objective; the router may call it a
+  // same-project deliverable based solely on stale task metadata.
+  if (/^\s*\[(?:image|images|file|files|video|audio)\]\s*$/i.test(input.message) ||
+      classifyUserTurn(input.message) === "conversation")
+    return omit("ordinary_or_upload_only_turn");
 
   const parent = input.progress.projectContext;
   if (!parent || parent.userMessageId === input.currentUserMessageId)
