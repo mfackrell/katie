@@ -288,3 +288,29 @@ for (const streaming of [false, true]) {
     } finally { globalThis.fetch = originalFetch; }
   });
 }
+
+test("captured first pass matches sent JSON", async () => {
+  const priorFetch = globalThis.fetch;
+  let sent: any;
+  let captured: any;
+  globalThis.fetch = (async (_url, init) => {
+    sent = JSON.parse(String(init?.body));
+    return jsonResponse({ content: [{ type: "text", text: "Ok." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const provider = new ClaudeProvider("test-key");
+    await provider.generate({
+      ...baseParams,
+      history: [{role:"user",content:"Hello"},{role:"assistant",content:"Hi"}],
+      providerPayloadCaptureTrace: {
+        actorId:"actor",chatId:"chat",requestId:"req",currentUserMessageId:"u2",
+        historySource:"stm",stmVersion:2,stmExchangeCount:1,stmLastAssistantId:"a1",
+        persistedLastCompletedAssistantId:"a1",stmMatchesPersistedTail:true,
+        historyTurns:[],recentPersistedTurns:[],excludedTurns:[],intermediateSummaryChars:0
+      },
+      onProviderSystemPrepared: async audit => { captured = audit.requestDiagnostic?.wireRequest; },
+    });
+    assert.deepEqual(captured, sent);
+    assert.equal(sent.messages.at(-1).content, baseParams.user);
+  } finally { globalThis.fetch = priorFetch; }
+});
