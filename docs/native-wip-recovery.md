@@ -60,8 +60,8 @@ still pass deterministic/build/browser verification and final independent review
 the ordinary protected-preview/browser-completion pipeline remains mandatory.
 
 Recovery is not execution authority. The actual host requires the existing,
-separately approved live dispatch and atomic grant issuance before restoring and
-running a child; every new provider request still passes the existing gateway.
+separately approved live dispatch; restoration finishes before atomic grant
+issuance, and a child starts only after that grant succeeds; every new provider request still passes the existing gateway.
 The restoration helper itself performs no provider requests or grant writes and
 cannot declare completion. A failed or expired authorization leaves remote work
 recoverable. No owner approval, paid retry, or game execution is created by this PR.

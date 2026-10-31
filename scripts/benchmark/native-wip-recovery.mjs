@@ -1,7 +1,7 @@
 // Trusted host only. Recovery reads historical evidence; it never grants authority,
 // reconciles charges, replays a request, or treats WIP as reviewed source.
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync,rmSync,openSync,closeSync,mkdirSync,lstatSync,fstatSync,ftruncateSync,fchmodSync,writeSync,unlinkSync,constants} from 'node:fs';
+import {mkdtempSync,rmSync,openSync,closeSync,mkdirSync,lstatSync,fstatSync,ftruncateSync,fchmodSync,writeSync,unlinkSync,rmdirSync,constants} from 'node:fs';
 import {join} from 'node:path';
 import {inflateRawSync} from 'node:zlib';
 import {isDeepStrictEqual} from 'node:util';
@@ -13,7 +13,7 @@ const same=(actual,expected,reason)=>{if(!isDeepStrictEqual(actual,expected))fai
 const gitAt=workspace=>(...args)=>execFileSync('git',[...protectedGitConfig,...args],{
  cwd:workspace,encoding:'utf8',timeout:20000,maxBuffer:8*1024*1024,stdio:['pipe','pipe','pipe']}).trim();
 
-function materialize(workspace,{path,content,mode}){
+function materialize(workspace,{path,content,mode,directoryOnly=false}){
  const descriptors=[];
  try{
   let fd=openSync(workspace,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);descriptors.push(fd);
@@ -25,6 +25,14 @@ function materialize(workspace,{path,content,mode}){
   }
   const target=`/proc/self/fd/${fd}/${leaf}`;
   let existing;try{existing=lstatSync(target);}catch(error){if(error.code!=='ENOENT')throw error;}
+  if(directoryOnly){
+   if(!existing)return;
+   if(!existing.isDirectory()||existing.isSymbolicLink())fail('unsafe recovery directory');
+   // Never recursively delete: ignored/untracked or concurrently arrived work
+   // makes the directory nonempty and must survive the failed restoration.
+   try{rmdirSync(target);}catch(error){if(error.code!=='ENOTEMPTY'&&error.code!=='EEXIST')throw error;}
+   return;
+  }
   if(existing&&(!existing.isFile()||existing.nlink!==1))fail('unsafe existing recovery path');
   if(content===null){if(existing)unlinkSync(target);return;}
   fd=openSync(target,constants.O_WRONLY|constants.O_CREAT|constants.O_NOFOLLOW|constants.O_NONBLOCK,0o600);descriptors.push(fd);
@@ -206,6 +214,9 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
   const entry=git('ls-tree','-z',record.checkpointSha,'--',path).split('\t')[0];
   if(!entry)return {path,content:null};
   const [mode,type,blob]=entry.split(' ');
+  // A baseline file replaced by a directory must be removed before its new
+  // descendant blobs are written. Git does not otherwise track directories.
+  if(mode==='040000'&&type==='tree'&&sha(blob))return {path,content:null};
   if(!['100644','100755'].includes(mode)||type!=='blob'||!sha(blob))fail('unsafe recovery source type');
   const content=execFileSync('git',[...protectedGitConfig,'cat-file','blob',blob],{cwd:workspace,timeout:20000,maxBuffer:4*1024*1024,stdio:['ignore','pipe','pipe']});
   bytes+=content.length;if(bytes>4*1024*1024)fail('recovery source bytes exceed bounds');
@@ -216,7 +227,18 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
   // remains HEAD; unfinished source stays unstaged and explicitly unverified.
   if(git('rev-parse','HEAD')!==context.baseSha||git('diff','--name-only')||git('diff','--cached','--name-only')||
      git('ls-files','--others','--exclude-standard','-z').split('\0').filter(p=>p&&p!=='AGENT_REQUEST.md').length)fail('runner changed after recovery validation');
-  for(const file of files)materialize(workspace,file);
+  const deleted=files.filter(file=>file.content===null).sort((a,b)=>b.path.length-a.path.length);
+  for(const file of deleted)materialize(workspace,file);
+  const directories=new Set();
+  for(const {path} of deleted){
+   const parts=path.split('/');parts.pop();
+   while(parts.length){const parent=parts.join('/');
+    if(context.allowedPaths.some(p=>p.endsWith('/')&&(parent+'/'===p||parent.startsWith(p))))directories.add(parent);
+    parts.pop();
+   }
+  }
+  for(const path of [...directories].sort((a,b)=>b.length-a.length))materialize(workspace,{path,directoryOnly:true});
+  for(const file of files.filter(file=>file.content!==null))materialize(workspace,file);
   // Index-only read-tree and compare-and-swap HEAD preserve candidate ancestry
   // without executing any checkout helpers. WIP is never promoted to HEAD.
   git('read-tree',record.completedCheckpointSha);

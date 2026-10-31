@@ -18,14 +18,17 @@ function archive(value){
  const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,8);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+name.length,12);end.writeUInt32LE(local.length+name.length+body.length,16);
  return Buffer.concat([local,name,body,central,name,end]);
 }
-function fixture(t,{phase='repair',legacy=false,attributes=false}={}){
+function fixture(t,{phase='repair',legacy=false,attributes=false,transition}={}){
  const root=mkdtempSync(join(tmpdir(),'native-recovery-')),remote=join(root,'remote.git');let workspace=join(root,'first');
  t.after(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(workspace);
  const command=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['pipe','pipe','pipe']}).trim();
  const git=(...args)=>command(workspace,...args);
  const file=(path,contents)=>{mkdirSync(dirname(join(workspace,path)),{recursive:true});writeFileSync(join(workspace,path),contents);};
  command(root,'init','--bare','-q',remote);git('init','-q');git('config','user.name','Recovery fixture');git('config','user.email','recovery@example.invalid');
- file('README.md','trusted baseline');git('add','.');git('commit','-qm','baseline');const baseline=git('rev-parse','HEAD');
+ file('README.md','trusted baseline');
+ if(transition==='directory-to-file')file('app/pilot/old/deep/a.mjs','baseline directory');
+ if(transition==='file-to-directory')file('app/pilot/old','baseline file');
+ git('add','.');git('commit','-qm','baseline');const baseline=git('rev-parse','HEAD');
  git('remote','add','origin',remote);git('push','origin','HEAD:refs/heads/baseline');
  const contract={path:'/',scenarios:[{name:'state',steps:[{action:'expectText',selector:'#state',value:'Ready'}]}]};
  const context={version:1,projectId:'11111111-1111-4111-8111-111111111111',baseSha:baseline,baselineSha:baseline,allowedPaths:['app/pilot/'],contractHash:contractHash(contract),contract};
@@ -33,6 +36,7 @@ function fixture(t,{phase='repair',legacy=false,attributes=false}={}){
  const project={id:context.projectId,approved_hash:'scope',approval_hash:'scope',active_mission_id:'mission'};
  let completed=baseline;
  if(phase==='repair'){
+  if(transition){rmSync(join(workspace,'app/pilot/old'),{recursive:true});file(transition==='directory-to-file'?'app/pilot/old':'app/pilot/old/deep/a.mjs','completed replacement');}
   file('app/pilot/a.mjs','implementation a');file('app/pilot/b.mjs','implementation b');file('app/pilot/deleted.mjs','obsolete');git('add','.');git('commit','-qm','completed implementation');completed=git('rev-parse','HEAD');git('push','origin','HEAD:refs/heads/completed');
  }
  const requestFile=join(root,'request');writeFileSync(requestFile,projectMarker(context));
@@ -167,6 +171,16 @@ test('restoration uses exact raw bytes without running configured smudge/process
  assert.throws(()=>readFileSync(sentinel));assert.equal(readFileSync(join(f.workspace,'app/pilot/a.mjs'),'utf8'),'unfinished repair a');
  assert.equal(readFileSync(join(f.workspace,'app/pilot/new/nested.mjs'),'utf8'),'third new file');
  assert.equal(f.git('rev-parse','HEAD'),f.completed);
+});
+
+test('approved directory/file replacements preserve complete implementation and unfinished repair',async t=>{
+ for(const transition of ['directory-to-file','file-to-directory']){
+  const f=fixture(t,{transition});f.fresh();await f.validate();const recovered=f.prepare().restore();
+  const path=transition==='directory-to-file'?'app/pilot/old':'app/pilot/old/deep/a.mjs';
+  assert.equal(readFileSync(join(f.workspace,path),'utf8'),'completed replacement');
+  assert.equal(readFileSync(join(f.workspace,'app/pilot/a.mjs'),'utf8'),'unfinished repair a');
+  assert.equal(recovered.phase,'repair');assert.equal(f.git('rev-parse','HEAD'),f.completed);
+ }
 });
 
 test('legacy v1 repairs recover only corroborated full findings without changing their Git metadata',async t=>{

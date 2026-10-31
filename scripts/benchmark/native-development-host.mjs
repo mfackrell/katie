@@ -169,6 +169,8 @@ if(priorRefs.length){
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
 }
+// Source restoration is nonbillable and must succeed before consuming consent.
+const recovery=recoveryPlan?.restore()??null;
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
 const {data:grantResult,error:issueError}=proof.resourceAmendmentId
@@ -193,7 +195,6 @@ if(issueError||typeof grantId!=='string'||!Number.isSafeInteger(executionEpoch)|
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
-const recovery=recoveryPlan?.restore()??null;
 const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false};
 const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken,process.env.GH_TOKEN];
 const snapshot=label=>diagnostics.snapshots.push({label,...worktreeEvidence(boundary.root,diagnosticSecrets)});
