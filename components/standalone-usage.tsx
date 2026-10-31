@@ -22,7 +22,449 @@ function dollars(value: string) {
 function cents(value: string) {
   const amount = BigInt(value);
   const rounded = (amount + 5_000n) / 10_000n;
-  return `${rounded / 100n}.${(rounded % 100n).toString().padStart(2, '0')}`;
+  return '
+}
+function compactTokens(value: number) {
+  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : value.toLocaleString();
+}
+function summaryTokens(totals: UsageTotals) {
+  return `${compactTokens(totals.inputTokens)}${totals.missingInputCount ? ' + ?' : ''} / ${compactTokens(totals.outputTokens)}${totals.missingOutputCount ? ' + ?' : ''}`;
+}
+function decimal(value: string | null) { return value === null ? '' : dollars(value).slice(1); }
+function parseDollars(value: string) {
+  if (!/^\d+(?:\.\d{1,6})?$/.test(value)) throw Error('Enter a nonnegative USD amount with up to six decimal places.');
+  const [whole, fraction = ''] = value.split('.');
+  return (BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))).toString();
+}
+function Tokens({ totals }: { totals: UsageTotals }) {
+  return <span>In {totals.inputTokens.toLocaleString()}{totals.missingInputCount > 0 && ` + unknown (${totals.missingInputCount})`} · Out {totals.outputTokens.toLocaleString()}{totals.missingOutputCount > 0 && ` + unknown (${totals.missingOutputCount})`}</span>;
+}
+
+function displayedCost(totals: UsageTotals) {
+  return dollars((BigInt(totals.estimatedCostMicrousd) + BigInt(totals.estimatedInfrastructureMicrousd ?? '0')).toString());
+}
+
+function InfrastructureEstimate({totals}: {totals: UsageTotals}) {
+  return BigInt(totals.estimatedInfrastructureMicrousd ?? '0') > 0n
+    ? <span>RunPod estimated infrastructure cost {dollars(totals.estimatedInfrastructureMicrousd!)} · actual cost unconfirmed</span> : null;
+}
+function ProviderUsage({provider}: {provider: UsageTotals & {provider: string}}) {
+  if (provider.provider === 'runpod') return <>
+    <InfrastructureEstimate totals={provider}/>
+    {(BigInt(provider.estimatedCostMicrousd) > 0n || provider.unknownCostCount === 0) && <span>{BigInt(provider.estimatedInfrastructureMicrousd ?? '0') > 0n ? ' · ' : ''}RunPod actual cost {dollars(provider.estimatedCostMicrousd)}</span>}
+    {provider.unknownCostCount > 0 && BigInt(provider.estimatedInfrastructureMicrousd ?? '0') === 0n && <span>RunPod · actual cost unconfirmed</span>}
+  </>;
+  return <><strong>{provider.provider}</strong> <Tokens totals={provider}/> · {dollars(provider.estimatedCostMicrousd)}</>;
+}
+function ModelCost({model}: {model: UsageTotals & {provider: string}}) {
+  if (model.provider === 'runpod') return <ProviderUsage provider={model}/>;
+  return <>{dollars(model.estimatedCostMicrousd)}{model.unknownCostCount > 0 && ' + unknown'}</>;
+}
+
+export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false, inlinePendingOnly = false }: Props) {
+  const refreshSequence = useRef(0);
+  const snapshotScope = useRef('');
+  const automaticResumes = useRef(new Set<string>());
+  const automaticRetryAfter = useRef(new Map<string,number>());
+  const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
+  const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
+  // Render the chat approval using this existing usage instance. A second
+  // mounted usage component would create overlapping accounting refreshes.
+  const [inlineTarget, setInlineTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!inlinePendingOnly) setInlineTarget(document.getElementById('katie-inline-spending-approval'));
+  }, [chatId, inlinePendingOnly]);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
+  const [usageOpen, setUsageOpen] = useState(false), [reviewOpen, setReviewOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false), [timezone, setTimezone] = useState(''), [callLimit, setCallLimit] = useState(''), [requestLimit, setRequestLimit] = useState('');
+  const api = useCallback(async (path: string, init?: RequestInit) => {
+    const bearer = await ownerSessionBearer();
+    // The session is also available through a secure HttpOnly cookie for guests.
+    const response = await fetch(`/api/standalone-accounting/${path}`, { ...init, cache: 'no-store', headers: { ...init?.headers, ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), 'Content-Type': 'application/json' } });
+    const body = await response.json();
+    if (!response.ok) throw Error(body.error || 'Accounting is unavailable.');
+    return body;
+  }, []);
+  const [workCursor,setWorkCursor]=useState<{key:string;before:string;beforeId:string}|null>(null);
+  const [history,setHistory]=useState<DailyAttempt[]|null>(null);
+  const [historyEnd,setHistoryEnd]=useState(false);
+  const [historyBusy,setHistoryBusy]=useState(false);
+  const flight = useRef<ReturnType<typeof createRefreshFlight> | null>(null);
+  const refresh = useCallback(async () => { await flight.current?.refresh(true); }, []);
+  useEffect(() => {
+    const sequence = ++refreshSequence.current;
+    setSnapshot(null);setHistory(null);setHistoryEnd(false);setHistoryBusy(false);
+    const next = createRefreshFlight(async signal => {
+      try {
+        const result = await api(`usage?${new URLSearchParams({actorId,chatId,scope,...(workCursor?.key===`${actorId}:${chatId}`?{before:workCursor.before,beforeId:workCursor.beforeId}:{})})}`,{signal}) as Snapshot;
+        if(signal.aborted || sequence!==refreshSequence.current)return;
+        snapshotScope.current=`${actorId}:${chatId}`;
+        setSnapshot(result);setRefreshError('');
+      } catch(failure){if(!signal.aborted && sequence===refreshSequence.current)setRefreshError(failure instanceof Error?failure.message:'Accounting is unavailable.');}
+    });
+    flight.current=next;
+    void next.refresh();
+    const update=()=>{if(document.visibilityState!=='hidden')void next.refresh(true);};
+    const timer=inlinePendingOnly ? undefined : window.setInterval(()=>{if(document.visibilityState!=='hidden')void next.refresh(false);},15000);
+    window.addEventListener('focus',update);window.addEventListener('standalone-accounting-updated',update);
+    document.addEventListener('visibilitychange',update);
+    return ()=>{next.dispose();invalidateRefresh();if(timer!==undefined)clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('standalone-accounting-updated',update);document.removeEventListener('visibilitychange',update);if(flight.current===next)flight.current=null;};
+  },[api,actorId,chatId,scope,workCursor,invalidateRefresh,inlinePendingOnly]);
+  async function olderActivity(){
+    if(historyBusy)return;
+    setHistoryBusy(true);
+    const sequence=refreshSequence.current;
+    const current=history??snapshot?.daily?.attempts??[];
+    const last=current[current.length-1];
+    try{
+      const result=await api(`history?${new URLSearchParams({actorId,chatId,scope,...(last?{before:last.created_at,beforeId:last.id}:{})})}`) as {attempts:DailyAttempt[];next:unknown};
+      if(sequence!==refreshSequence.current)return;
+      setHistory([...current,...result.attempts.filter(a=>!current.some(b=>b.id===a.id))]);setHistoryEnd(!result.next);
+    }catch(failure){if(sequence===refreshSequence.current)setError(failure instanceof Error?failure.message:'History could not load.');}
+    finally{if(sequence===refreshSequence.current)setHistoryBusy(false);}
+  }
+  function openSettings() {
+    const config = snapshot?.configuration;
+    setTimezone(config?.timezone ?? ''); setCallLimit(decimal(config?.per_call_limit_microusd ?? null)); setRequestLimit(decimal(config?.request_limit_microusd ?? null));
+    setReviewOpen(false); setUsageOpen(true); setSettingsOpen(true);
+  }
+  async function saveSettings(event: React.FormEvent) {
+    event.preventDefault(); setBusy('settings'); setError('');
+    try {
+      await api('configuration', { method: 'PATCH', body: JSON.stringify({ actorId, chatId, timezone, perCallLimitMicrousd: parseDollars(callLimit), requestLimitMicrousd: parseDollars(requestLimit) }) });
+      setSettingsOpen(false); setNotice('Settings saved. Existing approvals require the current budget revision.'); await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Settings could not be saved.'); }
+    finally { setBusy(''); }
+  }
+  const requestSavedResume = useCallback(async (detail: { attemptId: string; requestId: string }) => {
+    if (onResumeAttempt) await onResumeAttempt(detail);
+    else await new Promise<void>((resolve, reject) => {
+      window.dispatchEvent(new CustomEvent('standalone-accounting-resume', { detail: { ...detail, actorId, chatId, resolve, reject } }));
+    });
+  }, [onResumeAttempt, actorId, chatId]);
+  useEffect(() => {
+    if (inlinePendingOnly || busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
+    const candidate = snapshot?.active?.find(attempt => attempt.uncertainAutoAuthorized && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
+      !automaticResumes.current.has(`${actorId}:${chatId}:${attempt.requestId}`) &&
+      (automaticRetryAfter.current.get(`${actorId}:${chatId}:${attempt.requestId}`) ?? 0) <= Date.now() &&
+      !snapshot.pending.some(other => other.requestId === attempt.requestId) &&
+      !snapshot.active?.some(other => other.requestId === attempt.requestId && other.state === 'uncertain' && !other.exposureAccepted));
+    if (!candidate) return;
+    automaticResumes.current.add(`${actorId}:${chatId}:${candidate.requestId}`);
+    setBusy(candidate.id); setNotice(''); setError('');
+    void requestSavedResume({attemptId:candidate.id,requestId:candidate.requestId})
+      .then(() => { setNotice('Automatically continued within owner spending limits.'); })
+      .catch(failure => {
+        const key = `${actorId}:${chatId}:${candidate.requestId}`;
+        automaticResumes.current.delete(key);
+        automaticRetryAfter.current.set(key,Date.now()+5000);
+        setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.');
+      })
+      .finally(() => { setBusy(''); void refresh(); });
+  }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh, inlinePendingOnly]);
+  async function resumeReserved(attempt: ActiveAttempt) {
+    if (attempt.continuationActionable !== true || attempt.continuationBlockedReason || (attempt.state !== 'reserved' && !attempt.pollableRunpod)) return;
+    setBusy(attempt.id); setError(''); setNotice('');
+    try {
+      await requestSavedResume({ attemptId: attempt.id, requestId: attempt.requestId });
+      setNotice('Saved work completed.');
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Saved work could not resume.'); }
+    finally { setBusy(''); }
+  }
+  async function acceptExposure(attempt: ActiveAttempt) {
+    if (attempt.continuationActionable !== true || attempt.continuationBlockedReason || attempt.state !== 'uncertain' || !snapshot?.configuration) return;
+    setBusy(attempt.id); setError(''); setNotice('');
+    const retained = `Uncertain exposure accepted · ${dollars(attempt.reservedMicrousd)} retained`;
+    let accepted = false;
+    try {
+      const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action: 'accept_exposure', preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: snapshot.configuration.budget_revision, reservedMicrousd: attempt.reservedMicrousd }) });
+      accepted = true; setNotice(`${retained} · continuing remaining work`);
+      await requestSavedResume({ attemptId: result.attemptId as string, requestId: result.requestId as string });
+      setNotice(`${retained} · remaining work completed`);
+    } catch (failure) {
+      if (accepted) setNotice(`${retained} · continuation stopped`);
+      setError(failure instanceof Error ? failure.message : 'Remaining work could not continue.');
+    }
+    finally { await refresh(); setBusy(''); }
+  }
+  async function prepareSavedAuthorization(requestId: string) {
+    setBusy('recover:'+requestId);setError('');setNotice('');
+    try {
+      // This only replays the original owner-bound workflow. The ledger will
+      // prepare an exact-model quote and STOP before a new paid model call.
+      await requestSavedResume({attemptId:'',requestId});
+      setNotice('Saved request completed.');
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Saved authorization could not be prepared.';
+      if (/standalone_approval_required|spending approval|approval required/i.test(message)) {
+        setNotice('Authorization proposal prepared. Review the selected model and choose whether to approve.');
+      } else setError(message);
+    } finally { await refresh();setBusy(''); }
+  }
+  async function decide(attempt: DecisionAttempt, action: 'approve_once' | 'reduce_cost' | 'cancel') {
+    setBusy(attempt.id); setError(''); setNotice('');
+    try {
+      const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action, preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: attempt.budgetRevision, reservedMicrousd: attempt.reservedMicrousd }) });
+      if (action === 'approve_once') {
+        await requestSavedResume({ attemptId: result.attemptId as string, requestId: result.requestId as string });
+        setNotice('Approved saved work completed.');
+      } else setNotice(action === 'cancel' ? result.message || 'Cancellation requested. Any dispatched spending exposure remains visible.' : 'A smaller proposal was prepared. Review its new estimate before approval.');
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Decision could not be saved.'); await refresh(); }
+    finally { setBusy(''); }
+  }
+  const daily = snapshot?.daily;
+  const activeAttempts = snapshot?.active ?? [];
+  const configurationComplete = snapshot?.configuration && snapshot.configuration.per_call_limit_microusd !== null && snapshot.configuration.request_limit_microusd !== null;
+  const approvals = (snapshot?.pending.length ?? 0) + (snapshot?.recoverable ? 1 : 0);
+  const unresolved = activeAttempts.length;
+  const alerts = snapshot?.alerts?.length ?? 0;
+  const workNavigation = <div>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{snapshot?.workPage?.next && <button type="button" className="ml-3 underline" onClick={()=>{const next=snapshot.workPage?.next;if(next)setWorkCursor({key:`${actorId}:${chatId}`,...next});}}>Older active work</button>}</div>;
+  // Surface the existing exact-attempt approval flow in the chat itself.
+  // Approval and continuation remain owned by the same audited endpoints.
+  const inlinePendingContent = snapshotScope.current === `${actorId}:${chatId}` && (snapshot?.pending.length || snapshot?.recoverable) ? (
+    <section aria-label="Spending authorization required" role="region" className="shrink-0 max-h-[38dvh] space-y-3 overflow-y-auto border-t border-amber-400/30 bg-zinc-950 px-4 py-3 text-xs text-zinc-200 sm:px-6">
+      <h3 className="text-sm font-semibold text-amber-100">Approve the selected model to continue</h3>
+      {snapshot.recoverable && <div className="space-y-2 rounded-lg border border-amber-400/30 p-3">
+        <p>The saved image analysis completed, but Katie stopped before generating the reply because the selected model&apos;s optional cache-billing policy was not reviewed.</p>
+        <p>No new model call will be sent until you review and approve the same-model standard-rate quote.</p>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === 'recover:'+snapshot.recoverable.requestId ? 'Preparing…' : 'Prepare saved authorization'}</button>
+      </div>}
+      {snapshot.pending.map(attempt => <div key={attempt.id} className="space-y-2 rounded-lg border border-amber-400/30 p-3">
+        <p>Selected model: <strong className="text-zinc-100">{attempt.provider} / {attempt.model}</strong> · {attempt.category}</p>
+        <p>Estimated reservation: <strong className="text-amber-100">{dollars(attempt.reservedMicrousd)}</strong> · automatic per-call threshold: <strong>{snapshot.configuration?.per_call_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.per_call_limit_microusd)}</strong></p>
+        <p>Original request: settled {dollars(attempt.requestExposure.estimatedCostMicrousd)} · pending (including this proposal) {dollars(attempt.requestExposure.pendingExposureMicrousd)} · uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)} · automatic request threshold {snapshot.configuration?.request_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
+        <p>Estimated input {attempt.preview.inputTokens.toLocaleString()} tokens · output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
+         {attempt.preview.ownerApprovalRequired === 'selected_model_uncached' && <p className="font-semibold text-amber-100">Owner decision required: keep this exact OpenAI model and complete prompt, but omit the optional unreviewed cache hints. The amount above uses standard uncached rates. Nothing is sent until you authorize this one request.</p>}
+        {attempt.tradeoffs && <p className="text-amber-100">Changes in this proposal: {attempt.tradeoffs}</p>}
+        <p className="text-zinc-400">The estimate is not a guaranteed actual-cost ceiling. Your approval authorizes only this exact saved attempt, keeps your normal thresholds unchanged, and resumes the original request without repeating settled calls.</p>
+        <div className="flex flex-wrap gap-3">
+          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === attempt.id ? 'Processing…' : attempt.preview.ownerApprovalRequired === 'selected_model_uncached' ? 'Authorize selected model at uncached rate' : 'Approve selected model once'}</button>
+          {attempt.provider !== 'runpod' && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Review reduced-cost proposal</button>}
+          <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Cancel</button>
+        </div>
+      </div>)}
+      {error && <p role="alert" className="text-amber-200">{error}</p>}
+      {refreshError && <p role="alert" className="text-amber-200">{refreshError} Refresh to verify the current proposal.</p>}
+      {notice && <p role="status" className="text-amber-100">{notice}</p>}
+    </section>
+  ) : null;
+  if (inlinePendingOnly) return inlinePendingContent;
+  const inlinePortal = inlineTarget && inlinePendingContent ? createPortal(inlinePendingContent, inlineTarget) : null;
+  if (rail) return <>{inlinePortal}<section aria-label="Standalone daily usage" className="space-y-4 text-xs text-zinc-300">
+    <section className="space-y-2">
+      <h3 className="text-sm font-semibold text-white">Daily usage</h3>
+      <div className="flex flex-wrap gap-2"><label>Scope <select aria-label="Scope" className="rounded bg-zinc-900 p-1" value={scope} onChange={e=>setScope(e.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label><button type="button" className="underline" onClick={openSettings}>Budget & timezone</button><button type="button" className="underline" onClick={()=>void refresh()}>Refresh</button></div>
+      {daily ? <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2" aria-label="Daily spending summary">
+          {[
+            { label: 'Spent', amount: (BigInt(daily.totals.estimatedCostMicrousd) + BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0')).toString() },
+            { label: 'Pending', amount: daily.totals.pendingExposureMicrousd },
+            { label: 'Uncertain', amount: daily.totals.uncertainExposureMicrousd },
+          ].map(item => <div key={item.label} className="min-w-0 rounded-lg bg-zinc-900 px-2 py-2">
+            <p className="text-[11px] text-zinc-400">{item.label}</p>
+            <p className="text-sm font-semibold tabular-nums text-white">{cents(item.amount)}</p>
+          </div>)}
+        </div>
+        <div className="space-y-2" aria-label="Usage by provider">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] gap-2 border-b border-white/10 pb-1 text-[11px] text-zinc-400">
+            <span>Provider</span><span className="text-right">In / Out</span><span className="text-right">Cost</span>
+          </div>
+          {daily.providers.map(provider => <div key={provider.provider} className="group relative">
+            <button type="button" aria-label={`Show model usage for ${provider.provider}`} className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-center gap-2 rounded py-1 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400" >
+              <span className="min-w-0 truncate capitalize text-zinc-200">{provider.provider}</span>
+              <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{provider.provider === 'runpod' ? 'Infrastructure' : summaryTokens(provider)}</span>
+              <span className="whitespace-nowrap text-right font-medium tabular-nums text-white">{cents((BigInt(provider.estimatedCostMicrousd) + BigInt(provider.estimatedInfrastructureMicrousd ?? '0')).toString())}{provider.unknownCostCount > 0 ? '*' : ''}</span>
+            </button>
+            <div role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-50 mb-1 hidden w-[min(340px,calc(100vw-32px))] max-w-none rounded-lg border border-white/20 bg-zinc-950 p-3 text-zinc-200 shadow-2xl group-hover:block group-focus-within:block">
+              <p className="mb-2 font-semibold capitalize">{provider.provider} · model usage</p>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-2">
+                <span className="text-zinc-400">Model</span><span className="text-right text-zinc-400">In / Out</span><span className="text-right text-zinc-400">Cost</span>
+                {daily.models.filter(model => model.provider === provider.provider).map(model => <div key={JSON.stringify([model.provider,model.model,model.category])} className="col-span-3 grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-3">
+                  <span className="min-w-0 break-words">{model.model}<span className="block text-[10px] text-zinc-500">{model.category}</span></span>
+                  <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{model.provider === 'runpod' ? 'Infrastructure' : summaryTokens(model)}</span>
+                  <span className="whitespace-nowrap text-right tabular-nums">{cents((BigInt(model.estimatedCostMicrousd) + BigInt(model.estimatedInfrastructureMicrousd ?? '0')).toString())}{model.unknownCostCount > 0 ? '*' : ''}</span>
+                </div>)}
+              </div>
+              {provider.unknownCostCount > 0 && <p className="mt-2 text-amber-200">* Some model costs remain unconfirmed.</p>}
+            </div>
+          </div>)}
+        </div>
+        {(daily.totals.unknownCostCount > 0 || daily.totals.missingInputCount > 0 || daily.totals.missingOutputCount > 0) && <p className="text-[11px] text-amber-200">* Some costs or token counts are unconfirmed. Details below.</p>}
+        {BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && <p className="text-[11px] text-zinc-400">Includes estimated infrastructure cost; actual RunPod cost unconfirmed.</p>}
+      </div> : <p>{error || refreshError || "Loading usage…"}</p>}
+      <details className="rounded border border-white/10 p-2"><summary className="cursor-pointer">Models, activity & earlier exposure</summary>
+    {daily && <>
+      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {displayedCost(daily.totals)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-1"><InfrastructureEstimate totals={daily.totals}/></p>
+      <p className="mt-1"><Tokens totals={daily.totals} />{daily.totals.unknownCostCount > 0 && ` · ${daily.totals.unknownCostCount} call(s) with unknown cost; displayed cost is incomplete.`}</p>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div>
+      {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
+      <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
+        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><>{model.provider === 'runpod' ? 'Infrastructure billing' : <Tokens totals={model}/>}</></td><td><ModelCost model={model}/></td></tr>)}</tbody></table></div>
+        <p className="mt-2">Recent activity · 25 per page. Daily totals include the entire day.</p><ul className="mt-2 space-y-1">{(history??daily.attempts).map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}
+      </details>
+    </>}
+
+
+      </details>
+    </section>
+    {workNavigation}
+    {(snapshot?.pending.length || activeAttempts.length || snapshot?.recoverable) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
+      {snapshot?.recoverable && <div className="rounded border border-amber-400/30 p-2">
+        <p>The saved image request needs a same-model uncached quote before approval.</p>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="mt-2 rounded border border-amber-300 px-2 py-1 disabled:opacity-50">Prepare saved authorization</button>
+      </div>}
+    {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
+      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
+      {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
+        <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
+        <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
+        {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.uncertainAutoAuthorized ? 'auto-authorized within owner limits' : attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
+        {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
+        {(attempt.state === 'reserved' || attempt.pollableRunpod) && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
+        {attempt.state === 'uncertain' && attempt.continuationActionable === true && <>
+          <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
+          {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
+          {!attempt.continuationBlockedReason && !attempt.pollableRunpod && <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>}
+        </>}
+        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
+        {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        {attempt.cancellationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
+      </div>)}
+    </div>}
+    {snapshot?.pending.map(attempt => <div key={attempt.id} className="mt-3 rounded border border-amber-400/40 p-3">
+      <p className="font-medium text-amber-100">Approval required · {attempt.provider}/{attempt.model} · {attempt.category}</p>
+      <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
+      <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
+      <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
+       {attempt.preview.ownerApprovalRequired === 'selected_model_uncached' && <p className="mt-1 font-semibold text-amber-100">Explicit owner choice: use this same model and full prompt without unreviewed optional cache hints, at the quoted standard uncached rates. No call will be sent before approval.</p>}
+      <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
+      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
+      <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
+      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}</details>
+      {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
+      <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+    </div>)}
+
+
+    </section> : <p className="text-zinc-500">No active requests.</p>}
+    <section className="space-y-2"><h3 className="text-sm font-semibold text-white">Alerts</h3>
+    {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
+
+
+      {snapshot?.pending.length ? <p className="text-amber-200">{snapshot.pending.length} approval(s) required</p> : null}
+      {!snapshot?.alerts?.length && !snapshot?.pending.length && <p className="text-zinc-500">No current alerts.</p>}
+      {error && <p role="alert" className="text-amber-200">{error}</p>}
+      {refreshError && <p role="alert" className="text-amber-200">{refreshError}{snapshot && " Previously loaded values may be stale."}</p>}
+      {notice && <p role="status">{notice}</p>}
+    </section>
+    {settingsOpen && <form onSubmit={event => void saveSettings(event)} className="mt-3 space-y-3 rounded border border-white/20 p-3">
+      <p>Owner settings apply to all standalone agents. Per request includes main calls, retries, routing, summarization, memory and other hidden helpers. USD estimates are not provider invoices.</p>
+      <label className="block">Timezone (IANA)<input required value={timezone} placeholder="e.g. America/New_York" onChange={event => setTimezone(event.target.value)} className="ml-2 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per call approval threshold (USD)<input inputMode="decimal" required value={callLimit} onChange={event => setCallLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per request approval threshold (USD)<input inputMode="decimal" required value={requestLimit} onChange={event => setRequestLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <p>Zero requires approval for every positive estimate. No timezone or monetary thresholds are preselected.</p>
+      <div className="flex gap-4"><button disabled={Boolean(busy)} className="rounded border border-white/30 px-3 py-1">Save settings</button><button type="button" onClick={() => setSettingsOpen(false)} className="underline">Close</button></div>
+    </form>}
+
+
+  </section></>;
+  return <>{inlinePortal}<section aria-label="Standalone daily usage" className="relative z-20 shrink-0 min-w-0 border-b border-white/10 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 sm:px-5">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="min-w-0 truncate" aria-live="polite">
+        {daily ? <>Today {displayedCost(daily.totals)}{BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && ' including infrastructure estimate'} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · <Tokens totals={daily.totals} /></> : (error || refreshError) ? 'Usage unavailable' : 'Loading usage…'}
+      </span>
+      <button type="button" aria-expanded={usageOpen} aria-controls="standalone-usage-details" className="shrink-0 underline underline-offset-2" onClick={() => { setUsageOpen(v => !v); setReviewOpen(false); }}>Usage details</button>
+      {(approvals > 0 || unresolved > 0 || alerts > 0) && <span className="flex min-w-0 flex-wrap items-center gap-2 text-amber-200" role="status">
+        {approvals > 0 ? `${approvals} approval${approvals === 1 ? '' : 's'} required` : `${unresolved} active/reserved`}
+        {alerts > 0 && ` · ${alerts} alerts`}
+        <button type="button" aria-expanded={reviewOpen} aria-controls="standalone-attempt-review" className="underline underline-offset-2" onClick={() => { setReviewOpen(v => !v); setUsageOpen(false); }}>Review</button>
+      </span>}
+      {snapshot && !configurationComplete && <button type="button" className="text-amber-200 underline" onClick={openSettings}>Set budget settings</button>}
+    </div>
+    {error && <p role="alert" className="text-amber-200">{error}</p>}
+    {refreshError && <p role="alert" className="text-amber-200">{refreshError}{snapshot && ' Previously loaded values may be stale.'}</p>}
+    {notice && <p role="status" className="truncate">{notice}</p>}
+    {usageOpen && <div id="standalone-usage-details" className="absolute left-0 right-0 top-full z-30 max-h-[65vh] overflow-y-auto overscroll-contain border border-white/20 bg-zinc-950 p-3 shadow-xl sm:p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <strong className="text-zinc-100">Daily standalone usage</strong>
+        <button type="button" className="underline" onClick={() => setUsageOpen(false)}>Close details</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label>Scope <select className="ml-1 rounded border border-white/20 bg-zinc-900 p-1" value={scope} onChange={event => setScope(event.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label>
+        <button type="button" onClick={openSettings} className="underline">Budget & timezone</button>
+        <button type="button" onClick={() => void refresh()} className="underline">Refresh</button>
+      </div>
+      {snapshot && !configurationComplete && <p className="mt-2 text-amber-200">Configuration required: choose a timezone and explicitly set both approval thresholds before paid standalone calls.</p>}
+    {daily && <>
+      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {displayedCost(daily.totals)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-1"><InfrastructureEstimate totals={daily.totals}/></p>
+      <p className="mt-1"><Tokens totals={daily.totals} />{daily.totals.unknownCostCount > 0 && ` · ${daily.totals.unknownCostCount} call(s) with unknown cost; displayed cost is incomplete.`}</p>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div>
+      {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
+      <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
+        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><>{model.provider === 'runpod' ? 'Infrastructure billing' : <Tokens totals={model}/>}</></td><td><ModelCost model={model}/></td></tr>)}</tbody></table></div>
+        <p className="mt-2">Recent activity · 25 per page. Daily totals include the entire day.</p><ul className="mt-2 space-y-1">{(history??daily.attempts).map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}
+      </details>
+    </>}
+
+    {settingsOpen && <form onSubmit={event => void saveSettings(event)} className="mt-3 space-y-3 rounded border border-white/20 p-3">
+      <p>Owner settings apply to all standalone agents. Per request includes main calls, retries, routing, summarization, memory and other hidden helpers. USD estimates are not provider invoices.</p>
+      <label className="block">Timezone (IANA)<input required value={timezone} placeholder="e.g. America/New_York" onChange={event => setTimezone(event.target.value)} className="ml-2 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per call approval threshold (USD)<input inputMode="decimal" required value={callLimit} onChange={event => setCallLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per request approval threshold (USD)<input inputMode="decimal" required value={requestLimit} onChange={event => setRequestLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <p>Zero requires approval for every positive estimate. No timezone or monetary thresholds are preselected.</p>
+      <div className="flex gap-4"><button disabled={Boolean(busy)} className="rounded border border-white/30 px-3 py-1">Save settings</button><button type="button" onClick={() => setSettingsOpen(false)} className="underline">Close</button></div>
+    </form>}
+
+    </div>}
+    {reviewOpen && <div id="standalone-attempt-review" className="absolute left-0 right-0 top-full z-30 max-h-[65vh] overflow-y-auto overscroll-contain border border-amber-400/30 bg-zinc-950 p-3 shadow-xl sm:p-4">
+      <div className="flex items-center justify-between gap-2">
+        <strong className="text-amber-100">Requests and approvals</strong>
+        <button type="button" onClick={() => setReviewOpen(false)} className="underline">Close review</button>
+      </div>
+    {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
+
+    {workNavigation}
+    {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
+      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
+      {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
+        <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
+        <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
+        {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.uncertainAutoAuthorized ? 'auto-authorized within owner limits' : attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
+        {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
+        {(attempt.state === 'reserved' || attempt.pollableRunpod) && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
+        {attempt.state === 'uncertain' && attempt.continuationActionable === true && <>
+          <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
+          {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
+          {!attempt.continuationBlockedReason && !attempt.pollableRunpod && <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>}
+        </>}
+        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
+        {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        {attempt.cancellationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
+      </div>)}
+    </div>}
+    {snapshot?.pending.map(attempt => <div key={attempt.id} className="mt-3 rounded border border-amber-400/40 p-3">
+      <p className="font-medium text-amber-100">Approval required · {attempt.provider}/{attempt.model} · {attempt.category}</p>
+      <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
+      <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
+      <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
+      <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
+      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
+      <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
+      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}</details>
+      {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
+      <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+    </div>)}
+
+    </div>}
+  </section></>;
+}
+ + (rounded / 100n).toString() + '.' + (rounded % 100n).toString().padStart(2, '0');
 }
 function compactTokens(value: number) {
   return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : value.toLocaleString();
