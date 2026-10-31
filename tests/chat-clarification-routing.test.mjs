@@ -642,15 +642,16 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
     projectContext:{userMessageId:'missing-anchor',text:'Retained original project brief'},
     objective:{userMessageId:'missing-anchor',text:'Prepare a project deliverable'},
   };
-  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[]}={})=>{
+  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[],historyOverride}={})=>{
     const reads=[],warnings=[];
+    const suppliedHistory=historyOverride ?? currentHistory;
     const result=await vm.runInNewContext(compile(`(async()=>{
       let history=currentHistory;
       ${recoveryBlock}
       return {history,savedProjectSourceWarning};
     })()`),{
       Map,Set, actorId:'actor-fixture',chatId:'current-chat',requestId:'source-recovery-test',
-      message,currentHistory,taskProgressUserMessageId:'new-message',
+      message,currentHistory:suppliedHistory,taskProgressUserMessageId:'new-message',
       explicitSavedProjectReference:explicit,contextClassification:null,
       pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[snapshot]},
       contextProjects:[{id:'missing-anchor'}],currentAgentTask:()=>null,
@@ -671,6 +672,18 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
   assert.deepEqual(recovered.reads,[['chat','source-chat'],['messages','source-chat']]);
   assert.equal(recovered.history[0].id,'missing-anchor');
   assert.equal(recovered.savedProjectSourceWarning,null);
+  // The project source must still restore even after the explicit resume turn
+  // has scrolled out of recent history; no four-turn time-to-live.
+  const longHistory=Array.from({length:7},(_,index)=>({id:'followup-'+index,role:'user',content:'Project conversation turn '+index}));
+  const longRunning=await run('List the requirements we agreed on',{
+    historyOverride:longHistory,
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(longRunning.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.equal(longRunning.history[0].id,'missing-anchor');
+  const ordinaryAfterMany=await run('Legs feel awesome',{historyOverride:longHistory});
+  assert.deepEqual(ordinaryAfterMany.reads,[]);
+  assert.deepEqual(ordinaryAfterMany.history,longHistory);
   const missing=await run('Resume the saved project',{explicit:true});
   assert.deepEqual(missing.reads,[['chat','source-chat'],['messages','source-chat']]);
   assert.deepEqual(missing.history,currentHistory,'Current conversation remains unchanged');
@@ -679,11 +692,20 @@ test('missing saved-project sources cannot crash ordinary chat, but explicit rec
   assert.equal(missing.savedProjectSourceWarning.retainedObjective,snapshot.objective.text);
   assert.equal(missing.warnings.length,1);
   assert.match(missing.warnings[0][0],/Saved project source unavailable/);
+  const repoAssignment=unique(findNodes(node=>ts.isBinaryExpression(node) &&
+    ts.isIdentifier(node.left) && node.left.text === 'personaForGeneration' &&
+    node.right.getText(routeAst).includes('repoGenerationContextLine')),
+    'repository context assignment');
+  assert.ok(notice.pos > repoAssignment.pos,'Source-loss disclosure must follow repository context assignment');
   const disclosed=await vm.runInNewContext(compile(`(async()=>{
     let personaForGeneration='Katie';
+    const personaWithRepoContext='Katie plus selected repository';
+    const repoGenerationContextLine='Repository metadata';
+    ${code(statement(repoAssignment))}
     ${code(notice)}
     return personaForGeneration;
   })()`),{savedProjectSourceWarning:missing.savedProjectSourceWarning});
+  assert.match(disclosed,/Repository metadata/);
   assert.match(disclosed,/original message missing-anchor/);
   assert.match(disclosed,/may be incomplete/);
   assert.match(disclosed,/Retained original project brief/);
