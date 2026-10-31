@@ -278,6 +278,7 @@ test('a later completed repair commit or missing final evidence cannot restart o
 
 test('authenticated clean no-work failure permits initial implementation only without recovery evidence',async t=>{
  const f=fixture(t);delete f.diagnostics.wipCheckpoint;
+ f.diagnostics.phases=[];
  f.diagnostics.snapshots=[{label:'final',head:f.baseline,status:[]}];
  const load=()=>loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github,emptyBaselineSha:f.baseline});
  assert.equal((await load()).record,null);
@@ -286,6 +287,7 @@ test('authenticated clean no-work failure permits initial implementation only wi
   {snapshots:[{label:'final',head:f.completed,status:[]}]},
   {snapshots:[{label:'final',head:f.baseline,status:['?? app/pilot/new.mjs']}]},
   {phases:[{phase:'review'}]},
+  {phases:null},
   {verification:[{head:f.completed,passed:true}]}
  ]){const saved=structuredClone(f.diagnostics);Object.assign(f.diagnostics,change);await assert.rejects(load,/unfinished same-task WIP/);for(const key of Object.keys(f.diagnostics))delete f.diagnostics[key];Object.assign(f.diagnostics,saved);}
  await assert.rejects(loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github}),/unfinished same-task WIP/);

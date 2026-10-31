@@ -96,7 +96,7 @@ export async function loadRecoveryDiagnostics({task,repository,github,emptyBasel
   // evidence of a clean original baseline establishes that; missing refs alone
   // never authorize restarting implementation. The caller must also see no refs.
   const final=diagnostics.snapshots?.filter(snapshot=>snapshot.label==='final')??[];
-  if(sha(emptyBaselineSha)&&!diagnostics.wipFailure&&final.length===1&&
+  if(sha(emptyBaselineSha)&&!diagnostics.wipFailure&&Array.isArray(diagnostics.phases)&&final.length===1&&
      final[0].head===emptyBaselineSha&&!final[0].unavailable&&Array.isArray(final[0].status)&&
      final[0].status.every(path=>path==='?? AGENT_REQUEST.md')&&
      !diagnostics.phases?.some(p=>['review','repair','final-review'].includes(p.phase))&&

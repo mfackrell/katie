@@ -55,14 +55,14 @@ export async function qualifyNativeRecovery(db,ids){
  const repairFiles={
   'app/pilot/state.ts':'export const value = "Recovered";\n',
   'app/pilot/page.tsx':'import {value} from "./state"; export default function Page(){return <div id="state">{value}</div>}\n',
-  'tests/native-recovery-synthetic.test.mjs':'import assert from "node:assert/strict"; import {readFileSync} from "node:fs"; assert.match(readFileSync("app/pilot/state.ts","utf8"),/Pending/);\n'
+  'tests/native-recovery-synthetic.test.mjs':'import test from "node:test"; import assert from "node:assert/strict"; import {readFileSync} from "node:fs"; test("recovered source",async()=>{const {value}=await import("data:text/javascript;base64,"+readFileSync("app/pilot/state.ts").toString("base64"));assert.equal(value,"Pending");});\n'
  };
  const commandFor=(phase)=>{
   if(phase==='implementation')return 'node -e '+quote(`const f=require('node:fs');f.mkdirSync('app/pilot',{recursive:true});for(const [p,c] of Object.entries(${JSON.stringify(initialFiles)}))f.writeFileSync(p,c);console.log('IMPLEMENTATION_WRITTEN')`);
   if(phase==='repair')return 'node -e '+quote(recovering?
-   `const f=require('node:fs'),a=require('node:assert/strict');for(const [p,c] of Object.entries(${JSON.stringify(repairFiles)}))a.equal(f.readFileSync(p,'utf8'),c);a.equal(f.existsSync('app/pilot/obsolete.mjs'),false);a.match(f.readFileSync('/trusted/review-findings.txt','utf8'),/Fix state and render/);f.writeFileSync('tests/native-recovery-synthetic.test.mjs',${JSON.stringify('import assert from "node:assert/strict"; import {readFileSync} from "node:fs"; assert.match(readFileSync("app/pilot/state.ts","utf8"),/Recovered/);\n')});console.log('RESTORED_REPAIR_CONTINUED')`:
+   `const f=require('node:fs'),a=require('node:assert/strict');for(const [p,c] of Object.entries(${JSON.stringify(repairFiles)}))a.equal(f.readFileSync(p,'utf8'),c);a.equal(f.existsSync('app/pilot/obsolete.mjs'),false);a.match(f.readFileSync('/trusted/review-findings.txt','utf8'),/Fix state and render/);f.writeFileSync('tests/native-recovery-synthetic.test.mjs',${JSON.stringify('import test from "node:test"; import assert from "node:assert/strict"; import {readFileSync} from "node:fs"; test("recovered source",async()=>{const {value}=await import("data:text/javascript;base64,"+readFileSync("app/pilot/state.ts").toString("base64"));assert.equal(value,"Recovered");});\n')});console.log('RESTORED_REPAIR_CONTINUED')`:
    `const f=require('node:fs');for(const [p,c] of Object.entries(${JSON.stringify(repairFiles)}))f.writeFileSync(p,c);f.unlinkSync('app/pilot/obsolete.mjs');console.log('UNFINISHED_REPAIR_WRITTEN')`);
-  return 'node -e '+quote(`const f=require('node:fs'),a=require('node:assert/strict');a.match(f.readFileSync('app/pilot/state.ts','utf8'),/${phase==='review'?'Broken':'Recovered'}/);console.log('INDEPENDENT_SOURCE_INSPECTED')`);
+  return (phase==='final-review'?'node --test tests/native-recovery-synthetic.test.mjs && ':'')+'node -e '+quote(`const f=require('node:fs'),a=require('node:assert/strict');a.match(f.readFileSync('app/pilot/state.ts','utf8'),/${phase==='review'?'Broken':'Recovered'}/);console.log('INDEPENDENT_SOURCE_INSPECTED')`);
  };
  const classify=body=>{
   const text=JSON.stringify(body.input);
@@ -140,6 +140,7 @@ export async function qualifyNativeRecovery(db,ids){
    proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);
    const request=projectMarker(context)+'\nSynthetic recovery qualification only.\n'+encodeNativeHandoff(proof,signing);
    const requestFile=join(runtime,'request.md'),manifestFile=join(runtime,'manifest.json');writeFileSync(requestFile,request);writeFileSync(manifestFile,JSON.stringify(readNativeHandoff(request,signing)));
+   rmSync(join(runtime,'qualification-browser-acceptance.json'),{force:true});
    const evidence=join(runtime,'native-metered-review.json');rmSync(evidence,{force:true});rmSync(evidence+'.diagnostics.json',{force:true});
    let log='';host=spawn(process.execPath,['--import',join(repo,'tests/helpers/native-recovery-fetch.mjs'),join(runtime,'native-host/native-development-host.mjs'),requestFile,manifestFile,join(runtime,'native-host/native-development-child.mjs')],{
     cwd:workspace,env:{PATH:bin+':'+process.env.PATH,HOME:root,RUNNER_TEMP:runtime,GITHUB_REPOSITORY:'mfackrell/katie',GITHUB_RUN_ID:String(run),GITHUB_RUN_ATTEMPT:'1',GITHUB_SHA:release,GH_TOKEN:'synthetic-git',OPENAI_API_KEY:'synthetic-provider-key-no-real-access',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_NATIVE_CHECKPOINT_BRANCH:`agent/issue-829-${run}-1`,KATIE_NATIVE_EVIDENCE_FILE:evidence,KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS:'enabled',KATIE_RECOVERY_FIXTURE_ENDPOINT:'http://127.0.0.1:'+server.address().port},stdio:['ignore','pipe','pipe']});
