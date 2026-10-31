@@ -69,6 +69,26 @@ test("misclassified same-project uploads and greetings never revive a stale task
   })).text,/KATIE_DURABLE_TASK_PROGRESS/);
 });
 
+test("synthetic casual projects cannot re-enter the prompt through false answer or same-project signals", () => {
+  const p=prior();
+  p.projectContext={text:"Good. What's up?",userMessageId:"old-greeting"};
+  p.objective={text:"Earlier casual conversation",userMessageId:"old-greeting"};
+  p.lastUserIntent="answer";
+  p.answered=[{
+    id:"casual:1",assistantMessageId:"casual-q",userMessageId:"current-user",
+    index:1,text:"How was your run?",answer:"Legs feel awesome.",exactNumberedMatch:false,
+    projectId:"old-greeting",
+  }];
+  for (const relation of [undefined,"same_project" as const]) {
+    const r=selectTaskProgressPrompt(input({
+      message:"Legs feel awesome.",progress:p,projectRelation:relation,
+      responsePurpose:"deliverable",
+    }));
+    assert.equal(r.text,"");
+    assert.equal(r.reason,"synthetic_conversation_project");
+  }
+});
+
 test("a genuinely new non-project request does not drag in the prior work assignment", () => {
   const p = prior();
   p.projectContext = { text: "Write me a poem about the sea.", userMessageId: "current-user" };
