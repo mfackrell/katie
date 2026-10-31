@@ -1430,7 +1430,7 @@ async function executeChat(request: NextRequest) {
     const restoreSavedProjectSource = explicitSavedProjectReference ||
       contextClassification?.projectTransition?.action === "resume" ||
       contextClassification?.projectTransition?.action === "amend" ||
-      Boolean(pdfProgress.projectContext && (projectRelatedFollowup || (recentProjectResumption && projectActionVerb)));
+      Boolean((activeProjectSnapshot || pdfProgress.projectContext) && (projectRelatedFollowup || (recentProjectResumption && projectActionVerb)));
     let savedProjectSourceWarning: {
       sourceChatId: string; sourceMessageId: string; retainedContext: string; retainedObjective: string;
     } | null = null;
