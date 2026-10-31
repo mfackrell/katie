@@ -719,13 +719,18 @@ async function executeChat(request: NextRequest) {
       message,
       images: requestImages,
       fileReferences,
-      overrideProvider,
-      overrideModel,
+      overrideProvider: suppliedOverrideProvider,
+      overrideModel: suppliedOverrideModel,
       routingTraceEnabled,
-      providerPayloadCapture,
+      providerPayloadCapture: explicitPayloadCapture,
       activeRepoId,
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
+    // One-turn owner diagnostic from the normal chat composer, without client changes.
+    const captureCommand = /^\\s*!capture-claude(?:\\s|$)/i.test(message);
+    const providerPayloadCapture = explicitPayloadCapture === true || captureCommand;
+    const overrideProvider = captureCommand ? "anthropic" : suppliedOverrideProvider;
+    const overrideModel = captureCommand ? "claude-sonnet-5" : suppliedOverrideModel;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
     // Exact outbound payload capture is explicitly requested, text-only and owner-grant scoped.
