@@ -88,6 +88,11 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  assert.equal((await db.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,{...receipt,run_id:126},release])).rows[0].ok,false);
  const claims=await Promise.all([db.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,receipt,release]),rival.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,receipt,release])]);
  assert.equal(claims.filter(x=>x.rows[0].ok).length,1);
+ if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'){
+  const {qualifyNativeRecovery}=await import('./qualify-native-recovery.mjs');
+  await qualifyNativeRecovery(db,{renewal:r,continuation:c,project,mission,task,trial,account,owner,actor,release,receipt});
+  return;
+ }
  await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,randomUUID(),release]),/unavailable/);
  await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,'7'.repeat(40)]),/unavailable/);
  await db.query('begin');await db.query('update benchmark_native_spending_approvals set revoked_at=now() where id=$1',[r.approval_id]);
@@ -118,4 +123,5 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  await assert.rejects(db.query(issue,[r.id,'c'.repeat(64),r.approval_id,task,release]),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
 }
+
 

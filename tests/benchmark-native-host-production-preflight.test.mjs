@@ -114,3 +114,9 @@ test('untrusted recovery evidence blocks before consuming a fresh owner grant',a
 test('restoration failure cannot consume fresh owner authorization',async()=>{
  const r=await preflight({restoreFailure:true});assert.match(r.error?.message??'',/unsafe restoration destination/);assert.equal(r.calls.grants,0);
 });
+
+test('saved failed task cannot bypass recovery when remote WIP refs are missing',async()=>{
+ const r=await preflight({taskChange:{external:{receipt:{outcome:'BLOCKED',run_id:123}}}});
+ assert.match(r.error?.message??'',/missing trusted evidence/);
+ assert.equal(r.calls.grants,0);
+});

@@ -12,7 +12,7 @@ import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
- {timeout:180000},async()=>{
+ {timeout:process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'?1500000:180000},async()=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
  const root=mkdtempSync(join(tmpdir(),'katie-continuation-')),data=join(root,'data');
  const clients=[];let started=false;
@@ -70,7 +70,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql','20261029185000_benchmark_zero_call_recovery_chain.sql','20261029213000_benchmark_development_owner_renewal.sql','20261029233500_benchmark_development_pregrant_recovery.sql','20261030001000_benchmark_development_paid_successor.sql','20261030004300_benchmark_owner_resource_amendment.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
-  const protocol=config.protocol;
+  const protocol={...config.protocol};
   await db.query('insert into actors(id,name) values($1,$2)',[actor,'Synthetic continuation fixture']);
   await db.query('insert into chats(id,actor_id,title) values($1,$2,$3)',[chat,actor,'Synthetic continuation fixture']);
   await db.query('insert into repo_sync_runs(id,repository_full_name) values($1,$2)',[repo,'mfackrell/katie']);
@@ -80,6 +80,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   await db.query('set role service_role');
   const created=(await db.query('select benchmark_create_full_game_project($1,$2,$3,$4,$5,$6,$7,$8,$9) p',
    [project,'continuation-'+project,actor,chat,'Build Take Eleven from approved original issue 650',repo,trial,protocol.baselineSha,'gpt-5.3-codex'])).rows[0].p;
+  if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline(protocol.baselineSha);
   const failedMission=randomUUID();
   await db.query('select create_mission($1,$2,$3,120,null)',[failedMission,'Synthetic failed specification',created.team]);
   // Synthetic historical failure setup only; actual continuation uses owner RPC and DO child creation.
@@ -216,5 +217,6 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   rmSync(root,{recursive:true,force:true});
  }
 });
+
 
 

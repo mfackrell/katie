@@ -208,3 +208,38 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node scripts/benchmark/closure-input-count-probe.mjs
+
+  native-recovery-lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE: '1'
+      KATIE_REQUIRE_NATIVE_BWRAP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Install disposable qualification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat postgresql-16
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Fetch immutable assignment baseline
+        run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+      - name: Actual host interruption and fresh-runner continuation with real isolated accounting
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain bounded nonbillable recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-recovery-qualification
+          path: ${{ runner.temp }}/native-recovery-qualification/
+          if-no-files-found: error
+          retention-days: 7

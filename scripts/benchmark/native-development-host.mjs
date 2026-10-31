@@ -163,11 +163,15 @@ if(proof.resourceAmendmentId){
 const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
 const priorRefs=recoveryRefs(boundary.root,task.id);
 let recoveryPlan=null;
-if(priorRefs.length){
- const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});
+// The existing signed startup recovery proves zero historical mission calls.
+// Other failed tasks require positive evidence even when their Git refs vanished.
+if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
+ const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
+ if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
+ }
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
