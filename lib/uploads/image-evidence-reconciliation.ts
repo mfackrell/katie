@@ -36,11 +36,13 @@ const aliases:Record<string,string>={
 /** A focal clause is only a *claimed* subject, never independent verification. */
 export function reportedFocalSubject(text:string):string|null {
   const s=text.replace(/\s+/g,' ').trim();
-  const patterns=[
-    /\b(?:primary|principal|main|central)\s+(?:visible\s+)?(?:focal\s+point|subject)(?:\s+of\s+(?:the|this)\s+(?:image|photo|photograph|picture))?\s*(?:is|:|shows?)\s*/i,
-    /\b(?:image|photo|photograph|picture)\b.{0,48}?\b(?:shows?|depicts?|features?|contains?)\s*/i
-  ];
-  const anchor=patterns.map(p=>p.exec(s)).find(Boolean);
+  const focal=/\b(?:primary|principal|main|central)\s+(?:visible\s+)?(?:focal\s+point|subject)(?:\s+of\s+(?:the|this)\s+(?:image|photo|photograph|picture))?\s*(?:is|:|shows?)\s*/i.exec(s);
+  const imageClauses=[...s.matchAll(/\b(?:image|photo|photograph|picture)\b.{0,48}?\b(?:shows?|depicts?|features?|contains?)\s*/gi)];
+  // A negative OCR/discovery preamble ("image does not contain text") is
+  // not a claim about what the primary pictured subject actually is.
+  const affirmative=imageClauses.find(match=>!/(?:\b(?:not|no|never|cannot|without|isn't|doesn't)\b|\bdoes\s+not\b)/i.test(match[0])&&
+    !/^(?:no|any|unreadable|illegible)\b/i.test(s.slice(match.index!+match[0].length).trim()));
+  const anchor=focal??affirmative??null;
   // Short Qwen observations commonly start "A cup on a table" without labels.
   // Only their first sentence can supply a fallback claimed subject.
   const shortUnlabelled=!anchor&&s.length<240&&
