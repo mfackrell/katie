@@ -31,6 +31,16 @@ function hasProjectWorkAnchor(text: string): boolean {
     || /\b(?:project|engagement|assignment|deliverable|application|resume|résumé)\b/i.test(text.slice(0, 400));
 }
 
+/**
+ * An ordinary greeting can become a synthetic project in older ledgers.
+ * It never becomes authoritative work solely because a model labels a later
+ * conversational answer as a task continuation.
+ */
+function isConversationalProjectOrigin(text: string): boolean {
+  const plain = text.trim().replace(/^(?:good|great|okay|ok|nice|indeed)[.!?,\\s]+/i, "").trim();
+  return classifyUserTurn(text) === "conversation" || classifyUserTurn(plain) === "conversation";
+}
+
 /** For unlabeled project follow-ups, require something grounded in the parent scope. */
 function explicitlyReferencesCurrentWork(message: string, parent: string): boolean {
   if (/^(?:(?:please|now)\s+)?(?:continue|resume|proceed|go ahead|finish|complete|do it|try again)\b/i.test(message)) return true;
@@ -73,6 +83,8 @@ export function selectTaskProgressPrompt(input: TaskProgressPromptInput): TaskPr
   const parent = input.progress.projectContext;
   if (!parent || parent.userMessageId === input.currentUserMessageId)
     return omit("no_prior_work_anchor");
+  if (isConversationalProjectOrigin(parent.text))
+    return omit("synthetic_conversation_project");
 
   if (input.projectRelation === "new_project") return omit("different_project");
   // Verified continuity outranks vocabulary heuristics. A real user-owned task
