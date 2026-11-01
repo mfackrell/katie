@@ -8,13 +8,14 @@ import sharp from 'sharp';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import { qualifyDocument, QUALIFIED_PAGES } from '../lib/documents/qualification';
 import { contentText, documentSchema, normalizedText, parseDocument } from '../lib/documents/model';
-import { documentRequest, answeredDocumentRequest } from '../lib/documents/intent';
+import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial } from '../lib/documents/intent';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
 import { produceDocument, shouldStopForReadingOrder } from '../lib/documents/production';
 import { generateDocx } from '../lib/documents/generate';
 import { renderDocument } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
+import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
 import type { LlmProvider } from '../lib/providers/types';
 
@@ -118,6 +119,38 @@ test('initial overfull pagination may retry once, but final PDF fidelity always 
   assert.equal(shouldStopForReadingOrder([reading, overflow], 1), true, 'mismatch after repair must stop delivery');
   assert.equal(shouldStopForReadingOrder([overflow], 0), false);
   assert.equal(shouldStopForReadingOrder([], 1), false);
+});
+
+test('document capability disclaimers reroute before rendering and never become document text', async () => {
+  const disclaimer = "I can't create, render, or download actual Word or PDF files. That's outside my technical capabilities.\n\nHere are manual options.";
+  assert.equal(isDocumentCapabilityDenial(disclaimer), true);
+  assert.equal(isDocumentCapabilityDenial('Sorry, I cannot generate Word documents because I have no file tools.'), true);
+  assert.equal(isDocumentCapabilityDenial('As a text-based AI, I cannot produce a PDF document myself.'), true);
+  assert.equal(isDocumentCapabilityDenial('# Memo\n\nI cannot create the documents until compliance approves the records.'), false);
+  assert.equal(isDocumentCapabilityDenial('CLARIFICATION_REQUIRED: Which version should I use?'), false);
+  assert.equal(isDocumentCapabilityDenial('# Executive Summary\n\n- Reduced costs.'), false);
+  assert.equal(isDocumentCapabilityDenial('I cannot create prohibited or unsafe PDF materials.'), false);
+  const routes = readFileSync('app/api/chat/route.ts','utf8');
+  assert.match(routes, /Boolean\(documentProduction\) && isDocumentCapabilityDenial\(generationResult.text/);
+  const calls: string[] = [];
+  const selected = await runWithRefusalFallback({
+    attempts: ['initial', 'alternate'], shouldRetryRefusal: true,
+    runAttempt: async candidate => {
+      calls.push(candidate);
+      return { provider: 'anthropic', model: candidate, text: candidate === 'initial' ? disclaimer : '# Executive Summary\n\n- Produced accurate reporting.' };
+    },
+    detectRefusal: reply => isDocumentCapabilityDenial(reply.text) || isLikelyProviderRefusal(reply, reply.provider),
+  });
+  assert.deepEqual(calls, ['initial','alternate']);
+  assert.match(selected.result.text, /Executive Summary/);
+  const context = { userId: scope.ownerId, actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId };
+  await assert.rejects(runWithStandaloneAccounting(context, () => deliverDocument({
+    result: { provider: 'anthropic', model: 'refusal', text: disclaimer },
+    provider: { name: 'anthropic', listModels: async()=>[], generate: async()=>{ throw new Error('Should not call a paid model'); } },
+    params: { name: 'Document specialist', persona: '', summary: '', history: [], user: 'Produce a Word file', modelId: 'refusal' },
+    actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId,
+    deadlineMs: Date.now()+30_000,
+  })), /did not supply document content/);
 });
 
 test('bounded document grammar preserves supplied content and rejects executable layouts', () => {

@@ -4,6 +4,7 @@ import { cachedWorkflowValue } from '@/lib/standalone-accounting/workflow';
 import { currentAgentTask } from '@/lib/agents/policy';
 import { launchWebsiteBrowser } from '@/lib/research/website-evidence';
 import { parseDocument } from './model';
+import { isDocumentCapabilityDenial } from './intent';
 import { produceDocument, visualReportSchema } from './production';
 import { documentLinks, documentStore, receiptSchema, type DocumentScope } from './storage';
 
@@ -17,6 +18,8 @@ export async function deliverDocument(input: {
     return { ...input.result, text: question };
   }
   if (input.result.truncated) throw new Error('Document content is incomplete; no file was delivered.');
+  if (isDocumentCapabilityDenial(input.result.text))
+    throw new Error('The selected AI model did not supply document content. No rendering or files were delivered.');
   const accounting = getAccountingScope(), task = currentAgentTask();
   let scope: DocumentScope;
   if (accounting?.kind === 'standalone' && accounting.context.actorId === input.actorId && accounting.context.chatId === input.chatId && accounting.context.requestId === input.requestId) {

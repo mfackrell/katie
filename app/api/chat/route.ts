@@ -1,5 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, answeredDocumentRequest, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
@@ -3090,7 +3090,7 @@ ${chunkWorkflowSummary}`;
                     generationResult.provider === videoReplyTarget.provider &&
                     generationResult.model === videoReplyTarget.model
                     ? false // Video conversational model decisions remain final.
-                    : isLikelyProviderRefusal(generationResult, candidate.provider.name),
+                    : (Boolean(documentProduction) && isDocumentCapabilityDenial(generationResult.text ?? '')) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt, attemptedAttempts }) => {
                 if (hasVideoInput) return null;
                 // Standalone photo analysis: prefer a real Grok vision model when
