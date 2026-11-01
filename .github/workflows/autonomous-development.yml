@@ -677,10 +677,15 @@ jobs:
                  (.repairPerformed == true and
                    (.review.verdict == "changes_requested" or
                     (.review.verdict == "pass" and
-                     .repairVerification.before.passed == false and
+                     ((.reviewRepair.before.verdict == "changes_requested" and
+                       (.reviewRepair.before.head | type == "string" and test("^[a-f0-9]{40}$")) and
+                       .reviewRepair.before.head != $head and
+                       .reviewRepair.after.verdict == "pass" and .reviewRepair.after.head == $head and
+                       .finalReview.reviewedHeadSha == $head) or
+                     (.repairVerification.before.passed == false and
                      (.repairVerification.before.head | type == "string" and test("^[a-f0-9]{40}$")) and
                      .repairVerification.before.head != $head and
-                     .repairVerification.after.passed == true and .repairVerification.after.head == $head))))
+                     .repairVerification.after.passed == true and .repairVerification.after.head == $head))))))
               ' "$evidence" >/dev/null 2>&1; then
               reviewed_head="$TEST_HEAD"
               tested_head="$TEST_HEAD"

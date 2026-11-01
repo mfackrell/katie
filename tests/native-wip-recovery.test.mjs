@@ -75,9 +75,9 @@ test('destroyed runner restores two edits, a new directory/file and deletion; re
  assert.throws(()=>readFileSync(join(f.workspace,'app/pilot/deleted.mjs')));
  assert.equal(recovery.verification,'unverified');assert.equal(recovery.reviewFindings,f.record.reviewFindings);
  const phases=[],verified=[];
- const result=await executeNativeDevelopmentLifecycle({recovery,qualifiedLifecycle:true,runPhase:async(phase,findings)=>{
+ const result=await executeNativeDevelopmentLifecycle({recovery,qualifiedLifecycle:true,runPhase:async(phase,findings,binding)=>{
   phases.push(phase);if(phase==='repair'){assert.equal(findings,f.record.reviewFindings);f.file('app/pilot/a.mjs','corrected a');return;}
-  assert.equal(phase,'final-review');return {phase,verdict:'pass',findings:'independently verified synthetic source'};
+  assert.equal(phase,'final-review');return {phase,reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'independently verified synthetic source'};
  },commitCandidate:()=>{f.git('add','app/pilot');f.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','synthetic repair');return f.git('rev-parse','HEAD');},verifyCandidate:async head=>{verified.push(head);return {passed:true,detail:'synthetic deterministic/build/browser assertions'};}});
  assert.deepEqual(phases,['repair','final-review']);assert.deepEqual(verified,[result.candidateHead]);assert.equal(result.review.verdict,'changes_requested');assert.equal(result.repairPerformed,true);
  assert.equal(JSON.stringify(f.rows),history,'no calls/tokens/reservations/receipts or historical authorization changed');
@@ -86,14 +86,14 @@ test('destroyed runner restores two edits, a new directory/file and deletion; re
 
 test('unfinished implementation restores source and starts in implementation, never specification',async t=>{
  const f=fixture(t,{phase:'implementation'});f.fresh();await f.validate();const recovery=f.prepare().restore(),phases=[];
- await executeNativeDevelopmentLifecycle({recovery,qualifiedLifecycle:true,runPhase:async phase=>{phases.push(phase);return {phase,verdict:'pass',findings:'synthetic independent review'};},commitCandidate:()=>f.completed,verifyCandidate:async()=>({passed:true})});
+ await executeNativeDevelopmentLifecycle({recovery,qualifiedLifecycle:true,runPhase:async (phase,_findings,binding)=>{phases.push(phase);return {phase,reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'synthetic independent review'};},commitCandidate:()=>f.completed,verifyCandidate:async()=>({passed:true})});
  assert.deepEqual(phases,['implementation','review','final-review']);assert.equal(readFileSync(join(f.workspace,'app/pilot/new/nested.mjs'),'utf8'),'third new file');
 });
 
 test('recovered implementation verifies and repairs actual failures under older authorization plans too',async()=>{
  const phases=[],verifications=[];let checks=0;
  const result=await executeNativeDevelopmentLifecycle({recovery:{phase:'implementation'},qualifiedLifecycle:false,
-  runPhase:async(phase,findings)=>{phases.push(phase);if(phase==='review')assert.match(findings,/"passed":false/);if(phase==='repair')assert.match(findings,/actual deterministic failure/);return {phase,verdict:'pass',findings:'PASS source review'};},
+  runPhase:async(phase,findings,binding)=>{phases.push(phase);if(phase==='review')assert.match(findings,/"passed":false/);if(phase==='repair')assert.match(findings,/actual deterministic failure/);return {phase,reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'PASS source review'};},
   commitCandidate:()=> 'a'.repeat(40),verifyCandidate:async head=>{verifications.push(head);return {passed:checks++>0,detail:'actual deterministic failure'};}});
  assert.deepEqual(phases,['implementation','review','repair','final-review']);assert.equal(verifications.length,2);assert.equal(result.repairPerformed,true);
 });
@@ -101,7 +101,7 @@ test('recovered implementation verifies and repairs actual failures under older 
 test('actual workflow completion accepts trusted deterministic repair without falsifying the initial review',async()=>{
  let checks=0,commits=0;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery:{phase:'implementation'},qualifiedLifecycle:false,
-  runPhase:async phase=>({phase,verdict:'pass',findings:'PASS independent source review'}),
+  runPhase:async (phase,_findings,binding)=>({phase,reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'PASS independent source review'}),
   commitCandidate:()=> (++commits===1?'a':'b').repeat(40),verifyCandidate:async()=>({passed:checks++>0,detail:'synthetic deterministic result'})});
  const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
  const predicate=workflow.match(/jq -e --arg head "\$TEST_HEAD" --arg project "\$PROJECT_ID" '([\s\S]+?)'\s+"\$evidence"/)?.[1];assert.ok(predicate);
@@ -218,8 +218,8 @@ test('missing/expired authority denies actual bridge admission after restore whi
 test('restored WIP cannot complete without deterministic acceptance and final independent review',async t=>{
  const f=fixture(t);f.fresh();await f.validate();const recovery=f.prepare().restore();
  for(const kind of ['deterministic','review']){
-  const phases=[];await assert.rejects(executeNativeDevelopmentLifecycle({recovery,qualifiedLifecycle:true,runPhase:async phase=>{phases.push(phase);return {phase,verdict:kind==='review'?'changes_requested':'pass',findings:'synthetic finding'};},commitCandidate:()=>f.completed,verifyCandidate:async()=>({passed:kind!=='deterministic'})}),kind==='deterministic'?/deterministic acceptance/:/final review/);
-  assert.deepEqual(phases,kind==='deterministic'?['repair']:['repair','final-review']);
+  const phases=[];await assert.rejects(executeNativeDevelopmentLifecycle({recovery,qualifiedLifecycle:true,runPhase:async (phase,_findings,binding)=>{phases.push(phase);return {phase,reviewedHeadSha:binding?.candidateHead,verdict:kind==='review'?'changes_requested':'pass',findings:'synthetic finding'};},commitCandidate:()=>f.completed,verifyCandidate:async()=>({passed:kind!=='deterministic'})}),/NO_PROGRESS/);
+  assert.ok(phases.includes('repair'));assert.ok(phases.includes('final-review'));
  }
 });
 
@@ -227,9 +227,9 @@ test('completed-phase summaries fit the unchanged checkpoint envelope alongside 
  let completed;
  const findings='CHANGES_REQUESTED '+('finding '.repeat(1500)),detail='failure '.repeat(1500);
  await executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,onCompleted:value=>{completed={...completed,...value};},
-  runPhase:async phase=>({phase,verdict:phase==='review'?'changes_requested':'pass',findings:phase==='review'?findings:'PASS'}),
+  runPhase:async (phase,_findings,binding)=>({phase,reviewedHeadSha:binding?.candidateHead,verdict:phase==='review'?'changes_requested':'pass',findings:phase==='review'?findings:'PASS'}),
   commitCandidate:()=> 'a'.repeat(40),verifyCandidate:async()=>({passed:true,detail})});
- assert.equal(completed.review.verdict,'changes_requested');assert.ok(Buffer.byteLength(completed.review.findings)<=1600);
+ assert.equal(completed.initialReview.verdict,'changes_requested');assert.equal(completed.review.verdict,'pass');assert.ok(Buffer.byteLength(completed.review.findings)<=1600);
  assert.ok(Buffer.byteLength(completed.verification.detail)<=1600);
  assert.ok(Buffer.byteLength(JSON.stringify({reviewFindings:findings.slice(0,12000),lastCompleted:completed}))<18000);
 });

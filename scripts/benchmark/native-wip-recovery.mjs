@@ -173,7 +173,8 @@ export async function validateRecoveryRecords({record,task,context,project,trial
   if(record.phase==='do_completion'&&(!last.lifecycle||last.lifecycle.candidateHead!==record.completedCheckpointSha||last.lifecycle.finalReview?.verdict!=='pass'||!last.verification.passed))fail('completed final review evidence missing');
  }
  if(record.phase==='repair'){
-  if(last.phase!=='review'||!last.review||last.review.phase!=='review'||!['pass','changes_requested'].includes(last.review.verdict)||
+  if(last.adaptiveRepair&&last.review?.reviewedHeadSha!==record.completedCheckpointSha)fail('repair reviewer candidate binding mismatch');
+  if(last.phase!=='review'||!last.review||!['review','final-review'].includes(last.review.phase)||!['pass','changes_requested'].includes(last.review.verdict)||
      typeof last.review.findings!=='string'||!last.review.findings.trim()||typeof record.reviewFindings!=='string'||!record.reviewFindings.trim()||
      !last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean'||
      (last.review.verdict==='pass'&&last.verification.passed))fail('completed review and verification evidence required for repair');

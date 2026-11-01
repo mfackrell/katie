@@ -266,6 +266,7 @@ const commitCandidate=(label)=>{
   try{execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'pipe'});diagnostics.scope.push({passed:true});}
   catch(error){diagnostics.scope.push({passed:false,detail:sanitizeEvidence(error.stderr?.toString()||error.message,diagnosticSecrets)});saveDiagnostics();throw Error('NATIVE_PROJECT_SCOPE_FAILED: see retained diagnostics');}
   execFileSync('node',[join(toolsRoot,'project-tools','recovery-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'inherit'});
+  if(!git('diff','--cached','--name-only'))return trustedCheckpointSha;
   git('-c','user.name=katie-native-checkpoint','-c','user.email=katie-native-checkpoint@users.noreply.github.com','commit','-m',label);
   const sha=git('rev-parse','HEAD');
   // Scope-verified checkpoint persists outside the short-lived runner before
@@ -308,7 +309,8 @@ try{
   // A fresh Codex process/thread is required for independent reviews.
   if(findings)writeFileSync(join(root,'review-findings.txt'),findings,{mode:0o600});
   const reviewing=phase==='review'||phase==='final-review';
-  activeWipPhase=reviewing?null:{phase,reviewFindings:findings};
+  const reviewedHeadSha=reviewing?git('rev-parse','HEAD'):null;
+  activeWipPhase={phase,reviewFindings:findings,...(reviewing?{boundary:true}:{})};
   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
   const args=sharedNativeContainerArgs({
    workspace:boundary.root,socketDir:sockdir,arm:'full',phase,command,
@@ -350,10 +352,13 @@ try{
      typeof decision.findings!=='string'||!decision.findings.trim())
     denied('invalid independent review verdict');
   decision.findings=sanitizeEvidence(decision.findings,diagnosticSecrets,12000);
-  return decision;
+  if(git('rev-parse','HEAD')!==reviewedHeadSha||git('status','--porcelain'))denied('review candidate changed');
+  return {...decision,reviewedHeadSha};
  };
  const safelyRunPhase=async(phase,findings='')=>{
-  if(phase==='repair'){capacityCompletedStages.delete('verification');capacityNotRequiredStages.delete('repair');}
+  if(phase==='repair'){for(const stage of ['repair','verification','final_review'])capacityCompletedStages.delete(stage);capacityNotRequiredStages.delete('repair');}
+  const {data:phaseLive,error:phaseLiveError}=await db.rpc(ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{p_digest:tokenDigest(grantToken),...(ordinary?{p_project:project.id}:{p_trial:proof.trialId}),p_epoch:executionEpoch});
+  if(phaseLiveError||phaseLive!==true){activeWipPhase={phase,reviewFindings:findings,boundary:true};preserveWip();denied('native phase authority stopped or expired');}
   await forecastCapacity(phase);diagnostics.capacityForecasts.push(latestCapacityForecast);diagnostics.capacityForecasts=diagnostics.capacityForecasts.slice(-12);saveDiagnostics();
   pauseForCapacity(phase,findings);
   // Retry only a positively identified process interruption. Any gateway denial,
@@ -363,7 +368,7 @@ try{
      capacityPhase=phase;capacityReceipts=[];const phaseStarted=Date.now();
      const result=await runPhase(phase,findings);
      if(capacityReceipts.length&&capacityReceipts.every(r=>Number.isSafeInteger(r.inputTokens)&&Number.isSafeInteger(r.outputTokens))){
-      capacityObservations.push({id:process.env.GITHUB_RUN_ID+':'+phase+':'+attempt,source:'verified_phase_receipts',cohort:project.approved_hash,
+      capacityObservations.push({id:process.env.GITHUB_RUN_ID+':'+phase+':'+capacityReceipts[0].operationId,source:'verified_phase_receipts',cohort:project.approved_hash,
        binding:{projectId:project.id,scopeHash:project.approved_hash},stage:({'review':'initial_review','final-review':'final_review'})[phase]??phase,
        completed:['review','final-review'].includes(phase),calls:capacityReceipts.length,inputTokens:capacityReceipts.reduce((n,r)=>n+r.inputTokens,0),outputTokens:capacityReceipts.reduce((n,r)=>n+r.outputTokens,0),
        seconds:Math.ceil((Date.now()-phaseStarted)/1000),operationIds:capacityReceipts.map(r=>r.operationId)});
@@ -408,6 +413,7 @@ try{
  // Run the existing trusted deterministic/build/browser verifier before the
  // one paid correction. Candidate commands remain inside its credential-free sandbox.
  const verifyCandidate=async(candidateHead)=>{
+  activeWipPhase={phase:'review',reviewFindings:lastCompleted.review?.findings??'',boundary:true};
   const output=join(root,'project-acceptance.json');
   const failure=join(root,'project-verification-failure.json');
   rmSync(output,{force:true});rmSync(failure,{force:true});
@@ -426,7 +432,9 @@ try{
  // Ordinary projects use verified lifecycle checkpoints from their first execution.
  const qualifiedLifecycle=ordinary||continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
-  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
+  candidateIdentity:()=>git('rev-parse','HEAD^{tree}'),
+  onIteration:evidence=>{diagnostics.repairIterations??=[];diagnostics.repairIterations.push(evidence);diagnostics.repairIterations=diagnostics.repairIterations.slice(-64);saveDiagnostics();},
+  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){activeWipPhase={phase:evidence.review?'final-review':'review',reviewFindings:evidence.review?.findings??'',boundary:true};}if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
  lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};
  await forecastCapacity('do_completion');diagnostics.capacityForecasts.push(latestCapacityForecast);saveDiagnostics();
  pauseForCapacity('do_completion');
@@ -434,7 +442,7 @@ try{
   denied('trusted evidence destination unavailable');
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),
   approvalId:proof.approvalId,projectId:proof.projectId,review:lifecycle.review,
-  finalReview:lifecycle.finalReview,repairPerformed:lifecycle.repairPerformed,repairVerification:lifecycle.repairVerification,
+  finalReview:lifecycle.finalReview,repairPerformed:lifecycle.repairPerformed,repairVerification:lifecycle.repairVerification,reviewRepair:lifecycle.reviewRepair,repairIterations:lifecycle.repairIterations,
   metered:true,completed:true,reviewedHeadSha:lifecycle.candidateHead})+'\n',{mode:0o600,flag:'wx'});
  diagnostics.completed=true;
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');

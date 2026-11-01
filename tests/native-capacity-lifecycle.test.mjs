@@ -8,9 +8,9 @@ const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8'
 const text=source.slice(source.indexOf(" const verifyCandidate="),source.indexOf(' if(!evidencePath'));
 async function run({testResults=[true],verdicts=['pass','pass'],infrastructure=false,version6=true,ordinary=false}={}){
  const phases=[],verifications=[];let callback,ci=0,decisions=0;
- const context={ordinary,pauseForCapacity:()=>{},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),recovery:null,lastCompleted:{},executeNativeDevelopmentLifecycle,continuation:{plan:{capacityRenewal:version6}},root:'/temp',process:{execPath:'node',env:{RUNNER_TEMP:'/temp'}},boundary:{root:'/work'},requestFile:'/request',diagnostics:{capacityForecasts:[]},diagnosticSecrets:[],gatewayFailure:null,child:null,join:(...x)=>x.join('/'),rmSync:()=>{},sanitizeEvidence:x=>x,saveDiagnostics:()=>{},denied:x=>{throw Error('NATIVE_HOST_DENIED: '+x)},readFileSync:()=>{if(infrastructure)return '{"kind":"infrastructure"}';throw Error('missing');},commitCandidate:()=>('head-'+phases.length),safelyRunPhase:async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};},spawn:()=>{const pass=testResults[Math.min(ci++,testResults.length-1)];verifications.push(pass);return {stdout:{on:()=>{}},stderr:{on:()=>{}},once:(event,fn)=>{if(event==='close')queueMicrotask(()=>fn(pass?0:1));}}}};
+ const context={git:()=>String(ci),ordinary,pauseForCapacity:()=>{},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),recovery:null,lastCompleted:{},executeNativeDevelopmentLifecycle,continuation:{plan:{capacityRenewal:version6}},root:'/temp',process:{execPath:'node',env:{RUNNER_TEMP:'/temp'}},boundary:{root:'/work'},requestFile:'/request',diagnostics:{capacityForecasts:[]},diagnosticSecrets:[],gatewayFailure:null,child:null,join:(...x)=>x.join('/'),rmSync:()=>{},sanitizeEvidence:x=>x,saveDiagnostics:()=>{},denied:x=>{throw Error('NATIVE_HOST_DENIED: '+x)},readFileSync:()=>{if(infrastructure)return '{"kind":"infrastructure"}';throw Error('missing');},commitCandidate:()=>('head-'+phases.length),safelyRunPhase:async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};},spawn:()=>{const pass=testResults[Math.min(ci++,testResults.length-1)];verifications.push(pass);return {stdout:{on:()=>{}},stderr:{on:()=>{}},once:(event,fn)=>{if(event==='close')queueMicrotask(()=>fn(pass?0:1));}}}};
  // Implementation/repair return no review decision.
- context.safelyRunPhase=async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);if(p==='review'||p==='final-review')return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};};
+ context.safelyRunPhase=async(p,findings,binding)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);if(p==='review'||p==='final-review')return {reviewedHeadSha:binding?.candidateHead,verdict:verdicts[decisions++]??'pass',findings:'independent findings'};};
  let error;try{await vm.runInNewContext('(async()=>{'+text+'})()',context);}catch(e){error=e.message;}
  return {phases,verifications,error,completed:context.lastCompleted};
 }
@@ -20,9 +20,9 @@ test('deterministic failure reaches the same bounded repair even when initial so
 test('a passed candidate still receives final independent review; no unnecessary repair',async()=>{
  const r=await run();assert.deepEqual(r.phases,['implementation','review','final-review']);assert.equal(r.error,undefined);
 });
-test('failed bounded repair or final review is terminal without another paid attempt',async()=>{
- const r=await run({testResults:[false,false]});assert.deepEqual(r.phases,['implementation','review','repair']);assert.match(r.error,/bounded repair/);
- const v=await run({verdicts:['pass','changes_requested']});assert.match(v.error,/final review/);
+test('failed repair and final re-review trigger another authorized correction',async()=>{
+ const r=await run({testResults:[false,false,true]});assert.deepEqual(r.phases,['implementation','review','repair','final-review','repair','final-review']);assert.equal(r.error,undefined);
+ const v=await run({verdicts:['pass','changes_requested','pass']});assert.deepEqual(v.phases,['implementation','review','final-review','repair','final-review']);assert.equal(v.error,undefined);
 });
 test('baseline infrastructure failure never consumes a model repair',async()=>{
  const r=await run({infrastructure:true,testResults:[false]});assert.deepEqual(r.phases,['implementation']);assert.match(r.error,/infrastructure/);
@@ -37,11 +37,11 @@ test('new authority is explicit and never reuses automatic process retry',()=>{
 test('paused final review preserves deterministic repair proof and skips completed phases',async()=>{
  let last={},head='a'.repeat(40),checks=0;
  await assert.rejects(executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,
-  runPhase:async phase=>{if(phase==='final-review')throw Error('synthetic capacity pause');return {phase,verdict:'pass',findings:'independent source review'};},
+  runPhase:async (phase,_findings,binding)=>{if(phase==='final-review')throw Error('synthetic capacity pause');return {phase,reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'independent source review'};},
   commitCandidate:()=>{if(checks)head='b'.repeat(40);return head;},verifyCandidate:async()=>({passed:checks++>0}),onCompleted:e=>{last={...last,...e};}}),/capacity pause/);
  const phases=[];
  const result=await executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:last},
-  runPhase:async p=>{phases.push(p);return {verdict:'pass',findings:'independent final review'};},commitCandidate:()=>assert.fail('completed implementation replayed'),verifyCandidate:()=>assert.fail('completed verification replayed')});
+  runPhase:async (p,_findings,binding)=>{phases.push(p);return {reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'independent final review'};},commitCandidate:()=>assert.fail('completed implementation replayed'),verifyCandidate:()=>assert.fail('completed verification replayed')});
  assert.deepEqual(phases,['final-review']);assert.equal(result.repairPerformed,true);
  assert.deepEqual(result.repairVerification,{before:{head:'a'.repeat(40),passed:false},after:{head:'b'.repeat(40),passed:true}});
  const closure=await executeNativeDevelopmentLifecycle({recovery:{phase:'do_completion',lastCompleted:{lifecycle:result}},runPhase:()=>assert.fail('completed engineering replayed')});
@@ -64,4 +64,15 @@ test('ordinary first execution verifies before review and preserves failed-to-pa
  assert.deepEqual(JSON.parse(JSON.stringify(r.completed.lifecycle.repairVerification)),{before:{head:'head-1',passed:false},after:{head:'head-3',passed:true}});
  const denied=await run({ordinary:true,version6:false,infrastructure:true,testResults:[false]});
  assert.deepEqual(denied.phases,['implementation']);assert.match(denied.error,/infrastructure/);
+});
+
+test('review without inspected candidate identity fails closed',async()=>{
+ await assert.rejects(executeNativeDevelopmentLifecycle({runPhase:async()=>({verdict:'pass',findings:'unbound approval'}),commitCandidate:()=> 'a'.repeat(40),verifyCandidate:async()=>({passed:true})}),/CANDIDATE_MISMATCH/);
+});
+test('unchanged source cannot evade no-progress by rewording diagnostics',async()=>{
+ let reviews=0,repairs=0;
+ await assert.rejects(executeNativeDevelopmentLifecycle({candidateIdentity:()=> 'same-tree',commitCandidate:()=> 'a'.repeat(40),verifyCandidate:async()=>({passed:false,detail:'failure '+reviews}),runPhase:async(phase,_findings,binding)=>{
+  if(phase==='repair'){repairs++;return;}if(phase==='implementation')return;
+  return {reviewedHeadSha:binding.candidateHead,verdict:'changes_requested',findings:'Review wording '+(++reviews)};
+ }}),/NO_PROGRESS/);assert.equal(repairs,1);
 });

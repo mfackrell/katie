@@ -51,10 +51,10 @@ test('native engineering cannot invoke unmetered review, repair, or final-review
 
 test('native independent reviewers are isolated and every phase shares the metered host gateway',()=>{
  assert.match(lifecycle,/await runPhase\('implementation'\)/);
- assert.match(lifecycle,/await runPhase\('review',qualifiedLifecycle/);
- assert.match(lifecycle,/await runPhase\('repair',recovery\?\.phase==='repair'\?recovery.reviewFindings:first\.findings\+/);
- assert.match(lifecycle,/await runPhase\('final-review',qualifiedLifecycle/);
- assert.match(lifecycle,/if\(final\.verdict!=='pass'\)throw Error/);
+ assert.match(lifecycle,/await runPhase\(phase,/);
+ assert.match(lifecycle,/await runPhase\('repair',findings\)/);
+ assert.match(lifecycle,/decision=await review\('final-review'\)/);
+ assert.match(lifecycle,/while\(decision\?\.verdict!=='pass'\|\|!verification\?\.passed\)/);
  assert.match(host,/executeNativeDevelopmentLifecycle\(\{recovery,runPhase:safelyRunPhase/);
  assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
