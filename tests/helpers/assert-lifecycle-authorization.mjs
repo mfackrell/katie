@@ -79,8 +79,13 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
   await assert.rejects(db.query('insert into benchmark_budget_calls(account_id,request_key,model,reserved_tokens,legacy_mission_call_id,continuation_id) values($1,$2::uuid::text,$3,$4,$2::uuid,$5)',[account,call,model,tokens,approved.continuationId]),/Protected lifecycle account reserves/);await db.query('rollback');
  }
  await assert.rejects(db.query(reserve,[grant.token_digest,trial,grant.execution_epoch,randomUUID(),'gpt-5.3-codex',100]),/unauthorized/);
- for(let i=0;i<2;i++) {
-  const id=(await db.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',100])).rows[0].id;
+ // Three competing reservations share only two newly authorized native slots.
+ const reservations=await Promise.allSettled([db,rival,db].map(connection=>connection.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',100])));
+ assert.equal(reservations.filter(r=>r.status==='fulfilled').length,2);
+ assert.equal(reservations.filter(r=>r.status==='rejected').length,1);
+ assert.match(reservations.find(r=>r.status==='rejected').reason.message,/closure/);
+ for(const result of reservations.filter(r=>r.status==='fulfilled')) {
+  const id=result.value.rows[0].id;
   const linked=(await db.query('select legacy_mission_call_id from benchmark_budget_calls where id=$1',[id])).rows[0].legacy_mission_call_id;
   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-lifecycle-'+id,{input_tokens:60,output_tokens:10,total_tokens:70}]);
  }
