@@ -175,6 +175,20 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.equal(providerCalls,15);assert.equal((await db.query("select count(*)::int n from project_runs where project_id=$1 and kind='development'",[ids.project])).rows[0].n,1,'No replacement development mission');
   assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions where proposal_id=$1',[pending.proposal.id])).rows[0].n,1);
   report.assessmentWorkers=assessmentJobs;report.finalProjectReceipt=finished;report.finalProjectBrowser=fixture.finalBrowser;
+  const purpose=(await db.query(`select m.project_kind,j.role,count(*)::int calls from benchmark_budget_calls c join mission_calls legacy on legacy.id=c.legacy_mission_call_id join mission_assignments j on j.id=legacy.job_id join agent_missions m on m.id=j.mission_id where c.account_id=$1 group by m.project_kind,j.role order by m.project_kind,j.role`,[ids.account])).rows;
+  assert.equal(purpose.find(p=>p.role==='development')?.calls,15);
+  for(const kind of ['development','assessment']){const protectedCalls=purpose.filter(p=>p.project_kind===kind&&p.role!=='development');assert.ok(protectedCalls.every(p=>['compose','review'].includes(p.role)));const count=protectedCalls.reduce((n,p)=>n+p.calls,0);assert.ok(count>0&&count<=4,JSON.stringify(purpose));}
+  report.accountingByPurpose=purpose;report.finalLedgerHash=hash(finalLedger);
+  report.scenarios.push(
+   {id:1,pass:true,observed:'Initial verified authority admitted implementation and review without an amendment. Forecast unknowns remain explicit; this is not a claim of fully measured completion cost.'},
+   {id:2,pass:true,observed:'Eleven native calls settled, zero native slots, tokens and dollars retained; one four-call proposal.'},
+   {id:5,pass:true,observed:'Four completion slots excluded from repair before and after amendment; later spent only by completion workers.'},
+   {id:6,pass:true,observed:'Review findings required repair; refreshed forecast stopped before its first request and consolidated remaining native demand.'},
+   {id:8,pass:true,observed:'Authenticated owner route committed exact proposal and real host used amended capacity on original task.'},
+   {id:10,pass:true,observed:'Two barrier-synchronized owner decisions plus duplicate click created one amendment and one continuation dispatch.'},
+   {id:12,pass:true,observed:'Fresh host restored original repair checkpoint; only repair and final review ran; initial eleven receipts unchanged.'}
+  );
+
   report.externalTransportLimitations=['Provider responses and external owner identity are isolated synthetic transports.','GitHub issue/workflow/PR and Vercel deployment responses are synthetic, backed by actual local source and host receipts.','Final browser executes Chromium against the same local immutable candidate; this fixture does not qualify Vercel network, deployment protection or paid model performance.'];
   report.completion=completion;report.browserAcceptance=browser;report.continuationDiagnostics=second.diagnostics;report.finalLedger=await ledger();
   console.log('TASK2C_INTEGRATED_NATIVE_PASS');

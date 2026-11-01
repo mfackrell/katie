@@ -8,7 +8,7 @@ import {chromium} from 'playwright-core';
 import bundledChromium from '@sparticuz/chromium';
 import config from '../../config/benchmark-715-production-qualification.json' with {type:'json'};
 export async function integratedOwnerBrowser(route,run){
- const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),args:bundledChromium.args,headless:true});
+ const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),args:bundledChromium.args.filter(arg=>arg!=='--disable-web-security'),headless:true});
  const exchanges=[],errors=[];let page;
  try{
   page=await browser.newPage();page.on('pageerror',error=>errors.push(error.message));
@@ -19,7 +19,7 @@ export async function integratedOwnerBrowser(route,run){
    const r=transport.request();assert.equal(new URL(r.url()).origin,config.productionUrl,'Production network is intercepted, never contacted');
    if(new URL(r.url()).pathname==='/task2c-synthetic-owner')return transport.fulfill({contentType:'text/html',body:html});
    assert.equal(new URL(r.url()).pathname,'/api/projects/lifecycle-approval');assert.ok(['GET','POST'].includes(r.method()));
-   const headers=await r.allHeaders();const request=new NextRequest(r.url(),{method:r.method(),headers,...(r.method()==='POST'?{body:r.postData()}:{} )});
+   const headers=await r.allHeaders();if(r.method()==='POST')assert.equal(headers.origin,config.productionUrl,'Browser must supply its authentic same-origin header');const request=new NextRequest(r.url(),{method:r.method(),headers,...(r.method()==='POST'?{body:r.postData()}:{} )});
    const response=await route[r.method()](request),body=await response.text();exchanges.push({method:r.method(),request:r.postData()?JSON.parse(r.postData()):null,status:response.status,response:JSON.parse(body)});
    await transport.fulfill({status:response.status,contentType:'application/json',body});
   });
