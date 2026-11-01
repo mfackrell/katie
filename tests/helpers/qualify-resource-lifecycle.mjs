@@ -177,6 +177,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   report.assessmentWorkers=assessmentJobs;report.finalProjectReceipt=finished;report.finalProjectBrowser=fixture.finalBrowser;
   report.externalTransportLimitations=['Provider responses and external owner identity are isolated synthetic transports.','GitHub issue/workflow/PR and Vercel deployment responses are synthetic, backed by actual local source and host receipts.','Final browser executes Chromium against the same local immutable candidate; this fixture does not qualify Vercel network, deployment protection or paid model performance.'];
   report.completion=completion;report.browserAcceptance=browser;report.continuationDiagnostics=second.diagnostics;report.finalLedger=await ledger();
+  report.dimensionMatrix=await (await import('./qualify-resource-dimensions.mjs')).qualifyResourceDimensions(db,rival);
   console.log('TASK2C_INTEGRATED_NATIVE_PASS');
  }finally{
   globalThis.fetch=oldFetch;for(const key of Object.keys(process.env))if(!(key in oldEnv))delete process.env[key];Object.assign(process.env,oldEnv);

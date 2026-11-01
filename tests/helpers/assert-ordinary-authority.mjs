@@ -6,12 +6,14 @@ import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-o
 // Disposable PostgreSQL only. These authenticated identities represent synthetic
 // consent fixtures; they are never owner consent or production execution.
 export async function assertOrdinaryAuthority(db,rival,options={}){
+ if(!options.schemaReady){
  await db.query('reset role');
  await db.query('alter table actors add column if not exists actor_kind text');
  await db.query(readFileSync('supabase/migrations/20261022093000_separate_project_resource_estimates.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261022174500_specialist_estimate_dispatch.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261101160000_ordinary_developer_authority.sql','utf8'));
+ }
  const actor=randomUUID(),chat=randomUUID(),owner=randomUUID(),project=randomUUID(),repo=randomUUID();
  await db.query("insert into actors(id,name,actor_kind) values($1,'Ordinary synthetic owner','standard')",[actor]);
  await db.query("insert into chats(id,actor_id,title) values($1,$2,'First shortage synthetic fixture')",[chat,actor]);
@@ -43,7 +45,7 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query("insert into chats(id,actor_id,title) values($1,$2,'Synthetic developer')",[taskChat,agent.actor_id]);
  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development','Frozen display scope','Frozen display scope',$7,'mfackrell/katie',$1::text,'blocked','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo]);
  }
- const limits={cumulativeTokens:180000,developmentTokens:120000,developmentCalls:15,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:3600};
+ const limits=options.limits??{cumulativeTokens:180000,developmentTokens:120000,developmentCalls:15,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:3600};
  await db.query('begin');await db.query("update agent_tasks set repository_full_name='other/repository' where id=$1",[job.id]);
  await assert.rejects(db.query('select developer_prepare_initial($1,$2) p',[owner,job.id]),/binding denied/);await db.query('rollback');
  const prepared=(await db.query('select developer_prepare_initial($1,$2) p',[owner,job.id])).rows[0].p;
@@ -64,7 +66,7 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query("update agent_tasks set status='dispatching',details='Waiting for owner authority',updated_at=clock_timestamp() where id=$1",[job.id]);
  await db.query("update mission_assignments set status='waiting_external',attempts=attempts+1,lease=null,lease_until=null,heartbeat_at=clock_timestamp(),available_at=clock_timestamp(),updated_at=clock_timestamp(),result=jsonb_build_object('detail','Waiting for owner authority','external','{}'::jsonb) where id=$1",[job.id]);
  await db.query("update agent_missions set updated_at=clock_timestamp(),detail='Polling saved task' where id=$1",[mission]);
- await db.query("update work_projects set lease=gen_random_uuid(),lease_until=clock_timestamp()+interval '1 minute',updated_at=clock_timestamp(),detail='Polling saved task' where id=$1",[project]);
+ await db.query("update work_projects set lease=gen_random_uuid(),lease_until=clock_timestamp()+interval '1 second',updated_at=clock_timestamp(),detail='Polling saved task' where id=$1",[project]);
  assert.equal((await db.query(offer,[owner,job.id,limits,'gpt-5.3-codex'])).rows[0].p.id,proposal.id);
  for(const [sql,values] of [
   ["update agent_tasks set input=input||' changed scope' where id=$1",[job.id]],
@@ -82,7 +84,7 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  assert.equal(decisions[0].rows[0].d.developer_approval_id,decisions[1].rows[0].d.developer_approval_id);
  const approved=(await db.query('select * from benchmark_native_spending_approvals where id=$1',[decisions[0].rows[0].d.developer_approval_id])).rows[0];
  assert.equal(approved.trial_id,null);assert.equal(approved.continuation_id,null);assert.equal(approved.previous_developer_approval_id,null);
- assert.deepEqual(approved.developer_authority.limits,limits);assert.equal(approved.max_tokens,'180000');
+ assert.deepEqual(approved.developer_authority.limits,limits);assert.equal(approved.max_tokens,String(limits.cumulativeTokens));
  assert.equal((await db.query('select count(*)::int n from benchmark_full_continuations')).rows[0].n,before);
  assert.equal((await db.query('select count(*)::int n from benchmark_execution_grants where account_id=$1',[approved.account_id])).rows[0].n,0);
  await assert.rejects(db.query('update benchmark_native_spending_approvals set max_tokens=max_tokens+1 where id=$1',[approved.id]),/immutable/);
