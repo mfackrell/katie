@@ -85,6 +85,12 @@ test('proposal cannot be changed through input references after hashing',()=>{
  assert.equal(p.current.ceilingMicrousd,'10000000');assert.equal(p.scope.request,'Finish original authorized task');
  assert.throws(()=>{p.current.ceilingMicrousd='900000000';},TypeError);
 });
+test('increasing completion reserve within existing call ceiling does not report negative native additions',()=>{
+ const args=setup(f=>{f.authorization.calls.completionReserveRemaining=2;});
+ const p=proposeLifecycleAmendment(args).proposal;
+ assert.equal(p.proposed.developmentCalls,100);assert.equal(p.proposed.completionCalls,4);
+ assert.equal(p.additions.nativeCalls,0);assert.equal(p.additions.completionCalls,2);
+});
 test('revocation, freeze and authoritative denials cannot be converted into owner proposals',()=>{
  for(const patch of [{revoked:true},{frozen:true},{admissionDenial:'scope_changed'}]){
   const args=setup(f=>{f.authorization.calls.developmentLimit=15;});Object.assign(args.current,patch);
