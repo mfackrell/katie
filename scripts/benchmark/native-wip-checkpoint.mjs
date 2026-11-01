@@ -39,8 +39,8 @@ export function createNativeWipCheckpointer({workspace,tempRoot,toolsRoot,reques
  const baseEnv={...process.env};
  // The trusted host, not a caller-supplied Git index, owns each snapshot.
  delete baseEnv.GIT_INDEX_FILE;
- return {save({phase,reviewFindings='',lastCompleted={}}){
-  if(!['implementation','repair'].includes(phase))return null;
+ return {save({phase,reviewFindings='',lastCompleted={},boundary=false}){
+  if(!(boundary?['implementation','review','repair','final-review','do_completion']:['implementation','repair']).includes(phase))return null;
   const scratch=mkdtempSync(join(tempRoot,'wip-'));
   const env={...baseEnv,GIT_INDEX_FILE:join(scratch,'index')};
   try{
@@ -63,11 +63,12 @@ export function createNativeWipCheckpointer({workspace,tempRoot,toolsRoot,reques
     git(['update-index','--add','--cacheinfo',mode,blob,path],env);
    }
    const tree=git(['write-tree'],env);
-   if(tree===git(['rev-parse',head+'^{tree}'],env))return null;
+   const clean=tree===git(['rev-parse',head+'^{tree}'],env);
+   if(clean&&!boundary)return null;
    // Validate the frozen cumulative scope using the unchanged trusted gates.
-   for(const tool of ['project-scope.mjs','recovery-scope.mjs'])execFileSync(process.execPath,[join(toolsRoot,tool),requestFile],{
+   for(const tool of boundary&&clean&&phase==='implementation'&&head===context.baseSha?[]:['project-scope.mjs','recovery-scope.mjs'])execFileSync(process.execPath,[join(toolsRoot,tool),requestFile],{
     cwd:workspace,env,timeout:20000,stdio:'pipe'});
-   const metadata={version:1,kind:'native-unverified-wip',verification:'unverified',
+   const metadata={version:boundary?2:1,kind:'native-unverified-wip',verification:'unverified',
     ...identity,originalBaselineSha:context.baselineSha,baseSha:context.baseSha,
     approvedScope:{hash:identity.approvedScopeHash,allowedPaths:context.allowedPaths,contractHash:context.contractHash},
     phase,sourceTreeSha:tree,completedCheckpointSha:head,

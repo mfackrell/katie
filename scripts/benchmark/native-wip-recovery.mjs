@@ -128,8 +128,8 @@ export function recoveryCompletedEvidence(record,diagnostics){
 }
 
 export async function validateRecoveryRecords({record,task,context,project,trialId,accountId,readOne,completedEvidence=record.lastCompleted}){
- if(record.version!==1||record.kind!=='native-unverified-wip'||record.verification!=='unverified'||
-    !['implementation','repair'].includes(record.phase)||!sha(record.checkpointSha)||!sha(record.completedCheckpointSha)||!sha(record.sourceTreeSha))fail('invalid WIP identity');
+ if(![1,2].includes(record.version)||record.kind!=='native-unverified-wip'||record.verification!=='unverified'||
+    !(record.version===2?['implementation','review','repair','final-review','do_completion']:['implementation','repair']).includes(record.phase)||!sha(record.checkpointSha)||!sha(record.completedCheckpointSha)||!sha(record.sourceTreeSha))fail('invalid WIP identity');
  for(const [value,expected,label] of [[record.taskId,task.id,'task'],[record.projectId,project.id,'project'],
   [record.trialId,trialId,'trial'],[record.originalBaselineSha,context.baselineSha,'baseline'],[record.baseSha,context.baseSha,'base'],
   [record.approvedScopeHash,project.approved_hash,'scope hash'],[record.approvedScope,{hash:project.approved_hash,allowedPaths:context.allowedPaths,contractHash:context.contractHash},'scope and contract']])same(value,expected,label+' mismatch');
@@ -160,6 +160,11 @@ export async function validateRecoveryRecords({record,task,context,project,trial
      callGrant.repository!==grant.repository||callGrant.model!==grant.model||!Number.isSafeInteger(callGrant.execution_epoch)||
      callGrant.execution_epoch>grant.execution_epoch)fail('historical model-call evidence mismatch');
  }else if(record.phase==='repair')fail('repair call evidence missing');
+ if(record.version===2&&['review','final-review','do_completion'].includes(record.phase)){
+  if(!last.modelCall||!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('completed boundary verification evidence missing');
+  if(record.phase!=='review'&&(!last.review||!['pass','changes_requested'].includes(last.review.verdict)))fail('completed boundary review evidence missing');
+  if(record.phase==='do_completion'&&(!last.lifecycle||last.lifecycle.candidateHead!==record.completedCheckpointSha||last.lifecycle.finalReview?.verdict!=='pass'||!last.verification.passed))fail('completed final review evidence missing');
+ }
  if(record.phase==='repair'){
   if(last.phase!=='review'||!last.review||last.review.phase!=='review'||!['pass','changes_requested'].includes(last.review.verdict)||
      typeof last.review.findings!=='string'||!last.review.findings.trim()||typeof record.reviewFindings!=='string'||!record.reviewFindings.trim()||

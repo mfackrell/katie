@@ -1,4 +1,6 @@
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
+import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
+import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {getDevelopmentProjectContext,acceptanceBinding,projectRpc,type Context} from '@/lib/projects/store';
 import {digest} from '@/lib/projects/contract';
@@ -91,6 +93,50 @@ function github() {
   const token = process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT ?? process.env.GH_TOKEN;
   if (!token) throw new Error("Blocked integration: no existing server-side GitHub credential configured.");
   return new Octokit({ auth: token, request: { timeout: 15000, fetch: boundedGithubFetch } });
+}
+
+// Nonbillable: authenticate Task 1 evidence before proposing/approving authority.
+// No provider request, dispatcher or mutation of historical recovery records.
+export async function authenticatedLifecycleCheckpoint(taskId:string){
+ const task=await readTask(taskId),context=await getDevelopmentProjectContext(taskId);
+ if(!context||!task.repository_full_name||task.status!=='blocked')throw Error('A blocked original development task is required');
+ const db=getSupabaseAdminClient(),client=github();
+ const one=async(table:string,id:string)=>{const r=await db.from(table).select('*').eq('id',id).maybeSingle<any>();if(r.error||!r.data)throw Error('Required lifecycle evidence unavailable');return r.data;};
+ const project=await one('work_projects',context.projectId);
+ const snap=await db.rpc<any>('benchmark_lifecycle_snapshot',{p_task:taskId});
+ if(snap.error||!snap.data)throw Error('Authoritative lifecycle snapshot unavailable');
+ let releaseSha='';
+ const reader=async(path:string,binary=false)=>{
+  if(!path.startsWith('/repos/'+task.repository_full_name+'/actions/'))throw Error('Recovery endpoint rejected');
+  const result=await client.request('GET '+path);
+  if(/\/actions\/runs\/\d+$/.test(path))releaseSha=String(result.data.head_sha??'');
+  return binary?Buffer.from(result.data as ArrayBuffer):result.data;
+ };
+ const {record,diagnostics}=await loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:reader});
+ if(!record)throw Error('Authenticated checkpoint required');
+ await validateRecoveryRecords({record,completedEvidence:recoveryCompletedEvidence(record,diagnostics),task,context,project,
+  trialId:snap.data.snapshot.approval.trial_id,accountId:snap.data.accountId,
+  readOne:async(table:string,column:string,value:string)=>{const r=await db.from(table).select('*').eq(column,value).maybeSingle<any>();if(r.error||!r.data)throw Error('Recovery provenance unavailable');return r.data;}});
+ const [owner,repo]=task.repository_full_name.split('/');
+ const refs=await client.git.listMatchingRefs({owner,repo,ref:'tags/katie-wip/'+taskId+'/'});
+ if(!refs.data.length||refs.data.length>=1000)throw Error('Recovery checkpoint inventory unavailable');
+ const ordered=refs.data.map(r=>{const suffix=r.ref.slice(('refs/tags/katie-wip/'+taskId+'/').length),m=suffix.match(/^(\d+)-(\d+)\/(\d+)$/);if(!m)throw Error('Invalid checkpoint reference');return {ref:r.ref,sha:r.object.sha,parts:m.slice(1).map(BigInt)};})
+  .sort((a,b)=>{for(let i=0;i<3;i++)if(a.parts[i]!==b.parts[i])return a.parts[i]>b.parts[i]?-1:1;return 0;});
+ if(ordered[0].sha!==record.checkpointSha||ordered[0].ref!==record.ref)throw Error('Latest durable checkpoint changed');
+ const commit=await client.git.getCommit({owner,repo,commit_sha:record.checkpointSha});
+ const {checkpointSha,ref,...metadata}=record;
+ if(commit.data.tree.sha!==record.sourceTreeSha||commit.data.parents[0]?.sha!==record.completedCheckpointSha||
+  digest(JSON.parse(commit.data.message))!==digest(metadata))throw Error('Checkpoint metadata differs');
+ return {task,context,snapshot:snap.data,record,diagnostics,checkpoint:{...record,scopeHash:record.approvedScopeHash,runId:String(record.runId),releaseSha}};
+}
+
+export async function prepareLifecycleOwnerProposal(taskId:string){
+ const evidence=await authenticatedLifecycleCheckpoint(taskId);
+ const plan=lifecycleProposalFromSnapshot({snapshot:evidence.snapshot,record:evidence.record,observations:evidence.diagnostics.capacityObservations??[]});
+ if(!plan.proposal)return {state:plan.state,reasons:plan.reasons??plan.assessment.uncertainties};
+ const saved=await getSupabaseAdminClient().rpc<any>('benchmark_lifecycle_offer',{p_task:taskId,p_proposal:plan.proposal,p_checkpoint:evidence.checkpoint});
+ if(saved.error||!saved.data)throw Error('Proposal changed before it could be saved');
+ return {state:'pending',offer:saved.data};
 }
 async function repository(task: AgentTask) {
   const { data, error } = await getSupabaseAdminClient().from("repo_sync_runs").select("repository_full_name").eq("id", task.repository_id).maybeSingle<{ repository_full_name: string }>();
@@ -586,7 +632,7 @@ async function dispatchOwnerAmendmentSuccessor(db:ReturnType<typeof getSupabaseA
 }
 
 async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAdminClient>,key:string,release:string){
- const {data:rows,error}=await db.from('benchmark_development_resource_amendments').select('*').order('created_at',{ascending:false}).limit(4).returns<{id:string;renewal_id:string;approval_id:string;task_id:string;continuation_id:string;successor_id:string;failed_run:number;release_sha:string;receipt:unknown;source_snapshot:{approval:{id:string};previousContinuation:{id:string};executedApproval?:{id:string};executedContinuation?:{id:string};successor:{release_sha:string}}}>();
+ const {data:rows,error}=await db.from('benchmark_development_resource_amendments').select('*').order('created_at',{ascending:false}).limit(4).returns<{id:string;renewal_id:string;approval_id:string;task_id:string;continuation_id:string;successor_id:string;failed_run:number;release_sha:string;receipt:unknown;lifecycle_proposal_id?:string;source_snapshot:{checkpoint?:{releaseSha:string};approval:{id:string};previousContinuation:{id:string};executedApproval?:{id:string};executedContinuation?:{id:string};successor:{release_sha:string}}}>();
  if(error)throw Error('Resource amendment inspection failed');
  if(!rows?.length||await qualifiedDevelopmentAmendmentRelease()!==release)return false;
  for(const am of rows??[]){
@@ -599,7 +645,7 @@ async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAd
   const saved=receiptSchema.safeParse(task.external.receipt);if(!saved.success||saved.data.run_id!==am.failed_run||digest(saved.data)!==digest(am.receipt))continue;
   const client=github(),binding=await repository(task),issue=Number(task.external.issueNumber);
   const {data:run}=await client.actions.getWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:am.failed_run});
-  if(run.status!=='completed'||run.conclusion!=='failure'||run.event!=='workflow_dispatch'||run.path!=='.github/workflows/autonomous-development.yml'||run.head_sha!==am.source_snapshot.successor.release_sha||run.head_branch!=='main'||run.repository.full_name!==binding.fullName||run.head_repository?.full_name!==binding.fullName)continue;
+  if(run.status!=='completed'||!(am.lifecycle_proposal_id?['failure','cancelled','timed_out'].includes(run.conclusion??''):run.conclusion==='failure')||!(am.lifecycle_proposal_id?['issues','workflow_dispatch'].includes(run.event):run.event==='workflow_dispatch')||run.path!=='.github/workflows/autonomous-development.yml'||run.head_sha!==(am.lifecycle_proposal_id?am.source_snapshot.checkpoint?.releaseSha:am.source_snapshot.successor.release_sha)||run.head_branch!=='main'||run.repository.full_name!==binding.fullName||run.head_repository?.full_name!==binding.fullName)continue;
   const artifacts=await client.actions.listWorkflowRunArtifacts({owner:binding.owner,repo:binding.repo,run_id:run.id,per_page:20});
   const artifact=artifacts.data.artifacts.find(x=>x.name==='agent-completion'&&!x.expired&&x.size_in_bytes<=1_000_000);if(!artifact)continue;
   const downloaded=await client.actions.downloadArtifact({owner:binding.owner,repo:binding.repo,artifact_id:artifact.id,archive_format:'zip'});
@@ -609,7 +655,7 @@ async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAd
   if(existing.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!body.startsWith(marker(task)+'\n\n')||[...body.matchAll(/<!-- katie-native-benchmark:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/g)].length!==1)continue;
   const {data:bound}=await db.from('benchmark_development_dispatches').select('*').eq('task_id',task.id).maybeSingle<{contract_hash:string;trial_id:string;benchmark_contract_hash:string}>();if(!bound||bound.contract_hash!==c.contractHash||bound.trial_id!==a.trial_id)continue;
   const prior=readNativeHandoff(body,key,0);
-  if(prior.taskId!==task.id||prior.approvalId!==(am.source_snapshot.executedApproval??am.source_snapshot.approval).id||prior.paidSuccessorId!==am.successor_id||prior.resourceAmendmentId||prior.continuationId!==(am.source_snapshot.executedContinuation??am.source_snapshot.previousContinuation).id||prior.trialId!==a.trial_id||prior.projectId!==c.projectId||prior.contractHash!==c.contractHash||prior.benchmarkContractHash!==bound.benchmark_contract_hash||prior.baselineSha!==c.baselineSha)continue;
+  if(prior.taskId!==task.id||prior.approvalId!==(am.source_snapshot.executedApproval??am.source_snapshot.approval).id||(!am.lifecycle_proposal_id&&(prior.paidSuccessorId!==am.successor_id||prior.resourceAmendmentId))||prior.continuationId!==(am.source_snapshot.executedContinuation??am.source_snapshot.previousContinuation).id||prior.trialId!==a.trial_id||prior.projectId!==c.projectId||prior.contractHash!==c.contractHash||prior.benchmarkContractHash!==bound.benchmark_contract_hash||prior.baselineSha!==c.baselineSha)continue;
   const handoff={taskId:task.id,trialId:a.trial_id,approvalId:a.id,projectId:a.project_id,continuationId:a.continuation_id,developmentRenewalId:am.renewal_id,resourceAmendmentId:am.id,contractHash:c.contractHash,benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:c.baselineSha,expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(a.deadline))};
   const header=encodeNativeHandoff({...handoff,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',handoff,key)},key);
   const claimed=await db.rpc('benchmark_claim_development_amendment',{p_amendment:am.id,p_release:release});if(claimed.error||claimed.data!==true)return false;

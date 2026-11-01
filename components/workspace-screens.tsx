@@ -1,6 +1,7 @@
 "use client";
 import { SelfToolsOwnerSession } from '@/components/self-tools-owner-session';
 import { ownerConversationHeaders } from '@/lib/tools/browser-owner-session';
+import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
 import { BenchmarkOwnerApproval } from "@/components/benchmark-owner-approval";
 import { SpecialistDirectory } from "@/components/specialist-directory";
 import Notepad from "@/components/Notepad";
@@ -212,6 +213,7 @@ export function HomeScreen() {
           retry={work.refresh}
           checked={work.checked}
         />
+        <LifecycleOwnerApproval />
         <BenchmarkOwnerApproval />
         <PendingMissionApprovals />
         {work.loading ? (

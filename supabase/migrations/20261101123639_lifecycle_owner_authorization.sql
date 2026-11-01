@@ -4,10 +4,10 @@ create table benchmark_lifecycle_proposals(
  id text primary key check(id ~ '^[a-f0-9]{64}$'),
  owner_id uuid not null, task_id uuid not null references agent_tasks(id),
  project_id uuid not null references work_projects(id),
- snapshot_hash text not null, proposal jsonb not null,
+ snapshot_hash text not null, fingerprint text not null, proposal jsonb not null,
  checkpoint jsonb not null, created_at timestamptz not null default now(),
  expires_at timestamptz not null,
- unique(task_id,snapshot_hash), check(expires_at>created_at)
+ check(expires_at>created_at)
 );
 create table benchmark_lifecycle_decisions(
  proposal_id text primary key references benchmark_lifecycle_proposals(id),
@@ -96,7 +96,7 @@ end $$;
 -- clients can neither write a proposal nor pass resource amounts to decision RPC.
 create function benchmark_lifecycle_offer(p_task uuid,p_proposal jsonb,p_checkpoint jsonb)
 returns jsonb language plpgsql security definer set search_path=public as $$
-declare s jsonb;existing benchmark_lifecycle_proposals;hash text;expires timestamptz;
+declare s jsonb;existing benchmark_lifecycle_proposals;hash text;v_fingerprint text;expires timestamptz;
 begin
  s:=benchmark_lifecycle_snapshot(p_task);
  if (s->>'revoked')::boolean or (s->>'frozen')::boolean then raise exception 'Existing authority denied';end if;
@@ -108,13 +108,17 @@ begin
   or p_checkpoint->>'taskId' is distinct from p_task::text or p_checkpoint->>'checkpointSha' is distinct from p_proposal->>'checkpointSha'
   or p_checkpoint->>'scopeHash' is distinct from s->'binding'->>'scopeHash'
  then raise exception 'Proposal differs from authoritative snapshot';end if;
- select * into existing from benchmark_lifecycle_proposals where task_id=p_task and snapshot_hash=s->>'snapshotHash';
+ v_fingerprint:=encode(sha256(convert_to(project_canonical(jsonb_build_object('snapshot',s->>'snapshotHash','checkpoint',p_checkpoint,
+  'proposed',p_proposal->'proposed','remaining',p_proposal->'remaining','shortages',p_proposal->'shortages')),'UTF8')),'hex');
+ select * into existing from benchmark_lifecycle_proposals o where task_id=p_task and o.fingerprint=v_fingerprint
+  and (expires_at>clock_timestamp() or exists(select 1 from benchmark_lifecycle_decisions d where d.proposal_id=o.id and d.decision='rejected'))
+  order by created_at desc limit 1;
  if found then return to_jsonb(existing);end if;
  expires:=to_timestamp((p_proposal->>'expiresAt')::numeric/1000);
  if expires<=clock_timestamp() or expires>clock_timestamp()+interval '24 hours' then raise exception 'Proposal expiration invalid';end if;
  hash:=encode(sha256(convert_to(project_canonical(p_proposal-'id'),'UTF8')),'hex');
- insert into benchmark_lifecycle_proposals(id,owner_id,task_id,project_id,snapshot_hash,proposal,checkpoint,expires_at)
- values(hash,(s->>'ownerId')::uuid,p_task,(s->'binding'->>'projectId')::uuid,s->>'snapshotHash',
+ insert into benchmark_lifecycle_proposals(id,owner_id,task_id,project_id,snapshot_hash,fingerprint,proposal,checkpoint,expires_at)
+ values(hash,(s->>'ownerId')::uuid,p_task,(s->'binding'->>'projectId')::uuid,s->>'snapshotHash',v_fingerprint,
   (p_proposal-'id')||jsonb_build_object('id',hash),p_checkpoint,expires) returning * into existing;
  insert into project_events(project_id,event,data) values(existing.project_id,'lifecycle_owner_approval_requested',jsonb_build_object('proposalId',hash,'taskId',p_task));
  return to_jsonb(existing);
@@ -158,7 +162,7 @@ begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into offer from benchmark_lifecycle_proposals where id=p_proposal for update;
  if p_owner is null or offer.id is null or offer.owner_id is distinct from p_owner or offer.task_id is distinct from p_task
-  or p_decision not in ('approved','rejected') then raise exception 'Owner/task/proposal authorization denied';end if;
+  or p_decision is null or p_decision not in ('approved','rejected') then raise exception 'Owner/task/proposal authorization denied';end if;
  select * into dec from benchmark_lifecycle_decisions where proposal_id=offer.id;
  if found then
   if dec.owner_id is distinct from p_owner or dec.decision<>p_decision then raise exception 'Proposal already decided';end if;
@@ -289,6 +293,14 @@ do $$ declare body text;begin
  if position('used+ceil(new.reserved_tokens*rate)>10000000' in body)=0 then raise exception 'Dollar admission anchor missing';end if;
  body:=replace(body,'used+ceil(new.reserved_tokens*rate)>10000000','used+ceil(new.reserved_tokens*rate)>benchmark_effective_dollar_ceiling(a.id,new.continuation_id)');execute body;
  select pg_get_functiondef('benchmark_production_call_guard()'::regprocedure) into body;
+ if position('if phase_cap=0' in body)=0 then raise exception 'Protected account reserve anchor missing';end if;
+ body:=replace(body,'if phase_cap=0',$s$select coalesce(sum(reserved_tokens),0) into held from benchmark_budget_calls where account_id=a.id and state='reserved';
+  if c.plan->>'version'='7' and m.project_kind='development' and
+   a.spent_tokens+held+new.reserved_tokens+(c.plan->>'assessmentTokens')::bigint+
+   case when new.model='gpt-5.3-codex' then (c.plan->>'developmentClosureTokens')::bigint else 0 end
+   >benchmark_effective_account_cap(a.id)
+   then raise exception 'Protected lifecycle account reserves';end if;
+  if phase_cap=0$s$);
  body:=replace(body,$s$c.plan->>'version' in ('5','6')$s$,$s$c.plan->>'version' in ('5','6','7')$s$);execute body;
  select pg_get_functiondef('benchmark_full_native_reserve(text,uuid,bigint,text,text,bigint)'::regprocedure) into body;
  if position('benchmark_effective_mission_call_limit(m.id,g.continuation_id)-4' in body)=0 or position('benchmark_effective_mission_allowance(m.id,g.continuation_id)-60000' in body)=0 then raise exception 'Completion reserve anchor missing';end if;
