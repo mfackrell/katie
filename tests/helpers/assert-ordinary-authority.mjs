@@ -104,6 +104,19 @@ export async function assertOrdinaryAuthority(db,rival){
  const checkpoint=hostFixture?.checkpoint??{...record,scopeHash:scope,runId:'131',approvalId:approved.id,grantId:grant.grantId,releaseSha:release};
  const amendmentOffer=(await db.query('select benchmark_lifecycle_offer($1,$2,$3) o',[job.id,plan.proposal,checkpoint])).rows[0].o;
  const amendmentArgs=[owner,job.id,amendmentOffer.id,'approved',release];
+ // Pending and rejected first amendments never grant another native call.
+ await assert.rejects(db.query(reserve,[token,project,grant.executionEpoch,randomUUID(),'gpt-5.3-codex',100]),/protected completion/);
+ const savedTask=(await db.query('select to_jsonb(t) t from agent_tasks t where id=$1',[job.id])).rows[0].t;
+ await db.query('begin');
+ assert.equal((await db.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',[owner,job.id,amendmentOffer.id,'rejected',release])).rows[0].d.state,'rejected');
+ assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where previous_developer_approval_id=$1',[approved.id])).rows[0].n,0);
+ assert.deepEqual((await db.query('select to_jsonb(t) t from agent_tasks t where id=$1',[job.id])).rows[0].t,savedTask);
+ assert.deepEqual((await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s.snapshot.calls,current.snapshot.calls);
+ assert.deepEqual((await db.query('select checkpoint from benchmark_lifecycle_proposals where id=$1',[amendmentOffer.id])).rows[0].checkpoint,checkpoint);
+ await db.query('savepoint rejected_admission');
+ await assert.rejects(db.query(reserve,[token,project,grant.executionEpoch,randomUUID(),'gpt-5.3-codex',100]),/protected completion/);
+ await db.query('rollback to savepoint rejected_admission');
+ await db.query('rollback'); // Independent approval scenario reuses the untouched fixture.
  await assert.rejects(db.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',[randomUUID(),...amendmentArgs.slice(1)]),/owner|denied/i);
  await assert.rejects(db.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',[owner,randomUUID(),...amendmentArgs.slice(2)]),/owner|denied/i);
  for(const [sql,args] of [
