@@ -15,7 +15,7 @@ export function completionTransport({fixture,trace}){
   let value;
   if(format==='mission_review_comparison'){
    assert.ok(inputText.includes(fixture.completion.reviewedHeadSha),'Review must see immutable engineering evidence');
-   value={verdict:'approve',optionalSuggestions:null,clarification:null,findings:'Synthetic reviewer verified saved immutable source and actual browser receipt.',checks:['requirement:assigned-outcome','criterion:1','criterion:2','overall-objective','factual-support','prior-findings'].map(id=>({id,passed:true,evidence:'Original task '+fixture.completion.taskId+'; immutable head '+fixture.completion.reviewedHeadSha+'; actual browser contract passed.'}))};
+   value={verdict:'approve',optionalSuggestions:'',clarification:null,findings:'Synthetic reviewer verified saved immutable source and actual browser receipt.',checks:['requirement:assigned-outcome','criterion:1','criterion:2','overall-objective','factual-support','prior-findings'].map(id=>({id,passed:true,evidence:'Original task '+fixture.completion.taskId+'; immutable head '+fixture.completion.reviewedHeadSha+'; actual browser contract passed.'}))};
   }else if(format==='mission_deliverable'){
    assert.ok(inputText.includes(fixture.completion.reviewedHeadSha),'Composer must receive actual verified head');
    value={deliverable:'The original synthetic task '+fixture.completion.taskId+' satisfies the frozen display contract at '+fixture.completion.reviewedHeadSha+'. Implementation and initial review were preserved; repair, independent final review and actual Chromium acceptance passed. This is isolated synthetic qualification, not a production deployment.',composerNotes:'Derived only from retained host/browser receipts.'};

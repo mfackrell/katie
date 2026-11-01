@@ -9,6 +9,7 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query('reset role');
  await db.query('alter table actors add column if not exists actor_kind text');
  await db.query(readFileSync('supabase/migrations/20261022093000_separate_project_resource_estimates.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261022174500_specialist_estimate_dispatch.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261101160000_ordinary_developer_authority.sql','utf8'));
  const actor=randomUUID(),chat=randomUUID(),owner=randomUUID(),project=randomUUID(),repo=randomUUID();
