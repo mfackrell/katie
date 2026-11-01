@@ -31,8 +31,8 @@ create function benchmark_lifecycle_snapshot(p_task uuid)
 returns jsonb language plpgsql security definer set search_path=public as $$
 declare t agent_tasks;j mission_assignments;m agent_missions;p work_projects;
  a benchmark_native_spending_approvals;c benchmark_full_continuations;acct benchmark_budget_accounts;
- am benchmark_development_resource_amendments;q benchmark_production_qualifications;
- binding jsonb;snap jsonb;position jsonb;calls jsonb;exposures jsonb;grants jsonb;
+ am benchmark_development_resource_amendments;q benchmark_production_qualifications;latest_grant benchmark_execution_grants;
+ binding jsonb;pricing jsonb;snap jsonb;position jsonb;calls jsonb;exposures jsonb;grants jsonb;
  held bigint;committed numeric;outstanding numeric;dev_calls integer;dev_limit bigint;call_limit integer;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
@@ -47,6 +47,7 @@ begin
  select * into q from benchmark_production_qualifications where experiment_id=acct.experiment_id;
  select r.binding into binding from project_runs r where r.mission_id=m.id and r.project_id=p.id;
  if t.id is null or a.id is null or c.id is null or acct.id is null or q.owner_id is distinct from a.owner_id
+  or p.actor_id is distinct from a.actor_id or q.actor_id is distinct from p.actor_id or acct.owner_actor_id is distinct from p.actor_id
   or a.project_id is distinct from p.id or a.mission_assignment_id is distinct from t.id or j.role<>'development'
   or p.active_mission_id is distinct from m.id or p.phase<>'development' or m.project_kind<>'development'
   or p.approved_hash is null or p.approved_hash is distinct from p.approval_hash
@@ -56,6 +57,7 @@ begin
  then raise exception 'Lifecycle task binding unavailable';end if;
  select * into am from benchmark_development_resource_amendments where continuation_id=c.id;
  if am.id is null or am.plan_hash is distinct from c.plan_hash then raise exception 'Lifecycle amendment history unavailable';end if;
+ select * into latest_grant from benchmark_execution_grants where continuation_id=c.id and mission_assignment_id=t.id order by execution_epoch desc limit 1;
  dev_limit:=am.development_limit;call_limit:=am.call_limit;
  select coalesce(jsonb_agg(to_jsonb(x) order by x.id),'[]') into calls from benchmark_budget_calls x where account_id=acct.id;
  select coalesce(jsonb_agg(to_jsonb(x) order by x.call_id),'[]') into exposures from benchmark_dollar_exposures x where account_id=acct.id;
@@ -77,19 +79,22 @@ begin
   'assessmentTokens',(c.plan->>'assessmentTokens')::bigint,'accountEncumberedTokens',acct.spent_tokens+held,
   'developmentEncumberedTokens',greatest(m.actual_tokens,m.reserved_tokens),'developmentConsumedCalls',dev_calls,
   'committedMicrousd',committed::text,'outstandingMicrousd',outstanding::text,'ceilingMicrousd',c.plan->>'dollarCeilingMicrousd',
-  'expiresAt',floor(extract(epoch from least(a.deadline,c.deadline,p.deadline))*1000)::bigint);
- snap:=jsonb_build_object('taskId',t.id,'projectId',p.id,'scopeHash',p.approved_hash,'binding',binding,
-  'receipt',t.external->'receipt','issueNumber',t.external->'issueNumber','projectStatus',p.status,'taskStatus',t.status,
+  'expiresAt',floor(extract(epoch from least(a.deadline,c.deadline,p.deadline,latest_grant.deadline))*1000)::bigint);
+ select jsonb_build_object('status',pricing_status,'source','verified_model_registry','serviceTier',c.plan->>'serviceTier',
+  'verifiedAt',floor(extract(epoch from pricing_verified_at)*1000)::bigint,'inputUsdPerMillion',pricing_input_per_1m::text,'outputUsdPerMillion',pricing_output_per_1m::text)
+  into pricing from model_registry where provider_name='openai' and model_id=a.model;
+ snap:=jsonb_build_object('pricing',pricing,'taskId',t.id,'projectId',p.id,'scopeHash',p.approved_hash,'binding',binding,
+  'scope',jsonb_build_object('specification',p.spec,'completionContract',p.completion_contract),'receipt',t.external->'receipt','issueNumber',t.external->'issueNumber','projectStatus',p.status,'taskStatus',t.status,
   'missionStatus',m.status,'assignmentStatus',j.status,'position',position,'approval',to_jsonb(a),
   'continuation',to_jsonb(c)-'source_snapshot','accountFrozen',acct.frozen_at,'qualificationRevoked',q.revoked_at,
   'calls',calls,'exposures',exposures,'grants',grants,'missionId',m.id);
  return jsonb_build_object('snapshotHash',encode(sha256(convert_to(project_canonical(snap),'UTF8')),'hex'),
   'snapshot',snap,'position',position,'ownerId',a.owner_id,'actorId',p.actor_id,'chatId',p.chat_id,
   'binding',jsonb_build_object('taskId',t.id,'projectId',p.id,'scopeHash',p.approved_hash,'baselineSha',binding->>'baselineSha','contractHash',binding->>'contractHash'),
-  'scope',p.spec,'acceptance',binding->'contract','originalWindowSeconds',(c.plan->>'durationSeconds')::integer,
-  'revoked',a.revoked_at is not null or q.revoked_at is not null,'frozen',acct.frozen_at is not null,
+  'scope',jsonb_build_object('specification',p.spec,'completionContract',p.completion_contract),'acceptance',binding->'contract','originalWindowSeconds',(c.plan->>'durationSeconds')::integer,
+  'revoked',a.revoked_at is not null or q.revoked_at is not null or latest_grant.revoked_at is not null,'frozen',acct.frozen_at is not null,
   'grantRenewable',true,'continuationId',c.id,'approvalId',a.id,'missionId',m.id,'accountId',acct.id,
-  'model',a.model,'exposureMicrousd',(committed+outstanding)::text,'deadline',least(a.deadline,c.deadline,p.deadline));
+  'model',a.model,'pricing',pricing,'exposureMicrousd',(committed+outstanding)::text,'deadline',least(a.deadline,c.deadline,p.deadline,latest_grant.deadline));
 end $$;
 
 -- Only the trusted server/host may persist a forecast. Authenticated browser
@@ -297,7 +302,7 @@ do $$ declare body text;begin
  body:=replace(body,'if phase_cap=0',$s$select coalesce(sum(reserved_tokens),0) into held from benchmark_budget_calls where account_id=a.id and state='reserved';
   if c.plan->>'version'='7' and m.project_kind='development' and
    a.spent_tokens+held+new.reserved_tokens+(c.plan->>'assessmentTokens')::bigint+
-   case when new.model='gpt-5.3-codex' then (c.plan->>'developmentClosureTokens')::bigint else 0 end
+   (case when new.model='gpt-5.3-codex' then (c.plan->>'developmentClosureTokens')::bigint else 0 end)
    >benchmark_effective_account_cap(a.id)
    then raise exception 'Protected lifecycle account reserves';end if;
   if phase_cap=0$s$);

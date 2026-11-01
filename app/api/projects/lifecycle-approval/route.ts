@@ -70,7 +70,7 @@ export async function POST(request:NextRequest){
    if(evidence.snapshot.ownerId!==principal||evidence.snapshot.snapshotHash!==saved.data.snapshot_hash||digest(evidence.checkpoint)!==digest(saved.data.checkpoint))
     return reply({error:'Task, accounting or latest checkpoint changed. Refresh the proposal.',state:'stale'},409);
   }
-  const release=await qualifiedDevelopmentAmendmentRelease();if(!release)return reply({error:'The deployed amendment runtime is not qualified.'},409);
+  const release=decision==='approved'?await qualifiedDevelopmentAmendmentRelease():null;if(decision==='approved'&&!release)return reply({error:'The deployed amendment runtime is not qualified.'},409);
   const committed=await db.rpc('benchmark_lifecycle_decide',{p_owner:principal,p_task:taskId,p_proposal:proposalId,p_decision:decision,p_release:release});
   if(committed.error)return reply({error:'The proposal became stale, expired, or its authority is unavailable. Refresh before deciding again.',state:'stale'},409);
   return reply(committed.data);

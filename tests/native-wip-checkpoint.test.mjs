@@ -123,3 +123,14 @@ test('oversized source and symlinked ancestor fail closed',t=>{
  symlinkSync(outside,join(f.repo,'app/pilot'));assert.throws(()=>wip.save({phase:'repair'}));
  assert.equal(f.git('ls-remote','--tags','origin'),'');
 });
+
+test('v2 clean pre-implementation boundary survives runner destruction and restores the same baseline',async t=>{
+ const {prepareRecovery,recoveryRefs}=await import('../scripts/benchmark/native-wip-recovery.mjs');
+ const f=fixture(t),wip=createNativeWipCheckpointer(f.options),baseline=f.context.baseSha;
+ f.git('push','origin','HEAD:refs/heads/baseline');
+ const record=wip.save({phase:'implementation',boundary:true,lastCompleted:{checkpointSha:baseline}});
+ assert.equal(record.version,2);assert.equal(record.sourceTreeSha,f.git('rev-parse','HEAD^{tree}'));
+ rmSync(f.repo,{recursive:true,force:true});f.command(f.root,'clone','-q','--branch','baseline',f.remote,f.repo);
+ const recovery=prepareRecovery({...f.options,record,refs:recoveryRefs(f.repo,f.options.identity.taskId)}).restore();
+ assert.equal(recovery.phase,'implementation');assert.equal(f.git('rev-parse','HEAD'),baseline);assert.equal(f.git('status','--porcelain'),'');
+});

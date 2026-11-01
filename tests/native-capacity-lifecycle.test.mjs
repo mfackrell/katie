@@ -33,3 +33,17 @@ test('new authority is explicit and never reuses automatic process retry',()=>{
 });
 
 
+
+test('paused final review preserves deterministic repair proof and skips completed phases',async()=>{
+ let last={},head='a'.repeat(40),checks=0;
+ await assert.rejects(executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,
+  runPhase:async phase=>{if(phase==='final-review')throw Error('synthetic capacity pause');return {phase,verdict:'pass',findings:'independent source review'};},
+  commitCandidate:()=>{if(checks)head='b'.repeat(40);return head;},verifyCandidate:async()=>({passed:checks++>0}),onCompleted:e=>{last={...last,...e};}}),/capacity pause/);
+ const phases=[];
+ const result=await executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:last},
+  runPhase:async p=>{phases.push(p);return {verdict:'pass',findings:'independent final review'};},commitCandidate:()=>assert.fail('completed implementation replayed'),verifyCandidate:()=>assert.fail('completed verification replayed')});
+ assert.deepEqual(phases,['final-review']);assert.equal(result.repairPerformed,true);
+ assert.deepEqual(result.repairVerification,{before:{head:'a'.repeat(40),passed:false},after:{head:'b'.repeat(40),passed:true}});
+ const closure=await executeNativeDevelopmentLifecycle({recovery:{phase:'do_completion',lastCompleted:{lifecycle:result}},runPhase:()=>assert.fail('completed engineering replayed')});
+ assert.deepEqual(closure,result);
+});

@@ -3,7 +3,7 @@ import {proposeLifecycleAmendment} from '../../lib/projects/lifecycle-authorizat
 
 // The caller authenticates the durable record using Task 1 before calling this
 // adapter. Snapshot comes from the locked service-only accounting RPC.
-export function lifecycleProposalFromSnapshot({snapshot,record,observations=[],pricing=null,now=Date.now()}) {
+export function lifecycleProposalFromSnapshot({snapshot,record,observations=[],pricing=snapshot?.pricing??null,now=Date.now()}) {
  const p=snapshot.position,b=snapshot.binding;
  if(!record || record.taskId!==b.taskId || record.projectId!==b.projectId ||
   record.originalBaselineSha!==b.baselineSha || record.approvedScopeHash!==b.scopeHash ||

@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,randomBytes} from 'node:crypto';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 
 // Isolated PostgreSQL only. Every decision below is synthetic test consent.
 export async function assertLifecycleAuthorization(db,rival,{project,mission,task,trial,owner,account,grant}) {
  await db.query('reset role');
- await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));
+ try{await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));}catch(error){console.error('Lifecycle migration error',JSON.stringify(error));throw error;}
  await db.query("update agent_tasks set status='blocked',external=jsonb_set(external,'{receipt,run_id}','131') where id=$1",[task]);
  await db.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[task]);
  await db.query("update agent_missions set status='blocked' where id=$1",[mission]);
  await db.query("update work_projects set status='blocked',lease=null,lease_until=null where id=$1",[project]);
+ // This isolated accounting fixture predates durable Git evidence; bind its synthetic frozen contract explicitly.
+ await db.query("update project_runs set binding=binding||jsonb_build_object('taskId',$2::text,'projectId',$3::text,'baselineSha',(select baseline_sha from benchmark_three_arm_trials where id=$4),'contractHash',repeat('b',64),'contract',jsonb_build_object('path','/pilot','scenarios',jsonb_build_array())) where mission_id=$1",[mission,task,project,trial]);
  await db.query('set role service_role');
  const snapshot=async()=> (await db.query('select benchmark_lifecycle_snapshot($1) s',[task])).rows[0].s;
  const initial=await snapshot();
@@ -21,7 +23,7 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
   checkpointSha:'d'.repeat(40),phase:'repair'};
  const checkpoint={...record,scopeHash:initial.binding.scopeHash,runId:'131',releaseSha:'b'.repeat(40)};
  const planned=lifecycleProposalFromSnapshot({snapshot:initial,record});
- assert.equal(planned.state,'awaiting_owner_approval');assert.equal(planned.proposal.additions.nativeCalls,2);
+ assert.equal(planned.state,'awaiting_owner_approval',JSON.stringify(planned.reasons));assert.equal(planned.proposal.additions.nativeCalls,2);
  assert.equal(planned.proposal.proposed.developmentCalls,34);
  assert.equal(planned.proposal.proposed.completionCalls,4);
  const offer=async(p=planned.proposal)=>(await db.query('select benchmark_lifecycle_offer($1,$2,$3) p',[task,p,checkpoint])).rows[0].p;
@@ -55,7 +57,7 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  const claims=await Promise.all([db.query('select benchmark_claim_development_amendment($1,$2) ok',[amendment.id,args[4]]),rival.query('select benchmark_claim_development_amendment($1,$2) ok',[amendment.id,args[4]])]);
  assert.equal(claims.filter(r=>r.rows[0].ok).length,1);
  const issue='select benchmark_issue_development_amendment_grant($1,$2,$3,$4,$5) r';
- const issues=await Promise.allSettled([db.query(issue,[amendment.id,'e'.repeat(64),amendment.approval_id,task,args[4]]),rival.query(issue,[amendment.id,'f'.repeat(64),amendment.approval_id,task,args[4]])]);
+ const issues=await Promise.allSettled([db.query(issue,[amendment.id,randomBytes(32).toString('hex'),amendment.approval_id,task,args[4]]),rival.query(issue,[amendment.id,randomBytes(32).toString('hex'),amendment.approval_id,task,args[4]])]);
  assert.equal(issues.filter(r=>r.status==='fulfilled').length,1,JSON.stringify(issues));
  const next=(await db.query('select * from benchmark_execution_grants where id=$1',[issues.find(r=>r.status==='fulfilled').value.rows[0].r.grantId])).rows[0];
  const reserve='select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6) id';

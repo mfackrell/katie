@@ -214,7 +214,7 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
   for(const commit of [...new Set([record.completedCheckpointSha,record.checkpointSha])]){
    execFileSync('git',[...protectedGitConfig,'read-tree',commit],{cwd:workspace,env,timeout:20000,stdio:'pipe'});
    // An interrupted initial implementation may have no completed source yet.
-   if(commit===context.baseSha&&record.phase==='implementation')continue;
+   if(record.phase==='implementation'&&(commit===context.baseSha||record.version===2&&record.completedCheckpointSha===context.baseSha&&record.sourceTreeSha===git('rev-parse',context.baseSha+'^{tree}')))continue;
    for(const tool of ['project-scope.mjs','recovery-scope.mjs'])execFileSync(process.execPath,[join(toolsRoot,tool),requestFile],{cwd:workspace,env,timeout:20000,stdio:'pipe'});
   }
  }catch{fail('checkpoint fails unchanged cumulative scope gates');}

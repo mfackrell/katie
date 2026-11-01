@@ -6,7 +6,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  if(recovery?.phase==='final-review'){
   const final=await runPhase('final-review','Trusted deterministic verification: '+JSON.stringify(recovery.lastCompleted.verification));
   if(final.verdict!=='pass')throw Error('NATIVE_HOST_DENIED: independent final review requires changes');
-  return {candidateHead:recovery.completedCheckpointSha,review:recovery.lastCompleted.review,finalReview:final,repairPerformed:recovery.lastCompleted.repairPerformed===true,repairVerification:null};
+  return {candidateHead:recovery.completedCheckpointSha,review:recovery.lastCompleted.review,finalReview:final,repairPerformed:recovery.lastCompleted.repairPerformed===true,repairVerification:recovery.lastCompleted.repairVerification??null};
  }
  if(recovery?.phase==='repair'){
   candidateHead=recovery.completedCheckpointSha;
@@ -43,7 +43,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  }
  let final=first;
  if(repairPerformed||qualifiedLifecycle||recovery){
-  onCompleted({verification:{...verification,head:candidateHead},repairPerformed});
+  onCompleted({verification:{...verification,head:candidateHead},repairPerformed,repairVerification});
   final=await runPhase('final-review',qualifiedLifecycle||recovery?'Trusted deterministic verification: '+JSON.stringify(verification):'');
   if(final.verdict!=='pass')throw Error('NATIVE_HOST_DENIED: independent final review requires changes');
  }
