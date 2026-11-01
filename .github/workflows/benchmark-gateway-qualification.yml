@@ -341,6 +341,10 @@ jobs:
 
   resource-lifecycle-qualification:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lifecycle: [shortage, adequate]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -348,6 +352,7 @@ jobs:
       OPENAI_API_KEY: ''
       CODEX_ACCESS_TOKEN: ''
       KATIE_TEST_TASK2C: '1'
+      KATIE_TEST_TASK2C_MODE: ${{ matrix.lifecycle }}
       KATIE_TEST_COMPLETION_CONTROLS: '1'
       KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
       KATIE_TEST_CAPACITY_RENEWAL: '1'
@@ -372,7 +377,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: task2c-qualification
+          name: task2c-qualification-${{ matrix.lifecycle }}
           path: ${{ runner.temp }}/task2c-qualification/
           if-no-files-found: warn
           retention-days: 90

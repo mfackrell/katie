@@ -18,7 +18,7 @@ import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtim
 import config from '../../config/benchmark-715-production-qualification.json' with {type:'json'};
 const hash=v=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'";
-export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
+export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment,{adequate=false}={}){
  const ordinary=ids.authorityKind==='ordinary-developer';
  if(!ordinary){
  await db.query('reset role');await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));await db.query('alter table actors add column if not exists actor_kind text');
@@ -26,9 +26,11 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
  await db.query('set role service_role');
  }
  const fixture=await createLifecycleCheckpoint(db,ids,{initial:true});
- const {root,remote,context,baseline,one}=fixture,trace=[],report={version:1,syntheticOnly:true,paidInference:0,ids,baseline,contract:context.contract,contractHash:context.contractHash,scenarios:[],trace};
+ const {root,remote,context,baseline,one}=fixture,trace=[],report={version:1,mode:adequate?'adequate':'shortage',syntheticOnly:true,paidInference:0,ids,baseline,contract:context.contract,contractHash:context.contractHash,scenarios:[],trace};
  const ledger=async()=>(await db.query(`select jsonb_build_object('calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),'exposures',(select jsonb_agg(to_jsonb(e) order by call_id) from benchmark_dollar_exposures e where account_id=$1),'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1)) value`,[ids.account])).rows[0].value;
  const prior=await ledger();report.initialLedgerHash=hash(prior);
+ const authorityHistory=async()=>(await db.query(`select jsonb_build_object('proposals',(select jsonb_agg(to_jsonb(p) order by id) from benchmark_lifecycle_proposals p where task_id=$1),'decisions',(select jsonb_agg(to_jsonb(d) order by proposal_id) from benchmark_lifecycle_decisions d join benchmark_lifecycle_proposals p on p.id=d.proposal_id where p.task_id=$1)) value`,[ids.task])).rows[0].value;
+ const originalAuthorityHistory=await authorityHistory();
  // Controlled prior measured phases are linked to genuine isolated settled rows.
  const rows=(await db.query("select to_jsonb(c) value from benchmark_budget_calls c where account_id=$1 and state='settled' and model='gpt-5.3-codex' and provider_usage is not null order by actual_tokens,id limit 12",[ids.account])).rows.map(r=>r.value);if(!ordinary)assert.equal(rows.length,12);
  const scope=(await one('work_projects','id',ids.project)).approved_hash;
@@ -39,11 +41,11 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
  const provider=async(body,path)=>{
   if(path.endsWith('/input_tokens'))return {type:'application/json',body:JSON.stringify({object:'response.input_tokens',input_tokens:3})};
   const input=JSON.stringify(body.input),phase=input.includes('prior findings remain')?'final-review':input.includes('Fix only the independent reviewer')?'repair':input.includes('fresh independent reviewer')?'review':input.includes('Complete the approved engineering work')?'implementation':null;assert.ok(phase,'Unknown real SDK phase');
-  if(recovering)assert.ok(['repair','final-review'].includes(phase),'Completed engineering replayed');else assert.ok(['implementation','review'].includes(phase),'Paid repair started before owner approval');
-  const n=(phaseCounts.get(phase)??0)+1;phaseCounts.set(phase,n);providerCalls++;const total=recovering?2:phase==='implementation'?5:6;assert.ok(n<=total);
-  const source='export default function Page(){return <div id="state">'+(recovering?'Recovered':'Broken')+'</div>}\n';
-  const cmd=phase==='implementation'&&n===1?'node -e '+quote(`const f=require('node:fs');f.mkdirSync('app/pilot',{recursive:true});f.writeFileSync('app/pilot/page.tsx',${JSON.stringify(source)});`):phase==='repair'?'node -e '+quote(`const f=require('node:fs'),a=require('node:assert/strict');a.match(f.readFileSync('app/pilot/page.tsx','utf8'),/Broken/);f.writeFileSync('app/pilot/page.tsx',${JSON.stringify(source)});`):'node -e '+quote(`require('node:assert/strict').match(require('node:fs').readFileSync('app/pilot/page.tsx','utf8'),/${recovering?'Recovered':'Broken'}/);`);
-  const item=n<total?{id:'fc_'+providerCalls,type:'function_call',namespace:'functions',name:'exec_command',call_id:'call_'+providerCalls,status:'completed',arguments:JSON.stringify({cmd,workdir:'/work'})}:{id:'msg_'+providerCalls,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:phase==='review'?'CHANGES_REQUESTED Repair the displayed state to satisfy frozen acceptance.':phase==='final-review'?'PASS Independently inspected repaired source.':'DONE',annotations:[],logprobs:[]}]};
+  if(recovering)assert.ok(['repair','final-review'].includes(phase),'Completed engineering replayed');else assert.ok((adequate?['implementation','review','final-review']:['implementation','review']).includes(phase),'Paid repair started before owner approval');
+  const n=(phaseCounts.get(phase)??0)+1;phaseCounts.set(phase,n);providerCalls++;const total=adequate||recovering?2:phase==='implementation'?5:6;assert.ok(n<=total);
+  const source='export default function Page(){return <div id="state">'+(adequate||recovering?'Recovered':'Broken')+'</div>}\n';
+  const cmd=phase==='implementation'&&n===1?'node -e '+quote(`const f=require('node:fs');f.mkdirSync('app/pilot',{recursive:true});f.writeFileSync('app/pilot/page.tsx',${JSON.stringify(source)});`):phase==='repair'?'node -e '+quote(`const f=require('node:fs'),a=require('node:assert/strict');a.match(f.readFileSync('app/pilot/page.tsx','utf8'),/Broken/);f.writeFileSync('app/pilot/page.tsx',${JSON.stringify(source)});`):'node -e '+quote(`require('node:assert/strict').match(require('node:fs').readFileSync('app/pilot/page.tsx','utf8'),/${adequate||recovering?'Recovered':'Broken'}/);`);
+  const item=n<total?{id:'fc_'+providerCalls,type:'function_call',namespace:'functions',name:'exec_command',call_id:'call_'+providerCalls,status:'completed',arguments:JSON.stringify({cmd,workdir:'/work'})}:{id:'msg_'+providerCalls,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:phase==='review'?(adequate?'PASS Independently inspected approved display.':'CHANGES_REQUESTED Repair the displayed state to satisfy frozen acceptance.'):phase==='final-review'?'PASS Independently inspected verified source.':'DONE',annotations:[],logprobs:[]}]};
   const response={id:'task2c-synthetic-'+providerCalls,object:'response',model:body.model,created_at:1,status:'completed',service_tier:'default',output:[item],usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
   trace.push({boundary:'provider',run:recovering?132:131,phase,request:n,requestHash:hash(body)});
   return {type:'text/event-stream',body:[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],['response.output_item.added',{type:'response.output_item.added',output_index:0,item}],['response.output_item.done',{type:'response.output_item.done',output_index:0,item}],['response.completed',{type:'response.completed',response}]].map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
@@ -79,6 +81,14 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const request=(method,body,token='task2c-synthetic-owner')=>new NextRequest(config.productionUrl+'/api/projects/lifecycle-approval?taskId='+ids.task,{method,headers:{Authorization:'Bearer '+token,Origin:config.productionUrl,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   if(ordinary){assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),true,'Initial ordinary owner authority dispatches through existing runtime');assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),false);}
   first=await qualifyLifecycleContinuation(db,ids,fixture,initialAmendment,{runId:131,provider,signing,keepRoot:true,...(ordinary?{request:issue.body}:{}),afterRun:async result=>result});
+  let historical,pending,result,workflow;
+  if(adequate){
+   assert.equal(first.code,0,first.log+'\n'+JSON.stringify(first.diagnostics));
+   assert.deepEqual([...phaseCounts],[['implementation',2],['review',2],['final-review',2]]);assert.equal(providerCalls,6);
+   assert.ok(first.diagnostics.capacityForecasts.every(f=>f.status!=='insufficient'));report.forecasts=first.diagnostics.capacityForecasts;
+   historical=await ledger();report.historicalCalls=historical.calls;report.originalAuthorityHistory=originalAuthorityHistory;
+   second=first;workflow={id:131,event:'issues',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:release,status:'completed',conclusion:'success',created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
+  }else{
   assert.notEqual(first.code,0,first.log);assert.ok(first.diagnostics,first.log);assert.match(first.diagnostics.failure,/OWNER_APPROVAL_REQUIRED/);
   assert.deepEqual([...phaseCounts],[['implementation',5],['review',6]]);assert.equal(providerCalls,11);
   for(const measured of observations)assert.deepEqual(first.diagnostics.capacityObservations.find(o=>o.id===measured.id),measured,'Authenticated clean-baseline measurements must survive into the owner proposal');
@@ -92,12 +102,12 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.deepEqual(initialBrowser.checks,[{name:context.contract.scenarios[0].name,passed:false,detail:'Rendered text does not equal approved expected value'}]);
   report.initialBrowserFailure=initialBrowser;
   report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
-  const historical=await ledger();for(const row of prior.calls??[])assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
+  historical=await ledger();for(const row of prior.calls??[])assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
   assert.equal(historical.calls.length,(prior.calls?.length??0)+11);report.pauseLedgerHash=hash(historical);report.historicalCalls=historical.calls;
   const receipt={version:1,repository:'mfackrell/katie',issue_number:829,checks:{build:'failure',test:'false',review:'changes_requested',repair:'skipped',retest:'skipped',final_review:'skipped'},...oldTask.external.receipt,run_id:131,outcome:'BLOCKED',pr_url:null};fixture.receipt=receipt;
 
   writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
-  const workflow={id:131,status:'completed',conclusion:'failure',event:ordinary?'issues':'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
+  workflow={id:131,status:'completed',conclusion:'failure',event:ordinary?'issues':'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
   writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
   // Preserve evidence, then destroy both source and trusted scratch from the old
   // runner. The continuation must use only the durable remote/archive bindings.
@@ -112,7 +122,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.equal((await one('agent_tasks','id',ids.task)).status,'blocked',JSON.stringify(await one('mission_assignments','id',ids.task)));assert.equal((await one('agent_missions','id',ids.mission)).status,'blocked');
   await load('@/lib/projects/worker').runProjectBatch();
   assert.equal((await one('work_projects','id',ids.project)).status,'blocked');
-  const offered=await route.GET(request('GET'));assert.equal(offered.status,200,await offered.clone().text());const pending=await offered.json();assert.equal(pending.state,'pending');assert.equal(pending.proposal.additions.nativeCalls,4);report.proposal=pending.proposal;
+  const offered=await route.GET(request('GET'));assert.equal(offered.status,200,await offered.clone().text());pending=await offered.json();assert.equal(pending.state,'pending');assert.equal(pending.proposal.additions.nativeCalls,4);report.proposal=pending.proposal;
   const preservedTask=await one('agent_tasks','id',ids.task);
   const preservedProposal=(await db.query('select checkpoint from benchmark_lifecycle_proposals where id=$1',[pending.proposal.id])).rows[0].checkpoint;
   const activeGrant=(await db.query('select * from benchmark_execution_grants where account_id=$1 order by execution_epoch desc limit 1',[ids.account])).rows[0];
@@ -121,7 +131,6 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const decision={taskId:ids.task,proposalId:pending.proposal.id,decision:'approved'};
   assert.equal((await route.POST(request('POST',decision,'wrong-owner'))).status,403);
   assert.equal(providerCalls,11);assert.deepEqual(await ledger(),historical);
-  let result;
   report.ownerBrowser=await integratedOwnerBrowser(route,async(page,exchanges)=>{
    assert.ok((await page.locator('body').innerText()).includes(ids.task));
    assert.equal(providerCalls,11);assert.deepEqual(await ledger(),historical);
@@ -150,14 +159,19 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const amendment=ordinary?{approval_id:result.approvalId,release_sha:release}:(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[result.continuationId])).rows[0];assert.ok(amendment);
   recovering=true;phaseCounts=new Map();second=await qualifyLifecycleContinuation(db,ids,fixture,amendment,{runId:132,provider,signing,keepRoot:true,request:issue.body,afterRun:async result=>result});
   assert.equal(second.code,0,second.log+'\n'+JSON.stringify(second.diagnostics)+'\n'+(existsSync(join(second.runtime,'qualification-verifier-tail.json'))?readFileSync(join(second.runtime,'qualification-verifier-tail.json'),'utf8'):''));assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
+  }
   const completion=JSON.parse(readFileSync(second.evidence)),browser=JSON.parse(readFileSync(join(second.runtime,'qualification-browser-acceptance.json')));assert.equal(completion.taskId,ids.task);assert.equal(completion.completed,true);assert.equal(browser.passed,true);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.headSha,completion.reviewedHeadSha);
   for(const row of historical.calls)assert.deepEqual((await ledger()).calls.find(c=>c.id===row.id),row);
   for(const row of historical.exposures)assert.deepEqual((await ledger()).exposures.find(c=>c.call_id===row.call_id),row);
   fixture.completion=completion;fixture.continued=second;
-  assert.equal(completion.repairVerification.after.passed,true);assert.equal(completion.repairVerification.after.head,completion.reviewedHeadSha);
+  if(adequate){assert.equal(completion.repairPerformed,false);assert.equal(completion.repairVerification,null);}else{assert.equal(completion.repairVerification.after.passed,true);assert.equal(completion.repairVerification.after.head,completion.reviewedHeadSha);}
   fixture.verifierLog=JSON.parse(readFileSync(join(second.runtime,'qualification-verifier-tail.json'),'utf8')).tail;
-  fixture.receipt={version:1,repository:'mfackrell/katie',issue_number:829,run_id:132,pr_url:'https://github.com/mfackrell/katie/pull/829',outcome:'READY',tested_head_sha:completion.reviewedHeadSha,reviewed_head_sha:completion.reviewedHeadSha,checks:{build:'success',test:'false',review:'changes_requested',repair:'success',retest:'true',final_review:'pass'},projectAcceptance:browser};
-  writeFileSync(join(root,'workflow.json'),JSON.stringify({...workflow,id:132,event:'workflow_dispatch',head_sha:release,conclusion:'success',created_at:new Date().toISOString()}));
+  fixture.receipt={version:1,repository:'mfackrell/katie',issue_number:829,run_id:adequate?131:132,pr_url:'https://github.com/mfackrell/katie/pull/829',outcome:'READY',tested_head_sha:completion.reviewedHeadSha,reviewed_head_sha:completion.reviewedHeadSha,checks:adequate?{build:'success',test:'true',review:'pass',repair:'skipped',retest:'skipped',final_review:'pass'}:{build:'success',test:'false',review:'changes_requested',repair:'success',retest:'true',final_review:'pass'},projectAcceptance:browser};
+  writeFileSync(join(root,'workflow.json'),JSON.stringify({...workflow,id:adequate?131:132,event:adequate?'issues':'workflow_dispatch',head_sha:release,conclusion:'success',created_at:new Date().toISOString()}));
+  if(adequate){
+   writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
+   writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:release}}]}));
+  }
   fixture.workerResponse=completionTransport({fixture,trace});
   const worker=load('@/lib/missions/worker');
   const developerClaim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(developerClaim?.job.id,ids.task);
@@ -196,15 +210,14 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const finalLedger=await ledger();for(const row of historical.calls)assert.deepEqual(finalLedger.calls.find(c=>c.id===row.id),row);
   for(const row of historical.exposures)assert.deepEqual(finalLedger.exposures.find(e=>e.call_id===row.call_id),row);
   assert.ok(finalLedger.calls.every(c=>c.state==='settled'),'No unresolved synthetic paid work');
-  assert.equal(providerCalls,15);assert.equal((await db.query("select count(*)::int n from project_runs where project_id=$1 and kind='development'",[ids.project])).rows[0].n,1,'No replacement development mission');
-  assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions where proposal_id=$1',[pending.proposal.id])).rows[0].n,1);
+  assert.equal(providerCalls,adequate?6:15);assert.equal((await db.query("select count(*)::int n from project_runs where project_id=$1 and kind='development'",[ids.project])).rows[0].n,1,'No replacement development mission');
+  if(adequate){assert.deepEqual(await authorityHistory(),originalAuthorityHistory,'Adequate task must finish without any amendment proposal or decision');assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where task_id=$1',[ids.task])).rows[0].n,1);}else assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions where proposal_id=$1',[pending.proposal.id])).rows[0].n,1);
   report.assessmentWorkers=assessmentJobs;report.finalProjectReceipt=finished;report.finalProjectBrowser=fixture.finalBrowser;
   const purpose=(await db.query(`select m.project_kind,j.role,count(*)::int calls from benchmark_budget_calls c join mission_calls legacy on legacy.id=c.legacy_mission_call_id join mission_assignments j on j.id=legacy.job_id join agent_missions m on m.id=j.mission_id where c.account_id=$1 group by m.project_kind,j.role order by m.project_kind,j.role`,[ids.account])).rows;
-  assert.equal(purpose.find(p=>p.role==='development')?.calls,15);
+  assert.equal(purpose.find(p=>p.role==='development')?.calls,adequate?6:15);
   for(const kind of ['development','assessment']){const protectedCalls=purpose.filter(p=>p.project_kind===kind&&p.role!=='development');assert.ok(protectedCalls.every(p=>['compose','review'].includes(p.role)));const count=protectedCalls.reduce((n,p)=>n+p.calls,0);assert.ok(count>0&&count<=4,JSON.stringify(purpose));}
   report.accountingByPurpose=purpose;report.finalLedgerHash=hash(finalLedger);
-  report.scenarios.push(
-   {id:1,pass:true,observed:'Initial verified authority admitted implementation and review without an amendment. Forecast unknowns remain explicit; this is not a claim of fully measured completion cost.'},
+  if(adequate)report.scenarios.push({id:1,pass:true,observed:'Original ordinary authority completed implementation, independent review, deterministic acceptance, final review, completion and assessment without repair or any additional proposal/decision. Forecast unknowns remain explicit.'});else report.scenarios.push(
    {id:2,pass:true,observed:'Eleven native calls settled, zero native slots, tokens and dollars retained; one four-call proposal.'},
    {id:5,pass:true,observed:'Four completion slots excluded from repair before and after amendment; retained until legitimate completion-worker use.'},
    {id:6,pass:true,observed:'Review findings required repair; refreshed forecast stopped before its first request and consolidated remaining native demand.'},
@@ -213,12 +226,12 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    {id:12,pass:true,observed:'Fresh host restored original repair checkpoint; only repair and final review ran; initial eleven receipts unchanged.'}
   );
 
-  report.externalTransportLimitations=['Provider responses and external owner identity are isolated synthetic transports.','GitHub issue/workflow/PR and Vercel deployment responses are synthetic, backed by actual local source and host receipts.','Final browser executes Chromium against the same local immutable candidate; this fixture does not qualify Vercel network, deployment protection or paid model performance.'];
+  report.externalTransportLimitations=['Provider responses, model inventory/catalog/pricing provenance and external owner identity are isolated synthetic transports.','GitHub issue/workflow/PR and Vercel deployment responses are synthetic, backed by actual local source and host receipts.','Final browser executes Chromium against the same local immutable candidate; this fixture does not qualify Vercel network, deployment protection or paid model performance.'];
   report.completion=completion;report.browserAcceptance=browser;report.continuationDiagnostics=second.diagnostics;report.finalLedger=await ledger();
-  console.log('TASK2C_INTEGRATED_NATIVE_PASS');
+  console.log('TASK2C_INTEGRATED_NATIVE_PASS mode='+report.mode);
  }finally{
   globalThis.fetch=oldFetch;for(const key of Object.keys(process.env))if(!(key in oldEnv))delete process.env[key];Object.assign(process.env,oldEnv);
-  const destination=join(process.env.RUNNER_TEMP??root,'task2c-qualification');mkdirSync(destination,{recursive:true});writeFileSync(join(destination,'report.json'),JSON.stringify(report,null,2));for(const [label,result]of[['initial',first],['continued',second]])if(result){writeFileSync(join(destination,label+'-host.log'),result.log);writeFileSync(join(destination,label+'-diagnostics.json'),JSON.stringify(result.diagnostics,null,2));for(const name of ['qualification-verifier-tail.json','qualification-browser-acceptance.json'])if(existsSync(join(result.runtime,name)))cpSync(join(result.runtime,name),join(destination,label+'-'+name));}
+  const destination=join(process.env.RUNNER_TEMP??root,'task2c-qualification');mkdirSync(destination,{recursive:true});writeFileSync(join(destination,'report.json'),JSON.stringify(report,null,2));for(const [label,result]of(adequate?[['adequate',first]]:[['initial',first],['continued',second]]))if(result){writeFileSync(join(destination,label+'-host.log'),result.log);writeFileSync(join(destination,label+'-diagnostics.json'),JSON.stringify(result.diagnostics,null,2));for(const name of ['qualification-verifier-tail.json','qualification-browser-acceptance.json'])if(existsSync(join(result.runtime,name)))cpSync(join(result.runtime,name),join(destination,label+'-'+name));}
   if(process.env.RUNNER_TEMP)rmSync(root,{recursive:true,force:true});
  }
 }

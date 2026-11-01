@@ -13,7 +13,7 @@ export function previewTransport(real,{fixture,trace}){
   assert.equal(projectId,fixture.context.projectId);
   assert.deepEqual(JSON.parse(JSON.stringify(contract)),fixture.context.contract);
   const run=async(actualContract,origin,options)=>{
-   assert.deepEqual(JSON.parse(JSON.stringify(actualContract)),fixture.context.contract);assert.equal(origin,syntheticPreviewOrigin);assert.equal(options.deployed,true);assert.deepEqual(options.cookies,[]);
+   assert.deepEqual(JSON.parse(JSON.stringify(actualContract)),fixture.context.contract);assert.equal(origin,syntheticPreviewOrigin);assert.equal(options.deployed,true);assert.ok(Array.isArray(options.cookies));assert.equal(options.cookies.length,0);
    const candidate=fixture.continued,output=join(candidate.runtime,'final-project-browser.json');
    const module=join(candidate.runtime,'project-tools/project-browser-check.mjs');
    const code=`import {checkProject} from ${JSON.stringify(module)}; const r=await checkProject(JSON.parse(process.argv[1])); if(!r?.passed)process.exitCode=1;`;
