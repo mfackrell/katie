@@ -122,22 +122,22 @@ test('initial overfull pagination may retry once, but final PDF fidelity always 
 });
 
 test('document capability disclaimers reroute before rendering and never become document text', async () => {
-  const disclaimer = "I can't create, render, or download actual Word or PDF files. That's outside my technical capabilities.\\n\\nHere are manual options.";
+  const disclaimer = "I can't create, render, or download actual Word or PDF files. That's outside my technical capabilities.\n\nHere are manual options.";
   assert.equal(isDocumentCapabilityDenial(disclaimer), true);
   assert.equal(isDocumentCapabilityDenial('Sorry, I cannot generate Word documents because I have no file tools.'), true);
   assert.equal(isDocumentCapabilityDenial('As a text-based AI, I cannot produce a PDF document myself.'), true);
-  assert.equal(isDocumentCapabilityDenial('# Memo\\n\\nI cannot create the documents until compliance approves the records.'), false);
+  assert.equal(isDocumentCapabilityDenial('# Memo\n\nI cannot create the documents until compliance approves the records.'), false);
   assert.equal(isDocumentCapabilityDenial('CLARIFICATION_REQUIRED: Which version should I use?'), false);
-  assert.equal(isDocumentCapabilityDenial('# Executive Summary\\n\\n- Reduced costs.'), false);
+  assert.equal(isDocumentCapabilityDenial('# Executive Summary\n\n- Reduced costs.'), false);
   assert.equal(isDocumentCapabilityDenial('I cannot create prohibited or unsafe PDF materials.'), false);
   const routes = readFileSync('app/api/chat/route.ts','utf8');
-  assert.match(routes, /Boolean\\(documentProduction\\) && isDocumentCapabilityDenial\\(generationResult.text/);
+  assert.match(routes, /Boolean\(documentProduction\) && isDocumentCapabilityDenial\(generationResult.text/);
   const calls: string[] = [];
   const selected = await runWithRefusalFallback({
     attempts: ['initial', 'alternate'], shouldRetryRefusal: true,
     runAttempt: async candidate => {
       calls.push(candidate);
-      return { provider: 'anthropic', model: candidate, text: candidate === 'initial' ? disclaimer : '# Executive Summary\\n\\n- Produced accurate reporting.' };
+      return { provider: 'anthropic', model: candidate, text: candidate === 'initial' ? disclaimer : '# Executive Summary\n\n- Produced accurate reporting.' };
     },
     detectRefusal: reply => isDocumentCapabilityDenial(reply.text) || isLikelyProviderRefusal(reply, reply.provider),
   });
