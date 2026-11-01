@@ -5,11 +5,11 @@ import vm from 'node:vm';
 import {nativeChildInterruptionRetryable,nativeGatewayFailureClass,createNativeHttpBridge} from '../scripts/benchmark/native-http-bridge.mjs';
 const host=readFileSync(new URL('../scripts/benchmark/native-development-host.mjs',import.meta.url),'utf8');
 const loop=host.slice(host.indexOf(' const safelyRunPhase='),host.indexOf(' stopTimer=setInterval'))+'\n safelyRunPhase("implementation");';
-async function runLoop({signal=null,code=1,gatewayFailure=null,pending=[],live=true,ownerApprovedSuccessor=false,capacityShortfall=false}={}){
- let runs=0,reads=0,resets=0;
- const context={ordinary:false,pauseForCapacity:()=>{if(capacityShortfall)throw Error('NATIVE_OWNER_APPROVAL_REQUIRED');},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},diagnostics:{capacityForecasts:[]},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),capacityPhase:null,capacityReceipts:[],capacityObservations:[],ownerApprovedSuccessor,snapshot:()=>{},saveDiagnostics:()=>{},nativeChildInterruptionRetryable,gatewayFailure,account:{id:'account'},proof:{trialId:'trial'},grantToken:'token',executionEpoch:1,tokenDigest:()=>'',trustedCheckpointSha:'head',console:{log:()=>{}},denied:message=>{throw Error(message)},git:()=>resets++,runPhase:async()=>{runs++;if(runs===1)throw Object.assign(Error('child failed'),{nativeChildOutcome:{signal,code}});},db:{from:()=>({select:()=>({eq:()=>({in:()=>({limit:async()=>{reads++;return {data:pending}}})})})}),rpc:async()=>({data:live})}};
+async function runLoop({signal=null,code=1,gatewayFailure=null,pending=[],live=true,liveAtStart=true,ownerApprovedSuccessor=false,capacityShortfall=false}={}){
+ let runs=0,reads=0,resets=0,authorityReads=0,preserved=0;
+ const context={activeWipPhase:null,preserveWip:()=>{preserved++;},ordinary:false,pauseForCapacity:()=>{if(capacityShortfall)throw Error('NATIVE_OWNER_APPROVAL_REQUIRED');},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},diagnostics:{capacityForecasts:[]},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),capacityPhase:null,capacityReceipts:[],capacityObservations:[],ownerApprovedSuccessor,snapshot:()=>{},saveDiagnostics:()=>{},nativeChildInterruptionRetryable,gatewayFailure,account:{id:'account'},proof:{trialId:'trial'},grantToken:'token',executionEpoch:1,tokenDigest:()=>'',trustedCheckpointSha:'head',console:{log:()=>{}},denied:message=>{throw Error(message)},git:()=>resets++,runPhase:async()=>{runs++;if(runs===1)throw Object.assign(Error('child failed'),{nativeChildOutcome:{signal,code}});},db:{from:()=>({select:()=>({eq:()=>({in:()=>({limit:async()=>{reads++;return {data:pending}}})})})}),rpc:async()=>({data:++authorityReads===1?liveAtStart:live})}};
  let error;try{await vm.runInNewContext(loop,context);}catch(e){error=e;}
- return {runs,reads,resets,error};
+ return {runs,reads,resets,preserved,error};
 }
 test('actual host recovery loop never repeats deterministic gateway denials or generic exit1',async()=>{
  for(const gatewayFailure of ['admission','authorization','request-schema','upstream-uncertain','gateway-failure',null]){
@@ -69,3 +69,9 @@ test('ordinary amended approval selects single-attempt interrupted-phase behavio
  const r=await runLoop({ownerApprovedSuccessor:successor,signal:'SIGKILL',code:null});
  assert.equal(r.runs,1);assert.equal(r.reads,0);assert.equal(r.resets,0);
 });
+
+ test('expired phase authority preserves checkpoint before any provider attempt',async()=>{
+ const r=await runLoop({liveAtStart:false});
+ assert.equal(r.runs,0);assert.equal(r.reads,0);assert.equal(r.resets,0);assert.equal(r.preserved,1);
+ assert.equal(r.error?.message,'native phase authority stopped or expired');
+ });

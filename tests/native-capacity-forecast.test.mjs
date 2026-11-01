@@ -66,3 +66,8 @@ test('revoked continuation preserves known authority denial when monetary RPC re
  const f=setup();f.rpcs.benchmark_continuation_live=false;f.rpcs.benchmark_full_monetary_control=null;f.rows.benchmark_native_spending_approvals[0].revoked_at='revoked';const before=structuredClone(f.rows);
  const r=await readNativeLifecycleCapacity(f.args);assert.equal(r.status,'insufficient');assert.ok(r.shortages.includes('executionAuthority'));assert.equal(r.authorization.live,false);assert.equal(r.dimensions.money.authorizedRemaining,null);assert.equal(r.dimensions.money.currentlyUsable,'0');assert.equal(r.dimensions.nativeCalls.currentlyUsable,0);assert.deepEqual(f.rows,before);
 });
+
+ test('additional repair reopens repair verification and final review including restored flags',()=>{
+ const r=capacityProgress({binding:{},recovery:{phase:'final-review',checkpointSha:'a'.repeat(40),lastCompleted:{repairPerformed:true}},phase:'repair',completedStages:['implementation','initial_review','repair','verification','final_review'],notRequiredStages:['repair']});
+ assert.deepEqual(r.completedStages,['implementation','initial_review']);assert.deepEqual(r.notRequiredStages,[]);
+ });
