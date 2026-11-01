@@ -1,5 +1,6 @@
 // Trusted host only. Recovery reads historical evidence; it never grants authority,
 // reconciles charges, replays a request, or treats WIP as reviewed source.
+import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {mkdtempSync,rmSync,openSync,closeSync,mkdirSync,lstatSync,fstatSync,ftruncateSync,fchmodSync,writeSync,unlinkSync,rmdirSync,constants} from 'node:fs';
 import {join} from 'node:path';
@@ -113,6 +114,20 @@ export async function loadRecoveryDiagnostics({task,repository,github,emptyBasel
 
 export function recoveryCompletedEvidence(record,diagnostics){
  const last=structuredClone(record.lastCompleted);
+ if(last?.adaptiveRepair?.version===2){
+  const full=diagnostics?.lifecycleEvidence;
+  const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  for(const key of ['verification','review','initialReview']){
+   const saved=last[key];if(!saved)continue;
+   const value=full?.[key],field=key==='verification'?'detail':'findings',hashKey=field+'Digest';
+   if(!value||typeof (value[field]??'')!=='string'||(value[field]??'').length>12000||
+      digest(value[field]??'')!==saved[hashKey])fail('full lifecycle evidence missing or altered');
+   const omit=o=>Object.fromEntries(Object.entries(o).filter(([k])=>k!==field&&k!==hashKey));
+   same(omit(value),omit(saved),'full lifecycle candidate or verdict mismatch');
+   last[key]={...saved,[field]:value[field]??''};
+  }
+  return last;
+ }
  if(record.phase!=='repair'||last?.review&&last?.verification)return last;
  // Original PR #902 checkpoints retain this evidence in diagnostics rather than
  // lastCompleted. Authenticate that artifact first; never rewrite Git metadata.
@@ -297,6 +312,6 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
   git('read-tree',record.completedCheckpointSha);
   git('update-ref','HEAD',record.completedCheckpointSha,context.baseSha);
   return {verification:'unverified',phase:record.phase,checkpointSha:record.checkpointSha,completedCheckpointSha:record.completedCheckpointSha,
-   reviewFindings:record.reviewFindings,lastCompleted:structuredClone(completedEvidence)};
+   reviewFindings:record.reviewFindings,checkpointEvidence:structuredClone(record.lastCompleted),lastCompleted:structuredClone(completedEvidence)};
  }});
 }

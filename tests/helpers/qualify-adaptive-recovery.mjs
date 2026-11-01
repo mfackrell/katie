@@ -6,7 +6,7 @@ import {readFileSync,writeFileSync,mkdirSync,rmSync,cpSync,existsSync} from 'nod
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createLifecycleCheckpoint,qualifyLifecycleContinuation,archive} from './qualify-lifecycle-continuation.mjs';
-import {loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,recoveryRefs} from '../../scripts/benchmark/native-wip-recovery.mjs';
+import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords,prepareRecovery,recoveryRefs} from '../../scripts/benchmark/native-wip-recovery.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 const hash=v=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'";
@@ -67,6 +67,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
    const result=await qualifyLifecycleContinuation(db,ids,fixture,currentAuthority,{runId:run,provider,keepRoot:true,interruption:run===131?'repair2':run===132?'verification3':null,afterRun:async r=>r});
    const retained=join(output,String(run));mkdirSync(retained,{recursive:true});
    writeFileSync(join(retained,'host.log'),result.log);for(const name of ['native-metered-review.json','native-metered-review.json.diagnostics.json','qualification-browser-acceptance.json','qualification-verifier-tail.json'])if(existsSync(join(result.runtime,name)))cpSync(join(result.runtime,name),join(retained,name));
+   for(const p of ['state.ts','page.tsx','added.ts'])if(existsSync(join(result.workspace,'app/pilot',p)))cpSync(join(result.workspace,'app/pilot',p),join(retained,p));
    assert.ok(result.diagnostics,result.log);await assertHistory(historical);
    const d=result.diagnostics,record=d.wipCheckpoint;
    report.attempts.push({run,code:result.code,recovery:d.recovery,verification:d.verification,iterations:d.repairIterations,checkpoint:record,phases:d.phases.map(p=>({phase:p.phase,outcome:p.outcome})),historicalBefore:hash(historical),historicalAfter:hash(await ledger())});
@@ -90,13 +91,14 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
    const task=await one('agent_tasks','id',ids.task),project=await one('work_projects','id',ids.project);
    const github=async(path,binary)=>binary?readFileSync(join(root,'artifact.zip')):path.includes('/artifacts?')?artifacts:workflow;
    const loaded=await loadRecoveryDiagnostics({task,repository:'mfackrell/katie',github});
-   await validateRecoveryRecords({record:loaded.record,task,context,project,authorityKind:'ordinary-developer',trialId:null,accountId:ids.account,readOne:one});
+   const completedEvidence=recoveryCompletedEvidence(loaded.record,loaded.diagnostics);
+   await validateRecoveryRecords({completedEvidence,record:loaded.record,task,context,project,authorityKind:'ordinary-developer',trialId:null,accountId:ids.account,readOne:one});
    // Destroy both environments. Only remote Git and trusted diagnostics survive.
    rmSync(result.workspace,{recursive:true,force:true});rmSync(result.runtime,{recursive:true,force:true});
    writeFileSync(join(root,'check-request.md'),result.request);
    const check=join(root,'restore-check-'+run);execFileSync('git',['clone','-q','--branch','baseline',remote,check]);
    const beforeRestore=await ledger();
-   const restored=prepareRecovery({workspace:check,tempRoot:root,toolsRoot:join(repo,'scripts'),requestFile:join(root,'check-request.md'),context,record,refs:recoveryRefs(check,ids.task)});
+   const restored=prepareRecovery({workspace:check,tempRoot:root,toolsRoot:join(repo,'scripts'),requestFile:join(root,'check-request.md'),context,record,completedEvidence,refs:recoveryRefs(check,ids.task)});
    restored.restore();
    for(const p of files)assert.equal(hash(readFileSync(join(check,'app/pilot',p),'utf8')),report.attempts.at(-1).files[p]);
    assert.deepEqual(await ledger(),beforeRestore);rmSync(check,{recursive:true,force:true});
@@ -116,5 +118,5 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
   assert.equal(report.trace.filter(t=>t.phase==='review'&&t.event==='completed').length,1);
   const calls=await ledger();assert.ok(calls.calls.every(c=>c.state==='settled'));assert.equal(new Set(calls.calls.map(c=>c.id)).size,calls.calls.length);
   report.finalLedger=calls;report.passed=true;console.log('TASK3B_MULTI_INTERRUPTION_PASS');
- }finally{writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2));rmSync(root,{recursive:true,force:true});}
+ }finally{if(report.passed)execFileSync('git',['--git-dir',remote,'bundle','create',join(output,'checkpoints.bundle'),'--all','^'+baseline]);writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2));rmSync(root,{recursive:true,force:true});}
 }

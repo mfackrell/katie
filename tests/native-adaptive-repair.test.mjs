@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {createHash} from 'node:crypto';
+import {recoveryCompletedEvidence} from '../scripts/benchmark/native-wip-recovery.mjs';
 import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -232,5 +234,23 @@ test('interruption at each durable transition resumes only pending engineering',
   let result;try{result=await executeNativeDevelopmentLifecycle(options);}catch(error){assert.match(error.message,/durable transition interruption/);}
   if(stopped){const action=saved.adaptiveRepair.nextAction;result=await executeNativeDevelopmentLifecycle({...options,onCompleted:()=>{},recovery:{phase:action==='repair'?'repair':action==='verification'?'review':'final-review',completedCheckpointSha:head,lastCompleted:saved,reviewFindings:saved.review?.findings}});}
   assert.equal(result.finalReview.verdict,'pass');assert.equal(events.filter(p=>p==='implementation').length,1);assert.equal(events.filter(p=>p==='repair').length,1);assert.equal(events.filter(p=>p==='review').length,1);assert.equal(events.filter(p=>p==='final-review').length,1);
+ }
+});
+test('full authenticated long findings preserve repair instructions and stagnation across recovery',async()=>{
+ for(const changedTail of [false,true]){
+  const old='a'.repeat(40),head='b'.repeat(40),detail='deterministic context '.repeat(150)+'LAST FAILED ASSERTION',findings='review context '.repeat(180)+'ACTIONABLE TAIL';
+  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
+  const full={verification:{head:old,passed:false,detail},review:{phase:'final-review',reviewedHeadSha:old,verdict:'changes_requested',findings}};
+  const last={repairPerformed:true,verification:{...full.verification,detail:detail.slice(0,1600),detailDigest:digest(detail)},review:{...full.review,findings:findings.slice(0,1600),findingsDigest:digest(findings)},adaptiveRepair:{version:2,nextAction:'repair',candidateHead:old,iteration:2,stagnant:2,seen:[],failureSignature:digest({findings,verification:detail}),pendingRepair:{iteration:3,before:{head:old,passed:false},source:old,priorFindings:['ACTIONABLE TAIL']}}};
+  const record={phase:'repair',lastCompleted:last};
+  const recovered=recoveryCompletedEvidence(record,{lifecycleEvidence:full});
+  assert.equal(recovered.review.findings,findings);assert.equal(recovered.verification.detail,detail);
+  for(const bad of [undefined,{...full,review:{...full.review,findings:findings+' altered'}},{...full,review:{...full.review,reviewedHeadSha:head}}])assert.throws(()=>recoveryCompletedEvidence(record,{lifecycleEvidence:bad}),/RECOVERY_DENIED/);
+  let repairs=0,lastSaved;const events=[];
+  await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'repair',completedCheckpointSha:old,lastCompleted:recovered,reviewFindings:'summary only'},candidateIdentity:h=>h,commitCandidate:()=>head,verifyCandidate:async()=>({passed:false,detail}),onCompleted:e=>{lastSaved=e;},runPhase:async(phase,instructions)=>{
+   events.push(phase);if(phase==='repair'){repairs++;assert.match(instructions,/ACTIONABLE TAIL/);assert.match(instructions,/LAST FAILED ASSERTION/);if(repairs===2)throw Error('next legitimate repair');return;}
+   return {...full.review,reviewedHeadSha:head,findings:changedTail?findings+' distinct tail':findings};
+  }}),changedTail?/next legitimate repair/:/NO_PROGRESS/);
+  assert.equal(repairs,changedTail?2:1);assert.equal(lastSaved.adaptiveRepair.stagnant,changedTail?0:3);
  }
 });

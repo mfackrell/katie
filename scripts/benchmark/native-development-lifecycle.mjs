@@ -20,8 +20,12 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  if(nextAction&&['repair','complete'].includes(nextAction)&&decision?.reviewedHeadSha!==candidateHead)throw Error('NATIVE_REVIEW_CANDIDATE_MISMATCH');
  let reviewRepair=saved.reviewRepair??null,pendingRepair=saved.adaptiveRepair?.pendingRepair??null;
  const state=()=>({version:2,iteration,seen:seen.slice(-16),stagnant,failureSignature:previousFailure,nextAction,candidateHead,pendingRepair});
- const publish=(extra={})=>onCompleted({phase:'review',verification:{...verification,head:candidateHead,detail:summary(verification?.detail)},
-  initialReview:first&&{...first,findings:summary(first.findings)},review:decision&&{...decision,findings:summary(decision.findings)},repairPerformed,repairVerification,reviewRepair,adaptiveRepair:state(),...extra});
+ const publish=(extra={})=>{
+  const full={verification:{...verification,head:candidateHead},review:decision,initialReview:first};
+  return onCompleted({phase:'review',verification:{...verification,head:candidateHead,detail:summary(verification?.detail),detailDigest:digest(verification?.detail??'')},
+   initialReview:first&&{...first,findings:summary(first.findings),findingsDigest:digest(first.findings)},
+   review:decision&&{...decision,findings:summary(decision.findings),findingsDigest:digest(decision.findings)},repairPerformed,repairVerification,reviewRepair,adaptiveRepair:state(),...extra},full);
+ };
  const review=async phase=>{
   const result=await runPhase(phase,'Previous independent findings: '+(decision?.findings??'none')+'\nTrusted deterministic verification: '+JSON.stringify(verification),{candidateHead});
   if(!result||!['pass','changes_requested'].includes(result.verdict)||typeof result.findings!=='string'||!result.findings.trim())throw Error('NATIVE_REVIEW_INVALID');
@@ -71,7 +75,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
   const priorFindings=findingsOf(decision);
   const before={head:candidateHead,passed:verification.passed};
   if(decision.verdict==='changes_requested')reviewRepair={before:{head:candidateHead,verdict:decision.verdict}};
-  const findings=recovery?.phase==='repair'&&iteration===(saved.adaptiveRepair?.iteration??0)?recovery.reviewFindings:
+  const findings=recovery?.phase==='repair'&&saved.adaptiveRepair?.version!==2&&iteration===(saved.adaptiveRepair?.iteration??0)?recovery.reviewFindings:
    decision.findings+'\nTrusted deterministic verification: '+JSON.stringify(verification);
   pendingRepair={iteration:iteration+1,before,source,priorFindings};publish({continueReason:'actionable_engineering_defects'});
   await runPhase('repair',findings);resumedRepair=false;iteration++;repairPerformed=true;
