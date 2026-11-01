@@ -1,7 +1,7 @@
 // Task 2C: one synthetic assignment, real host/route/SQL/dispatcher/recovery.
 // The only substituted boundaries are external identity, GitHub and provider transport.
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,mkdirSync,cpSync,rmSync,existsSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,cpSync,rmSync,existsSync,statfsSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
@@ -74,6 +74,13 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.deepEqual([...phaseCounts],[['implementation',5],['review',6]]);assert.equal(providerCalls,11);
   for(const measured of observations)assert.deepEqual(first.diagnostics.capacityObservations.find(o=>o.id===measured.id),measured,'Authenticated clean-baseline measurements must survive into the owner proposal');
   const record=first.diagnostics.wipCheckpoint;assert.equal(record.phase,'repair');assert.equal(record.lastCompleted.review.verdict,'changes_requested');
+  const initialBrowserPath=join(first.runtime,'qualification-browser-acceptance.json');
+  assert.ok(existsSync(initialBrowserPath),'Initial deterministic verification must reach the frozen browser assertion');
+  const initialBrowser=JSON.parse(readFileSync(initialBrowserPath,'utf8'));
+  assert.equal(initialBrowser.passed,false);assert.equal(initialBrowser.projectId,ids.project);assert.equal(initialBrowser.contractHash,context.contractHash);
+  assert.equal(initialBrowser.headSha,record.lastCompleted.verification.head);
+  assert.deepEqual(initialBrowser.checks,[{name:'recovered state',passed:false,detail:'Rendered text does not equal approved expected value'}]);
+  report.initialBrowserFailure=initialBrowser;
   report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
   const historical=await ledger();for(const row of prior.calls??[])assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
   assert.equal(historical.calls.length,(prior.calls?.length??0)+11);report.pauseLedgerHash=hash(historical);report.historicalCalls=historical.calls;
@@ -82,7 +89,14 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
   const workflow={id:131,status:'completed',conclusion:'failure',event:ordinary?'issues':'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
   writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
-  rmSync(first.workspace,{recursive:true,force:true});
+  // Preserve evidence, then destroy both source and trusted scratch from the old
+  // runner. The continuation must use only the durable remote/archive bindings.
+  const disk=()=>{const value=statfsSync(root);return {availableBytes:value.bavail*value.bsize};};
+  report.firstRunnerDisposal={before:disk()};
+  const retained=join(root,'retained-131');mkdirSync(retained);
+  for(const name of ['qualification-verifier-tail.json','qualification-browser-acceptance.json'])if(existsSync(join(first.runtime,name)))cpSync(join(first.runtime,name),join(retained,name));
+  rmSync(first.workspace,{recursive:true,force:true});rmSync(first.runtime,{recursive:true,force:true});first.runtime=retained;
+  report.firstRunnerDisposal.after=disk();
   const claim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(claim?.job.id,ids.task,'Original development assignment must reconcile its host receipt');
   await load('@/lib/missions/worker').executeClaim(claim,async()=>{throw Error('Receipt reconciliation cannot invoke inference');});
   assert.equal((await one('agent_tasks','id',ids.task)).status,'blocked',JSON.stringify(await one('mission_assignments','id',ids.task)));assert.equal((await one('agent_missions','id',ids.mission)).status,'blocked');
