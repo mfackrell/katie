@@ -46,7 +46,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
  const oldEnv={...process.env},oldFetch=globalThis.fetch;
  try{
   first=await qualifyLifecycleContinuation(db,ids,fixture,initialAmendment,{runId:131,provider,signing,keepRoot:true,afterRun:async result=>result});
-  assert.notEqual(first.code,0,first.log);assert.match(first.diagnostics.failure,/OWNER_APPROVAL_REQUIRED/);
+  assert.notEqual(first.code,0,first.log);assert.ok(first.diagnostics,first.log);assert.match(first.diagnostics.failure,/OWNER_APPROVAL_REQUIRED/);
   assert.deepEqual([...phaseCounts],[['implementation',6],['review',5]]);assert.equal(providerCalls,11);
   const record=first.diagnostics.wipCheckpoint;assert.equal(record.phase,'repair');assert.equal(record.lastCompleted.review.verdict,'changes_requested');
   report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
@@ -60,7 +60,15 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
   rmSync(first.workspace,{recursive:true,force:true});
   const release='e'.repeat(40),issue={number:829,user:{login:'mfackrell'},body:'<!-- katie-managed-task:'+ids.task+' -->\n\n'+first.request};
-  let turn=0,scenarioConnection=null;const client=postgresClient({query:(...args)=>(scenarioConnection??(turn++%2?db:rival)).query(...args)},trace);
+  let turn=0,scenarioConnection=null,approvalRace=null;
+  const client=postgresClient({query:async(...args)=>{
+   let connection=scenarioConnection??(turn++%2?db:rival);
+   if(approvalRace&&args[0].includes('benchmark_lifecycle_decide')){
+    const race=approvalRace,index=race.arrivals++;connection=index===0?db:rival;
+    assert.ok(index<2);if(race.arrivals===2)race.release();await race.ready;
+   }
+   return connection.query(...args);
+  }},trace);
   Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,NEXT_PUBLIC_SUPABASE_URL:config.productionDatabaseUrl,NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-key',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-role',KATIE_OWNER_AUTH_USER_ID:ids.owner,GITHUB_TOKEN:'synthetic-github',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_BENCHMARK_PAID_EXECUTION:'enabled'});
   globalThis.fetch=async(url,options)=>{assert.equal(url,config.productionDatabaseUrl+'/auth/v1/user','External network forbidden');return Response.json(options.headers.Authorization==='Bearer task2c-synthetic-owner'?{id:ids.owner,is_anonymous:false}:{error:'invalid synthetic session'},{status:options.headers.Authorization==='Bearer task2c-synthetic-owner'?200:401});};
   const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
@@ -81,8 +89,10 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    assert.equal((await db.query("select count(*)::int n from benchmark_lifecycle_decisions where decision='approved'")).rows[0].n,0);assert.deepEqual(await ledger(),historical);
    report.scenarios.push({id:9,pass:true,observed:'Ignored views and actual browser rejection created no authority, calls or checkpoint changes'});
    await db.query('rollback');scenarioConnection=null;await page.reload();await page.getByRole('button',{name:'Approve exactly this amendment'}).waitFor();
+   approvalRace={arrivals:0};approvalRace.ready=new Promise(resolve=>{approvalRace.release=resolve;});
    const click=page.getByRole('button',{name:'Approve exactly this amendment'}).click();
    const racing=route.POST(request('POST',decision));await click;const response=await racing;assert.equal(response.status,200,await response.clone().text());
+   assert.equal(approvalRace.arrivals,2);approvalRace=null;
    await page.getByText(/Amendment authorized; continuation queued/).waitFor();result=await response.json();
    assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions')).rows[0].n,1);assert.deepEqual((await ledger()).calls,historical.calls);
    assert.ok(exchanges.some(x=>x.method==='POST'&&x.request.decision==='approved'&&x.status===200));
@@ -96,6 +106,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.equal(second.code,0,second.log+'\n'+JSON.stringify(second.diagnostics));assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completion=JSON.parse(readFileSync(second.evidence)),browser=JSON.parse(readFileSync(join(second.runtime,'qualification-browser-acceptance.json')));assert.equal(completion.taskId,ids.task);assert.equal(completion.completed,true);assert.equal(browser.passed,true);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.headSha,completion.reviewedHeadSha);
   for(const row of historical.calls)assert.deepEqual((await ledger()).calls.find(c=>c.id===row.id),row);
+  for(const row of historical.exposures)assert.deepEqual((await ledger()).exposures.find(c=>c.call_id===row.call_id),row);
   report.completion=completion;report.browserAcceptance=browser;report.continuationDiagnostics=second.diagnostics;report.finalLedger=await ledger();
   console.log('TASK2C_INTEGRATED_NATIVE_PASS');
  }finally{
