@@ -64,3 +64,11 @@ These Task 2C qualification gaps remain blocking until verified. Independent rev
 Zero paid inference was initiated. No Take Eleven benchmark was restarted. No production synthetic approval, grant, task, or accounting record was created. No spending ceilings, historical counters, protected reserves, production scope, or model capability were changed. No Task 3 work was performed.
 
 PR #924 remains draft and unmerged. There is no Task 2C merge commit, migration, or production deployment. Current production verification of Task 2B is not Task 2C acceptance evidence. The seven-day recovery diagnostic retention boundary and abrupt-termination limitations remain unchanged and are not newly qualified here.
+
+## Repair of run 41330983960
+
+Job `124920833772`, step 8 failed at `qualify-resource-lifecycle.mjs:77` with `2 !== 4`. The retained initial diagnostics contain implementation (six requests) and initial review (five requests), but omit the six authenticated predecessor phase observations. The host copied those observations only when a WIP source record existed; an accepted clean-baseline predecessor returns no source record. The owner planner therefore correctly used uncertain one-call minima for repair and final review.
+
+Commit `10dada7898a194a091caa8217df78bfb501a78b7` preserves observations from authenticated clean-baseline diagnostics before the record-only source-restoration branch. Receipt, model, cohort, and accounting validation remain in the capacity adapters. The four-call assertion is retained, and the harness now checks that each predecessor observation survives. Independent review confirmed this root cause and the unchanged security boundary.
+
+Commit `e15b3360a24e01ad33a06a98d7ff6000780e48ab` replaces direct pause-status updates with the real mission claim/execution and project worker. It also checks unchanged task/checkpoint records and actual native-admission denial after rejection. Hosted results remain required before acceptance.

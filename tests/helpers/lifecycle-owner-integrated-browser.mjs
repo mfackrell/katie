@@ -1,6 +1,7 @@
 // Real owner component -> real route -> disposable PostgreSQL. No API result mock.
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+import {join} from 'node:path';
 import ts from 'typescript';
 import {NextRequest} from 'next/server.js';
 import {chromium} from 'playwright-core';
@@ -8,9 +9,9 @@ import bundledChromium from '@sparticuz/chromium';
 import config from '../../config/benchmark-715-production-qualification.json' with {type:'json'};
 export async function integratedOwnerBrowser(route,run){
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),args:bundledChromium.args,headless:true});
- const exchanges=[],errors=[];
+ const exchanges=[],errors=[];let page;
  try{
-  const page=await browser.newPage();page.on('pageerror',error=>errors.push(error.message));
+  page=await browser.newPage();page.on('pageerror',error=>errors.push(error.message));
   const code=ts.transpileModule(readFileSync('components/lifecycle-owner-approval.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
   const scripts=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js'].map(p=>readFileSync('node_modules/'+p,'utf8'));
   const html=`<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script>${scripts.join('\n')}</script><script>const exports={};const require=name=>name==='react'?React:name==='react/jsx-runtime'?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=> 'task2c-synthetic-owner'};${code};ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(exports.LifecycleOwnerApproval));</script></body></html>`;
@@ -26,5 +27,9 @@ export async function integratedOwnerBrowser(route,run){
   await page.getByRole('button',{name:'Approve exactly this amendment'}).waitFor({timeout:15000});
   await run(page,exchanges);
   assert.deepEqual(errors,[]);return {exchanges,errors,visibleText:await page.locator('body').innerText()};
+ }catch(error){
+  const evidence={passed:false,exchanges,errors,visibleText:page?await page.locator('body').innerText().catch(()=>null):null};
+  if(process.env.RUNNER_TEMP){const dir=join(process.env.RUNNER_TEMP,'task2c-qualification');mkdirSync(dir,{recursive:true});writeFileSync(join(dir,'owner-browser-failure.json'),JSON.stringify(evidence,null,2));}
+  error.message+='\nOwner browser evidence: '+JSON.stringify(evidence);throw error;
  }finally{await browser.close();}
 }

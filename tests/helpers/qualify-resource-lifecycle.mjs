@@ -7,6 +7,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {NextRequest} from 'next/server.js';
 import {modules} from './load-project-modules.mjs';
+import {completionTransport} from './lifecycle-completion-transport.mjs';
 import {integratedOwnerBrowser} from './lifecycle-owner-integrated-browser.mjs';
 import {postgresClient,githubTransport} from './lifecycle-qualification-adapters.mjs';
 import {createLifecycleCheckpoint,qualifyLifecycleContinuation,archive} from './qualify-lifecycle-continuation.mjs';
@@ -71,8 +72,8 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    }
    return connection.query(...args);
   }},trace);
-  Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,NEXT_PUBLIC_SUPABASE_URL:config.productionDatabaseUrl,NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-key',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-role',KATIE_OWNER_AUTH_USER_ID:ids.owner,GITHUB_TOKEN:'synthetic-github',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_BENCHMARK_PAID_EXECUTION:'enabled'});
-  globalThis.fetch=async(url,options)=>{assert.equal(url,config.productionDatabaseUrl+'/auth/v1/user','External network forbidden');return Response.json(options.headers.Authorization==='Bearer task2c-synthetic-owner'?{id:ids.owner,is_anonymous:false}:{error:'invalid synthetic session'},{status:options.headers.Authorization==='Bearer task2c-synthetic-owner'?200:401});};
+  Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,NEXT_PUBLIC_SUPABASE_URL:config.productionDatabaseUrl,NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-key',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-role',KATIE_OWNER_AUTH_USER_ID:ids.owner,GITHUB_TOKEN:'synthetic-github',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_BENCHMARK_PAID_EXECUTION:'enabled',KATIE_FULL_BENCHMARK_TRIAL_ID:ids.trial,OPENAI_API_KEY:'synthetic-provider-no-real-access',GOOGLE_API_KEY:'',CLAUDE_API_KEY:'',claude_api_key:'',GROK_API_KEY:'',XAI_API_KEY:'',grok_api_key:''});
+  globalThis.fetch=async(url,options)=>{if(new URL(typeof url==='string'||url instanceof URL?url:url.url).origin==='https://api.openai.com'){assert.ok(fixture.workerResponse,'Provider forbidden before completed native engineering');return fixture.workerResponse(url,options);}assert.equal(url,config.productionDatabaseUrl+'/auth/v1/user','External network forbidden');return Response.json(options.headers.Authorization==='Bearer task2c-synthetic-owner'?{id:ids.owner,is_anonymous:false}:{error:'invalid synthetic session'},{status:options.headers.Authorization==='Bearer task2c-synthetic-owner'?200:401});};
   const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
   const route=load('@/app/api/projects/lifecycle-approval/route'),development=load('@/lib/agents/development');
   const request=(method,body,token='task2c-synthetic-owner')=>new NextRequest(config.productionUrl+'/api/projects/lifecycle-approval?taskId='+ids.task,{method,headers:{Authorization:'Bearer '+token,Origin:config.productionUrl,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
@@ -122,6 +123,27 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const completion=JSON.parse(readFileSync(second.evidence)),browser=JSON.parse(readFileSync(join(second.runtime,'qualification-browser-acceptance.json')));assert.equal(completion.taskId,ids.task);assert.equal(completion.completed,true);assert.equal(browser.passed,true);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.headSha,completion.reviewedHeadSha);
   for(const row of historical.calls)assert.deepEqual((await ledger()).calls.find(c=>c.id===row.id),row);
   for(const row of historical.exposures)assert.deepEqual((await ledger()).exposures.find(c=>c.call_id===row.call_id),row);
+  fixture.completion=completion;
+  assert.equal(completion.repairVerification.after.passed,true);assert.equal(completion.repairVerification.after.head,completion.reviewedHeadSha);
+  fixture.verifierLog=JSON.parse(readFileSync(join(second.runtime,'qualification-verifier-tail.json'),'utf8')).tail;
+  fixture.receipt={version:1,repository:'mfackrell/katie',issue_number:829,run_id:132,pr_url:'https://github.com/mfackrell/katie/pull/829',outcome:'READY',tested_head_sha:completion.reviewedHeadSha,reviewed_head_sha:completion.reviewedHeadSha,checks:{build:'success',test:'false',review:'changes_requested',repair:'success',retest:'true',final_review:'pass'},projectAcceptance:browser};
+  writeFileSync(join(root,'workflow.json'),JSON.stringify({...workflow,id:132,head_sha:release,conclusion:'success',created_at:new Date().toISOString()}));
+  fixture.workerResponse=completionTransport({fixture,trace});
+  const worker=load('@/lib/missions/worker');
+  const developerClaim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(developerClaim?.job.id,ids.task);
+  await worker.executeClaim(developerClaim);
+  assert.equal((await one('agent_tasks','id',ids.task)).status,'ready');
+  const completionJobs=[];
+  for(let n=0;n<3;n++){
+   if((await one('agent_missions','id',ids.mission)).status==='completed')break;
+   const next=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(next?.mission.id,ids.mission);assert.ok(['compose','review'].includes(next.job.role),'Completed native development cannot replay');
+   completionJobs.push({id:next.job.id,role:next.job.role,agentId:next.job.agent_id});await worker.executeClaim(next);
+  }
+  assert.deepEqual(completionJobs.map(j=>j.role),['compose','review']);assert.notEqual(completionJobs[0].agentId,completionJobs[1].agentId);
+  assert.equal((await one('agent_missions','id',ids.mission)).status,'completed');
+  await load('@/lib/projects/worker').runProjectBatch();
+  assert.equal((await one('work_projects','id',ids.project)).verified_sha,completion.reviewedHeadSha);
+  report.completionWorkers=completionJobs;
   report.completion=completion;report.browserAcceptance=browser;report.continuationDiagnostics=second.diagnostics;report.finalLedger=await ledger();
   console.log('TASK2C_INTEGRATED_NATIVE_PASS');
  }finally{
