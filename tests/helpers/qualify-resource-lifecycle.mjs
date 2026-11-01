@@ -1,7 +1,7 @@
 // Task 2C: one synthetic assignment, real host/route/SQL/dispatcher/recovery.
 // The only substituted boundaries are external identity, GitHub and provider transport.
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,mkdirSync,cpSync,rmSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,cpSync,rmSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
@@ -125,7 +125,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),true);assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),false);assert.equal(trace.filter(t=>t.boundary==='workflow_dispatch').length,1);
   const amendment=ordinary?{approval_id:result.approvalId,release_sha:release}:(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[result.continuationId])).rows[0];assert.ok(amendment);
   recovering=true;phaseCounts=new Map();second=await qualifyLifecycleContinuation(db,ids,fixture,amendment,{runId:132,provider,signing,keepRoot:true,request:issue.body,afterRun:async result=>result});
-  assert.equal(second.code,0,second.log+'\n'+JSON.stringify(second.diagnostics));assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
+  assert.equal(second.code,0,second.log+'\n'+JSON.stringify(second.diagnostics)+'\n'+(existsSync(join(second.runtime,'qualification-verifier-tail.json'))?readFileSync(join(second.runtime,'qualification-verifier-tail.json'),'utf8'):''));assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completion=JSON.parse(readFileSync(second.evidence)),browser=JSON.parse(readFileSync(join(second.runtime,'qualification-browser-acceptance.json')));assert.equal(completion.taskId,ids.task);assert.equal(completion.completed,true);assert.equal(browser.passed,true);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.headSha,completion.reviewedHeadSha);
   for(const row of historical.calls)assert.deepEqual((await ledger()).calls.find(c=>c.id===row.id),row);
   for(const row of historical.exposures)assert.deepEqual((await ledger()).exposures.find(c=>c.call_id===row.call_id),row);
@@ -194,7 +194,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   console.log('TASK2C_INTEGRATED_NATIVE_PASS');
  }finally{
   globalThis.fetch=oldFetch;for(const key of Object.keys(process.env))if(!(key in oldEnv))delete process.env[key];Object.assign(process.env,oldEnv);
-  const destination=join(process.env.RUNNER_TEMP??root,'task2c-qualification');mkdirSync(destination,{recursive:true});writeFileSync(join(destination,'report.json'),JSON.stringify(report,null,2));for(const [label,result]of[['initial',first],['continued',second]])if(result){writeFileSync(join(destination,label+'-host.log'),result.log);writeFileSync(join(destination,label+'-diagnostics.json'),JSON.stringify(result.diagnostics,null,2));}
+  const destination=join(process.env.RUNNER_TEMP??root,'task2c-qualification');mkdirSync(destination,{recursive:true});writeFileSync(join(destination,'report.json'),JSON.stringify(report,null,2));for(const [label,result]of[['initial',first],['continued',second]])if(result){writeFileSync(join(destination,label+'-host.log'),result.log);writeFileSync(join(destination,label+'-diagnostics.json'),JSON.stringify(result.diagnostics,null,2));for(const name of ['qualification-verifier-tail.json','qualification-browser-acceptance.json'])if(existsSync(join(result.runtime,name)))cpSync(join(result.runtime,name),join(destination,label+'-'+name));}
   if(process.env.RUNNER_TEMP)rmSync(root,{recursive:true,force:true});
  }
 }
