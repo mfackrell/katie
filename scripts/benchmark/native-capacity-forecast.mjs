@@ -8,7 +8,10 @@ const sum=rows=>rows.every(v=>number(v)!==null)&&Number.isSafeInteger(rows.reduc
 const canonical=value=>JSON.stringify(value,(_k,v)=>Array.isArray(v)&&v.every(x=>x&&typeof x.id==='string')?[...v].sort((a,b)=>a.id.localeCompare(b.id)):v);
 export function capacityProgress({binding,recovery,phase='implementation',completedStages=[],notRequiredStages=[]}){
  const key={'review':'initial_review','final-review':'final_review'}[phase]??phase;
- const restored=recovery?.phase==='repair'?['implementation','initial_review']:[];
+ let restored=recovery?.phase==='repair'?['implementation','initial_review']:recovery?.phase==='review'?['implementation']:
+  recovery?.phase==='final-review'?['implementation','initial_review','repair','verification']:
+  recovery?.phase==='do_completion'?['implementation','initial_review','repair','verification','final_review']:[];
+ if(['final-review','do_completion'].includes(recovery?.phase)&&recovery.lastCompleted?.repairPerformed!==true&&recovery.lastCompleted?.lifecycle?.repairPerformed!==true){restored=restored.filter(s=>s!=='repair');notRequiredStages=[...new Set([...notRequiredStages,'repair'])];}
  return {source:recovery?'authenticated_recovery':'trusted_host',binding,phase:key,completedStages:[...new Set([...restored,...completedStages])],notRequiredStages,checkpointSha:recovery?.checkpointSha??null};
 }
 export async function readNativeLifecycleCapacity({db,task,project,approval,continuation,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,observations=[],now=Date.now()}){
@@ -41,7 +44,7 @@ export async function readNativeLifecycleCapacity({db,task,project,approval,cont
   // and report unknown instead of presenting a mixture as authoritative capacity.
   const first=await snapshot(),s=await snapshot();if(canonical(first)!==canonical(s))throw Error('snapshot_changed');
   const plan=continuation?.plan;
-  if(![5,6].includes(plan?.version)||(s.control!==null&&s.control?.version!=='atomic-exposure-v1'))throw Error('unsupported_capacity_contract');
+  if(![5,6,7].includes(plan?.version)||(s.control!==null&&s.control?.version!=='atomic-exposure-v1'))throw Error('unsupported_capacity_contract');
   if(s.account.id!==approval.account_id||s.mission.project_id!==project.id||s.currentProject.approved_hash!==project.approved_hash||s.currentProject.approval_hash!==project.approved_hash||s.currentApproval.task_id!==task.id||s.currentApproval.project_id!==project.id)throw Error('snapshot_identity_mismatch');
   const jobIds=new Set(s.jobCalls.map(x=>x.id));
   const developmentCalls=s.calls.filter(c=>jobIds.has(c.legacy_mission_call_id??c.request_key));

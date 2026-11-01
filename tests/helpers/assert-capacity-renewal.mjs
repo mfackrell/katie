@@ -57,6 +57,9 @@ export async function assertCapacityRenewal(db,rival,{am,ng,project,mission,task
  }
  await assert.rejects(db.query(reserve,[g.token_digest,trial,g.execution_epoch,randomUUID(),'gpt-5.3-codex',1]),/closure/);
  assert.equal((await db.query('select calls from agent_missions where id=$1',[mission])).rows[0].calls,28);
+ if(process.env.KATIE_TEST_LIFECYCLE_AUTHORIZATION==='1'){
+  await (await import('./assert-lifecycle-authorization.mjs')).assertLifecycleAuthorization(db,rival,{project,mission,task,trial,owner,account,grant:g});return;
+ }
  await assertRenewalCompletionLifecycle(db,{project,mission,task,c:{id:c.id,planHash:c.plan_hash},cumulativeCap:625000});
  await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(rpc,approve),/permission denied/);await db.query('reset role');await db.query('set role service_role');
  console.log('CAPACITY_RENEWAL_POSTGRES_PASS: append-only625k/32calls/4hours, unchanged dollars, owner identity, exact ledger, concurrent approval/dispatch/grant and native closure fence');

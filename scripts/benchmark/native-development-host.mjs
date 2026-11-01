@@ -98,10 +98,10 @@ const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.
 const pricing=await readVerifiedBenchmarkPricing(signal=>db.from('model_registry')
  .select('pricing_input_per_1m,pricing_output_per_1m,pricing_status')
  .eq('provider_name','openai').eq('model_id',approval.model).abortSignal(signal).maybeSingle());
-if([5,6].includes(continuation?.plan?.version)){
- const cumulativeCap=continuation.plan.version===6?625000:550000;
+if([5,6,7].includes(continuation?.plan?.version)){
+ const cumulativeCap=continuation.plan.version===7?continuation.plan.cumulativeTokenCap:continuation.plan.version===6?625000:550000;
  const control=await db.rpc('benchmark_full_monetary_control',{p_account:account.id,p_continuation:continuation.id});
- if(control.error||control.data?.version!=='atomic-exposure-v1'||control.data.cumulativeTokenCap!==cumulativeCap||control.data.dollarCeilingMicrousd!==10000000||Number(approval.max_tokens)!==cumulativeCap)denied('atomic cumulative monetary control unavailable');
+ if(control.error||control.data?.version!=='atomic-exposure-v1'||control.data.cumulativeTokenCap!==cumulativeCap||String(control.data.dollarCeilingMicrousd)!==String(continuation.plan.version===7?continuation.plan.dollarCeilingMicrousd:10000000)||Number(approval.max_tokens)!==cumulativeCap)denied('atomic cumulative monetary control unavailable');
 }else assertBenchmarkDollarCeiling({
  armUsdCents:productionRuntime?1000:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
  priceCeilingMicrosPerMillion:productionRuntime?28000000:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
@@ -145,7 +145,7 @@ if(proof.pregrantRecoveryId){
  const recovery=await readOne('benchmark_development_pregrant_recoveries','id',proof.pregrantRecoveryId);
  if(recovery.renewal_id!==proof.developmentRenewalId||recovery.release_sha!==process.env.GITHUB_SHA||task.external?.pregrantRecoveryId!==recovery.id)denied('pregrant recovery identity or release mismatch');
 }
-let ownerApprovedSuccessor=continuation?.plan?.capacityRenewal===true;
+let ownerApprovedSuccessor=continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
 if(proof.paidSuccessorId){
  if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId||proof.pregrantRecoveryId||process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS!=='enabled'||NATIVE_ADMISSION_DIAGNOSTICS_VERSION!=='bounded-schema-v1')denied('instrumented paid successor transport required');
  const successor=await readOne('benchmark_development_paid_successors','id',proof.paidSuccessorId);
@@ -235,6 +235,14 @@ const preserveWip=()=>{
   const checkpoint=wip.save({...activeWipPhase,lastCompleted});
   if(checkpoint){diagnostics.wipCheckpoint=checkpoint;saveDiagnostics();}
  }catch{diagnostics.wipFailure='NATIVE_WIP_CHECKPOINT_DENIED';saveDiagnostics();throw Error('NATIVE_WIP_CHECKPOINT_DENIED');}
+};
+const pauseForCapacity=(phase,findings='')=>{
+ if(latestCapacityForecast?.status!=='insufficient')return;
+ activeWipPhase={phase,reviewFindings:findings,boundary:true};
+ preserveWip();
+ diagnostics.ownerApprovalRequired={phase,shortages:latestCapacityForecast.shortages,checkpointSha:diagnostics.wipCheckpoint?.checkpointSha};
+ saveDiagnostics();
+ throw Error('NATIVE_OWNER_APPROVAL_REQUIRED: lifecycle capacity shortage; checkpoint preserved');
 };
 const commitCandidate=(label)=>{
   if(git('rev-parse','HEAD')!==trustedCheckpointSha)
@@ -336,6 +344,7 @@ try{
  const safelyRunPhase=async(phase,findings='')=>{
   if(phase==='repair'){capacityCompletedStages.delete('verification');capacityNotRequiredStages.delete('repair');}
   await forecastCapacity(phase);diagnostics.capacityForecasts.push(latestCapacityForecast);diagnostics.capacityForecasts=diagnostics.capacityForecasts.slice(-12);saveDiagnostics();
+  pauseForCapacity(phase,findings);
   // Retry only a positively identified process interruption. Any gateway denial,
   // uncertain upstream result, ordinary nonzero exit or intentional stop is final.
   for(let attempt=0;attempt<(ownerApprovedSuccessor?1:2);attempt++){
@@ -403,10 +412,12 @@ try{
   try{if(JSON.parse(readFileSync(failure,'utf8')).kind==='infrastructure')denied('deterministic verification infrastructure failed before candidate tests');}catch(error){if(error.message?.startsWith('NATIVE_HOST_DENIED'))throw error;}
   return result;
  };
- const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true;
+ const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
   onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
+ lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};
  await forecastCapacity('do_completion');diagnostics.capacityForecasts.push(latestCapacityForecast);saveDiagnostics();
+ pauseForCapacity('do_completion');
  if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
   denied('trusted evidence destination unavailable');
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),

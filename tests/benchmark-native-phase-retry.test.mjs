@@ -5,9 +5,9 @@ import vm from 'node:vm';
 import {nativeChildInterruptionRetryable,nativeGatewayFailureClass,createNativeHttpBridge} from '../scripts/benchmark/native-http-bridge.mjs';
 const host=readFileSync(new URL('../scripts/benchmark/native-development-host.mjs',import.meta.url),'utf8');
 const loop=host.slice(host.indexOf(' const safelyRunPhase='),host.indexOf(' stopTimer=setInterval'))+'\n safelyRunPhase("implementation");';
-async function runLoop({signal=null,code=1,gatewayFailure=null,pending=[],live=true,ownerApprovedSuccessor=false}={}){
+async function runLoop({signal=null,code=1,gatewayFailure=null,pending=[],live=true,ownerApprovedSuccessor=false,capacityShortfall=false}={}){
  let runs=0,reads=0,resets=0;
- const context={forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},diagnostics:{capacityForecasts:[]},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),capacityPhase:null,capacityReceipts:[],capacityObservations:[],ownerApprovedSuccessor,snapshot:()=>{},saveDiagnostics:()=>{},nativeChildInterruptionRetryable,gatewayFailure,account:{id:'account'},proof:{trialId:'trial'},grantToken:'token',executionEpoch:1,tokenDigest:()=>'',trustedCheckpointSha:'head',console:{log:()=>{}},denied:message=>{throw Error(message)},git:()=>resets++,runPhase:async()=>{runs++;if(runs===1)throw Object.assign(Error('child failed'),{nativeChildOutcome:{signal,code}});},db:{from:()=>({select:()=>({eq:()=>({in:()=>({limit:async()=>{reads++;return {data:pending}}})})})}),rpc:async()=>({data:live})}};
+ const context={pauseForCapacity:()=>{if(capacityShortfall)throw Error('NATIVE_OWNER_APPROVAL_REQUIRED');},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},diagnostics:{capacityForecasts:[]},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),capacityPhase:null,capacityReceipts:[],capacityObservations:[],ownerApprovedSuccessor,snapshot:()=>{},saveDiagnostics:()=>{},nativeChildInterruptionRetryable,gatewayFailure,account:{id:'account'},proof:{trialId:'trial'},grantToken:'token',executionEpoch:1,tokenDigest:()=>'',trustedCheckpointSha:'head',console:{log:()=>{}},denied:message=>{throw Error(message)},git:()=>resets++,runPhase:async()=>{runs++;if(runs===1)throw Object.assign(Error('child failed'),{nativeChildOutcome:{signal,code}});},db:{from:()=>({select:()=>({eq:()=>({in:()=>({limit:async()=>{reads++;return {data:pending}}})})})}),rpc:async()=>({data:live})}};
  let error;try{await vm.runInNewContext(loop,context);}catch(e){error=e;}
  return {runs,reads,resets,error};
 }
@@ -56,3 +56,8 @@ test('owner-approved successor never retries even a settled live process interru
  }
 });
 
+
+test('forecast capacity pause occurs before child dispatch or retry admission',async()=>{
+ const r=await runLoop({capacityShortfall:true,signal:'SIGKILL',code:null});
+ assert.equal(r.runs,0);assert.equal(r.reads,0);assert.equal(r.resets,0);assert.equal(r.error?.message,'NATIVE_OWNER_APPROVAL_REQUIRED');
+});

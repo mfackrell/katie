@@ -233,8 +233,24 @@ jobs:
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - name: Fetch immutable assignment baseline
         run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+      - name: Forecast approval and actual same-task host continuation without inference
+        env:
+          KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE: '0'
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+          KATIE_TEST_CAPACITY_RENEWAL: '1'
+          KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+          KATIE_TEST_LIFECYCLE_HOST: '1'
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
       - name: Actual host interruption and fresh-runner continuation with real isolated accounting
         run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain lifecycle qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-qualification
+          path: ${{ runner.temp }}/lifecycle-qualification/
+          if-no-files-found: warn
       - name: Retain bounded nonbillable recovery evidence
         if: always()
         uses: actions/upload-artifact@v4

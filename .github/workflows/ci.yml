@@ -61,6 +61,14 @@ jobs:
           KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
         run: node --test tests/benchmark-renewal-postgres.test.mjs
 
+      - name: Qualify lifecycle owner amendment in actual PostgreSQL without inference
+        env:
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+          KATIE_TEST_CAPACITY_RENEWAL: '1'
+          KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
