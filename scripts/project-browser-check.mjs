@@ -77,6 +77,9 @@ fcntl.ioctl(s, 0x8914, struct.pack("16sH14s", b"lo", 0x49, b""))
 s.close()
 os.execv(sys.argv[1], sys.argv[1:])
 `;
+// PID numbers must resolve in the same procfs view before nested Bubblewrap
+// opens /proc/<pid>/ns. --mount-proc creates a private mount namespace too.
+export const projectNetworkNamespaceArgs = Object.freeze(['--user', '--map-root-user', '--net', '--pid', '--fork', '--mount-proc', '--kill-child=SIGKILL']);
 export async function checkProject({ request, port, output, dependencies }) {
   if (resolve(request) === resolve(output)) throw Error('Acceptance output must not overwrite the original request');
   const metadata = parseProjectContext(readFileSync(request, 'utf8'));
@@ -92,7 +95,7 @@ export async function checkProject({ request, port, output, dependencies }) {
     const browserExecutablePath = await prepareTrustedChromium();
     const moduleUrl = import.meta.url;
     const code = `import { runIsolatedProjectCheck } from ${JSON.stringify(moduleUrl)}; const r = await runIsolatedProjectCheck(JSON.parse(process.argv[1])); if (!r.passed) process.exitCode = 1;`;
-    child = spawn('unshare', ['--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child=SIGKILL', 'python3', '-c', networkBootstrap,
+    child = spawn('unshare', [...projectNetworkNamespaceArgs, 'python3', '-c', networkBootstrap,
       process.execPath, '--input-type=module', '-e', code, JSON.stringify({ request: resolve(request), port, output: resolve(output), dependencies, browserExecutablePath })], {
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, HOME: '/tmp', TMPDIR: '/tmp', NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' },
