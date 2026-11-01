@@ -174,11 +174,14 @@ let recoveryPlan=null,priorCapacityObservations=[];
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
  const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
+ // Authenticated diagnostics may carry measured history even when the accepted
+ // predecessor stopped at the clean baseline and has no source to restore.
+ // Capacity adapters still validate every observation against settled receipts.
+ priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:ordinary?null:proof.trialId,authorityKind:ordinary?'ordinary-developer':undefined,accountId:account.id,readOne});
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
- priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  }
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
@@ -420,7 +423,8 @@ try{
   try{if(JSON.parse(readFileSync(failure,'utf8')).kind==='infrastructure')denied('deterministic verification infrastructure failed before candidate tests');}catch(error){if(error.message?.startsWith('NATIVE_HOST_DENIED'))throw error;}
   return result;
  };
- const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
+ // Ordinary projects use verified lifecycle checkpoints from their first execution.
+ const qualifiedLifecycle=ordinary||continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
   onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
  lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};

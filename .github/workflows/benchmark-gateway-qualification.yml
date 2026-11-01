@@ -222,6 +222,7 @@ jobs:
       KATIE_TEST_CAPACITY_RENEWAL: '1'
       KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
       KATIE_TEST_ORDINARY_AUTHORITY: '1'
+      KATIE_TEST_RESOURCE_DIMENSIONS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -240,7 +241,9 @@ jobs:
         if: always()
         with:
           name: ordinary-owner-proposal
-          path: ${{ runner.temp }}/ordinary-owner-proposal.json
+          path: |
+            ${{ runner.temp }}/ordinary-owner-proposal.json
+            ${{ runner.temp }}/resource-dimensions.json
           if-no-files-found: error
 
 
@@ -335,3 +338,46 @@ jobs:
           path: ${{ runner.temp }}/native-recovery-qualification/
           if-no-files-found: error
           retention-days: 7
+
+  resource-lifecycle-qualification:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lifecycle: [shortage, adequate]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_TEST_TASK2C: '1'
+      KATIE_TEST_TASK2C_MODE: ${{ matrix.lifecycle }}
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_REQUIRE_NATIVE_BWRAP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Install disposable qualification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat postgresql-16
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Fetch immutable assignment baseline
+        run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+      - name: Integrated Task 2C synthetic lifecycle
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain Task 2C reproducible evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task2c-qualification-${{ matrix.lifecycle }}
+          path: ${{ runner.temp }}/task2c-qualification/
+          if-no-files-found: warn
+          retention-days: 90

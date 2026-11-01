@@ -6,13 +6,13 @@ import {executeNativeDevelopmentLifecycle} from '../scripts/benchmark/native-dev
 const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
 // Exercise the host's actual lifecycle control with nonbillable phase/verifier doubles.
 const text=source.slice(source.indexOf(" const verifyCandidate="),source.indexOf(' if(!evidencePath'));
-async function run({testResults=[true],verdicts=['pass','pass'],infrastructure=false,version6=true}={}){
+async function run({testResults=[true],verdicts=['pass','pass'],infrastructure=false,version6=true,ordinary=false}={}){
  const phases=[],verifications=[];let callback,ci=0,decisions=0;
- const context={pauseForCapacity:()=>{},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),recovery:null,lastCompleted:{},executeNativeDevelopmentLifecycle,continuation:{plan:{capacityRenewal:version6}},root:'/temp',process:{execPath:'node',env:{RUNNER_TEMP:'/temp'}},boundary:{root:'/work'},requestFile:'/request',diagnostics:{capacityForecasts:[]},diagnosticSecrets:[],gatewayFailure:null,child:null,join:(...x)=>x.join('/'),rmSync:()=>{},sanitizeEvidence:x=>x,saveDiagnostics:()=>{},denied:x=>{throw Error('NATIVE_HOST_DENIED: '+x)},readFileSync:()=>{if(infrastructure)return '{"kind":"infrastructure"}';throw Error('missing');},commitCandidate:()=>('head-'+phases.length),safelyRunPhase:async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};},spawn:()=>{const pass=testResults[Math.min(ci++,testResults.length-1)];verifications.push(pass);return {stdout:{on:()=>{}},stderr:{on:()=>{}},once:(event,fn)=>{if(event==='close')queueMicrotask(()=>fn(pass?0:1));}}}};
+ const context={ordinary,pauseForCapacity:()=>{},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),recovery:null,lastCompleted:{},executeNativeDevelopmentLifecycle,continuation:{plan:{capacityRenewal:version6}},root:'/temp',process:{execPath:'node',env:{RUNNER_TEMP:'/temp'}},boundary:{root:'/work'},requestFile:'/request',diagnostics:{capacityForecasts:[]},diagnosticSecrets:[],gatewayFailure:null,child:null,join:(...x)=>x.join('/'),rmSync:()=>{},sanitizeEvidence:x=>x,saveDiagnostics:()=>{},denied:x=>{throw Error('NATIVE_HOST_DENIED: '+x)},readFileSync:()=>{if(infrastructure)return '{"kind":"infrastructure"}';throw Error('missing');},commitCandidate:()=>('head-'+phases.length),safelyRunPhase:async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};},spawn:()=>{const pass=testResults[Math.min(ci++,testResults.length-1)];verifications.push(pass);return {stdout:{on:()=>{}},stderr:{on:()=>{}},once:(event,fn)=>{if(event==='close')queueMicrotask(()=>fn(pass?0:1));}}}};
  // Implementation/repair return no review decision.
  context.safelyRunPhase=async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);if(p==='review'||p==='final-review')return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};};
  let error;try{await vm.runInNewContext('(async()=>{'+text+'})()',context);}catch(e){error=e.message;}
- return {phases,verifications,error};
+ return {phases,verifications,error,completed:context.lastCompleted};
 }
 test('deterministic failure reaches the same bounded repair even when initial source review passes',async()=>{
  const r=await run({testResults:[false,true]});assert.deepEqual(r.phases,['implementation','review','repair','final-review']);assert.deepEqual(r.verifications,[false,true]);assert.equal(r.error,undefined);
@@ -46,4 +46,22 @@ test('paused final review preserves deterministic repair proof and skips complet
  assert.deepEqual(result.repairVerification,{before:{head:'a'.repeat(40),passed:false},after:{head:'b'.repeat(40),passed:true}});
  const closure=await executeNativeDevelopmentLifecycle({recovery:{phase:'do_completion',lastCompleted:{lifecycle:result}},runPhase:()=>assert.fail('completed engineering replayed')});
  assert.deepEqual(closure,result);
+});
+
+test('authenticated clean-baseline predecessor retains bounded phase observations without source restoration',async()=>{
+ const start=source.indexOf('let recoveryPlan=null,priorCapacityObservations=[];'),end=source.indexOf('let latestCapacityForecast',start);
+ assert.ok(start>=0&&end>start);
+ const observations=Array.from({length:70},(_,i)=>({id:'settled-phase-'+i}));
+ const context={priorRefs:[],task:{id:'original',external:{receipt:{outcome:'BLOCKED'}}},proof:{},wipContext:{baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40)},process:{env:{GITHUB_REPOSITORY:'synthetic/repository'}},githubRecoveryReader:()=>({}),loadRecoveryDiagnostics:async input=>{assert.equal(input.emptyBaselineSha,'a'.repeat(40));return {record:null,diagnostics:{capacityObservations:observations}};},recoveryCompletedEvidence:()=>assert.fail('No source checkpoint exists'),validateRecoveryRecords:()=>assert.fail('No source checkpoint exists'),prepareRecovery:()=>assert.fail('No source checkpoint exists')};
+ const run=()=>vm.runInNewContext('(async()=>{'+source.slice(start,end)+';return {recovery,capacityObservations};})()',context);
+ const result=await run();assert.equal(result.recovery,null);assert.deepEqual(JSON.parse(JSON.stringify(result.capacityObservations)),observations.slice(-64));
+ context.loadRecoveryDiagnostics=async()=>{throw Error('Untrusted predecessor artifact');};await assert.rejects(run(),/Untrusted predecessor artifact/);
+});
+
+test('ordinary first execution verifies before review and preserves failed-to-passed repair evidence',async()=>{
+ const r=await run({ordinary:true,version6:false,testResults:[false,true]});
+ assert.equal(r.error,undefined);assert.deepEqual(r.phases,['implementation','review','repair','final-review']);assert.deepEqual(r.verifications,[false,true]);
+ assert.deepEqual(JSON.parse(JSON.stringify(r.completed.lifecycle.repairVerification)),{before:{head:'head-1',passed:false},after:{head:'head-3',passed:true}});
+ const denied=await run({ordinary:true,version6:false,infrastructure:true,testResults:[false]});
+ assert.deepEqual(denied.phases,['implementation']);assert.match(denied.error,/infrastructure/);
 });

@@ -6,7 +6,7 @@ export type Observation = {id:string;stage:Stage;source:'verified_phase_receipts
 export type CapacityInput = {
  binding:Binding;observedAt:number;cohort:string;
  progress:{source:'authenticated_recovery'|'trusted_host';binding:Binding;phase:Stage;completedStages:Stage[];notRequiredStages?:Stage[];checkpointSha?:string|null};
- work:{repairIterations:number|null;additionalRepairIterations:number|null};
+ work:{repairIterations:number|null;additionalRepairIterations:number|null;nativePhaseProfile?:'fresh-native-inspection-v1';nativeMinimumCalls?:2};
  observations:Observation[];pricing:Partial<Record<Pool,Pricing|null>>;otherApiCostMicrousd:Partial<Record<Stage,string|null>>;
  authorization:{source:string;live:boolean|null;executionAuthorized:boolean|null;deadline:number|null;
   tokens:{cumulativeLimit:number|null;accountEncumbered:number|null;developmentLimit:number|null;developmentEncumbered:number|null;completionReserveRemaining:number|null;assessmentReserveRemaining:number|null};
@@ -20,7 +20,7 @@ export type CapacityAssessment = {
  evidence:{source:string|null;checkpointSha:string|null;accountingSource:string|null;cohort:string|null};
  stages:{stage:Stage;pool:Pool;status:'completed'|'not_required'|'in_progress'|'remaining';remainingUnits:number|null;minimumCalls:number;
   metrics:Record<'calls'|'inputTokens'|'outputTokens'|'seconds',Measure>;cost:{unit:'microUSD';expected:string|null;projected:string|null};evidence:string[];confidence:string}[];
- dimensions:Record<string,{unit:'calls'|'input_plus_output_tokens'|'microUSD'|'seconds';expectedRemaining:number|string|null;contingency:number|string|null;projectedRemaining:number|string|null;minimumRemaining:number|string;authorizedRemaining:number|string|null;currentlyUsable:number|string|null;status:'sufficient'|'insufficient'|'indeterminate';shortfall:number|string|null;minimumShortfall:number|string|null;headroom:number|string|null}>;
+ dimensions:Record<string,{knownProjectedRemaining?:string;knownProjectedShortfall?:string;unestimatedStages?:Stage[];unit:'calls'|'input_plus_output_tokens'|'microUSD'|'seconds';expectedRemaining:number|string|null;contingency:number|string|null;projectedRemaining:number|string|null;minimumRemaining:number|string;authorizedRemaining:number|string|null;currentlyUsable:number|string|null;status:'sufficient'|'insufficient'|'indeterminate';shortfall:number|string|null;minimumShortfall:number|string|null;headroom:number|string|null}>;
  protectedReserves:{completionTokens:number|null;completionCalls:number|null;assessmentTokens:number|null};
  authorization:{live:boolean|null;executionAuthorized:boolean|null;deadline:number|null;spendingPermission:'unchanged';snapshotOnly:true};
  methodology:{minimumComparableObservations:number;expected:string;contingency:string;tokenAccounting:string;monetaryAccounting:string;guaranteed:false};

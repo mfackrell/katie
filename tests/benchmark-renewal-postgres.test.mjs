@@ -12,7 +12,7 @@ import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
- {timeout:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1'||process.env.KATIE_TEST_ORDINARY_HOST==='1')?1500000:180000},async()=>{
+ {timeout:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1'||process.env.KATIE_TEST_ORDINARY_HOST==='1'||process.env.KATIE_TEST_TASK2C==='1')?1500000:180000},async()=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
  const root=mkdtempSync(join(tmpdir(),'katie-continuation-')),data=join(root,'data');
  const clients=[];let started=false;
@@ -79,7 +79,13 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   const account=(await db.query(`insert into benchmark_budget_accounts(experiment_id,trial_id,arm,owner_actor_id,cap_tokens,spent_tokens) values($1,$2,'full',$3,350000,0) returning id`,[exp,trial,actor])).rows[0].id;
   await db.query('set role service_role');
   const created=(await db.query('select benchmark_create_full_game_project($1,$2,$3,$4,$5,$6,$7,$8,$9) p',
-   [project,'continuation-'+project,actor,chat,'Build Take Eleven from approved original issue 650',repo,trial,protocol.baselineSha,'gpt-5.3-codex'])).rows[0].p;
+   [project,'continuation-'+project,actor,chat,process.env.KATIE_TEST_TASK2C==='1'?'Synthetic Task 2C issue #715 regression: repair /pilot state to Recovered with frozen browser acceptance':'Build Take Eleven from approved original issue 650',repo,trial,protocol.baselineSha,'gpt-5.3-codex'])).rows[0].p;
+  if(process.env.KATIE_TEST_TASK2C==='1'){
+   // Frozen synthetic assignment installed before any scope approval. Never changes production scope.
+   const contract={path:'/pilot',scenarios:[{name:'recovered state',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]};
+   const spec={name:'Synthetic recovered state',summary:'Repair an isolated display state',requirements:['The /pilot route displays Recovered in #state','Independent review and browser acceptance pass on the same commit'],allowedPaths:['app/pilot/'],milestones:[{title:'Recovered state',instruction:'Implement and independently verify the frozen display contract',contract}],finalContract:contract};
+   await db.query('update work_projects set spec=$2,baseline_sha=$3 where id=$1',[project,spec,protocol.baselineSha]);
+  }
   if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline(protocol.baselineSha);
   const failedMission=randomUUID();
   await db.query('select create_mission($1,$2,$3,120,null)',[failedMission,'Synthetic failed specification',created.team]);

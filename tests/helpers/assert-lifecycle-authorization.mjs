@@ -24,8 +24,8 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
   checkpointSha:'d'.repeat(40),phase:'repair'};
  const checkpoint=hostFixture?.checkpoint??{...record,scopeHash:initial.binding.scopeHash,runId:'131',releaseSha:'b'.repeat(40)};
  const planned=lifecycleProposalFromSnapshot({snapshot:initial,record,observations:hostFixture?.observations??[]});
- assert.equal(planned.state,'awaiting_owner_approval',JSON.stringify(planned.reasons));assert.equal(planned.proposal.additions.nativeCalls,hostFixture?4:2);
- assert.equal(planned.proposal.proposed.developmentCalls,hostFixture?36:34);
+ assert.equal(planned.state,'awaiting_owner_approval',JSON.stringify(planned.reasons));assert.equal(planned.proposal.additions.nativeCalls,4);
+ assert.equal(planned.proposal.proposed.developmentCalls,36);
  assert.equal(planned.proposal.proposed.completionCalls,4);
  const offer=async(p=planned.proposal)=>(await db.query('select benchmark_lifecycle_offer($1,$2,$3) p',[task,p,checkpoint])).rows[0].p;
  const saved=await offer();assert.equal((await offer()).id,saved.id);
@@ -60,7 +60,7 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions')).rows[0].n,1);
  assert.equal((await db.query(decision,args)).rows[0].r.continuationId,approved.continuationId);
  const after=await snapshot();assert.deepEqual(after.snapshot.calls,initial.snapshot.calls);assert.deepEqual(after.snapshot.exposures,initial.snapshot.exposures);
- assert.equal(after.position.developmentConsumedCalls,28);assert.equal(after.position.developmentCalls,hostFixture?36:34);
+ assert.equal(after.position.developmentConsumedCalls,28);assert.equal(after.position.developmentCalls,36);
  assert.equal((await db.query('select benchmark_continuation_live($1,$2,$3) ok',[approved.continuationId,account,project])).rows[0].ok,true);
  const amendment=(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[approved.continuationId])).rows[0];
  const claims=await Promise.all([db.query('select benchmark_claim_development_amendment($1,$2) ok',[amendment.id,args[4]]),rival.query('select benchmark_claim_development_amendment($1,$2) ok',[amendment.id,args[4]])]);
@@ -79,7 +79,13 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
   await assert.rejects(db.query('insert into benchmark_budget_calls(account_id,request_key,model,reserved_tokens,legacy_mission_call_id,continuation_id) values($1,$2::uuid::text,$3,$4,$2::uuid,$5)',[account,call,model,tokens,approved.continuationId]),/Protected lifecycle account reserves/);await db.query('rollback');
  }
  await assert.rejects(db.query(reserve,[grant.token_digest,trial,grant.execution_epoch,randomUUID(),'gpt-5.3-codex',100]),/unauthorized/);
- // Three competing reservations share only two newly authorized native slots.
+ // Four fresh-phase requests were approved. Complete two legitimate requests
+ // first, then race three reservations for the exact two remaining native slots.
+ for(let n=0;n<2;n++){
+  const id=(await db.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',100])).rows[0].id;
+  const linked=(await db.query('select legacy_mission_call_id id from benchmark_budget_calls where id=$1',[id])).rows[0].id;
+  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-fresh-phase-'+id,{input_tokens:60,output_tokens:10,total_tokens:70}]);
+ }
  const reservations=await Promise.allSettled([db,rival,db].map(connection=>connection.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',100])));
  assert.equal(reservations.filter(r=>r.status==='fulfilled').length,2);
  assert.equal(reservations.filter(r=>r.status==='rejected').length,1);
@@ -90,7 +96,7 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-lifecycle-'+id,{input_tokens:60,output_tokens:10,total_tokens:70}]);
  }
  await assert.rejects(db.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',1]),/closure/);
- assert.equal((await db.query('select calls from agent_missions where id=$1',[mission])).rows[0].calls,30);
+ assert.equal((await db.query('select calls from agent_missions where id=$1',[mission])).rows[0].calls,32);
  await (await import('./assert-renewal-completion-lifecycle.mjs')).assertRenewalCompletionLifecycle(db,{project,mission,task,c:{id:approved.continuationId,planHash:after.snapshot.continuation.plan_hash},cumulativeCap:after.position.cumulativeTokens});
  await db.query('reset role');await db.query('set role authenticated');
  await assert.rejects(db.query(decision,args),/permission denied/);
