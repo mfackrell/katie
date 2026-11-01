@@ -11,7 +11,7 @@ import { contentText, documentSchema, normalizedText, parseDocument } from '../l
 import { documentRequest, answeredDocumentRequest } from '../lib/documents/intent';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
-import { produceDocument } from '../lib/documents/production';
+import { produceDocument, shouldStopForReadingOrder } from '../lib/documents/production';
 import { generateDocx } from '../lib/documents/generate';
 import { renderDocument } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
@@ -104,6 +104,20 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     if (oldKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = oldKey;
     await new Promise<void>((resolve, reject) => storageServer.close(error => error ? reject(error) : resolve()));
   }
+});
+
+test('initial overfull pagination may retry once, but final PDF fidelity always fails closed', () => {
+  const reading = { rule: 'reading-order' as const, page: 0, detail: 'Mismatch' };
+  const overflow = { rule: 'overflow' as const, page: 1, detail: 'First page clipped' };
+  const pageCount = { rule: 'page-count' as const, page: 0, detail: 'Too many pages' };
+  const whitespace = { rule: 'whitespace' as const, page: 1, detail: 'Empty' };
+  assert.equal(shouldStopForReadingOrder([reading], 0), true, 'never accept an otherwise clean PDF with mismatched text');
+  assert.equal(shouldStopForReadingOrder([reading, whitespace], 0), true, 'whitespace alone cannot excuse a fidelity mismatch');
+  assert.equal(shouldStopForReadingOrder([reading, overflow], 0), false, 'first pass can repaginate clipped text');
+  assert.equal(shouldStopForReadingOrder([reading, pageCount], 0), false, 'first pass can repaginate incorrect page count');
+  assert.equal(shouldStopForReadingOrder([reading, overflow], 1), true, 'mismatch after repair must stop delivery');
+  assert.equal(shouldStopForReadingOrder([overflow], 0), false);
+  assert.equal(shouldStopForReadingOrder([], 1), false);
 });
 
 test('bounded document grammar preserves supplied content and rejects executable layouts', () => {

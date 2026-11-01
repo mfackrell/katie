@@ -13,6 +13,14 @@ export type VisualReport = z.infer<typeof visualReportSchema>;
 export type VisualInspector = (rendered: RenderedDocument, attempt: number) => Promise<VisualReport>;
 export type ProductionResult = { docx: Buffer; pdf: Buffer; images: Buffer[]; inspection: Inspection; corrections: number; attempts: Array<{ findings: Inspection['findings']; visual?: VisualReport }> };
 
+/** The first overfull layout is only a measuring pass, not an acceptable PDF.
+ * Reading-order differences caused by clipping can be rechecked once after
+ * pagination. A clean-layout mismatch or any post-reflow mismatch is fatal. */
+export function shouldStopForReadingOrder(findings: Inspection['findings'], attempt: number): boolean {
+  if (!findings.some(f => f.rule === 'reading-order')) return false;
+  return attempt !== 0 || !findings.some(f => f.rule === 'overflow' || f.rule === 'page-count');
+}
+
 /** Reusable, provider-independent workflow. Tests must supply an inspector of actual rendered bytes. */
 export async function produceDocument(input: {
   spec: DocumentSpec; browser: Browser; inspect: VisualInspector; deadlineMs: number;
@@ -43,7 +51,20 @@ export async function produceDocument(input: {
         layout = { ...layout, spacing: Math.min(10, layout.spacing + 2) }; continue;
       }
     }
-    if (record.findings.some(f => f.rule === 'reading-order')) throw new Error('Text fidelity or ATS reading-order validation failed. No files delivered.');
+    // An intentionally overfull initial page can produce a truncated or reordered
+    // intermediate PDF. Try the normal, bounded pagination repair ONCE before
+    // requiring exact text fidelity on the re-rendered final candidate.
+    // No PDF can be delivered unless the final inspection has zero findings.
+    if (shouldStopForReadingOrder(record.findings, attempt)) {
+      const expected = rendered.inspection.extractedText;
+      // Record only bounded diagnostic counts, never private document text.
+      console.warn('[Document Fidelity] final reading-order mismatch', {
+        attempt, sourceChars: spec.blocks.reduce((n, b) => n + (b.kind === 'table' ? b.rows.flat().join(' ').length : b.text.length), 0),
+        extractedChars: expected.length, pages: rendered.images.length,
+        findings: record.findings.map(f => f.rule),
+      });
+      throw new Error('Text fidelity or ATS reading-order validation failed. No files delivered.');
+    }
     const minimum = Math.max(1, Math.ceil(rendered.heights.reduce((a, b) => a + b, 0) / ((PAGE.height - 2 * PAGE.margin - 12) * 96 / 72)));
     const pages = spec.targetPages ?? Math.min(PAGE.maxPages, minimum);
     layout = paginate(spec, rendered.heights, pages, layout.spacing);
