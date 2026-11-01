@@ -2,6 +2,7 @@ import {encodeDeveloperHandoff,readDeveloperHandoff} from '../../scripts/benchma
 // Nonbillable qualification only. Production host/recovery/admission code with
 // synthetic provider and GitHub transports, disposable Git and PostgreSQL state.
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {createServer} from 'node:http';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,cpSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -98,10 +99,20 @@ export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
   for(const old of history)assert.deepEqual(await one('benchmark_budget_calls','id',old.id),old);
   const mission=await one('agent_missions','id',ids.mission);assert.equal(mission.calls+mission.routing_calls,ordinary?15:32);
   const browser=JSON.parse(readFileSync(join(runtime,'qualification-browser-acceptance.json')));assert.equal(browser.passed,true);assert.equal(browser.headSha,completed.reviewedHeadSha);
+  const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const retained=await Promise.all(history.map(old=>one('benchmark_budget_calls','id',old.id)));
+  assert.equal(digest(retained),digest(history));
+  writeFileSync(join(runtime,'continuation-report.json'),JSON.stringify({version:1,syntheticConsentOnly:true,paidInference:false,
+   authorityKind:ordinary?'ordinary-developer':'benchmark',taskId:ids.task,projectId:ids.project,accountId:ids.account,
+   baseline,scopeHash:fixture.record.approvedScopeHash,contract:context.contract,checkpoint:fixture.record,
+   amendmentApprovalId:amendment.approval_id,phases,historicalCalls:history.length,historicalAccountingBefore:digest(history),historicalAccountingAfter:digest(retained),
+   callsAfter:mission.calls+mission.routing_calls,protectedCompletionCalls:4,
+   sourceSha256:createHash('sha256').update(readFileSync(join(workspace,'app/pilot/page.tsx'))).digest('hex'),
+   completed,browser,limitations:['Synthetic provider and GitHub transports; actual PostgreSQL, pinned SDK and isolated host.','Host engineering completion is not final project assessment or Task 2C acceptance.']},null,2));
   console.log('LIFECYCLE_SAME_TASK_HOST_PASS: synthetic owner consent, original repair restored, implementation/review not repeated, four approved synthetic native requests, historical receipts unchanged, four completion calls protected, real isolated verification and Chromium passed');
  }finally{
   if(host)host.kill('SIGKILL');await new Promise(r=>server.close(r));
-  if(process.env.RUNNER_TEMP){const output=join(process.env.RUNNER_TEMP,ordinary?'ordinary-lifecycle-qualification':'lifecycle-qualification');mkdirSync(output,{recursive:true});writeFileSync(join(output,'host.log'),log);for(const name of['native-metered-review.json','native-metered-review.json.diagnostics.json','qualification-browser-acceptance.json','qualification-verifier-tail.json'])if(existsSync(join(runtime,name)))cpSync(join(runtime,name),join(output,name));}
+  if(process.env.RUNNER_TEMP){const output=join(process.env.RUNNER_TEMP,ordinary?'ordinary-lifecycle-qualification':'lifecycle-qualification');mkdirSync(output,{recursive:true});writeFileSync(join(output,'host.log'),log);for(const name of['continuation-report.json','native-metered-review.json','native-metered-review.json.diagnostics.json','qualification-browser-acceptance.json','qualification-verifier-tail.json'])if(existsSync(join(runtime,name)))cpSync(join(runtime,name),join(output,name));}
   rmSync(root,{recursive:true,force:true});
  }
 }
