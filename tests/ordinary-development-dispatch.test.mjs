@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {stripTypeScriptTypes} from 'node:module';
+import vm from 'node:vm';
+const source=readFileSync('lib/agents/development.ts','utf8');
+test('ordinary continuation waits for dispatch and cannot consume the predecessor failure',async()=>{
+ const start=source.indexOf('export async function reconcileDevelopment('),end=source.indexOf('  const client = github(), binding = await repository(task);',start);
+ const prefix=stripTypeScriptTypes(source.slice(start,end).replace('export async','async')+'return task;}');
+ let persisted;
+ const reconcile=vm.runInNewContext(prefix+';reconcileDevelopment',{save:async(task,status,detail,external)=>{persisted={status,detail};return {...task,status,external};},Date});
+ const task={id:'original',status:'dispatching',external:{developerApprovalId:'child',lifecycleProposalId:'proposal',receipt:{run_id:101}}};
+ await reconcile(task,{});assert.match(persisted.detail,/Waiting for the authenticated ordinary resource dispatch/);
+ const guard=source.split('\n').find(line=>line.includes('run.created_at')&&line.includes('developerDispatchSince'));
+ const filter=new Function('task','runs',stripTypeScriptTypes('function filter(){const accepted=[];for(const run of runs){'+guard+';accepted.push(run.id);}return accepted;}')+'return filter();');
+ Object.assign(task.external,{developerDispatchSince:'2026-11-01T12:00:00Z',developerReleaseSha:'new'});
+ const old={id:101,created_at:'2026-11-01T11:00:00Z',head_sha:'old',event:'workflow_dispatch',status:'completed'};
+ assert.deepEqual(filter(task,[old]),[],'a pending successor cannot reuse the only completed predecessor');
+ assert.deepEqual(filter(task,[{...old,created_at:'2026-11-01T12:01:00Z',head_sha:'new'}]),[],'old receipt identity remains excluded');
+ assert.deepEqual(filter(task,[{...old,id:102,created_at:'2026-11-01T12:01:00Z',head_sha:'new',event:'issues'}]),[]);
+ assert.deepEqual(filter(task,[{...old,id:102,created_at:'2026-11-01T12:01:00Z',head_sha:'new'}]),[102]);
+});

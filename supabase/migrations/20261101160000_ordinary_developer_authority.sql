@@ -214,8 +214,9 @@ begin
   then raise exception 'Initial resource proposal exceeds existing project token authority';end if;
  -- These are explicit proposed native/$ authority, not inherited permissions.
  p:=jsonb_build_object('version','ordinary-native-authorization-v1','kind','proposal_not_authorization',
-  'binding',s->'snapshot'->'binding','taskId',p_task,'ownerId',p_owner,
-  'snapshotHash',s->>'snapshotHash','scope',s->'snapshot'->'project'->'completion_contract',
+  'binding',(s->'snapshot'->'binding')||jsonb_build_object('taskId',p_task),'taskId',p_task,'ownerId',p_owner,
+  'snapshotHash',s->>'snapshotHash','scope',jsonb_build_object('specification',s->'snapshot'->'project'->'spec','taskContract',s->'snapshot'->'binding'->'contract'),
+  'remaining',jsonb_build_array('implementation','independent_review','repair_if_required','verification','final_review','completion','assessment'),'historicalNativeSpendingMicrousd','0',
   'current',jsonb_build_object('nativeAuthorityEstablished',false,'nativeCalls',null,'ceilingMicrousd',null,
    'projectTokens',s->'snapshot'->'project'->'token_allowance','projectEncumberedTokens',s->'snapshot'->'projectEncumberedTokens'),
   'proposed',p_limits,'model',p_model,'guaranteedCompletion',false,
@@ -565,11 +566,13 @@ begin
   or coalesce(p_release,'')!~'^[a-f0-9]{40}$' or exists(select 1 from benchmark_native_spending_approvals where previous_developer_approval_id=a.id)
   then return false;end if;
  s:=developer_task_binding(a.owner_id,a.task_id);
- if exists(select 1 from project_events where project_id=a.project_id and event='developer_native_dispatch_claimed' and data->>'approvalId'=a.id::text)
+ if a.developer_authority->'binding' is distinct from s->'binding'
+  or a.developer_authority->'completionContract' is distinct from s->'project'->'completion_contract'
+  or exists(select 1 from project_events where project_id=a.project_id and event='developer_native_dispatch_claimed' and data->>'approvalId'=a.id::text)
   or exists(select 1 from benchmark_budget_calls where account_id=a.account_id and state<>'settled')
   or s->'project'->>'status'<>'running' or s->'mission'->>'status'<>'running' then return false;end if;
  insert into project_events(project_id,event,data) values(a.project_id,'developer_native_dispatch_claimed',jsonb_build_object('approvalId',a.id,'taskId',a.task_id,'releaseSha',p_release));
- update agent_tasks set status='dispatching',external=external||jsonb_build_object('developerApprovalId',a.id,'developerReleaseSha',p_release,'developerDispatchSince',clock_timestamp()),updated_at=now() where id=a.task_id;
+ update agent_tasks set status='dispatching',external=external||jsonb_build_object('developerApprovalId',a.id,'developerReleaseSha',p_release,'developerDispatchSince',clock_timestamp(),'attempted',true,'dispatchStartedAt',clock_timestamp()),updated_at=now() where id=a.task_id;
  update mission_assignments set status='waiting_external',lease=null,lease_until=null,available_at=now(),updated_at=now() where id=a.task_id;
  return true;
 end $$;
@@ -681,3 +684,74 @@ create trigger developer_approval_history before delete on benchmark_native_spen
 create trigger developer_grant_history before delete on benchmark_execution_grants for each row execute function developer_history_delete_guard();
 create trigger developer_mission_history before delete on benchmark_mission_bindings for each row execute function developer_history_delete_guard();
 revoke all on function developer_history_delete_guard() from public,anon,authenticated,service_role;
+
+-- Prepare original authority from existing project allocation, with an explicit
+-- new monetary ceiling. This is a proposal only; no grant or budget is changed.
+create function developer_prepare_initial(p_owner uuid,p_task uuid) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare s jsonb;m jsonb;p jsonb;price model_registry;tokens bigint;duration integer;rate numeric;
+begin
+ s:=developer_initial_snapshot(p_owner,p_task);m:=s->'snapshot'->'mission';p:=s->'snapshot'->'project';
+ select * into price from model_registry where provider_name='openai' and model_id='gpt-5.3-codex';
+ if price.pricing_status is distinct from 'verified' or price.pricing_verified_at is null
+  or price.pricing_verified_at<clock_timestamp()-interval '24 hours'
+  or price.pricing_verified_at>clock_timestamp() or price.pricing_input_per_1m<=0 or price.pricing_output_per_1m<=0
+  then raise exception 'Verified native pricing required for original authority proposal';end if;
+ rate:=greatest(price.pricing_input_per_1m,price.pricing_output_per_1m);
+ if rate is null or rate>28 then raise exception 'Native conservative pricing bound unsupported';end if;
+ tokens:=(m->>'token_allowance')::bigint+60000;
+ duration:=least(86400,floor(extract(epoch from (p->>'deadline')::timestamptz-(p->>'created_at')::timestamptz))::integer);
+ if (m->>'token_allowance')::bigint<=60000 or (m->>'max_calls')::integer<8
+  or tokens>(p->>'token_allowance')::bigint-(s->'snapshot'->>'projectEncumberedTokens')::bigint or duration<60
+  then raise exception 'Existing ordinary allocation cannot establish protected native lifecycle authority';end if;
+ return developer_offer_initial(p_owner,p_task,jsonb_build_object(
+  'cumulativeTokens',tokens,'developmentTokens',(m->>'token_allowance')::bigint,
+  'developmentCalls',(m->>'max_calls')::integer,'completionTokens',60000,'completionCalls',4,
+  'assessmentTokens',60000,'assessmentCalls',4,'perCallMicrousd',ceil((m->>'token_allowance')::numeric*rate),
+  'ceilingMicrousd',ceil(tokens*rate),'durationSeconds',duration),'gpt-5.3-codex');
+end $$;
+create function developer_next_initial_task(p_owner uuid,p_chat uuid default null) returns uuid
+language plpgsql security definer set search_path=public as $$
+declare candidate record;
+begin
+ for candidate in select t.id from agent_tasks t join mission_assignments j on j.id=t.id
+ join agent_missions m on m.id=j.mission_id join work_projects p on p.id=m.project_id
+ where j.role='development' and p.active_mission_id=m.id and p.phase='development' and p.status='running'
+ and (p_chat is null or p.chat_id=p_chat) and standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
+ and not exists(select 1 from benchmark_full_project_bindings where project_id=p.id)
+ and not exists(select 1 from benchmark_native_spending_approvals where task_id=t.id)
+ order by t.created_at desc limit 8 loop
+  begin perform developer_initial_snapshot(p_owner,candidate.id);return candidate.id;
+  exception when others then continue;end;
+ end loop;
+ return null;
+end $$;
+revoke all on function developer_prepare_initial(uuid,uuid),developer_next_initial_task(uuid,uuid) from public,anon,authenticated,service_role;
+grant execute on function developer_prepare_initial(uuid,uuid),developer_next_initial_task(uuid,uuid) to service_role;
+
+create function developer_bound_mission_authority(p_mission uuid) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare b benchmark_mission_bindings;a jsonb;
+begin
+ select * into b from benchmark_mission_bindings where mission_id=p_mission and developer_project_id is not null;
+ if b.mission_id is null then return null;end if;
+ a:=developer_current_mission_authority(p_mission);
+ return jsonb_build_object('bound',true,'live',a is not null,'model',a->>'model','accountId',b.account_id);
+end $$;
+create function developer_bind_assessment_account() returns trigger
+language plpgsql security definer set search_path=public as $$
+declare a benchmark_budget_accounts;p work_projects;
+begin
+ if new.project_id is null or new.project_kind<>'assessment' then return new;end if;
+ select * into a from benchmark_budget_accounts where developer_project_id=new.project_id;
+ if a.id is null then return new;end if;
+ select * into p from work_projects where id=new.project_id;
+ insert into benchmark_mission_bindings(mission_id,account_id,experiment_id,baseline_sha,developer_project_id)
+ values(new.id,a.id,null,p.baseline_sha,p.id) on conflict(mission_id) do nothing;
+ if not exists(select 1 from benchmark_mission_bindings where mission_id=new.id and account_id=a.id and developer_project_id=p.id) then raise exception 'Assessment canonical account binding differs';end if;
+ return new;
+end $$;
+create trigger developer_assessment_account after insert or update of project_id,project_kind on agent_missions
+ for each row execute function developer_bind_assessment_account();
+revoke all on function developer_bound_mission_authority(uuid),developer_bind_assessment_account() from public,anon,authenticated,service_role;
+grant execute on function developer_bound_mission_authority(uuid) to service_role;

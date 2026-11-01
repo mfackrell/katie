@@ -27,3 +27,16 @@ test('missing snapshot preserves already known revoked authority',async()=>{
  const result=await readOrdinaryLifecycleCapacity(f);assert.ok(result.uncertainties.includes('ordinary_authoritative_snapshot_unavailable'));
  assert.equal(result.authorization.live,false);assert.equal(result.authorization.executionAuthorized,false);assert.equal(result.status,'insufficient');
 });
+
+test('ordinary forecast uses only reconciled measured multi-call phase observations',async()=>{
+ const f=fixture();f.observations=[];f.snapshot.snapshot.calls=[];
+ for(let i=0;i<3;i++){
+  const operationIds=Array.from({length:3},(_,j)=>'call-'+i+'-'+j);
+  f.snapshot.snapshot.calls.push(...operationIds.map(id=>({id,state:'settled',model:f.approval.model,provider_usage:{input_tokens:3,output_tokens:2}})));
+  f.observations.push({id:'phase-'+i,stage:'repair',source:'verified_phase_receipts',cohort:f.project.approved_hash,binding:{projectId:f.project.id,scopeHash:f.project.approved_hash},completed:true,calls:3,inputTokens:9,outputTokens:6,seconds:5,operationIds});
+ }
+ const result=await readOrdinaryLifecycleCapacity(f);
+ assert.equal(result.stages.find(s=>s.stage==='repair').metrics.calls.projected,3);
+ f.observations[0].inputTokens=999;
+ const invalid=await readOrdinaryLifecycleCapacity(f);assert.equal(invalid.stages.find(s=>s.stage==='repair').metrics.calls.projected,null);
+});

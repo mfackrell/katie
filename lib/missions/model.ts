@@ -22,10 +22,10 @@ async function fullProjectBinding(claim:Claim):Promise<FullBinding|null>{
  if(!claim.mission.project_id)return null;
  return loadFullBenchmarkBinding(getSupabaseAdminClient(),claim.mission.project_id,process.env);
 }
-function fullBenchmarkAccounting(claim:Claim){
+function fullBenchmarkAccounting(claim:Claim,ordinary=false){
  return {
   reserve:async(model:string,tokens:number,routing:boolean,callId=randomUUID())=>{
-   if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')throw Error('Full benchmark paid execution is disabled');
+   if(!ordinary&&process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')throw Error('Full benchmark paid execution is disabled');
    const receipt=await rpc<string|null>('benchmark_reserve_mission_call',{p_job:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:model,p_tokens:tokens,p_routing:routing});
    if(!receipt)throw new MissionModelFailure('Full benchmark account denied atomic model-call admission',{admissionDenied:true,admissionReason:'atomic_benchmark_gate',requestedTokens:tokens});
    return callId;
@@ -49,6 +49,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  const fullBinding=await fullProjectBinding(claim);
+ const ordinaryAuthority=claim.mission.project_id?await rpc<{bound:boolean;live:boolean;model:string}|null>('developer_bound_mission_authority',{p_mission:claim.mission.id}):null;
+ const ordinary=Boolean(ordinaryAuthority?.bound);
+ if(ordinary&&(!ordinaryAuthority?.live||ordinaryAuthority.model!=='gpt-5.3-codex'||process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'))throw Error('Ordinary lifecycle authority is unavailable; no generic fallback permitted');
+ const metered=Boolean(fullBinding)||ordinary;
  if(fullBinding&&process.env.KATIE_FULL_BENCHMARK_DISPATCH!=='enabled')
   throw Error('Full benchmark dispatch is disabled for this project; no generic model route is permitted');
  if(fullBinding&&(fullBinding.model!=='gpt-5.3-codex'||fullBinding.baseline_sha!=='0015bcdb8ac9ad94b7c74d1a4cd76737903b1319'))
@@ -57,7 +61,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   throw Error('Full benchmark paid execution is disabled');
  // Take Eleven's frozen tool profile has no premium/search tools. Its supplied
  // issue and contract are sufficient evidence for every DO phase.
- const effectiveTools=fullBinding?'none':tools;
+ const effectiveTools=metered?'none':tools;
  const executionDeadline=missionExecutionDeadline(claim);
  const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
  const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,...(reviewFormat?{reviewFormat}:{}),objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
@@ -68,16 +72,16 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${effectiveTools}. Complete input size: ${instruction.length+input.length} characters; select a model with sufficient context capacity. `+
   (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
   (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
-  requestId:claim.job.id,accounting:fullBinding?{
-   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));return fullBenchmarkAccounting(claim).reserve(model,tokens,true);},
+  requestId:claim.job.id,accounting:metered?{
+   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));return fullBenchmarkAccounting(claim,ordinary).reserve(model,tokens,true);},
    finish:async(id,tokens,receipt)=>{
     if(receipt){if(!receipt.id||!receipt.usage)throw Error('Full routing provider receipt missing');await rpc('benchmark_reconcile_provider_usage',{p_call:id,p_provider_request:receipt.id,p_usage:receipt.usage,p_linked:true});}
-    else await fullBenchmarkAccounting(claim).finish(id,tokens);
+    else await fullBenchmarkAccounting(claim,ordinary).finish(id,tokens);
    }
   }:{
    reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
-  },fixedModel:fullBinding?{provider:'openai',modelId:'gpt-5.3-codex'}:undefined,research:effectiveTools==='research',review:claim.job.role==='review',
+  },fixedModel:metered?{provider:'openai',modelId:'gpt-5.3-codex'}:undefined,research:effectiveTools==='research',review:claim.job.role==='review',
   // The server already knows specification writing is architecture/planning.
   // Avoid paying a second classifier to rediscover this known phase.
   planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)),
@@ -93,14 +97,14 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
   try{
    let result:ModelResult;
-   try{result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,Boolean(fullBinding));}
+   try{result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,metered,ordinary);}
    catch(error){
     if(error instanceof MissionModelFailure&&typeof error.partial.partialText==='string')incomplete=error.partial;
     if(!(error instanceof MissionModelFailure)||error.partial.incompleteReason!=='max_output_tokens'||!String(error.partial.partialText??'').trim()||expandedOutputTokens||Number(error.partial.outputTokenLimit)>=12000)throw error;
     // One capacity correction on the selected model, within the same ledger and
     // wall-clock window. Never rotate through providers with an identical cap.
     expandedOutputTokens=Math.min(12000,Number(error.partial.outputTokenLimit)*2);
-    result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,Boolean(fullBinding));
+    result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,metered,ordinary);
    }
    const complete={...result,requestedExecutionEffort:claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string'?'low':['compose','revise'].includes(claim.job.role)&&claim.mission.project_kind!=='specification'?'medium':undefined,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
    if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
@@ -134,7 +138,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat,fullBenchmark=false):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat,fullBenchmark=false,ordinary=false):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const specificationV2=(claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget?.version===2;
@@ -172,7 +176,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
   await assertSpecificationStageCapacity(claim,reserve);
   const admitted=fullBenchmark
-   ?await fullBenchmarkAccounting(claim).reserve(choice.provider.name+':'+selectedModel,reserve,false,callId)
+   ?await fullBenchmarkAccounting(claim,ordinary).reserve(choice.provider.name+':'+selectedModel,reserve,false,callId)
    :await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve});
   if(!admitted)await explainAdmissionDenial(claim,reserve);
   const started=Date.now();
@@ -229,7 +233,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    }
    return{text,sources,calculations,model:selectedModel};
   }catch(error){
-   if(fullBenchmark)await fullBenchmarkAccounting(claim).finish(callId,rejectedBeforeInference(error)?0:null).catch(()=>{});
+   if(fullBenchmark)await fullBenchmarkAccounting(claim,ordinary).finish(callId,rejectedBeforeInference(error)?0:null).catch(()=>{});
    else await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
    console.warn('[Missions] Provider attempt ended',{jobId:claim.job.id,callId,provider:choice.provider.name,model:selectedModel,durationMs:Date.now()-started,reservedTokens:reserve,countMethod:counted?'provider':'conservative-bytes',error:error instanceof Error?error.message.slice(0,350):'Unknown provider failure'});
    throw error;

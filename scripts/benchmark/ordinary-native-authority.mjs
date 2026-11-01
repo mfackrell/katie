@@ -20,7 +20,7 @@ export async function readOrdinaryNativeAuthority({db,proof,approval,project,acc
 
 import {assessLifecycleCapacity,STAGES} from './lifecycle-capacity.mjs';
 import {capacityProgress} from './native-capacity-forecast.mjs';
-export async function readOrdinaryLifecycleCapacity({db,task,project,approval,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,now=Date.now()}){
+export async function readOrdinaryLifecycleCapacity({db,task,project,approval,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,observations=[],now=Date.now()}){
  const binding={taskId:task.id,projectId:project.id,baselineSha:context.baselineSha,scopeHash:project.approved_hash,contractHash:context.contractHash};
  const progress=capacityProgress({binding,recovery,phase,completedStages,notRequiredStages});
  const input={binding,progress,observedAt:now,cohort:binding.scopeHash,work:{repairIterations:progress.completedStages.includes('repair')||progress.notRequiredStages.includes('repair')?0:1,additionalRepairIterations:0},observations:[],pricing:{},
@@ -35,6 +35,14 @@ export async function readOrdinaryLifecycleCapacity({db,task,project,approval,co
    tokens:{cumulativeLimit:p.cumulativeTokens,accountEncumbered:p.accountEncumberedTokens,developmentLimit:p.developmentTokens,developmentEncumbered:p.developmentEncumberedTokens,completionReserveRemaining:p.completionTokens,assessmentReserveRemaining:p.assessmentTokens},
    calls:{developmentLimit:p.developmentCalls,developmentConsumed:p.developmentConsumedCalls,completionReserveRemaining:p.completionCalls,assessmentLimit:p.assessmentCalls,assessmentConsumed:p.assessmentConsumedCalls},
    money:{complete:true,ceilingMicrousd:p.ceilingMicrousd,exposureMicrousd:s.exposureMicrousd}};
+  const seen=new Set();
+  input.observations=observations.filter(o=>{
+   if(!Array.isArray(o.operationIds)||!o.operationIds.length||o.operationIds.length!==o.calls||new Set(o.operationIds).size!==o.calls)return false;
+   const rows=o.operationIds.map(id=>s.snapshot.calls?.find(c=>c.id===id));
+   if(rows.some(c=>!c||c.state!=='settled'||c.model!==approval.model||!c.provider_usage||seen.has(c.id)))return false;
+   if(rows.reduce((n,c)=>n+c.provider_usage.input_tokens,0)!==o.inputTokens||rows.reduce((n,c)=>n+c.provider_usage.output_tokens,0)!==o.outputTokens)return false;
+   rows.forEach(c=>seen.add(c.id));return true;
+  });
   input.pricing.native=s.pricing;
   return assessLifecycleCapacity(input);
  }catch{

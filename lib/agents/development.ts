@@ -1,3 +1,4 @@
+import {encodeDeveloperHandoff,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
@@ -98,14 +99,15 @@ function github() {
 
 // Nonbillable: authenticate Task 1 evidence before proposing/approving authority.
 // No provider request, dispatcher or mutation of historical recovery records.
-export async function authenticatedLifecycleCheckpoint(taskId:string){
+export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string){
  const task=await readTask(taskId),context=await getDevelopmentProjectContext(taskId);
- if(!context||!task.repository_full_name||task.status!=='blocked')throw Error('A blocked original development task is required');
+ if(!context||!task.repository_full_name||(task.status!=='blocked'&&!(approvedContinuation&&task.status==='dispatching')))throw Error('A blocked original development task is required');
  const db=getSupabaseAdminClient(),client=github();
  const one=async(table:string,id:string)=>{const r=await db.from(table).select('*').eq('id',id).maybeSingle<Record<string,unknown>>();if(r.error||!r.data)throw Error('Required lifecycle evidence unavailable');return r.data;};
  const project=await one('work_projects',context.projectId);
  const snap=await db.rpc<LifecycleSnapshot>('benchmark_lifecycle_snapshot',{p_task:taskId});
  if(snap.error||!snap.data)throw Error('Authoritative lifecycle snapshot unavailable');
+ if(approvedContinuation&&(snap.data.authorityKind!=='ordinary-developer'||snap.data.approvalId!==approvedContinuation))throw Error('Continuation approval changed');
  let releaseSha='';
  const reader=async(path:string,binary=false)=>{
   if(!path.startsWith('/repos/'+task.repository_full_name+'/actions/'))throw Error('Recovery endpoint rejected');
@@ -192,6 +194,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
     const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
+    if(!fullBinding)return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
     if(fullBinding){
       if(!fullDispatchEnabled||!nativeDispatchEnabled)
         throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');
@@ -668,7 +671,61 @@ async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAd
 }
 
 // Dispatch only a separately authenticated, append-only owner development renewal.
+export async function qualifiedOrdinaryDevelopmentRelease(){
+ const release=process.env.VERCEL_GIT_COMMIT_SHA;
+ if(process.env.VERCEL_ENV!=='production'||!release||!/^[a-f0-9]{40}$/.test(release))return null;
+ const client=github(),binding={owner:'mfackrell',repo:'katie'};
+ const {data:main}=await client.repos.getCommit({...binding,ref:'main'});if(main.sha!==release)return null;
+ const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
+ return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
+}
+async function dispatchOrdinaryNativeDevelopment(){
+ if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
+ const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+ if(!key||key.length<32)return false;
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).order('created_at',{ascending:false}).limit(8).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown}}>();
+ if(rows.error)throw Error('Ordinary authority inspection unavailable');
+ if(!rows.data?.length)return false;
+ const release=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
+ for(const a of rows.data){
+  if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
+  const task=await readTask(a.task_id),c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
+  if(a.previous_developer_approval_id){
+   const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
+   if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+  }
+  const client=github(),binding=await repository(task);
+  const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
+  if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
+  const proof:DeveloperDispatchPayload={authorityKind:'ordinary-developer',taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
+  const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
+  const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
+  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
+  const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
+  const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
+  const issue=Number(task.external.issueNumber);
+  if(a.previous_developer_approval_id){
+   if(!Number.isSafeInteger(issue)||issue<1)continue;
+   const existing=await client.issues.get({...binding,issue_number:issue});
+   if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!unpackDevelopmentRequest(existing.data.body??'').startsWith(marker(task)+'\n'))continue;
+  }else if(task.external.attempted||task.external.issueNumber)continue;
+  const claim=await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});if(claim.error||claim.data!==true)continue;
+  const claimed=await readTask(task.id);
+  // An uncertain external acceptance retains the single dispatch claim. Never retry creation automatically.
+  if(a.previous_developer_approval_id){
+   await client.issues.update({...binding,issue_number:issue,body});
+   await client.actions.createWorkflowDispatch({...binding,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
+   await save(claimed,'submitted','Owner-authorized original task continuation dispatched.',{...claimed.external,attempted:true,developerDispatchRunPending:true});
+  }else{
+   const created=await client.issues.create({...binding,title:'[agent] '+task.input.split('\n')[0].slice(0,180),body});
+   await save(claimed,'submitted','Original owner-authorized Developer task dispatched.',{...claimed.external,attempted:true,issueNumber:created.data.number,issueUrl:created.data.html_url,repository:binding.fullName});
+  }
+  return true;
+ }
+ return false;
+}
 export async function dispatchOwnerRenewedNativeDevelopment() {
+ if(await dispatchOrdinaryNativeDevelopment())return true;
  const release=process.env.VERCEL_GIT_COMMIT_SHA;
  if(process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT!=='production'||process.env.KATIE_FULL_BENCHMARK_DISPATCH!=='enabled'||
     process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'||!release||!/^[a-f0-9]{40}$/.test(release))return false;
@@ -726,6 +783,7 @@ export async function dispatchOwnerRenewedNativeDevelopment() {
 export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcceptanceBinding, assignmentLease?:string) {
   const persist=(current:AgentTask,status:string,detail:string|null,external=current.external)=>save(current,status,detail,external,assignmentLease);
   if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
+  if(task.external.developerApprovalId&&!task.external.developerDispatchSince)return persist(task,task.status,'Waiting for the authenticated ordinary resource dispatch; original checkpoint and receipt remain preserved.');
   const deadline = Date.now() + 60_000;
   if (!["submitted", "dispatching", "ready", "blocked"].includes(task.status)) return task;
   if(!task.external.ownerSuccessorConsentId&&task.external.resourceAmendmentId&&!task.external.resourceAmendmentSince)return persist(task,task.status,'Waiting for the owner-approved resource amendment dispatch; original failed attempts remain recorded.');
@@ -757,6 +815,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   const runs = await client.actions.listWorkflowRuns({ owner: binding.owner, repo: binding.repo, workflow_id: workflowId, per_page: 20 });
   for (const run of runs.data.workflow_runs) {
     if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
+    if(typeof task.external.developerDispatchSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.developerDispatchSince)||run.head_sha!==task.external.developerReleaseSha||(task.external.lifecycleProposalId&&(run.event!=='workflow_dispatch'||run.id===(task.external.receipt as {run_id?:number}|undefined)?.run_id))))continue;
     if(!task.external.ownerSuccessorConsentId&&typeof task.external.resourceAmendmentSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.resourceAmendmentSince)||run.head_sha!==task.external.resourceAmendmentRelease||run.event!=='workflow_dispatch'))continue;
     if((!task.external.resourceAmendmentId||task.external.ownerSuccessorConsentId)&&typeof task.external.paidSuccessorSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.paidSuccessorSince)||run.head_sha!==task.external.paidSuccessorRelease||run.event!=='workflow_dispatch'))continue;
     if(!task.external.resourceAmendmentId&&!task.external.paidSuccessorId&&typeof task.external.pregrantRecoverySince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.pregrantRecoverySince)||run.head_sha!==task.external.pregrantRecoveryRelease||run.event!=='workflow_dispatch'))continue;

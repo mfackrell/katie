@@ -32,6 +32,15 @@ export async function assertOrdinaryAuthority(db,rival){
  await db.query("insert into chats(id,actor_id,title) values($1,$2,'Synthetic developer')",[taskChat,agent.actor_id]);
  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development','Frozen display scope','Frozen display scope',$7,'mfackrell/katie',$1::text,'blocked','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo]);
  const limits={cumulativeTokens:180000,developmentTokens:120000,developmentCalls:15,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:3600};
+ const prepared=(await db.query('select developer_prepare_initial($1,$2) p',[owner,job.id])).rows[0].p;
+ assert.equal(prepared.proposal.version,'ordinary-native-authorization-v1');
+ assert.equal(prepared.proposal.binding.taskId,job.id);
+ assert.equal((await db.query('select developer_next_initial_task($1,$2) id',[owner,chat])).rows[0].id,job.id);
+ assert.equal((await db.query('select developer_next_initial_task($1,$2) id',[randomUUID(),chat])).rows[0].id,null);
+ const rejected=(await db.query('select developer_decide_initial($1,$2,$3,$4) d',[owner,job.id,prepared.id,'rejected'])).rows[0].d;
+ assert.equal(rejected.decision,'rejected');
+ assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where task_id=$1',[job.id])).rows[0].n,0);
+ assert.equal((await db.query('select status from agent_tasks where id=$1',[job.id])).rows[0].status,'blocked');
  const offer='select developer_offer_initial($1,$2,$3,$4) p';
  await assert.rejects(db.query(offer,[randomUUID(),job.id,limits,'gpt-5.3-codex']),/binding denied/);
  const proposal=(await db.query(offer,[owner,job.id,limits,'gpt-5.3-codex'])).rows[0].p;

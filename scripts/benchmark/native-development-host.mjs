@@ -151,7 +151,7 @@ if(proof.pregrantRecoveryId){
  const recovery=await readOne('benchmark_development_pregrant_recoveries','id',proof.pregrantRecoveryId);
  if(recovery.renewal_id!==proof.developmentRenewalId||recovery.release_sha!==process.env.GITHUB_SHA||task.external?.pregrantRecoveryId!==recovery.id)denied('pregrant recovery identity or release mismatch');
 }
-let ownerApprovedSuccessor=continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
+let ownerApprovedSuccessor=Boolean(ordinary&&approval.previous_developer_approval_id)||continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
 if(proof.paidSuccessorId){
  if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId||proof.pregrantRecoveryId||process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS!=='enabled'||NATIVE_ADMISSION_DIAGNOSTICS_VERSION!=='bounded-schema-v1')denied('instrumented paid successor transport required');
  const successor=await readOne('benchmark_development_paid_successors','id',proof.paidSuccessorId);
