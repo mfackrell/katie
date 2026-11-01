@@ -31,7 +31,7 @@ test('host recovery checks record/release and uses only recovery grant endpoint'
  // These authority fixtures represent tasks with no saved WIP. The full host
  // preflight tests separately exercise restoration rejection before grants.
  const recoveryFixture="const requestFile='/trusted/request',boundary={root:'/fixture'};const execFileSync=()=> '{}',join=(...parts)=>parts.join('/'),recoveryRefs=()=>[];";
- const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','NATIVE_ADMISSION_DIAGNOSTICS_VERSION','const continuation=null;'+recoveryFixture+host.slice(start,end)+'return {grantId,executionEpoch,ownerApprovedSuccessor};');
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','NATIVE_ADMISSION_DIAGNOSTICS_VERSION','const continuation=null,ordinary=false;'+recoveryFixture+host.slice(start,end)+'return {grantId,executionEpoch,ownerApprovedSuccessor};');
  const proof={paidSuccessorId:'recovery',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task'};
  for(const scenario of ['valid','consented','consent-error','release','disabled','marker']){
   const wrong=scenario==='release';

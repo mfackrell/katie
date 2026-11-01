@@ -23,8 +23,8 @@ export function nativeChildInterruptionRetryable(outcome,gatewayFailure){
 // The caller must supply a server-owned grant and DB client. This bridge
 // deliberately does not forward model requests unless all dependencies exist.
 export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
- providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false,onFailure=()=>{},requireInputCount=false,beforeRequest=()=>{}}){
- if(!db||!grantToken||!trialId||!upstream||!recordReceipt||
+ providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false,developerProjectId=null,onFailure=()=>{},requireInputCount=false,beforeRequest=()=>{}}){
+ if(!db||!grantToken||(!trialId&&!developerProjectId)||(trialId&&developerProjectId)||!upstream||!recordReceipt||
     typeof clientToken!=='string'||clientToken.length<12)
   throw Error('NATIVE_GATEWAY_NOT_CONFIGURED');
  const reasoningProvenance=createNativeReasoningProvenance();
@@ -52,7 +52,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    // This callback has no authority to reserve tokens or issue execution grants.
    await beforeRequest();
    const result=await forwardAuthorizedModelRequest({
-    db,grantToken,trialId,executionEpoch,model:body.model,
+    db,grantToken,trialId,developerProjectId,executionEpoch,model:body.model,
     requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,reasoningProvenance,
     fullMission:typeof fullMission==='function'?fullMission():fullMission,requireInputCount
    });

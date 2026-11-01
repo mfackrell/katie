@@ -96,5 +96,6 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  await assert.rejects(db.query(decision,args),/permission denied/);
  await assert.rejects(db.query('select * from benchmark_lifecycle_proposals'),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
+ if(process.env.KATIE_TEST_ORDINARY_AUTHORITY==='1')await (await import('./assert-ordinary-authority.mjs')).assertOrdinaryAuthority(db,rival);
  console.log('LIFECYCLE_AUTHORIZATION_POSTGRES_PASS: synthetic consent only; duplicate/concurrent exact amendment; historical calls retained; native admission usable; four completion calls protected');
 }

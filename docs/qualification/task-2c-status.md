@@ -1,11 +1,18 @@
-# Task 2C qualification — blocked, not accepted
+# Task 2C qualification — resumed, not accepted
 
-Baseline: `05d46db95c1123b87731159909bc9419180491f7` (Task 2B merge).
-Work is preserved in draft PR #924. This document is a blocker report, not a completion receipt. No production implementation or migration has been changed by this PR.
+Original baseline: `05d46db95c1123b87731159909bc9419180491f7` (Task 2B merge).
+Reconciled baseline: `37582024733d7c012cfafa2f57c9021644058d9f` (ordinary first-shortage extension, PR #925).
+Work is preserved in draft PR #924. This document is a qualification status report, not a completion receipt. This PR adds no production implementation or migration beyond its merged baseline.
 
-## Material architecture finding
+## First-shortage extension delivered
 
-The reusable pure planner is connected at runtime only to the existing Full benchmark amendment chain. It is not connected to an ordinary Developer project's first resource shortage.
+The owner authorized the architecture correction below. PR #925 was independently reviewed, passed full CI and actual PostgreSQL/SDK/host qualification, and merged at `37582024733d7c012cfafa2f57c9021644058d9f` from final commit `f208c9b61a950052a1fd5512b84c9d8d2f12ba55`. Production deployment `dpl_GVnBsgxb4EF2v2XLGVsYpou1Upq8` is READY at that merge commit. The normal migration pipeline applied the ordinary authority migration; nonmutating health and accounting checks passed. Full delivery evidence is retained in PR #925.
+
+The preserved Task 2C work has been reconciled with that main commit. Ordinary authority support and generalized Task 2C host options are both retained. The historical architectural blocker is resolved; the qualification gaps listed below still require implementation and execution. Extension acceptance does not establish Task 2C acceptance.
+
+## Historical architecture finding (resolved by PR #925)
+
+At the original baseline, the reusable pure planner was connected at runtime only to the existing Full benchmark amendment chain. It is not connected to an ordinary Developer project's first resource shortage.
 
 The authoritative `benchmark_lifecycle_snapshot` function in `supabase/migrations/20261101123639_lifecycle_owner_authorization.sql`, lines 43–59, requires all of:
 
@@ -23,7 +30,7 @@ Consequently, even a successful benchmark-bound synthetic continuation would not
 
 An independent reviewer separately confirmed this finding. Supporting that missing path requires an explicit architectural extension of the authority/snapshot/decision/grant interfaces, with owner and scope binding preserved. Task 2C permits narrow corrections but instructs us to stop for a material redesign. No security fence has been relaxed.
 
-Required owner decision: authorize a focused extension of Task 2B to support first-shortage amendments for ordinary authorized Developer projects, reusing existing ledgers and admission mechanisms. After that extension is qualified, resume Task 2C. Restricting Task 2C to benchmark-bound renewals would change its acceptance scope and would not meet the current assignment.
+Resolved owner decision: the owner authorized a focused extension of Task 2B to support first-shortage amendments for ordinary authorized Developer projects, reusing existing ledgers and admission mechanisms. After that extension is qualified, resume Task 2C. Restricting Task 2C to benchmark-bound renewals would change its acceptance scope and would not meet the current assignment.
 
 ## Preserved qualification work
 
@@ -50,7 +57,7 @@ Independent review also identified:
 4. Historical monetary exposure must be compared after continuation; assertion added, not yet demonstrated in a passing hosted run.
 5. GitHub transport argument validation needs tightening.
 
-All remain blocking until verified. No final independent approval was obtained.
+These Task 2C qualification gaps remain blocking until verified. Independent review after PR #925 also confirmed that the preserved harness still uses benchmark setup, lacks ordinary-dispatch adapter methods, and does not prove a final project assessment receipt. No final independent Task 2C approval has been obtained.
 
 ## Safety and deployment status
 

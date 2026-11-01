@@ -127,7 +127,7 @@ export function recoveryCompletedEvidence(record,diagnostics){
  return {...last,review:{phase:'review',verdict:/^PASS(?:\s|$)/.test(reviews[0].finalMessage)?'pass':'changes_requested',findings:record.reviewFindings.slice(0,at)},verification:verifications[0]};
 }
 
-export async function validateRecoveryRecords({record,task,context,project,trialId,accountId,readOne,completedEvidence=record.lastCompleted}){
+export async function validateRecoveryRecords({record,task,context,project,trialId,authorityKind,accountId,readOne,completedEvidence=record.lastCompleted}){
  if(![1,2].includes(record.version)||record.kind!=='native-unverified-wip'||record.verification!=='unverified'||
     !(record.version===2?['implementation','review','repair','final-review','do_completion']:['implementation','repair']).includes(record.phase)||!sha(record.checkpointSha)||!sha(record.completedCheckpointSha)||!sha(record.sourceTreeSha))fail('invalid WIP identity');
  for(const [value,expected,label] of [[record.taskId,task.id,'task'],[record.projectId,project.id,'project'],
@@ -145,6 +145,9 @@ export async function validateRecoveryRecords({record,task,context,project,trial
     grant.mission_assignment_id!==task.id||grant.project_id!==project.id||grant.trial_id!==trialId||grant.account_id!==accountId||
     grant.execution_epoch!==record.executionEpoch||grant.owner_actor_id!==approval.actor_id||grant.repository!==task.repository_full_name||
     grant.protocol_digest!==approval.protocol_digest||grant.model!==approval.model)fail('historical grant binding mismatch');
+ if(authorityKind==='ordinary-developer'){
+  if(record.authorityKind!==authorityKind||trialId!==null||approval.developer_authority?.version!=='ordinary-developer-v1'||grant.developer_approval_id!==approval.id)fail('ordinary recovery authority mismatch');
+ }else if(record.authorityKind||approval.developer_authority||grant.developer_approval_id)fail('benchmark recovery authority mismatch');
  const last=completedEvidence;
  if(!last||last.checkpointSha!==record.completedCheckpointSha)fail('completed checkpoint evidence missing');
  if(last.modelCall){
@@ -159,6 +162,10 @@ export async function validateRecoveryRecords({record,task,context,project,trial
      callGrant.account_id!==accountId||callGrant.trial_id!==trialId||callGrant.owner_actor_id!==grant.owner_actor_id||
      callGrant.repository!==grant.repository||callGrant.model!==grant.model||!Number.isSafeInteger(callGrant.execution_epoch)||
      callGrant.execution_epoch>grant.execution_epoch)fail('historical model-call evidence mismatch');
+  if(authorityKind==='ordinary-developer'){
+   const callApproval=callGrant.id===grant.id?approval:await readOne('benchmark_native_spending_approvals','id',callGrant.developer_approval_id);
+   if(!callGrant.developer_approval_id||callApproval.developer_authority?.version!=='ordinary-developer-v1'||callApproval.account_id!==accountId||callApproval.task_id!==task.id||callApproval.project_id!==project.id||callApproval.owner_id!==approval.owner_id)fail('ordinary historical call authority mismatch');
+  }
  }else if(record.phase==='repair')fail('repair call evidence missing');
  if(record.version===2&&['review','final-review','do_completion'].includes(record.phase)){
   if(!last.modelCall||!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('completed boundary verification evidence missing');

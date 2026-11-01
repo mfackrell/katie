@@ -209,6 +209,82 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node scripts/benchmark/closure-input-count-probe.mjs
 
+  ordinary-developer-authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+      KATIE_TEST_ORDINARY_AUTHORITY: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - name: Install disposable PostgreSQL
+        run: sudo apt-get install -y postgresql-16
+      - name: Ordinary authority and historical benchmark transactions without inference
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Render actual PostgreSQL original-owner proposal in Chromium
+        env:
+          KATIE_ORDINARY_PROPOSAL_FILE: ${{ runner.temp }}/ordinary-owner-proposal.json
+        run: node --test tests/lifecycle-owner-approval-browser.test.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ordinary-owner-proposal
+          path: ${{ runner.temp }}/ordinary-owner-proposal.json
+          if-no-files-found: error
+
+
+  ordinary-native-continuation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_REQUIRE_NATIVE_BWRAP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Install disposable qualification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat postgresql-16
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Fetch immutable synthetic assignment baseline
+        run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+      - name: Ordinary first-shortage actual host continuation without inference
+        env:
+          KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE: '0'
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+          KATIE_TEST_CAPACITY_RENEWAL: '1'
+          KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+          KATIE_TEST_ORDINARY_AUTHORITY: '1'
+          KATIE_TEST_ORDINARY_HOST: '1'
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain ordinary lifecycle qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-lifecycle-qualification
+          path: ${{ runner.temp }}/ordinary-lifecycle-qualification/
+          if-no-files-found: warn
+
   native-recovery-lifecycle:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -33,7 +33,7 @@ test('host recovery checks record/release and uses only recovery grant endpoint'
  // These authority fixtures represent tasks with no saved WIP. The full host
  // preflight tests separately exercise restoration rejection before grants.
  const recoveryFixture="const requestFile='/trusted/request',boundary={root:'/fixture'};const execFileSync=()=> '{}',join=(...parts)=>parts.join('/'),recoveryRefs=()=>[];";
- const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','continuation',recoveryFixture+host.slice(start,end)+'return {grantId,executionEpoch};');
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','continuation','const ordinary=false;'+recoveryFixture+host.slice(start,end)+'return {grantId,executionEpoch};');
  const proof={pregrantRecoveryId:'recovery',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task'};
  for(const wrong of [false,true]){
   const calls=[];const promise=run(proof,{},async()=>({id:'recovery',renewal_id:'renewal',release_sha:wrong?'old':'new'}),{external:{pregrantRecoveryId:'recovery'}},{env:{GITHUB_SHA:'new'}},{rpc:async(name,args)=>{calls.push(name);assert.equal(args.p_approval,'approval');return {data:{grantId:'grant',executionEpoch:4}};}},()=>({toString:()=> 'token'}),()=> 'digest',message=>{throw Error(message);});
