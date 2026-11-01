@@ -167,6 +167,22 @@ export async function validateRecoveryRecords({record,task,context,project,trial
    if(!callGrant.developer_approval_id||callApproval.developer_authority?.version!=='ordinary-developer-v1'||callApproval.account_id!==accountId||callApproval.task_id!==task.id||callApproval.project_id!==project.id||callApproval.owner_id!==approval.owner_id)fail('ordinary historical call authority mismatch');
   }
  }else if(record.phase==='repair')fail('repair call evidence missing');
+ const adaptive=last.adaptiveRepair;
+ if(adaptive?.version===2){
+  const action=adaptive.nextAction;
+  if(!['implementation','verification','review','final-review','repair','complete'].includes(action)||
+     adaptive.candidateHead!==record.completedCheckpointSha||!Number.isSafeInteger(adaptive.iteration)||adaptive.iteration<0||
+     !Number.isSafeInteger(adaptive.stagnant)||adaptive.stagnant<0||!Array.isArray(adaptive.seen)||adaptive.seen.length>16||
+     adaptive.seen.some(value=>typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value)))fail('invalid adaptive continuation state');
+  if(!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('adaptive verification binding missing');
+  if(action==='verification'&&last.verification.pending!==true)fail('pending verification evidence missing');
+  if(['review','final-review','repair','complete'].includes(action)&&last.verification.pending)fail('unfinished verification cannot be accepted');
+  if(['repair','complete'].includes(action)&&(!last.review||last.review.reviewedHeadSha!==record.completedCheckpointSha||
+     !['review','final-review'].includes(last.review.phase)||!['pass','changes_requested'].includes(last.review.verdict)||
+     typeof last.review.findings!=='string'||!last.review.findings.trim()))fail('completed adaptive review binding missing');
+  if(action==='complete'&&(last.review.phase!=='final-review'||last.review.verdict!=='pass'||!last.verification.passed))fail('adaptive completion evidence missing');
+  if(action==='repair'&&last.review.verdict==='pass'&&last.verification.passed)fail('adaptive repair evidence inconsistent');
+ }
  if(record.version===2&&['review','final-review','do_completion'].includes(record.phase)){
   if(!last.modelCall||!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('completed boundary verification evidence missing');
   if(record.phase!=='review'&&(!last.review||!['pass','changes_requested'].includes(last.review.verdict)))fail('completed boundary review evidence missing');
@@ -212,6 +228,8 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
  const {checkpointSha:_,ref:__,...metadata}=record;
  same(JSON.parse(raw),metadata,'checkpoint metadata was forged or altered');
  same(git('rev-parse',record.checkpointSha+'^{tree}'),record.sourceTreeSha,'checkpoint tree mismatch');
+ if(completedEvidence.adaptiveRepair?.version===2&&['verification','review','final-review','complete'].includes(completedEvidence.adaptiveRepair.nextAction)&&
+    record.sourceTreeSha!==git('rev-parse',record.completedCheckpointSha+'^{tree}'))fail('completed candidate contains unverified source modifications');
  const parents=git('show','-s','--format=%P',record.checkpointSha).split(' ');
  if(parents.length>2||parents[0]!==record.completedCheckpointSha)fail('completed checkpoint ancestry mismatch');
  git('merge-base','--is-ancestor',context.baseSha,record.completedCheckpointSha);

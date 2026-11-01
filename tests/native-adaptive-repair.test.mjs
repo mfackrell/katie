@@ -180,3 +180,28 @@ test('interrupted repaired candidate verification reruns tests before source re-
  const result=await executeNativeDevelopmentLifecycle({...options,recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:structuredClone(saved)}});
  assert.equal(result.finalReview.verdict,'pass');assert.deepEqual(events.slice(boundary),['verify:'+'b'.repeat(40),'final-review']);assert.equal(result.repairIterations,1);
 });
+
+test('completed candidate-bound final review is reused after interruption without any paid phase',async()=>{
+ const head='a'.repeat(40),events=[];
+ const result=await executeNativeDevelopmentLifecycle({recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:{
+  verification:{head,passed:true},review:{phase:'final-review',reviewedHeadSha:head,verdict:'pass',findings:'All frozen assertions passed'},
+  initialReview:{phase:'review',reviewedHeadSha:'b'.repeat(40),verdict:'changes_requested',findings:'Original retained defect'},
+  repairPerformed:true,adaptiveRepair:{version:2,nextAction:'complete',candidateHead:head,iteration:3,seen:[],stagnant:0}
+ }},runPhase:async p=>{events.push(p);throw Error('Completed phase replayed');},verifyCandidate:async()=>{throw Error('Completed verification replayed');}});
+ assert.equal(result.candidateHead,head);assert.equal(result.repairIterations,3);assert.deepEqual(events,[]);
+ assert.equal(result.review.findings,'Original retained defect');
+});
+test('retained no-progress terminal decision cannot be cleared by runner restart',async()=>{
+ await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'repair',lastCompleted:{stopReason:'no_meaningful_progress'}},runPhase:()=>{throw Error('must not dispatch');}}),/NO_PROGRESS/);
+});
+test('pending verification preserves repair proof, iteration evidence and findings after interruption',async()=>{
+ const head='b'.repeat(40),old='a'.repeat(40),iterations=[],events=[];
+ const result=await executeNativeDevelopmentLifecycle({recovery:{phase:'review',completedCheckpointSha:head,lastCompleted:{
+  repairPerformed:true,verification:{head,passed:false,pending:true},review:{phase:'final-review',reviewedHeadSha:old,verdict:'changes_requested',findings:'largest'},
+  adaptiveRepair:{version:2,nextAction:'verification',candidateHead:head,iteration:3,seen:[],stagnant:1,failureSignature:'prior',pendingRepair:{before:{head:old,passed:false},source:'old-tree',priorFindings:['largest']}}
+ }},candidateIdentity:()=> 'new-tree',verifyCandidate:async()=>{events.push('verify');return {passed:true,head};},runPhase:async phase=>{events.push(phase);return {phase,reviewedHeadSha:head,verdict:'pass',findings:'Frozen assertions passed'};},onIteration:e=>iterations.push(e)});
+ assert.deepEqual(events,['verify','final-review']);assert.equal(iterations.length,1);assert.deepEqual(iterations[0].resolvedFindings,['largest']);assert.equal(result.repairVerification.before.head,old);assert.equal(result.repairVerification.after.head,head);
+});
+test('changed candidate cannot reuse a completed review',async()=>{
+ await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'final-review',completedCheckpointSha:'b'.repeat(40),lastCompleted:{verification:{passed:true},review:{reviewedHeadSha:'a'.repeat(40)},adaptiveRepair:{version:2,candidateHead:'b'.repeat(40),nextAction:'complete'}}}}),/CANDIDATE_MISMATCH/);
+});

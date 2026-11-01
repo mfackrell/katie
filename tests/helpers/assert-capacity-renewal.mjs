@@ -44,12 +44,15 @@ export async function assertCapacityRenewal(db,rival,{am,ng,project,mission,task
  assert.equal((await db.query('select benchmark_effective_mission_call_limit($1,$2) n',[mission,c.id])).rows[0].n,32);
  assert.equal((await db.query('select benchmark_full_monetary_control($1,$2) r',[account,c.id])).rows[0].r.cumulativeTokenCap,625000);
  const claim=await Promise.all([db.query('select benchmark_claim_development_amendment($1,$2) ok',[next.id,release]),rival.query('select benchmark_claim_development_amendment($1,$2) ok',[next.id,release])]);assert.equal(claim.filter(x=>x.rows[0].ok).length,1);
- if(process.env.KATIE_TEST_TASK2C==='1'){
+ if(process.env.KATIE_TEST_TASK2C==='1'||process.env.KATIE_TEST_TASK3B==='1'){
   // Preserve benchmark regression state and stop its fixture through its normal
   // control before independently qualifying an ordinary original authorization.
   const parked=(await db.query('select actor_id,chat_id from work_projects where id=$1',[project])).rows[0];
   await db.query("select control_work_project($1,$2,$3,'stop')",[project,parked.actor_id,parked.chat_id]);
   await db.query('reset role');await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));await db.query('set role service_role');
+  if(process.env.KATIE_TEST_TASK3B==='1'){
+   await (await import('./assert-ordinary-authority.mjs')).assertOrdinaryAuthority(db,rival,{limits:{cumulativeTokens:180000,developmentTokens:120000,developmentCalls:40,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:7200},initialLifecycle:async(ids,authority)=>(await import('./qualify-adaptive-recovery.mjs')).qualifyAdaptiveRecovery(db,rival,ids,authority)});return;
+  }
   await (await import('./assert-ordinary-authority.mjs')).assertOrdinaryAuthority(db,rival,{initialLifecycle:async(ids,authority)=>
    (await import('./qualify-resource-lifecycle.mjs')).qualifyResourceLifecycle(db,rival,ids,authority,{adequate:process.env.KATIE_TEST_TASK2C_MODE==='adequate'})});return;
  }

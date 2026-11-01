@@ -381,3 +381,41 @@ jobs:
           path: ${{ runner.temp }}/task2c-qualification/
           if-no-files-found: warn
           retention-days: 90
+
+  adaptive-recovery-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_TEST_TASK3B: '1'
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_REQUIRE_NATIVE_BWRAP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Install disposable qualification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat postgresql-16
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Fetch immutable assignment baseline
+        run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+      - name: Task 3B actual-host multi-interruption lifecycle
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain Task 3B reproducible evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task3b-qualification
+          path: ${{ runner.temp }}/task3b-qualification/
+          if-no-files-found: warn
+          retention-days: 90

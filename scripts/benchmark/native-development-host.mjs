@@ -169,7 +169,7 @@ if(proof.resourceAmendmentId){
 // failed-run receipt and its immutable diagnostics authenticate the Git object.
 const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
 const priorRefs=recoveryRefs(boundary.root,task.id);
-let recoveryPlan=null,priorCapacityObservations=[];
+let recoveryPlan=null,priorCapacityObservations=[],priorRepairIterations=[];
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
@@ -178,6 +178,7 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
  // predecessor stopped at the clean baseline and has no source to restore.
  // Capacity adapters still validate every observation against settled receipts.
  priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
+ priorRepairIterations=Array.isArray(priorDiagnostics.repairIterations)?priorDiagnostics.repairIterations.slice(-64):[];
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:ordinary?null:proof.trialId,authorityKind:ordinary?'ordinary-developer':undefined,accountId:account.id,readOne});
@@ -225,7 +226,7 @@ forecastGrantId=grantId;
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
-const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false,capacityForecasts:[latestCapacityForecast],capacityObservations};
+const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false,repairIterations:priorRepairIterations,capacityForecasts:[latestCapacityForecast],capacityObservations};
 const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken,process.env.GH_TOKEN];
 const snapshot=label=>diagnostics.snapshots.push({label,...worktreeEvidence(boundary.root,diagnosticSecrets)});
 const saveDiagnostics=()=>{if(evidencePath&&evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))writeFileSync(evidencePath+'.diagnostics.json',JSON.stringify(diagnostics)+'\n',{mode:0o600});};
@@ -434,7 +435,7 @@ try{
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
   candidateIdentity:()=>git('rev-parse','HEAD^{tree}'),
   onIteration:evidence=>{diagnostics.repairIterations??=[];diagnostics.repairIterations.push(evidence);diagnostics.repairIterations=diagnostics.repairIterations.slice(-64);saveDiagnostics();},
-  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){activeWipPhase={phase:evidence.review?'final-review':'review',reviewFindings:evidence.review?.findings??'',boundary:true};}if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
+  onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){const action=evidence.adaptiveRepair?.nextAction;activeWipPhase={phase:action==='repair'?'repair':action==='verification'?'review':action==='complete'?'final-review':action??'review',reviewFindings:evidence.review?.findings??'',boundary:true};preserveWip();}if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
  lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};
  await forecastCapacity('do_completion');diagnostics.capacityForecasts.push(latestCapacityForecast);saveDiagnostics();
  pauseForCapacity('do_completion');

@@ -4,9 +4,13 @@ import assert from 'node:assert/strict';
 const endpoint=process.env.KATIE_RECOVERY_FIXTURE_ENDPOINT;
 assert.match(endpoint??'',/^http:\/\/127\.0\.0\.1:\d+$/);
 const transport=globalThis.fetch;
+let adaptiveChild=null;
 globalThis.fetch=async(input,init)=>{
  const url=new URL(typeof input==='string'||input instanceof URL?input:input.url);
  assert.ok(['api.openai.com','barclcqataqyvifoeyop.supabase.co'].includes(url.hostname),'Unexpected outbound destination');
+ if(process.env.KATIE_TEST_ADAPTIVE_INTERRUPTION==='repair2'&&url.pathname.endsWith('/input_tokens')&&fs.existsSync('app/pilot/added.ts')){
+  adaptiveChild?.kill('SIGTERM');throw Error('Synthetic runner interruption after durable repair writes, before admission');
+ }
  return transport(endpoint+'/'+(url.hostname==='api.openai.com'?'provider':'database')+url.pathname+url.search,init);
 };
 
@@ -33,6 +37,11 @@ import childProcess from 'node:child_process';
 const spawn=childProcess.spawn;
 childProcess.spawn=function(command,args,options){
  const child=spawn.call(this,command,args,options);
+ if(command==='bwrap')adaptiveChild=child;
+ if(process.env.KATIE_TEST_ADAPTIVE_INTERRUPTION==='verification3'&&args?.[0]===join(process.env.RUNNER_TEMP,'project-tools','project-ci.mjs')){
+  const d=JSON.parse(fs.readFileSync(process.env.KATIE_NATIVE_EVIDENCE_FILE+'.diagnostics.json'));
+  if(d.wipCheckpoint?.lastCompleted?.adaptiveRepair?.iteration===3)child.kill('SIGTERM');
+ }
  if(args?.[0]===join(process.env.RUNNER_TEMP,'project-tools','project-ci.mjs')){
   let tail='';
   for(const stream of [child.stdout,child.stderr])stream?.on('data',chunk=>{tail=(tail+chunk).slice(-8000);});
