@@ -12,7 +12,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  let decision=saved.review,repairPerformed=saved.repairPerformed===true,repairVerification=saved.repairVerification??null;
  let iteration=saved.adaptiveRepair?.iteration??0,seen=saved.adaptiveRepair?.seen??[],stagnant=saved.adaptiveRepair?.stagnant??0;
  let previousFailure=saved.adaptiveRepair?.failureSignature??null;
- let resumedRepair=recovery?.phase==='repair';
+ let resumedRepair=recovery?.phase==='repair'&&(saved.adaptiveRepair?.version!==2||saved.adaptiveRepair?.pendingRepair?.iteration===(saved.adaptiveRepair.iteration+1));
  let nextAction=saved.adaptiveRepair?.version===2?saved.adaptiveRepair.nextAction:null;
  if(saved.stopReason==='no_meaningful_progress')throw Error('NATIVE_REPAIR_NO_PROGRESS: retained terminal repair history');
  if(nextAction&&!['implementation','verification','review','final-review','repair','complete'].includes(nextAction))throw Error('NATIVE_RECOVERY_ACTION_INVALID');
@@ -45,6 +45,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
   else if(repairVerification&&verification.passed)repairVerification={...repairVerification,after:{head:candidateHead,passed:true}};
  };
  if(!nextAction)nextAction=!['repair','review','final-review'].includes(recovery?.phase)?'implementation':saved.verification?.pending?'verification':recovery.phase;
+ if(pendingRepair?.iteration===iteration&&['repair','complete'].includes(nextAction)){await finishRepairReview();publish();}
  if(nextAction==='implementation'){
   await runPhase('implementation');candidateHead=await commitCandidate('native: checkpoint approved implementation');
   verification={passed:false,pending:true,head:candidateHead,detail:'Candidate verification pending'};nextAction='verification';publish({phase:'implementation'});
@@ -58,21 +59,21 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  }
  if(nextAction==='final-review'){
   decision=await review('final-review');first??=decision;
-  nextAction=decision.verdict==='pass'&&verification?.passed?'complete':'repair';await finishRepairReview();publish();
+  nextAction=decision.verdict==='pass'&&verification?.passed?'complete':'repair';publish();await finishRepairReview();publish();
  }
  while(decision?.verdict!=='pass'||!verification?.passed){
   if(verification?.kind==='infrastructure')throw Error('NATIVE_VERIFICATION_INFRASTRUCTURE: trustworthy tests unavailable');
   const source=await candidateIdentity(candidateHead);
   const failure=digest({findings:decision?.verdict==='pass'?'':decision?.findings,verification:verification?.passed?null:verification?.detail});
   const signature=digest({source,failure});
-  if(!resumedRepair&&(seen.includes(signature)||stagnant>=3)){publish({stopReason:'no_meaningful_progress'});throw Error('NATIVE_REPAIR_NO_PROGRESS: unresolved findings or deterministic acceptance repeat; source and failure evidence preserved');}
-  if(!seen.includes(signature))seen=[...seen,signature].slice(-16);previousFailure=failure;nextAction='repair';publish({continueReason:'actionable_engineering_defects'});
+  if(stagnant>=3||!resumedRepair&&seen.includes(signature)){publish({stopReason:'no_meaningful_progress'});throw Error('NATIVE_REPAIR_NO_PROGRESS: unresolved findings or deterministic acceptance repeat; source and failure evidence preserved');}
+  if(!seen.includes(signature))seen=[...seen,signature].slice(-16);previousFailure=failure;nextAction='repair';
   const priorFindings=findingsOf(decision);
   const before={head:candidateHead,passed:verification.passed};
   if(decision.verdict==='changes_requested')reviewRepair={before:{head:candidateHead,verdict:decision.verdict}};
   const findings=recovery?.phase==='repair'&&iteration===(saved.adaptiveRepair?.iteration??0)?recovery.reviewFindings:
    decision.findings+'\nTrusted deterministic verification: '+JSON.stringify(verification);
-  pendingRepair={before,source,priorFindings};publish();
+  pendingRepair={iteration:iteration+1,before,source,priorFindings};publish({continueReason:'actionable_engineering_defects'});
   await runPhase('repair',findings);resumedRepair=false;iteration++;repairPerformed=true;
   candidateHead=await commitCandidate('native: checkpoint bounded repair');
   // A changed candidate invalidates any earlier approval before verification.
@@ -81,7 +82,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
   retainVerification();nextAction='final-review';publish();
   decision=await review('final-review');
   nextAction=decision.verdict==='pass'&&verification.passed?'complete':'repair';
-  await finishRepairReview();publish();
+  publish();await finishRepairReview();publish();
  }
  if(reviewRepair)reviewRepair={...reviewRepair,after:{head:candidateHead,verdict:decision.verdict}};
  const result={candidateHead,review:first,finalReview:decision,repairPerformed,repairVerification,reviewRepair,repairIterations:iteration};

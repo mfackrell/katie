@@ -8,7 +8,6 @@ import {execFileSync} from 'node:child_process';
 import {createLifecycleCheckpoint,qualifyLifecycleContinuation,archive} from './qualify-lifecycle-continuation.mjs';
 import {loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,recoveryRefs} from '../../scripts/benchmark/native-wip-recovery.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
-import {proposeLifecycleAmendment} from '../../lib/projects/lifecycle-authorization.mjs';
 const hash=v=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'";
 const correct=[
@@ -103,10 +102,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
    assert.deepEqual(await ledger(),beforeRestore);rmSync(check,{recursive:true,force:true});
    const snapshot=(await db.query('select benchmark_lifecycle_snapshot($1) s',[ids.task])).rows[0].s;
    const plan=lifecycleProposalFromSnapshot({snapshot,record,observations:d.capacityObservations});
-   // The consumed single-use attempt cannot be reissued. Existing proposal
-   // contract supports explicit owner grant renewal without expanding limits.
-   const assessment={...plan.assessment,shortages:[...new Set([...plan.assessment.shortages,'executionAuthority'])]};
-   const proposed=proposeLifecycleAmendment({assessment,current:{...snapshot,checkpointSha:record.checkpointSha,proposalExpiresAt:Date.now()+3600000},now:Date.now()});
+   const proposed=plan;assert.ok(plan.assessment.shortages.includes('executionAuthority'),'Real adapter must identify consumed attempt authority');
    assert.equal(proposed.state,'awaiting_owner_approval',JSON.stringify(proposed));
    const offered=(await db.query('select benchmark_lifecycle_offer($1,$2,$3) o',[ids.task,proposed.proposal,{...record,scopeHash:ids.scopeHash,releaseSha:authority.release_sha}])).rows[0].o;
    const args=[ids.owner,ids.task,offered.id,'approved',authority.release_sha];

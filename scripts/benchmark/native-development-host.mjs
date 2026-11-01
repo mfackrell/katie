@@ -434,7 +434,7 @@ try{
  const qualifiedLifecycle=ordinary||continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
   candidateIdentity:()=>git('rev-parse','HEAD^{tree}'),
-  onIteration:evidence=>{diagnostics.repairIterations??=[];diagnostics.repairIterations.push(evidence);diagnostics.repairIterations=diagnostics.repairIterations.slice(-64);saveDiagnostics();},
+  onIteration:evidence=>{diagnostics.repairIterations??=[];if(!diagnostics.repairIterations.some(old=>old.iteration===evidence.iteration&&old.candidateHead===evidence.candidateHead))diagnostics.repairIterations.push(evidence);diagnostics.repairIterations=diagnostics.repairIterations.slice(-64);saveDiagnostics();},
   onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){const action=evidence.adaptiveRepair?.nextAction;activeWipPhase={phase:action==='repair'?'repair':action==='verification'?'review':action==='complete'?'final-review':action??'review',reviewFindings:evidence.review?.findings??'',boundary:true};preserveWip();}if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
  lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};
  await forecastCapacity('do_completion');diagnostics.capacityForecasts.push(latestCapacityForecast);saveDiagnostics();

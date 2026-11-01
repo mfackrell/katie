@@ -21,3 +21,16 @@ test('partial monetary ceiling preserves exact committed and outstanding exposur
  const r=lifecycleProposalFromSnapshot(f);assert.equal(r.proposal.proposed.ceilingMicrousd,'66012.579');assert.equal(r.proposal.current.outstandingMicrousd,'7.456');
  const prior=r.proposal.id;f.snapshot.position.outstandingMicrousd='8.456';assert.equal(r.proposal.id,prior);assert.equal(r.proposal.current.outstandingMicrousd,'7.456');
 });
+
+test('authenticated failed ordinary attempt offers grant renewal without inventing resource increases',()=>{
+ const f=partialMoneyFixture();f.snapshot.position.ceilingMicrousd='2000000';
+ const {snapshot,record}=f,b=snapshot.binding;
+ Object.assign(snapshot,{authorityKind:'ordinary-developer',approvalId:'approval',grantRenewable:true});
+ Object.assign(record,{approvalId:'approval',grantId:'grant',runId:'131'});
+ Object.assign(snapshot.snapshot,{approval:{id:'approval',consumed_at:'2026-11-01'},task:{id:b.taskId,status:'blocked',external:{receipt:{outcome:'BLOCKED',run_id:131}}},grants:[{id:'grant',developer_approval_id:'approval',mission_assignment_id:b.taskId}]});
+ const plan=lifecycleProposalFromSnapshot(f);assert.equal(plan.state,'awaiting_owner_approval');assert.ok(plan.assessment.shortages.includes('executionAuthority'));
+ assert.equal(plan.proposal.additions.nativeCalls,0);assert.equal(plan.proposal.additions.tokens,0);assert.equal(plan.proposal.proposed.ceilingMicrousd,snapshot.position.ceilingMicrousd);
+ for(const mutate of [x=>{x.snapshot.snapshot.task.status='dispatching';},x=>{x.record.runId='132';},x=>{x.snapshot.snapshot.approval.consumed_at=null;},x=>{x.snapshot.snapshot.grants=[];}]){
+  const copy=structuredClone(f);mutate(copy);assert.equal(lifecycleProposalFromSnapshot(copy).state,'not_required');
+ }
+});

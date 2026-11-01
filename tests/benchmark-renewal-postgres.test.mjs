@@ -86,7 +86,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    const spec={name:'Synthetic recovered state',summary:'Repair an isolated display state',requirements:['The /pilot route displays Recovered in #state','Independent review and browser acceptance pass on the same commit'],allowedPaths:['app/pilot/'],milestones:[{title:'Recovered state',instruction:'Implement and independently verify the frozen display contract',contract}],finalContract:contract};
    await db.query('update work_projects set spec=$2,baseline_sha=$3 where id=$1',[project,spec,protocol.baselineSha]);
   }
-  if(process.env.KATIE_TEST_TASK3B==='1'||process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline(protocol.baselineSha);
+  if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline(protocol.baselineSha);
   const failedMission=randomUUID();
   await db.query('select create_mission($1,$2,$3,120,null)',[failedMission,'Synthetic failed specification',created.team]);
   // Synthetic historical failure setup only; actual continuation uses owner RPC and DO child creation.

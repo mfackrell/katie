@@ -175,6 +175,11 @@ export async function validateRecoveryRecords({record,task,context,project,trial
      !Number.isSafeInteger(adaptive.stagnant)||adaptive.stagnant<0||!Array.isArray(adaptive.seen)||adaptive.seen.length>16||
      adaptive.seen.some(value=>typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value)))fail('invalid adaptive continuation state');
   if(!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('adaptive verification binding missing');
+  const pending=adaptive.pendingRepair;
+  if(pending&&(!Number.isSafeInteger(pending.iteration)||![adaptive.iteration,adaptive.iteration+1].includes(pending.iteration)||
+     !sha(pending.source)||!sha(pending.before?.head)||typeof pending.before?.passed!=='boolean'||
+     !Array.isArray(pending.priorFindings)||pending.priorFindings.length>32||pending.priorFindings.some(f=>typeof f!=='string'||f.length>240)||
+     pending.iteration===adaptive.iteration+1&&(action!=='repair'||pending.before.head!==record.completedCheckpointSha)))fail('invalid pending repair evidence');
   if(action==='verification'&&last.verification.pending!==true)fail('pending verification evidence missing');
   if(['review','final-review','repair','complete'].includes(action)&&last.verification.pending)fail('unfinished verification cannot be accepted');
   if(['repair','complete'].includes(action)&&(!last.review||last.review.reviewedHeadSha!==record.completedCheckpointSha||
@@ -230,6 +235,11 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
  same(git('rev-parse',record.checkpointSha+'^{tree}'),record.sourceTreeSha,'checkpoint tree mismatch');
  if(completedEvidence.adaptiveRepair?.version===2&&['verification','review','final-review','complete'].includes(completedEvidence.adaptiveRepair.nextAction)&&
     record.sourceTreeSha!==git('rev-parse',record.completedCheckpointSha+'^{tree}'))fail('completed candidate contains unverified source modifications');
+ const pendingRepair=completedEvidence.adaptiveRepair?.pendingRepair;
+ if(pendingRepair){
+  same(git('rev-parse',pendingRepair.before.head+'^{tree}'),pendingRepair.source,'pending repair source mismatch');
+  git('merge-base','--is-ancestor',pendingRepair.before.head,record.completedCheckpointSha);
+ }
  const parents=git('show','-s','--format=%P',record.checkpointSha).split(' ');
  if(parents.length>2||parents[0]!==record.completedCheckpointSha)fail('completed checkpoint ancestry mismatch');
  git('merge-base','--is-ancestor',context.baseSha,record.completedCheckpointSha);
