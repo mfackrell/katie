@@ -17,7 +17,9 @@ import config from '../../config/benchmark-715-production-qualification.json' wi
 const hash=v=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'";
 export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
- await db.query('reset role');await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));await db.query('set role service_role');
+ await db.query('reset role');await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));await db.query('alter table actors add column if not exists actor_kind text');
+ for(const name of ['20261022093000_separate_project_resource_estimates.sql','20261028193000_standalone_provider_attempt_ledger.sql','20261101160000_ordinary_developer_authority.sql'])await db.query(readFileSync('supabase/migrations/'+name,'utf8'));
+ await db.query('set role service_role');
  const fixture=await createLifecycleCheckpoint(db,ids,{initial:true});
  const {root,remote,context,baseline,one}=fixture,trace=[],report={version:1,syntheticOnly:true,paidInference:0,ids,baseline,contract:context.contract,contractHash:context.contractHash,scenarios:[],trace};
  const ledger=async()=>(await db.query(`select jsonb_build_object('calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),'exposures',(select jsonb_agg(to_jsonb(e) order by call_id) from benchmark_dollar_exposures e where account_id=$1),'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1)) value`,[ids.account])).rows[0].value;
@@ -53,11 +55,10 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
   const historical=await ledger();for(const row of prior.calls)assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
   assert.equal(historical.calls.length,prior.calls.length+11);report.pauseLedgerHash=hash(historical);report.historicalCalls=historical.calls;
-  const receipt={...oldTask.external.receipt,run_id:131,outcome:'BLOCKED',reason:'NATIVE_OWNER_APPROVAL_REQUIRED',pr_url:null};fixture.receipt=receipt;
-  await db.query("update agent_tasks set status='blocked',external=jsonb_set(external,'{receipt}',$2::jsonb) where id=$1",[ids.task,receipt]);
-  await db.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[ids.task]);await db.query("update agent_missions set status='blocked' where id=$1",[ids.mission]);await db.query("update work_projects set status='blocked',lease=null,lease_until=null where id=$1",[ids.project]);
+  const receipt={...oldTask.external.receipt,run_id:131,outcome:'BLOCKED',pr_url:null};fixture.receipt=receipt;
+
   writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
-  const workflow={id:131,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
+  const workflow={id:131,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
   writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
   rmSync(first.workspace,{recursive:true,force:true});
   const release='e'.repeat(40),issue={number:829,user:{login:'mfackrell'},body:'<!-- katie-managed-task:'+ids.task+' -->\n\n'+first.request};
@@ -75,7 +76,17 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
   const route=load('@/app/api/projects/lifecycle-approval/route'),development=load('@/lib/agents/development');
   const request=(method,body,token='task2c-synthetic-owner')=>new NextRequest(config.productionUrl+'/api/projects/lifecycle-approval?taskId='+ids.task,{method,headers:{Authorization:'Bearer '+token,Origin:config.productionUrl,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+  const claim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(claim?.job.id,ids.task,'Original development assignment must reconcile its host receipt');
+  await load('@/lib/missions/worker').executeClaim(claim,async()=>{throw Error('Receipt reconciliation cannot invoke inference');});
+  assert.equal((await one('agent_tasks','id',ids.task)).status,'blocked');assert.equal((await one('agent_missions','id',ids.mission)).status,'blocked');
+  await load('@/lib/projects/worker').runProjectBatch();
+  assert.equal((await one('work_projects','id',ids.project)).status,'blocked');
   const offered=await route.GET(request('GET'));assert.equal(offered.status,200,await offered.clone().text());const pending=await offered.json();assert.equal(pending.state,'pending');assert.equal(pending.proposal.additions.nativeCalls,4);report.proposal=pending.proposal;
+  const preservedTask=await one('agent_tasks','id',ids.task);
+  const preservedProposal=(await db.query('select checkpoint from benchmark_lifecycle_proposals where id=$1',[pending.proposal.id])).rows[0].checkpoint;
+  const activeGrant=(await db.query('select * from benchmark_execution_grants where account_id=$1 order by execution_epoch desc limit 1',[ids.account])).rows[0];
+  const denyNative=async()=>assert.rejects(db.query('select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6)',[activeGrant.token_digest,ids.trial,activeGrant.execution_epoch,randomUUID(),'gpt-5.3-codex',100]),/closure|unauthorized|capacity/i);
+  await denyNative();
   const decision={taskId:ids.task,proposalId:pending.proposal.id,decision:'approved'};
   assert.equal((await route.POST(request('POST',decision,'wrong-owner'))).status,403);
   assert.equal(providerCalls,11);assert.deepEqual(await ledger(),historical);
@@ -88,6 +99,9 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    await page.getByRole('button',{name:'Reject amendment'}).click();
    await page.getByText(/Owner rejected; saved work remains recoverable/).waitFor();
    assert.equal((await db.query("select count(*)::int n from benchmark_lifecycle_decisions where decision='approved'")).rows[0].n,0);assert.deepEqual(await ledger(),historical);
+   assert.deepEqual(await one('agent_tasks','id',ids.task),preservedTask);
+   assert.deepEqual((await db.query('select checkpoint from benchmark_lifecycle_proposals where id=$1',[pending.proposal.id])).rows[0].checkpoint,preservedProposal);
+   await db.query('savepoint rejected_native');await denyNative();await db.query('rollback to savepoint rejected_native');
    report.scenarios.push({id:9,pass:true,observed:'Ignored views and actual browser rejection created no authority, calls or checkpoint changes'});
    await db.query('rollback');scenarioConnection=null;await page.reload();await page.getByRole('button',{name:'Approve exactly this amendment'}).waitFor();
    approvalRace={arrivals:0};approvalRace.ready=new Promise(resolve=>{approvalRace.release=resolve;});
