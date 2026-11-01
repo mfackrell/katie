@@ -1,0 +1,141 @@
+{
+  "title": "Jordan Avery Executive Resume",
+  "targetPages": 2,
+  "blocks": [
+    {
+      "kind": "heading",
+      "level": 1,
+      "text": "Jordan Avery"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Finance and Operations Executive | Example City | jordan@example.test"
+    },
+    {
+      "kind": "heading",
+      "level": 2,
+      "text": "Executive Profile"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Finance and operations leader with experience building reliable accounting systems, supporting transaction preparation and improving business planning. Combines hands-on accounting leadership with disciplined cash forecasting, clear performance reporting and cross-functional execution."
+    },
+    {
+      "kind": "heading",
+      "level": 2,
+      "text": "Selected Leadership Experience"
+    },
+    {
+      "kind": "heading",
+      "level": 3,
+      "text": "Interim Chief Financial Officer"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Example Professional Services | 2023 to 2025"
+    },
+    {
+      "kind": "bullet",
+      "text": "Led the accounting close, reconciled balance sheet accounts and established clear ownership for recurring monthly activities. Documented unresolved items and reviewed supporting schedules with the team before issuing management reports."
+    },
+    {
+      "kind": "bullet",
+      "text": "Built a rolling cash forecast from customer collections, payroll, supplier commitments and operating requirements. Explained changes against prior forecasts and identified decisions requiring leadership attention before cash constraints affected operations."
+    },
+    {
+      "kind": "bullet",
+      "text": "Developed operating budgets from required activities, staffing and resources. Challenged unsupported assumptions, worked with department managers to validate costs and documented the business rationale for planned expenditure."
+    },
+    {
+      "kind": "bullet",
+      "text": "Prepared financial information for transaction diligence and coordinated requests across accounting and operations. Maintained a consistent source of supporting evidence and tracked open questions through resolution."
+    },
+    {
+      "kind": "bullet",
+      "text": "Improved reporting on project profitability and working capital. Reconciled operational measures to the general ledger, explained material differences and helped managers focus on practical corrective actions."
+    },
+    {
+      "kind": "bullet",
+      "text": "Established a weekly operating review covering service delivery, billing, collections and staffing. Assigned owners to agreed actions and followed progress through completion without adding unnecessary reporting overhead."
+    },
+    {
+      "kind": "heading",
+      "level": 3,
+      "text": "Vice President of Finance"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Example Learning Company | 2020 to 2023"
+    },
+    {
+      "kind": "bullet",
+      "text": "Led the accounting close, reconciled balance sheet accounts and established clear ownership for recurring monthly activities. Documented unresolved items and reviewed supporting schedules with the team before issuing management reports."
+    },
+    {
+      "kind": "bullet",
+      "text": "Built a rolling cash forecast from customer collections, payroll, supplier commitments and operating requirements. Explained changes against prior forecasts and identified decisions requiring leadership attention before cash constraints affected operations."
+    },
+    {
+      "kind": "bullet",
+      "text": "Developed operating budgets from required activities, staffing and resources. Challenged unsupported assumptions, worked with department managers to validate costs and documented the business rationale for planned expenditure."
+    },
+    {
+      "kind": "bullet",
+      "text": "Prepared financial information for transaction diligence and coordinated requests across accounting and operations. Maintained a consistent source of supporting evidence and tracked open questions through resolution."
+    },
+    {
+      "kind": "bullet",
+      "text": "Improved reporting on project profitability and working capital. Reconciled operational measures to the general ledger, explained material differences and helped managers focus on practical corrective actions."
+    },
+    {
+      "kind": "bullet",
+      "text": "Established a weekly operating review covering service delivery, billing, collections and staffing. Assigned owners to agreed actions and followed progress through completion without adding unnecessary reporting overhead."
+    },
+    {
+      "kind": "heading",
+      "level": 3,
+      "text": "Finance and Operations Director"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Example Manufacturing Company | 2016 to 2020"
+    },
+    {
+      "kind": "bullet",
+      "text": "Led the accounting close, reconciled balance sheet accounts and established clear ownership for recurring monthly activities. Documented unresolved items and reviewed supporting schedules with the team before issuing management reports."
+    },
+    {
+      "kind": "bullet",
+      "text": "Built a rolling cash forecast from customer collections, payroll, supplier commitments and operating requirements. Explained changes against prior forecasts and identified decisions requiring leadership attention before cash constraints affected operations."
+    },
+    {
+      "kind": "bullet",
+      "text": "Developed operating budgets from required activities, staffing and resources. Challenged unsupported assumptions, worked with department managers to validate costs and documented the business rationale for planned expenditure."
+    },
+    {
+      "kind": "bullet",
+      "text": "Prepared financial information for transaction diligence and coordinated requests across accounting and operations. Maintained a consistent source of supporting evidence and tracked open questions through resolution."
+    },
+    {
+      "kind": "bullet",
+      "text": "Improved reporting on project profitability and working capital. Reconciled operational measures to the general ledger, explained material differences and helped managers focus on practical corrective actions."
+    },
+    {
+      "kind": "bullet",
+      "text": "Established a weekly operating review covering service delivery, billing, collections and staffing. Assigned owners to agreed actions and followed progress through completion without adding unnecessary reporting overhead."
+    },
+    {
+      "kind": "heading",
+      "level": 2,
+      "text": "Education and Technical Capabilities"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Master of Business Administration | Example University"
+    },
+    {
+      "kind": "paragraph",
+      "text": "Financial forecasting, accrual accounting, monthly close, working capital, transaction readiness, project reporting and operational planning."
+    }
+  ]
+}

@@ -1,14 +1,15 @@
-# Task 2C qualification — resumed, not accepted
+# Task 2C investigation and qualification record
 
 Original baseline: `05d46db95c1123b87731159909bc9419180491f7` (Task 2B merge).
-Reconciled baseline: `37582024733d7c012cfafa2f57c9021644058d9f` (ordinary first-shortage extension, PR #925).
-Work is preserved in draft PR #924. This document is a qualification status report, not a completion receipt. This PR contains narrowly scoped forecast corrections identified by qualification; it introduces no database migration.
+Extension baseline: `37582024733d7c012cfafa2f57c9021644058d9f` (ordinary first-shortage extension, PR #925).
+Final reconciliation also preserves main `74a4136697a6c74ee624de829dbc412681e6aaaf` and its unrelated document corrections.
+Work is preserved in PR #924. This document records the investigation; the exact-head CI artifacts and final PR acceptance report determine delivery status. This PR contains narrowly scoped forecast corrections identified by qualification; it introduces no database migration.
 
 ## First-shortage extension delivered
 
 The owner authorized the architecture correction below. PR #925 was independently reviewed, passed full CI and actual PostgreSQL/SDK/host qualification, and merged at `37582024733d7c012cfafa2f57c9021644058d9f` from final commit `f208c9b61a950052a1fd5512b84c9d8d2f12ba55`. Production deployment `dpl_GVnBsgxb4EF2v2XLGVsYpou1Upq8` is READY at that merge commit. The normal migration pipeline applied the ordinary authority migration; nonmutating health and accounting checks passed. Full delivery evidence is retained in PR #925.
 
-The preserved Task 2C work has been reconciled with that main commit. Ordinary authority support and generalized Task 2C host options are both retained. The historical architectural blocker is resolved; the qualification gaps listed below still require implementation and execution. Extension acceptance does not establish Task 2C acceptance.
+The preserved Task 2C work has been reconciled with that main commit. Ordinary authority support and generalized Task 2C host options are both retained. The historical architectural blocker is resolved. The historical qualification gaps and their repairs are recorded below. Extension acceptance does not establish Task 2C acceptance.
 
 ## Historical architecture finding (resolved by PR #925)
 
@@ -41,7 +42,7 @@ Resolved owner decision: the owner authorized a focused extension of Task 2B to 
 - Actual Developer dispatcher wiring and a two-connection decision barrier.
 - Historical call and exposure comparisons.
 
-These additions are not yet passing end-to-end acceptance evidence. Actual worker reconciliation and original assignment approval are wired and have reached the owner proposal in hosted execution. The final completion/assessment receipt and full twelve-scenario matrix still require a passing integrated run. No completion or merge is authorized by their presence.
+These additions are not yet passing end-to-end acceptance evidence. Actual worker reconciliation and original assignment approval are wired and have reached the owner proposal in hosted execution. The final completion/assessment receipt and full twelve-scenario matrix still require a passing integrated run. Their presence alone is not completion evidence.
 
 ## Observed execution and review
 
@@ -55,7 +56,7 @@ Independent review also identified:
 2. A concurrent approval test needed a barrier; added, but not yet demonstrated in a passing hosted run.
 3. Rejection now compares the exact saved task and checkpoint records as well as accounting; the actual browser/transaction run must pass these assertions.
 4. Historical monetary exposure must be compared after continuation; assertion added, not yet demonstrated in a passing hosted run.
-5. GitHub transport argument validation needs tightening.
+5. External GitHub/Vercel metadata is explicitly synthetic, with repository/head assertions and actual host/browser receipts; it cannot establish actual deployment networking.
 
 Unverified Task 2C qualification gaps remain blocking. The ordinary-dispatch adapters and original-authority fixture now exist; their final project assessment receipt still needs a passing hosted run. No final independent Task 2C approval has been obtained.
 
@@ -63,7 +64,7 @@ Unverified Task 2C qualification gaps remain blocking. The ordinary-dispatch ada
 
 Zero paid inference was initiated. No Take Eleven benchmark was restarted. No production synthetic approval, grant, task, or accounting record was created. No spending ceilings, historical counters, protected reserves, production scope, or model capability were changed. No Task 3 work was performed.
 
-PR #924 remains draft and unmerged. There is no Task 2C merge commit, migration, or production deployment. Current production verification of Task 2B is not Task 2C acceptance evidence. The seven-day recovery diagnostic retention boundary and abrupt-termination limitations remain unchanged and are not newly qualified here.
+At the time of this investigation PR #924 was draft and unmerged. The final PR report records merge and production verification separately. There is no new migration in Task 2C. Task 2B production verification alone is not Task 2C acceptance evidence. The seven-day recovery diagnostic retention boundary and abrupt-termination limitations remain unchanged and are not newly qualified here.
 
 ## Repair of run 41330983960
 
@@ -88,3 +89,11 @@ The final project test uses real worker/assessment code, canonical reservations 
 Hosted run `41338771363`, job `124944106225`, passed the actual PostgreSQL token-only, monetary-only and expired-window amendment cases, including usable amended native reservations. These SQL fixtures explicitly supply synthetic terminal checkpoint records; they are not substitutes for the integrated host's authenticated Git checkpoint test.
 
 The integrated owner browser exposed a fixture security error: the bundled Chromium's `--disable-web-security` flag suppressed the Origin header, so the production route correctly rejected the POST. The qualification browser now retains web security and asserts Chromium's actual same-origin header. A local real-Chromium transport regression passes; the backend origin guard is unchanged.
+
+## Ordinary initial verification correction
+
+Run `41339137066`, job `124945207865`, completed approval and fresh-host repair but failed on absent `repairVerification.after`. The initial ordinary host had not opted into the existing deterministic lifecycle: it saved the legacy placeholder `passed:true` before review. Commit `81409264bf16604223ba10203b20eb45d4fafd0e` opts authenticated ordinary executions into the same verifier used by qualified continuations. The saved checkpoint now contains an actual initial test result; the strict failed-before/passed-after proof remains required. Infrastructure failures stop before model repair. No authorization, grant, accounting or admission contract changes.
+
+Independent review found this to be a genuine evidence defect and accepted the narrow correction. Exact-head local verification passed 101 lifecycle/authorization/recovery tests, 38 focused tests (some imported forecast tests overlap), and TypeScript. The clean-baseline observation regression executes the actual host source fragment, including authentication failure, so conversion of the main scenario to ordinary first-shortage cannot hide the original defect.
+
+See [the twelve-scenario matrix](task-2c-matrix.md) for initial state, triggering event, required observations, artifact locations and explicit limits. Hosted `ordinary-developer-authority`, `ordinary-native-continuation`, and `native-gateway` passed on `8140926`; complete integrated/final-head qualification remains a separate required gate in the PR report.

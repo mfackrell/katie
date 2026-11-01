@@ -72,6 +72,20 @@ jobs:
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
+      - name: Verify generated Word document in a standard office application
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+          node scripts/document-word-acceptance.mjs
+
+      - name: Upload document acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-production-acceptance
+          path: test-artifacts/documents/
+          if-no-files-found: error
+
       - name: Upload standalone status rail Chromium screenshots
         if: always()
         uses: actions/upload-artifact@v4
