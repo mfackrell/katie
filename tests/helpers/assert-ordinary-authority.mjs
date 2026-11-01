@@ -11,6 +11,7 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query('alter table actors add column if not exists actor_kind text');
  await db.query(readFileSync('supabase/migrations/20261022093000_separate_project_resource_estimates.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261022174500_specialist_estimate_dispatch.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261023182000_owner_approved_resource_ceiling.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261101160000_ordinary_developer_authority.sql','utf8'));
  }
@@ -203,5 +204,6 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query('reset role');await db.query('set role authenticated');
  await assert.rejects(db.query(decide,args),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
+ if(process.env.KATIE_TEST_RESOURCE_DIMENSIONS==='1'){const dimensions=await (await import('./qualify-resource-dimensions.mjs')).qualifyResourceDimensions(db,rival);if(process.env.RUNNER_TEMP)writeFileSync(join(process.env.RUNNER_TEMP,'resource-dimensions.json'),JSON.stringify(dimensions,null,2));console.log('RESOURCE_DIMENSIONS_POSTGRES_PASS');}
  console.log('ORDINARY_INITIAL_AUTHORITY_POSTGRES_PASS: isolated synthetic consent, no benchmark provenance, atomic first amendment, exact two-slot reservation, preserved eleven historical calls and four completion reserves');
 }

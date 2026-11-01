@@ -2,7 +2,7 @@
 
 Original baseline: `05d46db95c1123b87731159909bc9419180491f7` (Task 2B merge).
 Reconciled baseline: `37582024733d7c012cfafa2f57c9021644058d9f` (ordinary first-shortage extension, PR #925).
-Work is preserved in draft PR #924. This document is a qualification status report, not a completion receipt. This PR adds no production implementation or migration beyond its merged baseline.
+Work is preserved in draft PR #924. This document is a qualification status report, not a completion receipt. This PR contains narrowly scoped forecast corrections identified by qualification; it introduces no database migration.
 
 ## First-shortage extension delivered
 
@@ -72,3 +72,15 @@ Job `124920833772`, step 8 failed at `qualify-resource-lifecycle.mjs:77` with `2
 Commit `10dada7898a194a091caa8217df78bfb501a78b7` preserves observations from authenticated clean-baseline diagnostics before the record-only source-restoration branch. Receipt, model, cohort, and accounting validation remain in the capacity adapters. The four-call assertion is retained, and the harness now checks that each predecessor observation survives. Independent review confirmed this root cause and the unchanged security boundary.
 
 Commit `e15b3360a24e01ad33a06a98d7ff6000780e48ab` replaces direct pause-status updates with the real mission claim/execution and project worker. It also checks unchanged task/checkpoint records and actual native-admission denial after rejection. Hosted results remain required before acceptance.
+
+## Current repairs after ordinary-path integration
+
+The integrated fixture now establishes the coding-assignment approval through `prepare_mission_development` (via the commit contract), `control_mission`, and `mission_development_task`, in addition to the distinct authenticated resource approval. It does not insert a replacement task to bypass the worker's saved-input identity check. A short simulated polling lease checks proposal stability without preventing the real project worker from claiming the fixture later.
+
+The fresh native inspection profile declares two minimum requests for each unfinished native phase: one request to inspect authoritative files with a tool, and one to consume the tool result. This applies only to fresh native host phases. It preserves generic planner defaults and larger measured requirements; it is not a guarantee of completion. The controlled eleven-call assignment uses five implementation and six review requests so the corrected planner has enough minimum capacity to begin review, then detects the repair shortage.
+
+Qualification identified a monetary-adapter defect: known repair/review estimates were discarded from shortage detection whenever later costs were unknown. The correction retains a partial known estimate separately from the unknown whole-lifecycle total. A proposal may cover the known estimated subtotal while explicitly naming unestimated stages. No unknown cost becomes zero, no estimate becomes guaranteed funding, and all existing snapshot, owner, transaction and admission checks remain authoritative.
+
+Local verification at `42f13b384f8f65075ea7a87664161c107beda7c1`: 109 lifecycle/recovery regressions plus three actual-adapter monetary regressions passed; TypeScript passed. Hosted PostgreSQL ordinary authorization passed. Integrated host execution and full CI remain under repair; no final pass is claimed here.
+
+The final project test uses real worker/assessment code, canonical reservations and settlement, and fresh local Chromium against the immutable repaired candidate. GitHub workflow/PR and Vercel publication/HTTP responses remain explicit synthetic transports. This fixture does not qualify actual deployment protection, deployed-mode browser networking, production task publication, or paid-model performance. The synthetic project receipt is never a production completion claim.

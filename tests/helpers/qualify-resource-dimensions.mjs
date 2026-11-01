@@ -7,6 +7,7 @@ import {assertOrdinaryAuthority} from './assert-ordinary-authority.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 export async function qualifyResourceDimensions(db,rival){
  const results=[];
+ for(const p of (await db.query("select id,actor_id,chat_id from work_projects where status in ('running','blocked','awaiting_approval','awaiting_input','paused')")).rows)await db.query("select control_work_project($1,$2,$3,'stop')",[p.id,p.actor_id,p.chat_id]);
  for(const dimension of ['tokens','money','expiration']){
   const limits={cumulativeTokens:dimension==='tokens'?150000:180000,developmentTokens:dimension==='tokens'?90000:120000,developmentCalls:100,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:100000,ceilingMicrousd:dimension==='money'?220000:2000000,durationSeconds:dimension==='expiration'?60:3600};
   await assertOrdinaryAuthority(db,rival,{schemaReady:true,limits,initialLifecycle:async(ids,original)=>{
@@ -37,7 +38,7 @@ export async function qualifyResourceDimensions(db,rival){
    assert.deepEqual((await snapshot()).snapshot.calls,current.snapshot.calls);assert.deepEqual((await snapshot()).snapshot.exposures,current.snapshot.exposures);
    assert.equal((await db.query('select developer_claim_dispatch($1,$2) ok',[approved.approvalId,release])).rows[0].ok,true);
    const nextDigest=randomBytes(32).toString('hex'),next=(await db.query('select developer_issue_execution_grant($1,$2,$3,$4) g',[approved.approvalId,ids.task,nextDigest,release])).rows[0].g;
-   await assert.rejects(reserve(db,digest,grant.executionEpoch,1),/unauthorized|expired/i);
+   await assert.rejects(reserve(db,digest,grant.executionEpoch,1),/unauthorized|expired|Ordinary native admission denied/i);
    const usable=(await reserve(db,nextDigest,next.executionEpoch,dimension==='tokens'?7000:4000)).rows[0].id;
    const linked=(await db.query('select legacy_mission_call_id id from benchmark_budget_calls where id=$1',[usable])).rows[0].id;
    await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-amended-dimension-'+usable,{input_tokens:1000,output_tokens:1000,total_tokens:2000}]);

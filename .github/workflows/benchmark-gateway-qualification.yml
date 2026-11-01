@@ -222,6 +222,7 @@ jobs:
       KATIE_TEST_CAPACITY_RENEWAL: '1'
       KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
       KATIE_TEST_ORDINARY_AUTHORITY: '1'
+      KATIE_TEST_RESOURCE_DIMENSIONS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -240,7 +241,9 @@ jobs:
         if: always()
         with:
           name: ordinary-owner-proposal
-          path: ${{ runner.temp }}/ordinary-owner-proposal.json
+          path: |
+            ${{ runner.temp }}/ordinary-owner-proposal.json
+            ${{ runner.temp }}/resource-dimensions.json
           if-no-files-found: error
 
 
