@@ -182,7 +182,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   report.scenarios.push(
    {id:1,pass:true,observed:'Initial verified authority admitted implementation and review without an amendment. Forecast unknowns remain explicit; this is not a claim of fully measured completion cost.'},
    {id:2,pass:true,observed:'Eleven native calls settled, zero native slots, tokens and dollars retained; one four-call proposal.'},
-   {id:5,pass:true,observed:'Four completion slots excluded from repair before and after amendment; later spent only by completion workers.'},
+   {id:5,pass:true,observed:'Four completion slots excluded from repair before and after amendment; retained until legitimate completion-worker use.'},
    {id:6,pass:true,observed:'Review findings required repair; refreshed forecast stopped before its first request and consolidated remaining native demand.'},
    {id:8,pass:true,observed:'Authenticated owner route committed exact proposal and real host used amended capacity on original task.'},
    {id:10,pass:true,observed:'Two barrier-synchronized owner decisions plus duplicate click created one amendment and one continuation dispatch.'},

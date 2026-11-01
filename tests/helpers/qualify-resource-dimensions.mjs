@@ -48,7 +48,11 @@ export async function qualifyResourceDimensions(db,rival){
    const snapshot=async()=>(await db.query('select benchmark_lifecycle_snapshot($1) s',[ids.task])).rows[0].s;
    const observations=['repair','final_review'].flatMap((stage,k)=>[0,1,2].map(i=>({id:stage+i,stage,source:'verified_phase_receipts',cohort:ids.scopeHash,binding:{projectId:ids.project,scopeHash:ids.scopeHash},completed:true,calls:2,inputTokens:2000,outputTokens:2000,seconds:10,operationIds:calls.slice(k*6+i*2,k*6+i*2+2)})));
    if(dimension==='expiration')await db.query('select pg_sleep(greatest(0,extract(epoch from deadline-clock_timestamp()))+0.05) from benchmark_native_spending_approvals where id=$1',[original.approval_id]);
-   if(dimension==='expiration')await assert.rejects(reserve(db,digest,grant.executionEpoch,1),/Ordinary native admission denied/i);
+   if(dimension==='expiration'){
+    const expired=await snapshot();assert.ok(expired.position.expiresAt<=Date.now());
+    await assert.rejects(reserve(db,digest,grant.executionEpoch,1),/Ordinary native admission denied/i);
+    const denied=await snapshot();assert.deepEqual(denied.snapshot.calls,expired.snapshot.calls);assert.deepEqual(denied.snapshot.exposures,expired.snapshot.exposures);
+   }
    const current=await snapshot(),record={taskId:ids.task,projectId:ids.project,originalBaselineSha:current.binding.baselineSha,approvedScopeHash:ids.scopeHash,approvedScope:{contractHash:current.binding.contractHash},checkpointSha:'d'.repeat(40),phase:'repair'};
    const planned=lifecycleProposalFromSnapshot({snapshot:current,record,observations});
    assert.equal(planned.state,'awaiting_owner_approval',JSON.stringify(planned));assert.ok(planned.assessment.shortages.includes(dimension==='tokens'?'nativeTokens':dimension==='money'?'money':'executionAuthority'));

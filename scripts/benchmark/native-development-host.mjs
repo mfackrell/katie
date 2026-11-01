@@ -423,7 +423,8 @@ try{
   try{if(JSON.parse(readFileSync(failure,'utf8')).kind==='infrastructure')denied('deterministic verification infrastructure failed before candidate tests');}catch(error){if(error.message?.startsWith('NATIVE_HOST_DENIED'))throw error;}
   return result;
  };
- const qualifiedLifecycle=continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
+ // Ordinary projects use verified lifecycle checkpoints from their first execution.
+ const qualifiedLifecycle=ordinary||continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
   onCompleted:evidence=>{lastCompleted={...lastCompleted,...evidence};if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
  lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};

@@ -26,7 +26,7 @@ Missing first-task authority fails with `Lifecycle task binding unavailable`; mi
 
 The owner route at `app/api/projects/lifecycle-approval/route.ts`, lines 25–30, also discovers tasks and verifies ownership through `benchmark_native_spending_approvals`. An ordinary project authorization is not sufficient for this endpoint.
 
-Consequently, even a successful benchmark-bound synthetic continuation would not prove the requested reusable Developer Orchestrator workflow from initial authorization through its first proactive amendment. Current qualification fixtures first construct the prior benchmark continuation/amendment chain. They must not be reported as independent evidence of ordinary first-shortage support.
+Consequently, even a successful benchmark-bound synthetic continuation would not prove the requested reusable Developer Orchestrator workflow from initial authorization through its first proactive amendment. The original qualification fixtures first constructed a prior benchmark continuation/amendment chain; those historical fixtures alone were not evidence of ordinary first-shortage support. The current integrated fixture starts a separately authorized ordinary task and preserves benchmark fixtures as regressions.
 
 An independent reviewer separately confirmed this finding. Supporting that missing path requires an explicit architectural extension of the authority/snapshot/decision/grant interfaces, with owner and scope binding preserved. Task 2C permits narrow corrections but instructs us to stop for a material redesign. No security fence has been relaxed.
 
@@ -41,7 +41,7 @@ Resolved owner decision: the owner authorized a focused extension of Task 2B to 
 - Actual Developer dispatcher wiring and a two-connection decision barrier.
 - Historical call and exposure comparisons.
 
-These additions are incomplete qualification code, not passing end-to-end acceptance evidence. The twelve-scenario matrix, actual worker reconciliation, final completion/assessment receipt, and final browser acceptance remain unqualified. No completion or merge is authorized by their presence.
+These additions are not yet passing end-to-end acceptance evidence. Actual worker reconciliation and original assignment approval are wired and have reached the owner proposal in hosted execution. The final completion/assessment receipt and full twelve-scenario matrix still require a passing integrated run. No completion or merge is authorized by their presence.
 
 ## Observed execution and review
 
@@ -51,13 +51,13 @@ A local scratch SQL diagnostic reached the native-host boundary, which could not
 
 Independent review also identified:
 
-1. Direct post-host state updates bypass actual worker reconciliation; replace these with `claim_mission_work` → `executeClaim` → `runProjectBatch` before acceptance.
+1. Direct post-host state updates bypassed worker reconciliation. Replaced with `claim_mission_work` → `executeClaim` → `runProjectBatch`; hosted execution now reaches the real blocked task and project states.
 2. A concurrent approval test needed a barrier; added, but not yet demonstrated in a passing hosted run.
-3. Rejection must compare checkpoint refs/content and frozen scope explicitly, in addition to accounting. This remains outstanding.
+3. Rejection now compares the exact saved task and checkpoint records as well as accounting; the actual browser/transaction run must pass these assertions.
 4. Historical monetary exposure must be compared after continuation; assertion added, not yet demonstrated in a passing hosted run.
 5. GitHub transport argument validation needs tightening.
 
-These Task 2C qualification gaps remain blocking until verified. Independent review after PR #925 also confirmed that the preserved harness still uses benchmark setup, lacks ordinary-dispatch adapter methods, and does not prove a final project assessment receipt. No final independent Task 2C approval has been obtained.
+Unverified Task 2C qualification gaps remain blocking. The ordinary-dispatch adapters and original-authority fixture now exist; their final project assessment receipt still needs a passing hosted run. No final independent Task 2C approval has been obtained.
 
 ## Safety and deployment status
 
@@ -84,3 +84,7 @@ Qualification identified a monetary-adapter defect: known repair/review estimate
 Local verification at `42f13b384f8f65075ea7a87664161c107beda7c1`: 109 lifecycle/recovery regressions plus three actual-adapter monetary regressions passed; TypeScript passed. Hosted PostgreSQL ordinary authorization passed. Integrated host execution and full CI remain under repair; no final pass is claimed here.
 
 The final project test uses real worker/assessment code, canonical reservations and settlement, and fresh local Chromium against the immutable repaired candidate. GitHub workflow/PR and Vercel publication/HTTP responses remain explicit synthetic transports. This fixture does not qualify actual deployment protection, deployed-mode browser networking, production task publication, or paid-model performance. The synthetic project receipt is never a production completion claim.
+
+Hosted run `41338771363`, job `124944106225`, passed the actual PostgreSQL token-only, monetary-only and expired-window amendment cases, including usable amended native reservations. These SQL fixtures explicitly supply synthetic terminal checkpoint records; they are not substitutes for the integrated host's authenticated Git checkpoint test.
+
+The integrated owner browser exposed a fixture security error: the bundled Chromium's `--disable-web-security` flag suppressed the Origin header, so the production route correctly rejected the POST. The qualification browser now retains web security and asserts Chromium's actual same-origin header. A local real-Chromium transport regression passes; the backend origin guard is unchanged.
