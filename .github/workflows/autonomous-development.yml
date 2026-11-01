@@ -86,9 +86,9 @@ jobs:
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
           # Ordinary owner-authored projects must not depend on benchmark files.
-          if grep -Eq '<!--[[:space:]]*katie-native-benchmark:' "$RUNNER_TEMP/original-agent-request.md"; then
+          if grep -Eq '<!--[[:space:]]*katie-native-(benchmark|developer):' "$RUNNER_TEMP/original-agent-request.md"; then
             mkdir -p "$RUNNER_TEMP/native-host"
-            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-capacity-forecast,lifecycle-capacity,native-development-child,native-execution-evidence,native-wip-checkpoint,native-wip-recovery,native-development-lifecycle,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
+            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,developer-dispatch-contract,ordinary-native-authority,native-dispatch-cli,native-development-host,native-capacity-forecast,lifecycle-capacity,native-development-child,native-execution-evidence,native-wip-checkpoint,native-wip-recovery,native-development-lifecycle,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
             node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
           else
             echo '{"native":false}' > "$RUNNER_TEMP/native-benchmark.json"

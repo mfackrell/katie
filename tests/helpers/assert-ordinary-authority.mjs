@@ -17,7 +17,7 @@ export async function assertOrdinaryAuthority(db,rival){
  await db.query('select standalone_bind_scope($1,$2,$3)',[owner,actor,chat]);
  await db.query('set role service_role');
  const p=(await db.query('select create_work_project($1,$2,$3,$4,$5,$6) p',[project,'ordinary-'+project,actor,chat,'Synthetic original display repair',repo])).rows[0].p;
- const contract={path:'/pilot',scenarios:[{name:'Recovered',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]},scope='a'.repeat(64),baseline='b'.repeat(40),contractHash='c'.repeat(64);
+ const contract={path:'/pilot',scenarios:[{name:'Recovered',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]},scope='a'.repeat(64),baseline=process.env.KATIE_TEST_ORDINARY_HOST==='1'?'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319':'b'.repeat(40),contractHash='c'.repeat(64);
  const spec={name:'Synthetic display',summary:'Repair displayed state',requirements:['Display Recovered'],allowedPaths:['app/pilot/'],milestones:[{title:'Display',instruction:'Implement approved display',contract}],finalContract:contract};
  // Declare a frozen fixture before approval; the actual scope approval RPC owns
  // the transition. No production scope or records are imported or changed.
@@ -68,21 +68,27 @@ export async function assertOrdinaryAuthority(db,rival){
  assert.equal(snapshot.snapshot.calls.length,11);assert.equal(snapshot.snapshot.exposures.length,11);
  // SQL boundary fixture supplies a synthetic completed workflow/checkpoint.
  // Actual host and route qualification must independently prove that evidence.
- await db.query("update agent_tasks set status='blocked',external=external||jsonb_build_object('receipt',jsonb_build_object('outcome','BLOCKED','run_id',101)) where id=$1",[job.id]);
+ await db.query("update agent_tasks set status='blocked',external=external||jsonb_build_object('receipt',jsonb_build_object('outcome','BLOCKED','run_id',131)) where id=$1",[job.id]);
+ const hostFixture=process.env.KATIE_TEST_ORDINARY_HOST==='1'?await (await import('./qualify-lifecycle-continuation.mjs')).createLifecycleCheckpoint(db,{authorityKind:'ordinary-developer',task:job.id,project,mission,account:approved.account_id,grant:(await db.query('select * from benchmark_execution_grants where id=$1',[grant.grantId])).rows[0]}):null;
  const current=(await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s;
- const record={taskId:job.id,projectId:project,originalBaselineSha:baseline,approvedScopeHash:scope,approvedScope:{contractHash:current.binding.contractHash},checkpointSha:'d'.repeat(40),phase:'repair'};
- const plan=lifecycleProposalFromSnapshot({snapshot:current,record});assert.equal(plan.state,'awaiting_owner_approval',JSON.stringify(plan));
- const checkpoint={...record,scopeHash:scope,runId:'101',approvalId:approved.id,grantId:grant.grantId,releaseSha:release};
+ const record=hostFixture?.record??{taskId:job.id,projectId:project,originalBaselineSha:baseline,approvedScopeHash:scope,approvedScope:{contractHash:current.binding.contractHash},checkpointSha:'d'.repeat(40),phase:'repair'};
+ const plan=lifecycleProposalFromSnapshot({snapshot:current,record,observations:hostFixture?.observations??[]});assert.equal(plan.state,'awaiting_owner_approval',JSON.stringify(plan));
+ const checkpoint=hostFixture?.checkpoint??{...record,scopeHash:scope,runId:'131',approvalId:approved.id,grantId:grant.grantId,releaseSha:release};
  const amendmentOffer=(await db.query('select benchmark_lifecycle_offer($1,$2,$3) o',[job.id,plan.proposal,checkpoint])).rows[0].o;
  const amendmentArgs=[owner,job.id,amendmentOffer.id,'approved',release];
  const amended=await Promise.all([db,rival].map(c=>c.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',amendmentArgs)));
  assert.equal(amended[0].rows[0].d.approvalId,amended[1].rows[0].d.approvalId);
  const child=(await db.query('select * from benchmark_native_spending_approvals where id=$1',[amended[0].rows[0].d.approvalId])).rows[0];
  assert.equal(child.previous_developer_approval_id,approved.id);assert.equal(child.account_id,approved.account_id);assert.equal(child.trial_id,null);assert.equal(child.continuation_id,null);
- assert.equal(child.developer_authority.limits.developmentCalls,17);
+ assert.equal(child.developer_authority.limits.developmentCalls,hostFixture?19:17);
  assert.equal((await db.query('select count(*)::int n from benchmark_full_continuations')).rows[0].n,before);
  assert.deepEqual((await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s.snapshot.calls,current.snapshot.calls);
  assert.equal((await db.query('select benchmark_effective_account_cap($1) cap',[approved.account_id])).rows[0].cap,child.max_tokens);
+ if(hostFixture){
+  assert.equal((await db.query('select developer_claim_dispatch($1,$2) ok',[child.id,release])).rows[0].ok,true);
+  await (await import('./qualify-lifecycle-continuation.mjs')).qualifyLifecycleContinuation(db,{authorityKind:'ordinary-developer',task:job.id,project,mission,account:approved.account_id},hostFixture,{approval_id:child.id,release_sha:release});
+  return;
+ }
  // The committed amendment must be usable by the same admission boundary.
  assert.equal((await db.query('select developer_gateway_execution_live($1,$2,$3) ok',[token,project,grant.executionEpoch])).rows[0].ok,false,'superseded grant stopped');
  assert.equal((await db.query('select developer_claim_dispatch($1,$2) ok',[child.id,release])).rows[0].ok,true);

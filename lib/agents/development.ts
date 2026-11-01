@@ -116,7 +116,7 @@ export async function authenticatedLifecycleCheckpoint(taskId:string){
  const {record,diagnostics}=await loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:reader});
  if(!record)throw Error('Authenticated checkpoint required');
  await validateRecoveryRecords({record,completedEvidence:recoveryCompletedEvidence(record,diagnostics),task,context,project,
-  trialId:snap.data.snapshot.approval.trial_id,accountId:snap.data.accountId,
+  trialId:snap.data.snapshot.approval.trial_id,authorityKind:snap.data.authorityKind,accountId:snap.data.accountId,
   readOne:async(table:string,column:string,value:string)=>{const r=await db.from(table).select('*').eq(column,value).maybeSingle<Record<string,unknown>>();if(r.error||!r.data)throw Error('Recovery provenance unavailable');return r.data;}});
  const [owner,repo]=task.repository_full_name.split('/');
  const refs=await client.git.listMatchingRefs({owner,repo,ref:'tags/katie-wip/'+taskId+'/'});

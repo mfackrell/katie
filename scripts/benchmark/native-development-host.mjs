@@ -1,3 +1,5 @@
+import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
+import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
 import {recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
@@ -28,15 +30,18 @@ const [,,requestFile,manifestFile,childFile]=process.argv;
 const denied=message=>{throw Error('NATIVE_HOST_DENIED: '+message)};
 if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
-const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
+const requestBody=readFileSync(requestFile,'utf8');
+const ordinary=/<!--\s*katie-native-developer[:\s]/.test(requestBody);
+const proof=(ordinary?readDeveloperHandoff:readNativeHandoff)(requestBody,signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId','resourceAmendmentId'])
+for(const key of ['authorityKind','accountId','scopeHash','releaseSha','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId','resourceAmendmentId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
 const productionRuntime=proof.productionRuntime?openNativeProductionRuntime(proof.productionRuntime,proof,signingKey):null;
 // Production capsules are emitted only by the enabled server dispatcher after
 // its task-specific owner approval. Legacy staging retains its separate switch.
+if(ordinary&&!productionRuntime)denied('ordinary execution requires authenticated production runtime');
 if(!productionRuntime&&process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
  denied('no separately enabled paid benchmark run');
 const url=productionRuntime?.url??process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -54,11 +59,11 @@ const readOne=async(table,column,value,fields='*')=>{
  return data;
 };
 const approval=await readOne('benchmark_native_spending_approvals','id',proof.approvalId);
-if(approval.trial_id!==proof.trialId||approval.task_id!==proof.taskId||
+if(approval.trial_id!==(ordinary?null:proof.trialId)||approval.task_id!==proof.taskId||
  approval.project_id!==proof.projectId||approval.repository!==process.env.GITHUB_REPOSITORY||
  approval.revoked_at||((proof.startupRecoveryId||proof.paidSuccessorId)?!approval.consumed_at:Boolean(approval.consumed_at))||new Date(approval.deadline).getTime()<=Date.now())
  denied('owner spending approval is missing or consumed');
-const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
+const trial=ordinary?null:await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
 const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
 if((approval.continuation_id??undefined)!==proof.continuationId)denied('continuation identity differs from owner approval');
@@ -72,7 +77,7 @@ if(proof.continuationId){
  if(active.error||!continuation||continuation.id!==proof.continuationId||continuation.owner_id!==approval.owner_id||continuation.trial_id!==trial.id||continuation.account_id!==account.id||new Date(approval.deadline)>new Date(continuation.deadline))denied('continuation owner or deadline mismatch');
 }
 
-if(productionRuntime){
+if(productionRuntime&&!ordinary){
  const qualification=await readOne('benchmark_production_qualifications','experiment_id',account.experiment_id);
  if(qualification.issue!==715||qualification.revoked_at||qualification.owner_id!==approval.owner_id||
   qualification.actor_id!==approval.actor_id||trial.experiment_id!==qualification.experiment_id||
@@ -90,7 +95,8 @@ if(proof.startupRecoveryId){
   denied('startup recovery task, approval or release mismatch');
 }
 
-const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.taskId,
+const ordinaryAuthority=ordinary?await readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha:process.env.GITHUB_SHA}):null;
+const dispatch=ordinary?null:await readOne('benchmark_development_dispatches','task_id',proof.taskId,
  'task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status');
 // A token-only cap cannot discharge the owner's $10 per-arm approval.
 // Verify model pricing AND the independent owner-controlled upper price ceiling
@@ -102,7 +108,7 @@ if([5,6,7].includes(continuation?.plan?.version)){
  const cumulativeCap=continuation.plan.version===7?continuation.plan.cumulativeTokenCap:continuation.plan.version===6?625000:550000;
  const control=await db.rpc('benchmark_full_monetary_control',{p_account:account.id,p_continuation:continuation.id});
  if(control.error||control.data?.version!=='atomic-exposure-v1'||control.data.cumulativeTokenCap!==cumulativeCap||String(control.data.dollarCeilingMicrousd)!==String(continuation.plan.version===7?continuation.plan.dollarCeilingMicrousd:10000000)||Number(approval.max_tokens)!==cumulativeCap)denied('atomic cumulative monetary control unavailable');
-}else assertBenchmarkDollarCeiling({
+}else if(!ordinary)assertBenchmarkDollarCeiling({
  armUsdCents:productionRuntime?1000:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
  priceCeilingMicrosPerMillion:productionRuntime?28000000:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
  publishedInputUsdPerMillion:pricing.pricing_input_per_1m,
@@ -114,7 +120,7 @@ if(task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id){
  const {data,error}=await db.rpc('benchmark_full_task_provenance',{p_task:task.id,p_project:project.id});
  delegatedTask=!error&&data===true;
 }
-if(trial.arm!=='full'||(!continuation&&trial.state!=='qualified')||
+if(!ordinary&&(trial.arm!=='full'||(!continuation&&trial.state!=='qualified')||
  trial.contract_sha256!==proof.benchmarkContractHash||trial.baseline_sha!==proof.baselineSha||
  dispatch.trial_id!==proof.trialId||dispatch.contract_hash!==proof.contractHash||
  dispatch.benchmark_contract_hash!==proof.benchmarkContractHash||dispatch.baseline_sha!==proof.baselineSha||dispatch.status!=='qualified'||
@@ -125,7 +131,7 @@ if(trial.arm!=='full'||(!continuation&&trial.state!=='qualified')||
  project.status!=='running'||project.phase!=='development'||
  project.approved_hash!==project.approval_hash||!project.approved_hash||
  project.deadline<=new Date().toISOString()||
- ((task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id)&&!delegatedTask))
+ ((task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id)&&!delegatedTask)))
  denied('trial, project, owner or task state mismatch');
 // Complete local checkpoint setup before consuming owner execution authority.
 const boundary=assertTrustedBoundary(process.cwd());
@@ -170,7 +176,7 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
  const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
- await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:proof.trialId,accountId:account.id,readOne});
+ await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:ordinary?null:proof.trialId,authorityKind:ordinary?'ordinary-developer':undefined,accountId:account.id,readOne});
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
  priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  }
@@ -183,7 +189,7 @@ const capacityObservations=[...priorCapacityObservations];
 let latestCapacityForecast,forecastGrantId=null;
 const capacityCompletedStages=new Set(recovery?.phase==='repair'?['implementation','initial_review']:[]),capacityNotRequiredStages=new Set();
 const forecastCapacity=async phase=>{
- try{latestCapacityForecast=await readNativeLifecycleCapacity({db,task,project,approval,continuation,context:wipContext,recovery,phase,grantId:forecastGrantId,completedStages:[...capacityCompletedStages],notRequiredStages:[...capacityNotRequiredStages],observations:capacityObservations});}
+ try{latestCapacityForecast=await (ordinary?readOrdinaryLifecycleCapacity:readNativeLifecycleCapacity)({db,task,project,approval,continuation,context:wipContext,recovery,phase,grantId:forecastGrantId,completedStages:[...capacityCompletedStages],notRequiredStages:[...capacityNotRequiredStages],observations:capacityObservations});}
  catch{latestCapacityForecast={version:'lifecycle-capacity-v1',kind:'forecast_not_authorization',status:'indeterminate',uncertainties:['forecast_unavailable']};}
  console.log('NATIVE_LIFECYCLE_CAPACITY='+JSON.stringify({status:latestCapacityForecast.status,shortages:latestCapacityForecast.shortages??[],phase:latestCapacityForecast.currentPhase??null}));
 };
@@ -191,7 +197,9 @@ await forecastCapacity(recovery?.phase??'implementation');
 
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
-const {data:grantResult,error:issueError}=proof.resourceAmendmentId
+const {data:grantResult,error:issueError}=ordinary
+ ?await db.rpc('developer_issue_execution_grant',{p_approval:proof.approvalId,p_task:proof.taskId,p_digest:tokenDigest(grantToken),p_release:process.env.GITHUB_SHA})
+ :proof.resourceAmendmentId
  ?await db.rpc('benchmark_issue_development_amendment_grant',{p_amendment:proof.resourceAmendmentId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
  :proof.paidSuccessorId
  ?await db.rpc('benchmark_issue_development_paid_successor_grant',{p_successor:proof.paidSuccessorId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
@@ -207,8 +215,8 @@ const {data:grantResult,error:issueError}=proof.resourceAmendmentId
  p_repository:approval.repository,p_model:approval.model,
  p_epoch:1,p_deadline:approval.deadline,p_digest:tokenDigest(grantToken)
 });
-const grantId=(proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.grantId:grantResult;
-const executionEpoch=(proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.executionEpoch:1;
+const grantId=(ordinary||proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.grantId:grantResult;
+const executionEpoch=(ordinary||proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.executionEpoch:1;
 if(issueError||typeof grantId!=='string'||!Number.isSafeInteger(executionEpoch)||executionEpoch<1)denied('atomic owner grant issuance rejected');
 forecastGrantId=grantId;
 const clientToken=randomBytes(32).toString('base64url');
@@ -225,7 +233,7 @@ let activeWipPhase=null,lastCompleted=recovery?.lastCompleted??{checkpointSha:tr
 if(recovery){diagnostics.recovery={verification:'unverified',phase:recovery.phase,checkpointSha:recovery.checkpointSha,completedCheckpointSha:trustedCheckpointSha};saveDiagnostics();}
 const wip=createNativeWipCheckpointer({workspace:boundary.root,tempRoot:root,
  toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,
- identity:{taskId:proof.taskId,projectId:proof.projectId,trialId:proof.trialId,
+ identity:{taskId:proof.taskId,projectId:proof.projectId,trialId:ordinary?null:proof.trialId,...(ordinary?{authorityKind:'ordinary-developer'}:{}),
   approvalId:proof.approvalId,grantId,executionEpoch,approvedScopeHash:project.approved_hash,
   runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT||'1'},
  secrets:diagnosticSecrets,expectedHead:()=>trustedCheckpointSha});
@@ -276,7 +284,7 @@ const server=createNativeHttpBridge({
  beforeRequest:preserveWip,
  onFailure:classification=>{gatewayFailure??=classification;},
  requireInputCount:true,
- db,grantToken,trialId:proof.trialId,executionEpoch,
+ db,grantToken,trialId:ordinary?null:proof.trialId,developerProjectId:ordinary?project.id:null,executionEpoch,
  providerNamespace:'openai-responses',upperTokens:perRequestCap,
  upstream,clientToken,fullMission:true,
  recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens,usage})=>{
@@ -369,8 +377,8 @@ try{
       .in('state',['reserved','unresolved']).limit(1);
     if(ledgerError||!Array.isArray(pending)||pending.length)
      denied('native recovery requires authoritative reconciliation of pending provider charges');
-    const {data:stillLive,error:liveError}=await db.rpc('benchmark_gateway_execution_live',{
-     p_digest:tokenDigest(grantToken),p_trial:proof.trialId,p_epoch:executionEpoch
+    const {data:stillLive,error:liveError}=await db.rpc(ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{
+     p_digest:tokenDigest(grantToken),...(ordinary?{p_project:project.id}:{p_trial:proof.trialId}),p_epoch:executionEpoch
     });
     if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');
     // Only commit-stable source is eligible for retry; partial interrupted

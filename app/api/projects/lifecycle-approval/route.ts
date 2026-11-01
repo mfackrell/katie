@@ -47,7 +47,7 @@ export async function GET(request:NextRequest){
   if(decision.data){
    let state:string=decision.data.decision;
    if(state==='approved'){
-    const grants=await db.from('benchmark_execution_grants').select('id').eq('continuation_id',decision.data.continuation_id).limit(1).returns<{id:string}>();
+    const grants=await db.from('benchmark_execution_grants').select('id').eq(decision.data.developer_approval_id?'developer_approval_id':'continuation_id',decision.data.developer_approval_id??decision.data.continuation_id).limit(1).returns<{id:string}>();
     const task=await db.from('agent_tasks').select('status').eq('id',taskId).maybeSingle<{status:string}>();
     if(task.data?.status==='blocked')state='continuation_failed';
     else if(grants.data?.length)state='resumed';

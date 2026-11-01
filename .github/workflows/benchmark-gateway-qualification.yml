@@ -268,6 +268,23 @@ jobs:
         run: node --test tests/benchmark-renewal-postgres.test.mjs
       - name: Actual host interruption and fresh-runner continuation with real isolated accounting
         run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Ordinary first-shortage actual host continuation without inference
+        env:
+          KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE: '0'
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+          KATIE_TEST_CAPACITY_RENEWAL: '1'
+          KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+          KATIE_TEST_ORDINARY_AUTHORITY: '1'
+          KATIE_TEST_ORDINARY_HOST: '1'
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain ordinary lifecycle qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-lifecycle-qualification
+          path: ${{ runner.temp }}/ordinary-lifecycle-qualification/
+          if-no-files-found: warn
       - name: Retain lifecycle qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
