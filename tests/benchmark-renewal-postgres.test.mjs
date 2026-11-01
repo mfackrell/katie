@@ -12,7 +12,7 @@ import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
- {timeout:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1')?1500000:180000},async()=>{
+ {timeout:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1'||process.env.KATIE_TEST_ORDINARY_HOST==='1')?1500000:180000},async()=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
  const root=mkdtempSync(join(tmpdir(),'katie-continuation-')),data=join(root,'data');
  const clients=[];let started=false;
