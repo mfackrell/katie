@@ -21,6 +21,20 @@ export function answeredDocumentRequest(progress: {
     ? documentRequest(progress.objective.text) : null;
 }
 
-export const DOCUMENT_DRAFT_GUIDANCE = `DOCUMENT PRODUCTION STAGE: Katie has a shared DOCX/PDF generation, rendering, visual inspection, correction and private download service. You are preparing its content, not delivering the files yourself. Return ONLY the complete document content in Markdown: headings, paragraphs, bullets and simple tables. No preamble, download links, code fences, claims of inspection or instructions to paste into Word. The service will format this content, check page count, render actual files, inspect and deliver them after content review. Use only supplied facts; never invent credentials, employers, dates, metrics or achievements. If essential facts are missing, return a single question starting CLARIFICATION_REQUIRED: instead of a document. Do not shorten or omit supplied content merely to meet a page limit. Do not include a decorative rule or an artificial page marker.`;
+/** Detect a model's false assertion that it cannot create files, rather than
+ * treating that explanation as the user's requested document content.
+ * Only examine the opening of the answer; actual document copy may discuss
+ * file capabilities later without constituting a refusal. */
+export function isDocumentCapabilityDenial(value: string): boolean {
+  const start = value.replace(/[\u2018\u2019]/g, "'").trim().slice(0, 600);
+  if (!start || /^(?:#{1,3}\\s|[-*+]\\s|CLARIFICATION_REQUIRED:)/i.test(start)) return false;
+  const introduction = start.split(/\\n\\s*\\n/)[0].replace(/\\s+/g, ' ');
+  return /^(?:sorry[\\s,.!:—-]*)?(?:i\\s+(?:can't|cannot|can not|am unable to|don't have|do not have)|as an? (?:text-based )?(?:ai|language model)\\b|unfortunately\\b)/i.test(introduction)
+    && /\\b(?:create|generate|render|produce|download|provide|attach|make|format)\\b/i.test(introduction)
+    && /\\b(?:word|pdf|docx|files?|documents?)\\b/i.test(introduction)
+    && !/\\b(?:content policy|violates? (?:our )?policy|unsafe|illegal|prohibited)\\b/i.test(introduction);
+}
+
+export const DOCUMENT_DRAFT_GUIDANCE = `DOCUMENT PRODUCTION STAGE: Katie has a shared DOCX/PDF generation, rendering, visual inspection, correction and private download service. You are preparing its content, not delivering the files yourself. NEVER claim that you cannot create or deliver Word/PDF files: Katie's separate document service does that after you write the content. Return ONLY the complete document content in Markdown: headings, paragraphs, bullets and simple tables. No preamble, download links, code fences, claims of inspection or instructions to paste into Word. The service will format this content, check page count, render actual files, inspect and deliver them after content review. Use only supplied facts; never invent credentials, employers, dates, metrics or achievements. If essential facts are missing, return a single question starting CLARIFICATION_REQUIRED: instead of a document. Do not shorten or omit supplied content merely to meet a page limit. Do not include a decorative rule or an artificial page marker.`;
 
 export const DOCUMENT_REVIEW_GUIDANCE = `This is the content-review stage of a document production workflow. Review the draft's factual accuracy, completeness and suitability as document CONTENT. Real DOCX/PDF generation, rendering, visual inspection, page-count validation and secure delivery run after this review. Do not add preambles, download links, formatting instructions or claims about files to the content. Missing files at this intermediate stage are not a content defect. If clarification is essential, begin CLARIFICATION_REQUIRED:.`;
