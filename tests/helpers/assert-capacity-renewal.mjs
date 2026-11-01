@@ -44,6 +44,9 @@ export async function assertCapacityRenewal(db,rival,{am,ng,project,mission,task
  assert.equal((await db.query('select benchmark_effective_mission_call_limit($1,$2) n',[mission,c.id])).rows[0].n,32);
  assert.equal((await db.query('select benchmark_full_monetary_control($1,$2) r',[account,c.id])).rows[0].r.cumulativeTokenCap,625000);
  const claim=await Promise.all([db.query('select benchmark_claim_development_amendment($1,$2) ok',[next.id,release]),rival.query('select benchmark_claim_development_amendment($1,$2) ok',[next.id,release])]);assert.equal(claim.filter(x=>x.rows[0].ok).length,1);
+ if(process.env.KATIE_TEST_TASK2C==='1'){
+  await (await import('./qualify-resource-lifecycle.mjs')).qualifyResourceLifecycle(db,rival,{project,mission,task,trial,owner,account},next);return;
+ }
  const issue='select benchmark_issue_development_amendment_grant($1,$2,$3,$4,$5) r',grantArgs=[next.id,'c'.repeat(64),next.approval_id,task,release];
  const granted=await Promise.allSettled([db.query(issue,grantArgs),rival.query(issue,[next.id,'d'.repeat(64),...grantArgs.slice(2)])]);assert.equal(granted.filter(x=>x.status==='fulfilled').length,1,JSON.stringify(granted));
  const g=(await db.query('select * from benchmark_execution_grants where id=$1',[granted.find(x=>x.status==='fulfilled').value.rows[0].r.grantId])).rows[0];

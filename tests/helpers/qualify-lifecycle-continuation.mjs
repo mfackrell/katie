@@ -14,14 +14,14 @@ import {loadRecoveryDiagnostics,validateRecoveryRecords} from '../../scripts/ben
 const git=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:'pipe'}).trim();
 const write=(base,path,content)=>{mkdirSync(dirname(join(base,path)),{recursive:true});writeFileSync(join(base,path),content);};
 const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'";
-function archive(value){
+export function archive(value){
  const name=Buffer.from('native-metered-review.json.diagnostics.json'),body=Buffer.from(JSON.stringify(value));
  const local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt32LE(body.length,18);local.writeUInt32LE(body.length,22);local.writeUInt16LE(name.length,26);
  const central=Buffer.alloc(46);central.writeUInt32LE(0x02014b50);central.writeUInt32LE(body.length,20);central.writeUInt32LE(body.length,24);central.writeUInt16LE(name.length,28);
  const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,8);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+name.length,12);end.writeUInt32LE(local.length+name.length+body.length,16);
  return Buffer.concat([local,name,body,central,name,end]);
 }
-export async function createLifecycleCheckpoint(db,ids){
+export async function createLifecycleCheckpoint(db,ids,{initial=false}={}){
  const root=mkdtempSync(join(tmpdir(),'lifecycle-host-')),remote=join(root,'remote.git'),workspace=join(root,'source'),repo=resolve('.');
  const one=async(table,column,value)=>(await db.query(`select to_jsonb(r) value from ${table} r where ${column}=$1`,[value])).rows[0]?.value;
  const trial=await one('benchmark_three_arm_trials','id',ids.trial),project=await one('work_projects','id',ids.project),baseline=trial.baseline_sha;
@@ -30,6 +30,13 @@ export async function createLifecycleCheckpoint(db,ids){
  const context={version:1,projectId:ids.project,baselineSha:baseline,baseSha:baseline,allowedPaths:['app/pilot/'],contractHash:contractHash(contract),contract};
  await db.query('update project_runs set binding=$2 where mission_id=$1',[ids.mission,{...context,scopeHash:project.approved_hash}]);
  await db.query('update benchmark_development_dispatches set contract_hash=$2 where task_id=$1',[ids.task,context.contractHash]);
+ if(initial){
+  const task=await one('agent_tasks','id',ids.task),run=task.external.receipt.run_id,release='b'.repeat(40);
+  write(root,'workflow.json',JSON.stringify({id:run,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:release,run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}}));
+  write(root,'artifact.zip',archive({taskId:ids.task,runId:String(run),completed:false,phases:[],snapshots:[{label:'final',head:baseline,status:[]}]}));
+  write(root,'artifacts.json',JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:run,head_sha:release}}]}));
+  return {root,remote,repo,context,baseline,one,trial};
+ }
  write(workspace,'app/pilot/page.tsx','export default function Page(){return <div id="state">Broken</div>}\n');git(workspace,'add','app/pilot');git(workspace,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Synthetic completed implementation');const completed=git(workspace,'rev-parse','HEAD');
  write(workspace,'app/pilot/page.tsx','export default function Page(){return <div id="state">Interrupted repair</div>}\n');
  const historical=(await db.query('select * from benchmark_budget_calls where account_id=$1 and legacy_mission_call_id in(select id from mission_calls where lease=$2) order by created_at desc,id desc limit 1',[ids.account,ids.grant.id])).rows[0];
@@ -51,9 +58,9 @@ export async function createLifecycleCheckpoint(db,ids){
  rmSync(workspace,{recursive:true,force:true});
  return {root,remote,repo,context,baseline,record,observations,checkpoint:{...record,scopeHash:record.approvedScopeHash,releaseSha:release},one,trial};
 }
-export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
+export async function qualifyLifecycleContinuation(db,ids,fixture,amendment,options={}){
  const {root,remote,repo,context,baseline,one,trial}=fixture;
- const runtime=join(root,'runtime'),workspace=join(root,'fresh-runner'),bin=join(root,'bin');mkdirSync(runtime);mkdirSync(bin);
+ const runtime=join(root,'runtime-'+(options.runId??132)),workspace=join(root,'runner-'+(options.runId??132)),bin=join(root,'bin');mkdirSync(runtime,{recursive:true});mkdirSync(bin,{recursive:true});
  cpSync(join(repo,'scripts'),join(runtime,'project-tools'),{recursive:true});cpSync(join(repo,'scripts/benchmark'),join(runtime,'native-host'),{recursive:true});
  git(root,'clone','-q','--branch','baseline',remote,workspace);mkdirSync(join(workspace,'node_modules'));execFileSync('cp',['-al',join(repo,'node_modules')+'/.',join(workspace,'node_modules')]);
  write(bin,'gh',`#!/usr/bin/env node\nconst fs=require('node:fs'),p=require('node:path');if(process.argv[2]==='auth')process.exit(0);const path=process.argv[3],root=${JSON.stringify(root)};process.stdout.write(fs.readFileSync(p.join(root,path.endsWith('/zip')?'artifact.zip':path.includes('/artifacts?')?'artifacts.json':'workflow.json')));`);execFileSync('chmod',['700',join(bin,'gh')]);
@@ -64,6 +71,7 @@ export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
   try{
    const url=new URL(req.url,'http://localhost');let raw='';for await(const chunk of req){raw+=chunk;assert.ok(raw.length<2100000);}const body=raw?JSON.parse(raw):null;
    if(url.pathname.startsWith('/provider/')){
+    if(options.provider){const response=await options.provider(body,url.pathname);res.setHeader('content-type',response.type);res.end(response.body);return;}
     if(url.pathname.endsWith('/input_tokens')){res.setHeader('content-type','application/json');res.end(JSON.stringify({object:'response.input_tokens',input_tokens:3}));return;}
     const text=JSON.stringify(body.input),phase=text.includes('prior findings remain')?'final-review':text.includes('Fix only the independent reviewer')?'repair':null;assert.ok(phase,'Completed engineering phase replayed');
     // One streamed response per remaining phase, including a real sandbox tool.
@@ -83,13 +91,14 @@ export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
  });
  try{
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
-  const signing='synthetic-only-handoff-key-no-production-value',proof={taskId:ids.task,trialId:ids.trial,approvalId:amendment.approval_id,projectId:ids.project,contractHash:context.contractHash,benchmarkContractHash:trial.contract_sha256,baselineSha:baseline,expiresAt:Date.now()+25*60000,continuationId:amendment.continuation_id,developmentRenewalId:amendment.renewal_id,resourceAmendmentId:amendment.id};
-  proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);const request=projectMarker(context)+'\nSynthetic lifecycle qualification only.\n'+encodeNativeHandoff(proof,signing);
+  const signing=options.signing??'synthetic-only-handoff-key-no-production-value',proof={taskId:ids.task,trialId:ids.trial,approvalId:amendment.approval_id,projectId:ids.project,contractHash:context.contractHash,benchmarkContractHash:trial.contract_sha256,baselineSha:baseline,expiresAt:Date.now()+25*60000,continuationId:amendment.continuation_id,developmentRenewalId:amendment.renewal_id,resourceAmendmentId:amendment.id};
+  proof.productionRuntime=sealNativeProductionRuntime('synthetic-service-role',proof,signing);const request=options.request??(projectMarker(context)+'\nSynthetic lifecycle qualification only.\n'+encodeNativeHandoff(proof,signing));
   const requestFile=join(runtime,'request.md'),manifest=join(runtime,'manifest.json'),evidence=join(runtime,'native-metered-review.json');writeFileSync(requestFile,request);writeFileSync(manifest,JSON.stringify(readNativeHandoff(request,signing)));
-  host=spawn(process.execPath,['--import',join(repo,'tests/helpers/native-recovery-fetch.mjs'),join(runtime,'native-host/native-development-host.mjs'),requestFile,manifest,join(runtime,'native-host/native-development-child.mjs')],{cwd:workspace,env:{PATH:bin+':'+process.env.PATH,HOME:root,RUNNER_TEMP:runtime,GITHUB_REPOSITORY:'mfackrell/katie',GITHUB_RUN_ID:'132',GITHUB_RUN_ATTEMPT:'1',GITHUB_SHA:amendment.release_sha,GH_TOKEN:'synthetic-git',OPENAI_API_KEY:'synthetic-provider-key-no-real-access',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_NATIVE_CHECKPOINT_BRANCH:'agent/issue-829-132-1',KATIE_NATIVE_EVIDENCE_FILE:evidence,KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS:'enabled',KATIE_RECOVERY_FIXTURE_ENDPOINT:'http://127.0.0.1:'+server.address().port},stdio:['ignore','pipe','pipe']});
+  host=spawn(process.execPath,['--import',join(repo,'tests/helpers/native-recovery-fetch.mjs'),join(runtime,'native-host/native-development-host.mjs'),requestFile,manifest,join(runtime,'native-host/native-development-child.mjs')],{cwd:workspace,env:{PATH:bin+':'+process.env.PATH,HOME:root,RUNNER_TEMP:runtime,GITHUB_REPOSITORY:'mfackrell/katie',GITHUB_RUN_ID:String(options.runId??132),GITHUB_RUN_ATTEMPT:'1',GITHUB_SHA:amendment.release_sha,GH_TOKEN:'synthetic-git',OPENAI_API_KEY:'synthetic-provider-key-no-real-access',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_NATIVE_CHECKPOINT_BRANCH:'agent/issue-829-132-1',KATIE_NATIVE_EVIDENCE_FILE:evidence,KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS:'enabled',KATIE_RECOVERY_FIXTURE_ENDPOINT:'http://127.0.0.1:'+server.address().port},stdio:['ignore','pipe','pipe']});
   for(const stream of[host.stdout,host.stderr])stream.on('data',b=>{log=(log+b).slice(-60000)});const timer=setTimeout(()=>host.kill('SIGKILL'),900000);
   const code=await new Promise((resolve,reject)=>{host.once('error',reject);host.once('close',resolve)});clearTimeout(timer);host=null;
   const diagnostics=existsSync(evidence+'.diagnostics.json')?JSON.parse(readFileSync(evidence+'.diagnostics.json')):null;
+  if(options.afterRun)return await options.afterRun({code,log,diagnostics,evidence,runtime,workspace,history,request,manifest,phases});
   assert.equal(code,0,log+'\n'+JSON.stringify(diagnostics)+'\n'+(existsSync(join(runtime,'qualification-verifier-tail.json'))?readFileSync(join(runtime,'qualification-verifier-tail.json'),'utf8'):''));
   assert.deepEqual(phases,['repair','repair','final-review','final-review']);
   const completed=JSON.parse(readFileSync(evidence));assert.equal(completed.completed,true);assert.equal(completed.finalReview.verdict,'pass');assert.equal(completed.taskId,ids.task);
@@ -100,6 +109,6 @@ export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
  }finally{
   if(host)host.kill('SIGKILL');await new Promise(r=>server.close(r));
   if(process.env.RUNNER_TEMP){const output=join(process.env.RUNNER_TEMP,'lifecycle-qualification');mkdirSync(output,{recursive:true});writeFileSync(join(output,'host.log'),log);for(const name of['native-metered-review.json','native-metered-review.json.diagnostics.json','qualification-browser-acceptance.json','qualification-verifier-tail.json'])if(existsSync(join(runtime,name)))cpSync(join(runtime,name),join(output,name));}
-  rmSync(root,{recursive:true,force:true});
+  if(!options.keepRoot)rmSync(root,{recursive:true,force:true});
  }
 }
