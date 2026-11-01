@@ -64,6 +64,14 @@ jobs:
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
+      - name: Qualify lifecycle owner amendment in actual PostgreSQL without inference
+        env:
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+          KATIE_TEST_CAPACITY_RENEWAL: '1'
+          KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+
       - name: Upload standalone status rail Chromium screenshots
         if: always()
         uses: actions/upload-artifact@v4
