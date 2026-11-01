@@ -1,3 +1,4 @@
+import {freshNativePhaseWork} from './native-phase-profile.mjs';
 import {assessLifecycleCapacity,STAGES} from './lifecycle-capacity.mjs';
 import {proposeLifecycleAmendment} from '../../lib/projects/lifecycle-authorization.mjs';
 
@@ -24,7 +25,7 @@ export function lifecycleProposalFromSnapshot({snapshot,record,observations=[],p
  });
  const assessment=assessLifecycleCapacity({binding:b,observedAt:now,cohort:b.scopeHash,
   progress:{source:'authenticated_recovery',binding:b,phase,completedStages:completed,notRequiredStages:skippedRepair?['repair']:[],checkpointSha:record.checkpointSha},
-  work:{repairIterations:completed.includes('repair')||skippedRepair?0:1,additionalRepairIterations:0},observations:verified,
+  work:{...freshNativePhaseWork,repairIterations:completed.includes('repair')||skippedRepair?0:1,additionalRepairIterations:0},observations:verified,
   pricing:{native:pricing},otherApiCostMicrousd:Object.fromEntries(Object.keys(STAGES).map(k=>[k,k==='browser_delivery'?null:'0'])),
   authorization:{source:'locked_lifecycle_authority_snapshot',live:!snapshot.revoked&&!snapshot.frozen&&p.expiresAt>now,
    executionAuthorized:null,deadline:p.expiresAt,

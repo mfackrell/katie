@@ -1,3 +1,4 @@
+import {freshNativePhaseWork} from './native-phase-profile.mjs';
 // Trusted host adapter for ordinary Developer authority. No benchmark provenance
 // is synthesized; the service snapshot authenticates the original project owner.
 export async function readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha}){
@@ -23,7 +24,7 @@ import {capacityProgress} from './native-capacity-forecast.mjs';
 export async function readOrdinaryLifecycleCapacity({db,task,project,approval,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,observations=[],now=Date.now()}){
  const binding={taskId:task.id,projectId:project.id,baselineSha:context.baselineSha,scopeHash:project.approved_hash,contractHash:context.contractHash};
  const progress=capacityProgress({binding,recovery,phase,completedStages,notRequiredStages});
- const input={binding,progress,observedAt:now,cohort:binding.scopeHash,work:{repairIterations:progress.completedStages.includes('repair')||progress.notRequiredStages.includes('repair')?0:1,additionalRepairIterations:0},observations:[],pricing:{},
+ const input={binding,progress,observedAt:now,cohort:binding.scopeHash,work:{...freshNativePhaseWork,repairIterations:progress.completedStages.includes('repair')||progress.notRequiredStages.includes('repair')?0:1,additionalRepairIterations:0},observations:[],pricing:{},
   authorization:{live:!approval.revoked_at&&Date.parse(approval.deadline)>now,deadline:Date.parse(approval.deadline),executionAuthorized:approval.revoked_at?false:null},
   otherApiCostMicrousd:Object.fromEntries(Object.keys(STAGES).map(k=>[k,k==='browser_delivery'?null:'0']))};
  try{

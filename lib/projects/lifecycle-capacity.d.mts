@@ -6,7 +6,7 @@ export type Observation = {id:string;stage:Stage;source:'verified_phase_receipts
 export type CapacityInput = {
  binding:Binding;observedAt:number;cohort:string;
  progress:{source:'authenticated_recovery'|'trusted_host';binding:Binding;phase:Stage;completedStages:Stage[];notRequiredStages?:Stage[];checkpointSha?:string|null};
- work:{repairIterations:number|null;additionalRepairIterations:number|null};
+ work:{repairIterations:number|null;additionalRepairIterations:number|null;nativePhaseProfile?:'fresh-native-inspection-v1';nativeMinimumCalls?:2};
  observations:Observation[];pricing:Partial<Record<Pool,Pricing|null>>;otherApiCostMicrousd:Partial<Record<Stage,string|null>>;
  authorization:{source:string;live:boolean|null;executionAuthorized:boolean|null;deadline:number|null;
   tokens:{cumulativeLimit:number|null;accountEncumbered:number|null;developmentLimit:number|null;developmentEncumbered:number|null;completionReserveRemaining:number|null;assessmentReserveRemaining:number|null};

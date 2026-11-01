@@ -44,6 +44,7 @@ export function assessLifecycleCapacity(input){
  const uncertainties=[];
  if(!valid)uncertainties.push('untrusted_or_conflicting_progress');
  if(now===null)uncertainties.push('missing_snapshot_time');
+ const nativeFloor=input.work?.nativePhaseProfile==='fresh-native-inspection-v1'&&input.work?.nativeMinimumCalls===2?2:1;
  const repairs=known(input.work?.repairIterations);
  const extras=known(input.work?.additionalRepairIterations);
  const remainingRepairs=waived.includes('repair')?0:completed.includes('repair')?extras:add([repairs,extras]);
@@ -56,7 +57,7 @@ export function assessLifecycleCapacity(input){
   const unique=new Set(samples.map(s=>s.id));if(unique.size!==samples.length)samples.length=0;
   const metrics=Object.fromEntries(['calls','inputTokens','outputTokens','seconds'].map(k=>[k,measure(samples,k,units)]));
   if(pool==='deterministic')for(const k of ['calls','inputTokens','outputTokens'])metrics[k]={expected:0,contingency:0,projected:0,samples:0,basis:'no_model_execution_in_this_stage'};
-  const minimumCalls=done||pool==='deterministic'?0:stage==='do_completion'?4:stage==='repair'?(units===null?1:units):1;
+  const minimumCalls=done||pool==='deterministic'?0:stage==='do_completion'?4:pool==='native'?nativeFloor*(stage==='repair'?(units===null?1:units):1):1;
   if(pool!=='deterministic'&&metrics.calls.projected!==null&&metrics.calls.projected<minimumCalls){metrics.calls={expected:null,contingency:null,projected:null,samples:samples.length,basis:'observations_conflict_with_required_calls'};}
   const pricing=input.pricing?.[pool];
   const expectedMicrousd=done||pool==='deterministic'?'0':modelCostMicrousd(metrics.inputTokens.expected,metrics.outputTokens.expected,pricing,now);

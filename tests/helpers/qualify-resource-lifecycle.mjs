@@ -18,19 +18,22 @@ import config from '../../config/benchmark-715-production-qualification.json' wi
 const hash=v=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'";
 export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
+ const ordinary=ids.authorityKind==='ordinary-developer';
+ if(!ordinary){
  await db.query('reset role');await db.query(readFileSync('supabase/migrations/20261101123639_lifecycle_owner_authorization.sql','utf8'));await db.query('alter table actors add column if not exists actor_kind text');
  for(const name of ['20261022093000_separate_project_resource_estimates.sql','20261028193000_standalone_provider_attempt_ledger.sql','20261101160000_ordinary_developer_authority.sql'])await db.query(readFileSync('supabase/migrations/'+name,'utf8'));
  await db.query('set role service_role');
+ }
  const fixture=await createLifecycleCheckpoint(db,ids,{initial:true});
  const {root,remote,context,baseline,one}=fixture,trace=[],report={version:1,syntheticOnly:true,paidInference:0,ids,baseline,contract:context.contract,contractHash:context.contractHash,scenarios:[],trace};
  const ledger=async()=>(await db.query(`select jsonb_build_object('calls',(select jsonb_agg(to_jsonb(c) order by id) from benchmark_budget_calls c where account_id=$1),'exposures',(select jsonb_agg(to_jsonb(e) order by call_id) from benchmark_dollar_exposures e where account_id=$1),'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1)) value`,[ids.account])).rows[0].value;
  const prior=await ledger();report.initialLedgerHash=hash(prior);
  // Controlled prior measured phases are linked to genuine isolated settled rows.
- const rows=(await db.query("select to_jsonb(c) value from benchmark_budget_calls c where account_id=$1 and state='settled' and model='gpt-5.3-codex' and provider_usage is not null order by actual_tokens,id limit 12",[ids.account])).rows.map(r=>r.value);assert.equal(rows.length,12);
+ const rows=(await db.query("select to_jsonb(c) value from benchmark_budget_calls c where account_id=$1 and state='settled' and model='gpt-5.3-codex' and provider_usage is not null order by actual_tokens,id limit 12",[ids.account])).rows.map(r=>r.value);if(!ordinary)assert.equal(rows.length,12);
  const scope=(await one('work_projects','id',ids.project)).approved_hash;
- const observations=['repair','final_review'].flatMap((stage,k)=>[0,1,2].map(i=>{const calls=rows.slice(k*6+i*2,k*6+i*2+2);return {id:'controlled-history-'+stage+i,stage,source:'verified_phase_receipts',cohort:scope,binding:{projectId:ids.project,scopeHash:scope},completed:true,calls:2,inputTokens:calls.reduce((n,c)=>n+c.provider_usage.input_tokens,0),outputTokens:calls.reduce((n,c)=>n+c.provider_usage.output_tokens,0),seconds:5,operationIds:calls.map(c=>c.id)};}));
- const oldTask=await one('agent_tasks','id',ids.task),oldRun=oldTask.external.receipt.run_id;
- writeFileSync(join(root,'artifact.zip'),archive({taskId:ids.task,runId:String(oldRun),completed:false,phases:[],capacityObservations:observations,snapshots:[{label:'final',head:baseline,status:[]}]}));
+ const observations=ordinary?[]:['repair','final_review'].flatMap((stage,k)=>[0,1,2].map(i=>{const calls=rows.slice(k*6+i*2,k*6+i*2+2);return {id:'controlled-history-'+stage+i,stage,source:'verified_phase_receipts',cohort:scope,binding:{projectId:ids.project,scopeHash:scope},completed:true,calls:2,inputTokens:calls.reduce((n,c)=>n+c.provider_usage.input_tokens,0),outputTokens:calls.reduce((n,c)=>n+c.provider_usage.output_tokens,0),seconds:5,operationIds:calls.map(c=>c.id)};}));
+ const oldTask=await one('agent_tasks','id',ids.task),oldRun=oldTask.external.receipt?.run_id;
+ if(!ordinary)writeFileSync(join(root,'artifact.zip'),archive({taskId:ids.task,runId:String(oldRun),completed:false,phases:[],capacityObservations:observations,snapshots:[{label:'final',head:baseline,status:[]}]}));
  let recovering=false,phaseCounts=new Map(),providerCalls=0;
  const provider=async(body,path)=>{
   if(path.endsWith('/input_tokens'))return {type:'application/json',body:JSON.stringify({object:'response.input_tokens',input_tokens:3})};
@@ -48,21 +51,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
  let first,second;
  const oldEnv={...process.env},oldFetch=globalThis.fetch;
  try{
-  first=await qualifyLifecycleContinuation(db,ids,fixture,initialAmendment,{runId:131,provider,signing,keepRoot:true,afterRun:async result=>result});
-  assert.notEqual(first.code,0,first.log);assert.ok(first.diagnostics,first.log);assert.match(first.diagnostics.failure,/OWNER_APPROVAL_REQUIRED/);
-  assert.deepEqual([...phaseCounts],[['implementation',6],['review',5]]);assert.equal(providerCalls,11);
-  for(const measured of observations)assert.deepEqual(first.diagnostics.capacityObservations.find(o=>o.id===measured.id),measured,'Authenticated clean-baseline measurements must survive into the owner proposal');
-  const record=first.diagnostics.wipCheckpoint;assert.equal(record.phase,'repair');assert.equal(record.lastCompleted.review.verdict,'changes_requested');
-  report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
-  const historical=await ledger();for(const row of prior.calls)assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
-  assert.equal(historical.calls.length,prior.calls.length+11);report.pauseLedgerHash=hash(historical);report.historicalCalls=historical.calls;
-  const receipt={...oldTask.external.receipt,run_id:131,outcome:'BLOCKED',pr_url:null};fixture.receipt=receipt;
-
-  writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
-  const workflow={id:131,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
-  writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
-  rmSync(first.workspace,{recursive:true,force:true});
-  const release='e'.repeat(40),issue={number:829,user:{login:'mfackrell'},body:'<!-- katie-managed-task:'+ids.task+' -->\n\n'+first.request};
+  const release='e'.repeat(40),issue={number:829,user:{login:'mfackrell'},html_url:'https://github.com/mfackrell/katie/issues/829',body:'Synthetic original task '+ids.task};
   let turn=0,scenarioConnection=null,approvalRace=null;
   const client=postgresClient({query:async(...args)=>{
    let connection=scenarioConnection??(turn++%2?db:rival);
@@ -77,6 +66,21 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
   const route=load('@/app/api/projects/lifecycle-approval/route'),development=load('@/lib/agents/development');
   const request=(method,body,token='task2c-synthetic-owner')=>new NextRequest(config.productionUrl+'/api/projects/lifecycle-approval?taskId='+ids.task,{method,headers:{Authorization:'Bearer '+token,Origin:config.productionUrl,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+  if(ordinary){assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),true,'Initial ordinary owner authority dispatches through existing runtime');assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),false);}
+  first=await qualifyLifecycleContinuation(db,ids,fixture,initialAmendment,{runId:131,provider,signing,keepRoot:true,...(ordinary?{request:issue.body}:{}),afterRun:async result=>result});
+  assert.notEqual(first.code,0,first.log);assert.ok(first.diagnostics,first.log);assert.match(first.diagnostics.failure,/OWNER_APPROVAL_REQUIRED/);
+  assert.deepEqual([...phaseCounts],[['implementation',6],['review',5]]);assert.equal(providerCalls,11);
+  for(const measured of observations)assert.deepEqual(first.diagnostics.capacityObservations.find(o=>o.id===measured.id),measured,'Authenticated clean-baseline measurements must survive into the owner proposal');
+  const record=first.diagnostics.wipCheckpoint;assert.equal(record.phase,'repair');assert.equal(record.lastCompleted.review.verdict,'changes_requested');
+  report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
+  const historical=await ledger();for(const row of prior.calls??[])assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
+  assert.equal(historical.calls.length,(prior.calls?.length??0)+11);report.pauseLedgerHash=hash(historical);report.historicalCalls=historical.calls;
+  const receipt={version:1,repository:'mfackrell/katie',issue_number:829,checks:{build:'failure',test:'false',review:'changes_requested',repair:'skipped',retest:'skipped',final_review:'skipped'},...oldTask.external.receipt,run_id:131,outcome:'BLOCKED',pr_url:null};fixture.receipt=receipt;
+
+  writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
+  const workflow={id:131,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
+  writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
+  rmSync(first.workspace,{recursive:true,force:true});
   const claim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(claim?.job.id,ids.task,'Original development assignment must reconcile its host receipt');
   await load('@/lib/missions/worker').executeClaim(claim,async()=>{throw Error('Receipt reconciliation cannot invoke inference');});
   assert.equal((await one('agent_tasks','id',ids.task)).status,'blocked');assert.equal((await one('agent_missions','id',ids.mission)).status,'blocked');
@@ -86,7 +90,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const preservedTask=await one('agent_tasks','id',ids.task);
   const preservedProposal=(await db.query('select checkpoint from benchmark_lifecycle_proposals where id=$1',[pending.proposal.id])).rows[0].checkpoint;
   const activeGrant=(await db.query('select * from benchmark_execution_grants where account_id=$1 order by execution_epoch desc limit 1',[ids.account])).rows[0];
-  const denyNative=async()=>assert.rejects(db.query('select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6)',[activeGrant.token_digest,ids.trial,activeGrant.execution_epoch,randomUUID(),'gpt-5.3-codex',100]),/closure|unauthorized|capacity/i);
+  const denyNative=async()=>assert.rejects(db.query('select '+(ordinary?'developer_native_reserve':'benchmark_full_native_reserve')+'($1,$2,$3,$4,$5,$6)',[activeGrant.token_digest,ordinary?ids.project:ids.trial,activeGrant.execution_epoch,randomUUID(),'gpt-5.3-codex',100]),/closure|unauthorized|capacity|protected completion|external Developer assignment inactive/i);
   await denyNative();
   const decision={taskId:ids.task,proposalId:pending.proposal.id,decision:'approved'};
   assert.equal((await route.POST(request('POST',decision,'wrong-owner'))).status,403);
@@ -99,7 +103,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    scenarioConnection=db;await db.query('begin');
    await page.getByRole('button',{name:'Reject amendment'}).click();
    await page.getByText(/Owner rejected; saved work remains recoverable/).waitFor();
-   assert.equal((await db.query("select count(*)::int n from benchmark_lifecycle_decisions where decision='approved'")).rows[0].n,0);assert.deepEqual(await ledger(),historical);
+   assert.equal((await db.query("select count(*)::int n from benchmark_lifecycle_decisions where decision='approved' and proposal_id=$1",[pending.proposal.id])).rows[0].n,0);assert.deepEqual(await ledger(),historical);
    assert.deepEqual(await one('agent_tasks','id',ids.task),preservedTask);
    assert.deepEqual((await db.query('select checkpoint from benchmark_lifecycle_proposals where id=$1',[pending.proposal.id])).rows[0].checkpoint,preservedProposal);
    await db.query('savepoint rejected_native');await denyNative();await db.query('rollback to savepoint rejected_native');
@@ -110,14 +114,14 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    const racing=route.POST(request('POST',decision));await click;const response=await racing;assert.equal(response.status,200,await response.clone().text());
    assert.equal(approvalRace.arrivals,2);approvalRace=null;
    await page.getByText(/Amendment authorized; continuation queued/).waitFor();result=await response.json();
-   assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions')).rows[0].n,1);assert.deepEqual((await ledger()).calls,historical.calls);
+   assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions where proposal_id=$1',[pending.proposal.id])).rows[0].n,1);assert.deepEqual((await ledger()).calls,historical.calls);
    assert.ok(exchanges.some(x=>x.method==='POST'&&x.request.decision==='approved'&&x.status===200));
    await page.reload();await page.getByText(/Amendment authorized; continuation queued/).waitFor();
    assert.equal((await route.POST(request('POST',decision))).status,200);assert.equal(providerCalls,11,'Committed approval/reload does not dispatch');
   });
   report.authorization=result;
   assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),true);assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),false);assert.equal(trace.filter(t=>t.boundary==='workflow_dispatch').length,1);
-  const amendment=(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[result.continuationId])).rows[0];assert.ok(amendment);
+  const amendment=ordinary?{approval_id:result.approvalId,release_sha:release}:(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[result.continuationId])).rows[0];assert.ok(amendment);
   recovering=true;phaseCounts=new Map();second=await qualifyLifecycleContinuation(db,ids,fixture,amendment,{runId:132,provider,signing,keepRoot:true,request:issue.body,afterRun:async result=>result});
   assert.equal(second.code,0,second.log+'\n'+JSON.stringify(second.diagnostics));assert.deepEqual([...phaseCounts],[['repair',2],['final-review',2]]);
   const completion=JSON.parse(readFileSync(second.evidence)),browser=JSON.parse(readFileSync(join(second.runtime,'qualification-browser-acceptance.json')));assert.equal(completion.taskId,ids.task);assert.equal(completion.completed,true);assert.equal(browser.passed,true);assert.equal(browser.contractHash,context.contractHash);assert.equal(browser.headSha,completion.reviewedHeadSha);

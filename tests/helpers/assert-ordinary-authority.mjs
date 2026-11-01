@@ -5,7 +5,7 @@ import {randomUUID,randomBytes} from 'node:crypto';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 // Disposable PostgreSQL only. These authenticated identities represent synthetic
 // consent fixtures; they are never owner consent or production execution.
-export async function assertOrdinaryAuthority(db,rival){
+export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query('reset role');
  await db.query('alter table actors add column if not exists actor_kind text');
  await db.query(readFileSync('supabase/migrations/20261022093000_separate_project_resource_estimates.sql','utf8'));
@@ -18,7 +18,7 @@ export async function assertOrdinaryAuthority(db,rival){
  await db.query('select standalone_bind_scope($1,$2,$3)',[owner,actor,chat]);
  await db.query('set role service_role');
  const p=(await db.query('select create_work_project($1,$2,$3,$4,$5,$6) p',[project,'ordinary-'+project,actor,chat,'Synthetic original display repair',repo])).rows[0].p;
- const contract={path:'/pilot',scenarios:[{name:'Recovered',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]},scope='a'.repeat(64),baseline=process.env.KATIE_TEST_ORDINARY_HOST==='1'?'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319':'b'.repeat(40),contractHash='c'.repeat(64);
+ const contract={path:'/pilot',scenarios:[{name:'Recovered',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]},scope='a'.repeat(64),baseline=(process.env.KATIE_TEST_ORDINARY_HOST==='1'||options.initialLifecycle)?'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319':'b'.repeat(40),contractHash='c'.repeat(64);
  const spec={name:'Synthetic display',summary:'Repair displayed state',requirements:['Display Recovered'],allowedPaths:['app/pilot/'],milestones:[{title:'Display',instruction:'Implement approved display',contract}],finalContract:contract};
  // Declare a frozen fixture before approval; the actual scope approval RPC owns
  // the transition. No production scope or records are imported or changed.
@@ -76,6 +76,7 @@ export async function assertOrdinaryAuthority(db,rival){
  assert.equal((await db.query('select count(*)::int n from benchmark_execution_grants where account_id=$1',[approved.account_id])).rows[0].n,0);
  await assert.rejects(db.query('update benchmark_native_spending_approvals set max_tokens=max_tokens+1 where id=$1',[approved.id]),/immutable/);
  await assert.rejects(db.query("update benchmark_mission_bindings set baseline_sha=$2 where mission_id=$1",[mission,'f'.repeat(40)]),/immutable/);
+ if(options.initialLifecycle)return options.initialLifecycle({authorityKind:'ordinary-developer',task:job.id,project,mission,owner,account:approved.account_id,scopeHash:scope},{approval_id:approved.id,release_sha:'e'.repeat(40)});
  const release='e'.repeat(40),digest=randomBytes(32).toString('hex');
  const claims=await Promise.all([db,rival].map(c=>c.query('select developer_claim_dispatch($1,$2) ok',[approved.id,release])));
  assert.equal(claims.filter(r=>r.rows[0].ok).length,1);
@@ -133,7 +134,7 @@ export async function assertOrdinaryAuthority(db,rival){
  assert.equal(amended[0].rows[0].d.approvalId,amended[1].rows[0].d.approvalId);
  const child=(await db.query('select * from benchmark_native_spending_approvals where id=$1',[amended[0].rows[0].d.approvalId])).rows[0];
  assert.equal(child.previous_developer_approval_id,approved.id);assert.equal(child.account_id,approved.account_id);assert.equal(child.trial_id,null);assert.equal(child.continuation_id,null);
- assert.equal(child.developer_authority.limits.developmentCalls,hostFixture?19:17);
+ assert.equal(child.developer_authority.limits.developmentCalls,19);
  assert.equal((await db.query('select count(*)::int n from benchmark_full_continuations')).rows[0].n,before);
  assert.deepEqual((await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s.snapshot.calls,current.snapshot.calls);
  assert.equal((await db.query('select benchmark_effective_account_cap($1) cap',[approved.account_id])).rows[0].cap,child.max_tokens);
@@ -153,6 +154,13 @@ export async function assertOrdinaryAuthority(db,rival){
  assert.equal((await db.query('select binding b from project_runs where mission_id=$1',[mission])).rows[0].b.contract.tampered,true);
  await assert.rejects(db.query(reserve,[nextToken,project,nextGrant.executionEpoch,randomUUID(),'gpt-5.3-codex',100]),/authority|live|grant|admission|binding/i);
  await db.query('update project_runs set binding=$2 where mission_id=$1',[mission,savedBinding]);
+ // The fresh repair/final-review floor grants four slots. Consume two through
+ // normal settled admission before proving the last two slots are race-safe.
+ for(let n=0;n<2;n++){
+  const call=(await db.query(reserve,[nextToken,project,nextGrant.executionEpoch,randomUUID(),'gpt-5.3-codex',100])).rows[0].id;
+  const linked=(await db.query('select legacy_mission_call_id id from benchmark_budget_calls where id=$1',[call])).rows[0].id;
+  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-fresh-phase-'+call,{input_tokens:3,output_tokens:2,total_tokens:5}]);
+ }
  const attempts=await Promise.allSettled([db,rival,db].map(c=>c.query(reserve,[nextToken,project,nextGrant.executionEpoch,randomUUID(),'gpt-5.3-codex',100])));
  assert.equal(attempts.filter(r=>r.status==='fulfilled').length,2,'three concurrent reservations admit exactly two remaining native slots');
  assert.equal(attempts.filter(r=>r.status==='rejected').length,1);
@@ -162,7 +170,7 @@ export async function assertOrdinaryAuthority(db,rival){
   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'synthetic-ordinary-'+call,{input_tokens:3,output_tokens:2,total_tokens:5}]);
  }
  const after=(await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s;
- assert.equal(after.position.developmentConsumedCalls,13);assert.equal(after.position.completionCalls,4);
+ assert.equal(after.position.developmentConsumedCalls,15);assert.equal(after.position.completionCalls,4);
  assert.deepEqual(after.snapshot.calls.filter(c=>current.snapshot.calls.some(old=>old.id===c.id)),current.snapshot.calls);
  // Completion uses the existing worker reservation, including amended limits
  // beyond the original mission's fixed call allocation. Native work stays fenced.
@@ -178,7 +186,7 @@ export async function assertOrdinaryAuthority(db,rival){
   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[call,'synthetic-completion-'+call,{input_tokens:3,output_tokens:2,total_tokens:5}]);
  }
  assert.equal((await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,$5,false) id',[completion.id,completionLease,randomUUID(),'openai:gpt-5.3-codex',100])).rows[0].id,null);
- assert.equal((await db.query('select count(*)::int n from benchmark_budget_calls where account_id=$1',[approved.account_id])).rows[0].n,17);
+ assert.equal((await db.query('select count(*)::int n from benchmark_budget_calls where account_id=$1',[approved.account_id])).rows[0].n,19);
  await db.query('reset role');await db.query('set role authenticated');
  await assert.rejects(db.query(decide,args),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');

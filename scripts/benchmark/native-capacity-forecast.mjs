@@ -1,3 +1,4 @@
+import {freshNativePhaseWork} from './native-phase-profile.mjs';
 import {assessLifecycleCapacity,STAGES} from './lifecycle-capacity.mjs';
 // Every operation is SELECT or an existing STABLE accounting RPC. No grants,
 // reservations, phase transitions, approval proposals, or provider requests.
@@ -17,7 +18,7 @@ export function capacityProgress({binding,recovery,phase='implementation',comple
 export async function readNativeLifecycleCapacity({db,task,project,approval,continuation,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,observations=[],now=Date.now()}){
  const binding={taskId:task.id,projectId:project.id,baselineSha:context.baselineSha,scopeHash:project.approved_hash,contractHash:context.contractHash};
  const progress=capacityProgress({binding,recovery,phase:phase??recovery?.phase??'implementation',completedStages,notRequiredStages});
- const input={binding,progress,observedAt:now,cohort:project.approved_hash,work:{repairIterations:progress.completedStages.includes('repair')||progress.notRequiredStages.includes('repair')?0:1,additionalRepairIterations:0},observations:[],authorization:{},pricing:{},
+ const input={binding,progress,observedAt:now,cohort:project.approved_hash,work:{...freshNativePhaseWork,repairIterations:progress.completedStages.includes('repair')||progress.notRequiredStages.includes('repair')?0:1,additionalRepairIterations:0},observations:[],authorization:{},pricing:{},
   // Native tools are isolated from paid external APIs. Deployment charges are
   // not assumed free; their absence remains explicit rather than invented.
   otherApiCostMicrousd:Object.fromEntries(Object.keys(STAGES).map(k=>[k,k==='browser_delivery'?null:'0']))};

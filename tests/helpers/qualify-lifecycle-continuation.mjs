@@ -34,6 +34,7 @@ export async function createLifecycleCheckpoint(db,ids,{initial=false}={}){
  if(!ordinary)await db.query('update project_runs set binding=$2 where mission_id=$1',[ids.mission,{...context,scopeHash:project.approved_hash}]);
  if(!ordinary)await db.query('update benchmark_development_dispatches set contract_hash=$2 where task_id=$1',[ids.task,context.contractHash]);
  if(initial){
+  if(ordinary)return {root,remote,repo,context,baseline,one,trial};
   const task=await one('agent_tasks','id',ids.task),run=task.external.receipt.run_id,release='b'.repeat(40);
   write(root,'workflow.json',JSON.stringify({id:run,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:release,run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}}));
   write(root,'artifact.zip',archive({taskId:ids.task,runId:String(run),completed:false,phases:[],snapshots:[{label:'final',head:baseline,status:[]}]}));
