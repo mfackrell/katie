@@ -9,17 +9,17 @@ export const tokenDigest=token=>{
 };
 export async function forwardAuthorizedModelRequest({
  db,grantToken,trialId,executionEpoch,model,requestBody,
- upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance,requireInputCount=false
+ upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance,requireInputCount=false,developerProjectId=null
 }){
  if(!db||typeof db.rpc!=='function'||typeof upstream!=='function'||
-    typeof recordReceipt!=='function'||!trialId||!providerNamespace||
+    typeof recordReceipt!=='function'||(!trialId&&!developerProjectId)||(trialId&&developerProjectId)||!providerNamespace||
     !Number.isSafeInteger(upperTokens)||upperTokens<=0||
     !Number.isSafeInteger(executionEpoch)||executionEpoch<=0)
   throw Error('GATEWAY_CONFIGURATION_INVALID');
  // Every actual attempt has its own operation identity. No SDK turn-level
  // accounting and no "attested=true" substitute for DB reservation.
- const live=await db.rpc('benchmark_gateway_execution_live',{
-  p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch
+ const live=await db.rpc(developerProjectId?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{
+  p_digest:tokenDigest(grantToken),...(developerProjectId?{p_project:developerProjectId}:{p_trial:trialId}),p_epoch:executionEpoch
  });
  if(live.error||live.data!==true)throw Error('GATEWAY_EXECUTION_STOPPED');
  // Admission must cover the actual request, not an unrelated fixed allowance.
@@ -62,8 +62,8 @@ export async function forwardAuthorizedModelRequest({
  if(!Number.isSafeInteger(admissionTokens)||admissionTokens>upperTokens)
   throw Error('GATEWAY_REQUEST_EXCEEDS_GRANT');
  const key=randomUUID();
- const {data:id,error}=await db.rpc(fullMission?'benchmark_full_native_reserve':'benchmark_grant_reserve',{
-  p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch,
+ const {data:id,error}=await db.rpc(developerProjectId?'developer_native_reserve':fullMission?'benchmark_full_native_reserve':'benchmark_grant_reserve',{
+  p_digest:tokenDigest(grantToken),...(developerProjectId?{p_project:developerProjectId}:{p_trial:trialId}),p_epoch:executionEpoch,
   p_request_key:key,p_model:model,p_tokens:admissionTokens
  });
  if(error||typeof id!=='string'||!id)throw Error('GATEWAY_ADMISSION_DENIED');

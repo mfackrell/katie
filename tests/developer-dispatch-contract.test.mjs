@@ -33,3 +33,15 @@ test('even correctly signed payloads cannot mix authority kinds or hidden fields
  const sig=createHmac('sha256',key).update('katie:ordinary-developer:handoff:v1\0'+content).digest('base64url');
  assert.throws(()=>readDeveloperHandoff('<!-- katie-native-developer:'+content+'.'+sig+' -->',key,now),/INVALID/);
 });
+
+// Runtime secrets remain bound to the explicit ordinary authority domain.
+import {sealNativeProductionRuntime,openNativeProductionRuntime} from '../scripts/benchmark/native-runtime-capsule.mjs';
+test('ordinary runtime capsule binds every authority field and cannot become a benchmark capsule',()=>{
+ const time=Date.now(),secret='synthetic-service-credential',signing='synthetic-signing-key-at-least-32-characters';
+ const p={version:1,authorityKind:'ordinary-developer',taskId:'11111111-1111-4111-8111-111111111111',projectId:'22222222-2222-4222-8222-222222222222',approvalId:'33333333-3333-4333-8333-333333333333',accountId:'44444444-4444-4444-8444-444444444444',scopeHash:'a'.repeat(64),contractHash:'b'.repeat(64),baselineSha:'c'.repeat(40),releaseSha:'d'.repeat(40),expiresAt:time+60000};
+ const sealed=sealNativeProductionRuntime(secret,p,signing,time);
+ const verified=readDeveloperHandoff(encodeDeveloperHandoff({...p,productionRuntime:sealed},signing,time),signing,time);
+ assert.equal(openNativeProductionRuntime(sealed,verified,signing,time).serviceRoleKey,secret);
+ for(const field of ['authorityKind','taskId','projectId','approvalId','accountId','scopeHash','contractHash','baselineSha','releaseSha','expiresAt'])
+  assert.throws(()=>openNativeProductionRuntime(sealed,{...p,[field]:field==='expiresAt'?p[field]+1:p[field]+'x'},signing,time));
+});
