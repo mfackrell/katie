@@ -7,6 +7,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {NextRequest} from 'next/server.js';
 import {modules} from './load-project-modules.mjs';
+import {integratedOwnerBrowser} from './lifecycle-owner-integrated-browser.mjs';
 import {postgresClient,githubTransport} from './lifecycle-qualification-adapters.mjs';
 import {createLifecycleCheckpoint,qualifyLifecycleContinuation,archive} from './qualify-lifecycle-continuation.mjs';
 import {projectMarker} from '../../scripts/project-context.mjs';
@@ -59,7 +60,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
   rmSync(first.workspace,{recursive:true,force:true});
   const release='e'.repeat(40),issue={number:829,user:{login:'mfackrell'},body:'<!-- katie-managed-task:'+ids.task+' -->\n\n'+first.request};
-  let turn=0;const client=postgresClient({query:(...args)=>(turn++%2?db:rival).query(...args)},trace);
+  let turn=0,scenarioConnection=null;const client=postgresClient({query:(...args)=>(scenarioConnection??(turn++%2?db:rival)).query(...args)},trace);
   Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,NEXT_PUBLIC_SUPABASE_URL:config.productionDatabaseUrl,NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-key',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-role',KATIE_OWNER_AUTH_USER_ID:ids.owner,GITHUB_TOKEN:'synthetic-github',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_BENCHMARK_PAID_EXECUTION:'enabled'});
   globalThis.fetch=async(url,options)=>{assert.equal(url,config.productionDatabaseUrl+'/auth/v1/user','External network forbidden');return Response.json(options.headers.Authorization==='Bearer task2c-synthetic-owner'?{id:ids.owner,is_anonymous:false}:{error:'invalid synthetic session'},{status:options.headers.Authorization==='Bearer task2c-synthetic-owner'?200:401});};
   const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
@@ -69,9 +70,26 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const decision={taskId:ids.task,proposalId:pending.proposal.id,decision:'approved'};
   assert.equal((await route.POST(request('POST',decision,'wrong-owner'))).status,403);
   assert.equal(providerCalls,11);assert.deepEqual(await ledger(),historical);
-  const approved=await Promise.all([route.POST(request('POST',decision)),route.POST(request('POST',decision))]);for(const response of approved)assert.equal(response.status,200,await response.clone().text());const result=await approved[0].json();report.authorization=result;
-  assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions')).rows[0].n,1);assert.deepEqual((await ledger()).calls,historical.calls);
-  assert.equal((await route.POST(request('POST',decision))).status,200);assert.equal(providerCalls,11,'Commit does not dispatch');
+  let result;
+  report.ownerBrowser=await integratedOwnerBrowser(route,async(page,exchanges)=>{
+   assert.ok((await page.locator('body').innerText()).includes(ids.task));
+   assert.equal(providerCalls,11);assert.deepEqual(await ledger(),historical);
+   // Isolated rejected decision cannot authorize or corrupt the checkpoint.
+   scenarioConnection=db;await db.query('begin');
+   await page.getByRole('button',{name:'Reject amendment'}).click();
+   await page.getByText(/Owner rejected; saved work remains recoverable/).waitFor();
+   assert.equal((await db.query("select count(*)::int n from benchmark_lifecycle_decisions where decision='approved'")).rows[0].n,0);assert.deepEqual(await ledger(),historical);
+   report.scenarios.push({id:9,pass:true,observed:'Ignored views and actual browser rejection created no authority, calls or checkpoint changes'});
+   await db.query('rollback');scenarioConnection=null;await page.reload();await page.getByRole('button',{name:'Approve exactly this amendment'}).waitFor();
+   const click=page.getByRole('button',{name:'Approve exactly this amendment'}).click();
+   const racing=route.POST(request('POST',decision));await click;const response=await racing;assert.equal(response.status,200,await response.clone().text());
+   await page.getByText(/Amendment authorized; continuation queued/).waitFor();result=await response.json();
+   assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions')).rows[0].n,1);assert.deepEqual((await ledger()).calls,historical.calls);
+   assert.ok(exchanges.some(x=>x.method==='POST'&&x.request.decision==='approved'&&x.status===200));
+   await page.reload();await page.getByText(/Amendment authorized; continuation queued/).waitFor();
+   assert.equal((await route.POST(request('POST',decision))).status,200);assert.equal(providerCalls,11,'Committed approval/reload does not dispatch');
+  });
+  report.authorization=result;
   assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),true);assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),false);assert.equal(trace.filter(t=>t.boundary==='workflow_dispatch').length,1);
   const amendment=(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[result.continuationId])).rows[0];assert.ok(amendment);
   recovering=true;phaseCounts=new Map();second=await qualifyLifecycleContinuation(db,ids,fixture,amendment,{runId:132,provider,signing,keepRoot:true,request:issue.body,afterRun:async result=>result});
