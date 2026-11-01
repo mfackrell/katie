@@ -44,6 +44,7 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  for(const [sql,params] of [
   ["update work_projects set approved_hash=repeat('f',64) where id=$1",[project]],
   ['update agent_missions set calls=calls+1 where id=$1',[mission]],
+  ["update project_runs set binding=jsonb_set(binding,'{contractHash}',to_jsonb(repeat('f',64))) where mission_id=$1",[mission]],
   ['update benchmark_native_spending_approvals set revoked_at=now() where id=$1',[initial.approvalId]],
   ["update benchmark_budget_calls set state='unresolved' where id=(select id from benchmark_budget_calls where account_id=$1 limit 1)",[account]],
  ]) {
@@ -85,6 +86,7 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  }
  await assert.rejects(db.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',1]),/closure/);
  assert.equal((await db.query('select calls from agent_missions where id=$1',[mission])).rows[0].calls,30);
+ await (await import('./assert-renewal-completion-lifecycle.mjs')).assertRenewalCompletionLifecycle(db,{project,mission,task,c:{id:approved.continuationId,planHash:after.snapshot.continuation.plan_hash},cumulativeCap:after.position.cumulativeTokens});
  await db.query('reset role');await db.query('set role authenticated');
  await assert.rejects(db.query(decision,args),/permission denied/);
  await assert.rejects(db.query('select * from benchmark_lifecycle_proposals'),/permission denied/);

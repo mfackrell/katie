@@ -8,9 +8,11 @@ export function lifecycleProposalFromSnapshot({snapshot,record,observations=[],p
  if(!record || record.taskId!==b.taskId || record.projectId!==b.projectId ||
   record.originalBaselineSha!==b.baselineSha || record.approvedScopeHash!==b.scopeHash ||
   record.approvedScope?.contractHash!==b.contractHash)throw Error('Authenticated checkpoint binding differs');
- const completed=record.phase==='repair'?['implementation','initial_review']:
+ let completed=record.phase==='repair'?['implementation','initial_review']:
   record.phase==='review'?['implementation']:record.phase==='final-review'?['implementation','initial_review','repair','verification']:
   record.phase==='do_completion'?['implementation','initial_review','repair','verification','final_review']:[];
+ const skippedRepair=['final-review','do_completion'].includes(record.phase)&&record.lastCompleted?.repairPerformed!==true&&record.lastCompleted?.lifecycle?.repairPerformed!==true;
+ if(skippedRepair)completed=completed.filter(s=>s!=='repair');
  const phase=({'review':'initial_review','final-review':'final_review'})[record.phase]??record.phase;
  const calls=snapshot.snapshot.calls,seen=new Set();
  const verified=observations.filter(o=>{
@@ -21,8 +23,8 @@ export function lifecycleProposalFromSnapshot({snapshot,record,observations=[],p
   rows.forEach(c=>seen.add(c.id));return true;
  });
  const assessment=assessLifecycleCapacity({binding:b,observedAt:now,cohort:b.scopeHash,
-  progress:{source:'authenticated_recovery',binding:b,phase,completedStages:completed,checkpointSha:record.checkpointSha},
-  work:{repairIterations:completed.includes('repair')?0:1,additionalRepairIterations:0},observations:verified,
+  progress:{source:'authenticated_recovery',binding:b,phase,completedStages:completed,notRequiredStages:skippedRepair?['repair']:[],checkpointSha:record.checkpointSha},
+  work:{repairIterations:completed.includes('repair')||skippedRepair?0:1,additionalRepairIterations:0},observations:verified,
   pricing:{native:pricing},otherApiCostMicrousd:Object.fromEntries(Object.keys(STAGES).map(k=>[k,k==='browser_delivery'?null:'0'])),
   authorization:{source:'locked_lifecycle_authority_snapshot',live:!snapshot.revoked&&!snapshot.frozen&&p.expiresAt>now,
    executionAuthorized:null,deadline:p.expiresAt,

@@ -264,6 +264,12 @@ returns boolean language sql stable security invoker set search_path=public as $
  and c.plan->'developmentClosureCalls'=o.proposal->'proposed'->'completionCalls'
  and c.plan->'assessmentTokens'=o.proposal->'proposed'->'assessmentTokens'
  and p.approved_hash=o.proposal->'binding'->>'scopeHash' and p.approval_hash=p.approved_hash
+ and jsonb_build_object('specification',p.spec,'completionContract',p.completion_contract)=o.proposal->'scope'
+ and exists(select 1 from project_runs r where r.mission_id=am.mission_id and r.project_id=p.id
+  and r.binding->>'scopeHash'=o.proposal->'binding'->>'scopeHash'
+  and r.binding->>'baselineSha'=o.proposal->'binding'->>'baselineSha'
+  and r.binding->>'contractHash'=o.proposal->'binding'->>'contractHash'
+  and r.binding->'contract'=o.proposal->'acceptance')
  and c.deadline>clock_timestamp() and not exists(select 1 from benchmark_full_continuations n where n.previous_continuation_id=c.id));
 $$;
 revoke all on function benchmark_lifecycle_authorized(uuid) from public,anon,authenticated;

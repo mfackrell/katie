@@ -23,7 +23,7 @@ function archive(value){
 }
 export async function createLifecycleCheckpoint(db,ids){
  const root=mkdtempSync(join(tmpdir(),'lifecycle-host-')),remote=join(root,'remote.git'),workspace=join(root,'source'),repo=resolve('.');
- const one=async(table,column,value)=>(await db.query(`select * from ${table} where ${column}=$1`,[value])).rows[0];
+ const one=async(table,column,value)=>(await db.query(`select to_jsonb(r) value from ${table} r where ${column}=$1`,[value])).rows[0]?.value;
  const trial=await one('benchmark_three_arm_trials','id',ids.trial),project=await one('work_projects','id',ids.project),baseline=trial.baseline_sha;
  git(root,'init','--bare','-q',remote);git(root,'clone','--no-hardlinks','--no-checkout',repo,workspace);git(workspace,'fetch',repo,baseline);git(workspace,'checkout','--detach',baseline);git(workspace,'remote','set-url','origin',remote);git(workspace,'push','origin','HEAD:refs/heads/baseline');
  const contract={path:'/pilot',scenarios:[{name:'recovered state',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]};
@@ -35,7 +35,7 @@ export async function createLifecycleCheckpoint(db,ids){
  const historical=(await db.query('select * from benchmark_budget_calls where account_id=$1 and legacy_mission_call_id in(select id from mission_calls where lease=$2) order by created_at desc,id desc limit 1',[ids.account,ids.grant.id])).rows[0];
  const approval=(await db.query('select * from benchmark_native_spending_approvals where continuation_id=$1',[ids.grant.continuation_id])).rows[0];
  const request=join(root,'request.md');writeFileSync(request,projectMarker(context));
- const lastCompleted={checkpointSha:completed,phase:'review',review:{phase:'review',verdict:'changes_requested',findings:'Repair the displayed state'},verification:{head:completed,passed:false,detail:'Interrupted repair still displays wrong state'},modelCall:{requestKey:historical.request_key,operationId:historical.id,actualTokens:historical.actual_tokens,settlement:historical.state}};
+ const lastCompleted={checkpointSha:completed,phase:'review',review:{phase:'review',verdict:'changes_requested',findings:'Repair the displayed state'},verification:{head:completed,passed:false,detail:'Interrupted repair still displays wrong state'},modelCall:{requestKey:historical.request_key,operationId:historical.id,actualTokens:Number(historical.actual_tokens),settlement:historical.state}};
  const record=createNativeWipCheckpointer({workspace,tempRoot:root,toolsRoot:join(repo,'scripts'),requestFile:request,context,
   identity:{taskId:ids.task,projectId:ids.project,trialId:ids.trial,approvalId:approval.id,grantId:ids.grant.id,executionEpoch:Number(ids.grant.execution_epoch),runId:'131',runAttempt:'1',approvedScopeHash:project.approved_hash},expectedHead:()=>completed}).save({phase:'repair',reviewFindings:'CHANGES_REQUESTED Repair the displayed state',lastCompleted});
  const release='b'.repeat(40),workflow={id:131,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:release,run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
@@ -59,7 +59,7 @@ export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
  write(bin,'gh',`#!/usr/bin/env node\nconst fs=require('node:fs'),p=require('node:path');if(process.argv[2]==='auth')process.exit(0);const path=process.argv[3],root=${JSON.stringify(root)};process.stdout.write(fs.readFileSync(p.join(root,path.endsWith('/zip')?'artifact.zip':path.includes('/artifacts?')?'artifacts.json':'workflow.json')));`);execFileSync('chmod',['700',join(bin,'gh')]);
  const allowedTables=new Set(['benchmark_native_spending_approvals','benchmark_three_arm_trials','work_projects','benchmark_budget_accounts','benchmark_production_qualifications','agent_tasks','benchmark_development_dispatches','model_registry','benchmark_development_renewals','benchmark_development_resource_amendments','mission_assignments','project_runs','agent_missions','benchmark_execution_grants','benchmark_budget_calls','mission_calls']);
  const allowedRpcs=new Set(['benchmark_continuation_live','benchmark_active_full_continuation','benchmark_full_task_provenance','benchmark_issue_development_amendment_grant','benchmark_gateway_execution_live','benchmark_full_native_reserve','benchmark_reconcile_provider_usage','benchmark_full_monetary_control','benchmark_effective_mission_allowance','benchmark_effective_mission_call_limit']);
- const phases=[],history=(await db.query('select * from benchmark_budget_calls where account_id=$1 order by id',[ids.account])).rows;let host,log='';
+ const phases=[],history=(await db.query('select to_jsonb(r) value from benchmark_budget_calls r where account_id=$1 order by id',[ids.account])).rows.map(r=>r.value);let host,log='';
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url,'http://localhost');let raw='';for await(const chunk of req){raw+=chunk;assert.ok(raw.length<2100000);}const body=raw?JSON.parse(raw):null;
@@ -77,7 +77,7 @@ export async function qualifyLifecycleContinuation(db,ids,fixture,amendment){
    }
    assert.ok(url.pathname.startsWith('/database/rest/v1/'));const name=url.pathname.split('/').at(-1);let data;
    if(url.pathname.includes('/rpc/')){assert.ok(allowedRpcs.has(name),'Unexpected RPC '+name);const keys=Object.keys(body);assert.ok(keys.every(k=>/^p_[a-z_]+$/.test(k)));data=(await db.query(`select ${name}(${keys.map((k,i)=>k+'=>$'+(i+1)).join(',')}) answer`,keys.map(k=>body[k]))).rows[0].answer;}
-   else{assert.equal(req.method,'GET');assert.ok(allowedTables.has(name),'Unexpected table '+name);const args=[],where=[];for(const[k,v]of url.searchParams){if(k==='select'||k==='limit')continue;assert.match(k,/^[a-z_]+$/);assert.ok(v.startsWith('eq.'));args.push(v.slice(3));where.push(k+'=$'+args.length);}const rows=(await db.query(`select * from ${name}${where.length?' where '+where.join(' and '):''}`,args)).rows;data=req.headers.accept?.includes('object')?(rows[0]??null):rows;}
+   else{assert.equal(req.method,'GET');assert.ok(allowedTables.has(name),'Unexpected table '+name);const args=[],where=[];for(const[k,v]of url.searchParams){if(k==='select'||k==='limit')continue;assert.match(k,/^[a-z_]+$/);assert.ok(v.startsWith('eq.'));args.push(v.slice(3));where.push(k+'=$'+args.length);}const rows=(await db.query(`select to_jsonb(r) value from ${name} r${where.length?' where '+where.join(' and '):''}`,args)).rows.map(r=>r.value);data=req.headers.accept?.includes('object')?(rows[0]??null):rows;}
    res.setHeader('content-type','application/json');res.end(JSON.stringify(data));
   }catch(error){res.statusCode=400;res.setHeader('content-type','application/json');res.end(JSON.stringify({message:error.message,code:error.code??'FIXTURE'}));}
  });

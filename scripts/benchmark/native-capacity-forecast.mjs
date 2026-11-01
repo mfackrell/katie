@@ -8,9 +8,10 @@ const sum=rows=>rows.every(v=>number(v)!==null)&&Number.isSafeInteger(rows.reduc
 const canonical=value=>JSON.stringify(value,(_k,v)=>Array.isArray(v)&&v.every(x=>x&&typeof x.id==='string')?[...v].sort((a,b)=>a.id.localeCompare(b.id)):v);
 export function capacityProgress({binding,recovery,phase='implementation',completedStages=[],notRequiredStages=[]}){
  const key={'review':'initial_review','final-review':'final_review'}[phase]??phase;
- const restored=recovery?.phase==='repair'?['implementation','initial_review']:recovery?.phase==='review'?['implementation']:
+ let restored=recovery?.phase==='repair'?['implementation','initial_review']:recovery?.phase==='review'?['implementation']:
   recovery?.phase==='final-review'?['implementation','initial_review','repair','verification']:
   recovery?.phase==='do_completion'?['implementation','initial_review','repair','verification','final_review']:[];
+ if(['final-review','do_completion'].includes(recovery?.phase)&&recovery.lastCompleted?.repairPerformed!==true&&recovery.lastCompleted?.lifecycle?.repairPerformed!==true){restored=restored.filter(s=>s!=='repair');notRequiredStages=[...new Set([...notRequiredStages,'repair'])];}
  return {source:recovery?'authenticated_recovery':'trusted_host',binding,phase:key,completedStages:[...new Set([...restored,...completedStages])],notRequiredStages,checkpointSha:recovery?.checkpointSha??null};
 }
 export async function readNativeLifecycleCapacity({db,task,project,approval,continuation,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,observations=[],now=Date.now()}){
