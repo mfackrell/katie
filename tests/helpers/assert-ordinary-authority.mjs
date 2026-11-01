@@ -136,6 +136,21 @@ export async function assertOrdinaryAuthority(db,rival){
  const after=(await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s;
  assert.equal(after.position.developmentConsumedCalls,13);assert.equal(after.position.completionCalls,4);
  assert.deepEqual(after.snapshot.calls.filter(c=>current.snapshot.calls.some(old=>old.id===c.id)),current.snapshot.calls);
+ // Completion uses the existing worker reservation, including amended limits
+ // beyond the original mission's fixed call allocation. Native work stays fenced.
+ const completion=(await db.query("select id from mission_assignments where mission_id=$1 and role='compose'",[mission])).rows[0];
+ assert.ok(completion,'existing completion assignment');
+ const completionLease=randomUUID();
+ await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '6 minutes' where id=$1",[completion.id,completionLease]);
+ assert.equal((await db.query('select mission_call_capacity($1,$2) c',[completion.id,completionLease])).rows[0].c.callsRemaining,4);
+ for(let i=0;i<4;i++){
+  const call=randomUUID();
+  const op=(await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,$5,false) id',[completion.id,completionLease,call,'openai:gpt-5.3-codex',100])).rows[0].id;
+  assert.ok(op,'protected completion capacity usable only through authorized worker');
+  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[call,'synthetic-completion-'+call,{input_tokens:3,output_tokens:2,total_tokens:5}]);
+ }
+ assert.equal((await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,$5,false) id',[completion.id,completionLease,randomUUID(),'openai:gpt-5.3-codex',100])).rows[0].id,null);
+ assert.equal((await db.query('select count(*)::int n from benchmark_budget_calls where account_id=$1',[approved.account_id])).rows[0].n,17);
  await db.query('reset role');await db.query('set role authenticated');
  await assert.rejects(db.query(decide,args),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
