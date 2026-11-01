@@ -100,6 +100,15 @@ export function assessLifecycleCapacity(input){
  }
  compare('totalTokens','input_plus_output_tokens',add([sumMetric(stages,'inputTokens','projected'),sumMetric(stages,'outputTokens','projected')]),capacity.totalTokens);
  compare('money','microUSD',sumMoney(stages.map(s=>s.cost.projected)),dollars,'0');
+ // Unknown stages must not erase a known estimated requirement. This subtotal
+ // is a partial forecast, not a hard minimum or a complete funding estimate.
+ dimensions.money.knownProjectedRemaining=sumMoney(stages.filter(s=>s.cost.projected!==null).map(s=>s.cost.projected));
+ dimensions.money.unestimatedStages=stages.filter(s=>s.cost.projected===null).map(s=>s.stage);
+ if(dimensions.money.projectedRemaining===null&&dollars!==null&&money(dimensions.money.knownProjectedRemaining)>money(dollars)){
+  dimensions.money.status='insufficient';
+  dimensions.money.knownProjectedShortfall=moneyText(money(dimensions.money.knownProjectedRemaining)-money(dollars));
+  uncertainties.push('money:partial_estimate_excludes_unestimated_stages');
+ }
  compare('time','seconds',sumMetric(stages,'seconds','projected'),capacity.seconds);
  dimensions.totalTokens.expectedRemaining=add([sumMetric(stages,'inputTokens','expected'),sumMetric(stages,'outputTokens','expected')]);
  dimensions.money.expectedRemaining=sumMoney(stages.map(s=>s.cost.expected));dimensions.time.expectedRemaining=sumMetric(stages,'seconds','expected');

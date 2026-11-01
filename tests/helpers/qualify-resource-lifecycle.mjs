@@ -80,12 +80,12 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const receipt={version:1,repository:'mfackrell/katie',issue_number:829,checks:{build:'failure',test:'false',review:'changes_requested',repair:'skipped',retest:'skipped',final_review:'skipped'},...oldTask.external.receipt,run_id:131,outcome:'BLOCKED',pr_url:null};fixture.receipt=receipt;
 
   writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
-  const workflow={id:131,status:'completed',conclusion:'failure',event:'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
+  const workflow={id:131,status:'completed',conclusion:'failure',event:ordinary?'issues':'workflow_dispatch',path:'.github/workflows/autonomous-development.yml',head_branch:'main',head_sha:initialAmendment.release_sha,created_at:new Date().toISOString(),html_url:'https://github.com/mfackrell/katie/actions/runs/131',run_attempt:1,repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'}};
   writeFileSync(join(root,'workflow.json'),JSON.stringify(workflow));writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:1,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:131,head_sha:workflow.head_sha}}]}));
   rmSync(first.workspace,{recursive:true,force:true});
   const claim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(claim?.job.id,ids.task,'Original development assignment must reconcile its host receipt');
   await load('@/lib/missions/worker').executeClaim(claim,async()=>{throw Error('Receipt reconciliation cannot invoke inference');});
-  assert.equal((await one('agent_tasks','id',ids.task)).status,'blocked');assert.equal((await one('agent_missions','id',ids.mission)).status,'blocked');
+  assert.equal((await one('agent_tasks','id',ids.task)).status,'blocked',JSON.stringify(await one('mission_assignments','id',ids.task)));assert.equal((await one('agent_missions','id',ids.mission)).status,'blocked');
   await load('@/lib/projects/worker').runProjectBatch();
   assert.equal((await one('work_projects','id',ids.project)).status,'blocked');
   const offered=await route.GET(request('GET'));assert.equal(offered.status,200,await offered.clone().text());const pending=await offered.json();assert.equal(pending.state,'pending');assert.equal(pending.proposal.additions.nativeCalls,4);report.proposal=pending.proposal;
@@ -133,7 +133,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   assert.equal(completion.repairVerification.after.passed,true);assert.equal(completion.repairVerification.after.head,completion.reviewedHeadSha);
   fixture.verifierLog=JSON.parse(readFileSync(join(second.runtime,'qualification-verifier-tail.json'),'utf8')).tail;
   fixture.receipt={version:1,repository:'mfackrell/katie',issue_number:829,run_id:132,pr_url:'https://github.com/mfackrell/katie/pull/829',outcome:'READY',tested_head_sha:completion.reviewedHeadSha,reviewed_head_sha:completion.reviewedHeadSha,checks:{build:'success',test:'false',review:'changes_requested',repair:'success',retest:'true',final_review:'pass'},projectAcceptance:browser};
-  writeFileSync(join(root,'workflow.json'),JSON.stringify({...workflow,id:132,head_sha:release,conclusion:'success',created_at:new Date().toISOString()}));
+  writeFileSync(join(root,'workflow.json'),JSON.stringify({...workflow,id:132,event:'workflow_dispatch',head_sha:release,conclusion:'success',created_at:new Date().toISOString()}));
   fixture.workerResponse=completionTransport({fixture,trace});
   const worker=load('@/lib/missions/worker');
   const developerClaim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(developerClaim?.job.id,ids.task);

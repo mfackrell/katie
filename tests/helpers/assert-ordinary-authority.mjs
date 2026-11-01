@@ -30,9 +30,19 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  assert.equal((await db.query("select finish_work_project($1,$2,'child',$3) ok",[project,claim.lease,{kind:'development',objective:'Synthetic approved display repair',evidence:{syntheticOnly:true}}])).rows[0].ok,true);
  const mission=(await db.query('select active_mission_id id from work_projects where id=$1',[project])).rows[0].id;
  const job=(await db.query("select * from mission_assignments where mission_id=$1 and role='development'",[mission])).rows[0];
+ if(options.initialLifecycle){
+  const first=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(first.job.id,job.id);
+  await db.query("select commit_mission_work($1,$2,'{}'::jsonb,'[]'::jsonb,'awaiting_approval')",[job.id,first.job.lease]);
+  await db.query("select control_mission($1,'approve',$2)",[mission,job.id]);
+  const approvedClaim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(approvedClaim.job.id,job.id);
+  await db.query('select mission_development_task($1,$2)',[job.id,approvedClaim.job.lease]);
+  await db.query("select transition_agent_task($1,'start')",[job.id]);
+  await db.query("select commit_mission_work($1,$2,'{}'::jsonb,'[]'::jsonb,'waiting_external')",[job.id,approvedClaim.job.lease]);
+ }else{
  const agent=(await db.query('select * from managed_agents where id=$1',[job.agent_id])).rows[0],taskChat=randomUUID();
  await db.query("insert into chats(id,actor_id,title) values($1,$2,'Synthetic developer')",[taskChat,agent.actor_id]);
  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development','Frozen display scope','Frozen display scope',$7,'mfackrell/katie',$1::text,'blocked','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo]);
+ }
  const limits={cumulativeTokens:180000,developmentTokens:120000,developmentCalls:15,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:3600};
  await db.query('begin');await db.query("update agent_tasks set repository_full_name='other/repository' where id=$1",[job.id]);
  await assert.rejects(db.query('select developer_prepare_initial($1,$2) p',[owner,job.id]),/binding denied/);await db.query('rollback');
@@ -45,7 +55,7 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  const rejected=(await db.query('select developer_decide_initial($1,$2,$3,$4) d',[owner,job.id,prepared.id,'rejected'])).rows[0].d;
  assert.equal(rejected.decision,'rejected');
  assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where task_id=$1',[job.id])).rows[0].n,0);
- assert.equal((await db.query('select status from agent_tasks where id=$1',[job.id])).rows[0].status,'blocked');
+ assert.equal((await db.query('select status from agent_tasks where id=$1',[job.id])).rows[0].status,options.initialLifecycle?'dispatching':'blocked');
  const offer='select developer_offer_initial($1,$2,$3,$4) p';
  await assert.rejects(db.query(offer,[randomUUID(),job.id,limits,'gpt-5.3-codex']),/binding denied/);
  const proposal=(await db.query(offer,[owner,job.id,limits,'gpt-5.3-codex'])).rows[0].p;
