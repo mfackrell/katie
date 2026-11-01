@@ -51,7 +51,7 @@ export async function runIsolatedProjectCheck({ request, port, output, dependenc
       try { const response = await fetch(origin + metadata.contract.path, { signal: AbortSignal.timeout(1500), redirect: 'manual' }); await response.body?.cancel(); if (/Ready in/u.test(logs) && server.exitCode === null) { ready = true; break; } } catch {}
       await new Promise(r => setTimeout(r, 100));
     }
-    if (!ready) throw Error('Local Next application did not start');
+    if (!ready) throw Error('Local Next application did not start (exit=' + server.exitCode + ', signal=' + server.signalCode + '): ' + logs.slice(-450));
     // The browser bundle and Open Sans font tree were expanded by the trusted
     // verifier before entering the user namespace. Sparticuz calls chown()
     // while expanding /tmp/fonts, which fails under UID-mapped namespaces.
