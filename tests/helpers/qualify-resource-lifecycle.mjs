@@ -63,10 +63,19 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
    return connection.query(...args);
   }},trace);
   Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,NEXT_PUBLIC_SUPABASE_URL:config.productionDatabaseUrl,NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-key',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-role',KATIE_OWNER_AUTH_USER_ID:ids.owner,PROJECT_PREVIEW_HOST_PATTERN:'^katie-([a-z0-9]{9})-synthetic\\.vercel\\.app$',PROJECT_PREVIEW_BYPASS_SECRET:'',GITHUB_TOKEN:'synthetic-github',KATIE_NATIVE_HANDOFF_HMAC_KEY:signing,KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_BENCHMARK_PAID_EXECUTION:'enabled',KATIE_FULL_BENCHMARK_TRIAL_ID:ids.trial,OPENAI_API_KEY:'synthetic-provider-no-real-access',GOOGLE_API_KEY:'',CLAUDE_API_KEY:'',claude_api_key:'',GROK_API_KEY:'',XAI_API_KEY:'',grok_api_key:''});
-  globalThis.fetch=async(url,options)=>{if(new URL(typeof url==='string'||url instanceof URL?url:url.url).origin==='https://api.openai.com'){assert.ok(fixture.workerResponse,'Provider forbidden before completed native engineering');return fixture.workerResponse(url,options);}assert.equal(url,config.productionDatabaseUrl+'/auth/v1/user','External network forbidden');return Response.json(options.headers.Authorization==='Bearer task2c-synthetic-owner'?{id:ids.owner,is_anonymous:false}:{error:'invalid synthetic session'},{status:options.headers.Authorization==='Bearer task2c-synthetic-owner'?200:401});};
+  // Trusted pricing provenance and catalog below are isolated synthetic evidence,
+  // never production verification. Exercise normal registry refresh and routing.
+  await db.query(`update model_registry set source_metadata=jsonb_build_object('pricing_verification_source','https://developers.openai.com/api/docs/models/gpt-5.3-codex','pricing_verification_date',current_date::text) where provider_name='openai' and normalized_model_id='gpt-5.3-codex'`);
+  globalThis.fetch=async(url,options)=>{if(String(url)==='https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json')return Response.json({'gpt-5.3-codex':{input_cost_per_token:0.00000175,output_cost_per_token:0.000014}});if(new URL(typeof url==='string'||url instanceof URL?url:url.url).origin==='https://api.openai.com'){assert.ok(fixture.workerResponse,'Provider forbidden before completed native engineering');return fixture.workerResponse(url,options);}assert.equal(url,config.productionDatabaseUrl+'/auth/v1/user','External network forbidden');return Response.json(options.headers.Authorization==='Bearer task2c-synthetic-owner'?{id:ids.owner,is_anonymous:false}:{error:'invalid synthetic session'},{status:options.headers.Authorization==='Bearer task2c-synthetic-owner'?200:401});};
   const preview=modules()('@/lib/projects/preview');
   const load=modules({'@/lib/projects/preview':previewTransport(preview,{fixture,trace}),'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
   const route=load('@/app/api/projects/lifecycle-approval/route'),development=load('@/lib/agents/development');
+  const registry=load('@/lib/models/registry');
+  const refreshed=await registry.refreshModelRegistry([{name:'openai',listModels:async()=>['gpt-5.3-codex']}]);
+  assert.equal(refreshed[0].ok,true,'Synthetic registry transport must support real refresh');
+  const registered=(await db.query("select * from model_registry where provider_name='openai' and normalized_model_id='gpt-5.3-codex'")).rows[0];
+  assert.equal(registered.pricing_status,'verified');assert.equal(registered.supports_text,true);assert.ok(['verified','restricted'].includes(registered.routing_eligibility));
+
   const request=(method,body,token='task2c-synthetic-owner')=>new NextRequest(config.productionUrl+'/api/projects/lifecycle-approval?taskId='+ids.task,{method,headers:{Authorization:'Bearer '+token,Origin:config.productionUrl,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   if(ordinary){assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),true,'Initial ordinary owner authority dispatches through existing runtime');assert.equal(await development.dispatchOwnerRenewedNativeDevelopment(),false);}
   first=await qualifyLifecycleContinuation(db,ids,fixture,initialAmendment,{runId:131,provider,signing,keepRoot:true,...(ordinary?{request:issue.body}:{}),afterRun:async result=>result});
@@ -79,7 +88,8 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   const initialBrowser=JSON.parse(readFileSync(initialBrowserPath,'utf8'));
   assert.equal(initialBrowser.passed,false);assert.equal(initialBrowser.projectId,ids.project);assert.equal(initialBrowser.contractHash,context.contractHash);
   assert.equal(initialBrowser.headSha,record.lastCompleted.verification.head);
-  assert.deepEqual(initialBrowser.checks,[{name:'recovered state',passed:false,detail:'Rendered text does not equal approved expected value'}]);
+  assert.deepEqual(context.contract.scenarios[0].steps,[{action:'expectText',selector:'#state',value:'Recovered'}]);
+  assert.deepEqual(initialBrowser.checks,[{name:context.contract.scenarios[0].name,passed:false,detail:'Rendered text does not equal approved expected value'}]);
   report.initialBrowserFailure=initialBrowser;
   report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
   const historical=await ledger();for(const row of prior.calls??[])assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);
