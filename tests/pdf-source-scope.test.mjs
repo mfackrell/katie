@@ -17,6 +17,7 @@ function modules(){
  };return load;
 }
 const load=modules(),scope=load('lib/chat/pdf-source-selection.ts');
+const documentIntent=load('lib/documents/intent.ts');
 const route=readFileSync('app/api/chat/route.ts','utf8');
 const part=(from,to)=>{const a=route.indexOf(from),b=route.indexOf(to,a);assert.ok(a>=0 && b>a,from);return route.slice(a,b);};
 const code=source=>ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -34,6 +35,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
  const fixture={...load('lib/providers/openai-cache.ts'),workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+  ...documentIntent,documentProduction:documentIntent.documentRequest(message),
   // PDF ownership/source selection runs independently of still-image inference.
   standaloneImageObservation:false,observeImages:async()=>{},retainedImageDescriptors:new Map(),
   catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
@@ -123,6 +125,7 @@ for (const excluded of [false,true]) test(`independent ordinary, saved-draft and
  const shared=load('lib/chat/video-evidence.ts');
  for(const mode of ['ordinary','saved','clarification']){
   const assessment=vm.runInNewContext('({'+route.slice(start,end)+'})',{
+   ...documentIntent,documentProduction:documentIntent.documentRequest(message),
    ...shared,createParams:()=>result.params,result:{model:'offline'},hasVideoInput:false,attachments:result.attachments,isVideoAttachment:()=>false,
    savedDraftOriginalTask:mode==='saved'?'Read report.pdf':null,
    pendingReviewClarification:mode==='clarification'?{pending:{sourceTurns:['Read report.pdf'],question:'Which page?'}}:null,

@@ -56,6 +56,7 @@ const continuitySelection = unique(findNodes(node => ts.isBinaryExpression(node)
   ts.isIdentifier(node.left) && node.left.text === 'taskProgress' &&
   ts.isIdentifier(node.right) && node.right.text === 'pdfProgress'), 'frozen task selection');
 const selectionBlock = blockBetween(statement(continuitySelection), statement(declaration('requiredReviewForRequest')));
+const documentSelection = code(statement(declaration('documentProduction')));
 const collaborationGate = blockBetween(statement(declaration('websiteResearchRequired')), statement(declaration('collaborationEnabledForRequest')));
 const generationParams = code(unique(findNodes(node => ts.isFunctionDeclaration(node) &&
   node.name?.text === 'buildGenerationParams'), 'buildGenerationParams function'));
@@ -151,6 +152,7 @@ function fixture() {
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
     'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
+  Object.assign(helpers, load('lib/documents/intent'));
   const history = [
     { id: 'old-task', role: 'user', content: OLD_TASK },
     { id: 'old-question', role: 'assistant', content: oldQuestion },
@@ -162,11 +164,12 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
   return vm.runInNewContext(compile(`(async () => {
     ${contextResolutionBlock}
     let taskProgress = pdfProgress;
+    ${documentSelection}
     ${selectionBlock}
     ${collaborationGate}
     return { taskProgress, reviewTaskProgress, pendingReviewClarification, verifyingSavedDraft,
       savedDraftOriginalTask, taskProgressContext, resumptionContext, responsePolicy,
-      requiredReviewForRequest, collaborationEnabledForRequest };
+      requiredReviewForRequest, collaborationEnabledForRequest, documentProduction };
   })()`), {
     ...f.globals, ...f.helpers, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     message, taskProgressUserMessageId: messageId, priorTaskProgress, history,
@@ -419,6 +422,7 @@ test('actual route resolves identity before historical attachment retrieval and 
     // Simulate a later capability router incorrectly treating the generic question
     // as a new project after it has inspected a historical attachment.
     let projectRelationHint = 'new_project';
+    ${documentSelection}
     ${selectionBlock}
     return {taskProgress, projectRelationHint, attachmentDecision};
   })()`), {
