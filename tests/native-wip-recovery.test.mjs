@@ -226,7 +226,7 @@ test('restored WIP cannot complete without deterministic acceptance and final in
 test('completed-phase summaries fit the unchanged checkpoint envelope alongside full repair findings',async()=>{
  let completed;
  const findings='CHANGES_REQUESTED '+('finding '.repeat(1500)),detail='failure '.repeat(1500);
- await executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,onCompleted:value=>{completed=value;},
+ await executeNativeDevelopmentLifecycle({qualifiedLifecycle:true,onCompleted:value=>{completed={...completed,...value};},
   runPhase:async phase=>({phase,verdict:phase==='review'?'changes_requested':'pass',findings:phase==='review'?findings:'PASS'}),
   commitCandidate:()=> 'a'.repeat(40),verifyCandidate:async()=>({passed:true,detail})});
  assert.equal(completed.review.verdict,'changes_requested');assert.ok(Buffer.byteLength(completed.review.findings)<=1600);

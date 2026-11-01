@@ -20,20 +20,25 @@ export async function GET(request:NextRequest){
   const principal=await owner(request);if(!principal)return reply({error:'Sign in as the owner to review resource amendments.'},401);
   const db=getSupabaseAdminClient();
   let taskId=request.nextUrl.searchParams.get('taskId');
+  const chatId=request.nextUrl.searchParams.get('chatId');if(chatId&&!z.string().uuid().safeParse(chatId).success)return reply({error:'Invalid conversation.'},400);
   if(taskId&&!z.string().uuid().safeParse(taskId).success)return reply({error:'Invalid task.'},400);
-  if(!taskId){const recent=await db.from('benchmark_native_spending_approvals').select('task_id').eq('owner_id',principal).order('created_at',{ascending:false}).limit(1).returns<{task_id:string}>();
+  if(!taskId){let query=db.from('benchmark_native_spending_approvals').select('task_id').eq('owner_id',principal);if(chatId)query=query.eq('chat_id',chatId);
+   const recent=await query.order('created_at',{ascending:false}).limit(1).returns<{task_id:string}>();
    if(recent.error)throw Error('Authority unavailable');taskId=recent.data?.[0]?.task_id??null;}
   if(!taskId)return reply({state:'none'});
   const authority=await db.from('benchmark_native_spending_approvals').select('id').eq('owner_id',principal).eq('task_id',taskId).limit(1).returns<{id:string}>();
   if(authority.error||!authority.data?.length)return reply({error:'Task ownership denied.'},403);
   let result=await db.from('benchmark_lifecycle_proposals').select('*').eq('owner_id',principal).eq('task_id',taskId).order('created_at',{ascending:false}).limit(1).returns<LifecycleOffer>();
   if(result.error)throw Error('Proposal records unavailable');
-  if(!result.data?.length||request.nextUrl.searchParams.get('refresh')==='true'){
-   const task=await db.from('agent_tasks').select('status').eq('id',taskId).maybeSingle<{status:string}>();
-   if(task.data?.status==='blocked'){
+  const task=await db.from('agent_tasks').select('status').eq('id',taskId).maybeSingle<{status:string}>();
+  if(task.error)throw Error('Task state unavailable');
+  if(task.data?.status==='blocked'){
+   const current=await db.rpc<LifecycleSnapshot>('benchmark_lifecycle_snapshot',{p_task:taskId});
+   if(current.error)throw Error('Current authority unavailable');
+   if(!result.data?.length||request.nextUrl.searchParams.get('refresh')==='true'||current.data?.snapshotHash!==result.data[0].snapshot_hash){
     const prepared=await prepareLifecycleOwnerProposal(taskId);
-    if(!('offer' in prepared)||!prepared.offer)return reply({...prepared,taskId});
-    result={data:[prepared.offer],error:null};
+    if('offer' in prepared&&prepared.offer)result={data:[prepared.offer],error:null};
+    else if(!result.data?.length)return reply({...prepared,taskId});
    }
   }
   const offer=result.data?.[0];if(!offer)return reply({state:'none',taskId});

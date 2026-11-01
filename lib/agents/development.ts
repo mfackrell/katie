@@ -772,7 +772,13 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     const parsed = receiptSchema.safeParse(raw);
     if (!parsed.success || parsed.data.issue_number !== issueNumber) continue;
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
-    return persist(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
+    const updated=await persist(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
+    if(receipt.outcome!=='READY'&&project){
+      // Nonbillable only: emit a recoverable owner proposal before any new execution.
+      // Accounting/worker transitions may still be settling; owner reads revalidate.
+      try{await prepareLifecycleOwnerProposal(updated.id);}catch{/* Preserve the terminal receipt; unavailable evidence never grants authority. */}
+    }
+    return updated;
   }
   if(verificationOnly && Date.now()-verificationSince>2*60*60*1000){
     return persist(task,'blocked','Verification-only workflow did not provide a valid tested/reviewed/browser receipt within two hours. Saved source and original project scope remain intact.');

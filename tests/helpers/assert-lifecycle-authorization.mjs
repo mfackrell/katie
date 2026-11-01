@@ -33,6 +33,13 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  const args=[owner,task,saved.id,'approved','e'.repeat(40)];
  assert.deepEqual(await snapshot(),initial,'offer/ignored proposal does not alter accounting or authority');
  await assert.rejects(db.query(decision,[randomUUID(),...args.slice(1)]),/denied/);
+ await assert.rejects(db.query(decision,[...args.slice(0,3),null,args[4]]),/denied/);
+ // Expired immutable proposals cannot authorize; replacement is distinct.
+ await db.query('begin');
+ const expiring=structuredClone(planned.proposal);expiring.proposed.developmentCalls++;expiring.additions.nativeCalls++;expiring.expiresAt=Date.now()+100;
+ const expired=await offer(expiring);await db.query('select pg_sleep(0.15)');await db.query('savepoint expired_decision');
+ await assert.rejects(db.query(decision,[owner,task,expired.id,'approved',args[4]]),/expired/);await db.query('rollback to savepoint expired_decision');
+ expiring.expiresAt=Date.now()+3600000;assert.notEqual((await offer(expiring)).id,expired.id);await db.query('rollback');
  await assert.rejects(db.query(decision,[owner,randomUUID(),...args.slice(2)]),/denied/);
  for(const [sql,params] of [
   ["update work_projects set approved_hash=repeat('f',64) where id=$1",[project]],
@@ -63,6 +70,13 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  assert.equal(issues.filter(r=>r.status==='fulfilled').length,1,JSON.stringify(issues));
  const next=(await db.query('select * from benchmark_execution_grants where id=$1',[issues.find(r=>r.status==='fulfilled').value.rows[0].r.grantId])).rows[0];
  const reserve='select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6) id';
+ // Exercise the actual insert admission trigger for both native and DO models.
+ // No inference: roll back these synthetic candidate reservations completely.
+ for(const model of ['gpt-5.3-codex','openai:gpt-5.3-codex']){
+  await db.query('begin');const call=randomUUID(),tokens=after.position.cumulativeTokens-after.position.accountEncumberedTokens-after.position.assessmentTokens-(model==='gpt-5.3-codex'?after.position.completionTokens:0)+1;
+  await db.query('insert into mission_calls(id,job_id,lease,model,reserved_tokens) values($1,$2,$3,$4,$5)',[call,task,next.id,model,tokens]);
+  await assert.rejects(db.query('insert into benchmark_budget_calls(account_id,request_key,model,reserved_tokens,legacy_mission_call_id,continuation_id) values($1,$2::uuid::text,$3,$4,$2::uuid,$5)',[account,call,model,tokens,approved.continuationId]),/Protected lifecycle account reserves/);await db.query('rollback');
+ }
  await assert.rejects(db.query(reserve,[grant.token_digest,trial,grant.execution_epoch,randomUUID(),'gpt-5.3-codex',100]),/unauthorized/);
  for(let i=0;i<2;i++) {
   const id=(await db.query(reserve,[next.token_digest,trial,next.execution_epoch,randomUUID(),'gpt-5.3-codex',100])).rows[0].id;

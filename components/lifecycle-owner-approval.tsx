@@ -5,23 +5,24 @@ import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 type Position={cumulativeTokens:number;developmentTokens:number;developmentCalls:number;completionCalls:number;completionTokens:number;assessmentTokens:number;assessmentCalls:number|null;expiresAt:number|null;ceilingMicrousd:string;accountEncumberedTokens?:number;developmentConsumedCalls?:number;developmentEncumberedTokens?:number;committedMicrousd?:string;outstandingMicrousd?:string;durationSeconds?:number|null};
 type Proposal={id:string;binding:{taskId:string;projectId:string;scopeHash:string};checkpointSha:string;scope:unknown;acceptance:unknown;currentPhase:string;completed:string[];remaining:string[];shortages:string[];uncertainties:string[];evidence:unknown;current:Position;proposed:Position;additions:{tokens:number;nativeCalls:number;developmentTokens:number;completionCalls:number;assessmentTokens:number;assessmentCalls:number};estimatedIncrementalMicrousd:string|null;conservativeIncrementalMicrousd:string|null;expiresAt:number};
 type Result={state:string;taskId?:string;proposal?:Proposal;error?:string;reasons?:string[]};
-const dollars=(v:string|null|undefined)=>v==null?'Unknown':(Number(v)/1000000).toLocaleString('en-US',{style:'currency',currency:'USD'});
-const number=(v:number|null|undefined)=>v==null?'Unknown':v.toLocaleString();
+const dollars=(v:string|null|undefined)=>{if(v==null||!/^\d+(?:\.\d+)?$/.test(v))return 'Unknown';const cents=(BigInt(v.split('.')[0])+5000n)/10000n;return '$'+(cents/100n).toLocaleString('en-US')+'.'+(cents%100n).toString().padStart(2,'0');};
+const number=(v:number|null|undefined)=>v==null||!Number.isFinite(v)?'Unknown':v.toLocaleString();
 const date=(v:number|null)=>v==null?'At authenticated approval':new Date(v).toLocaleString();
 const statuses:Record<string,string>={pending:'Awaiting owner approval',approved:'Amendment authorized; continuation queued',rejected:'Owner rejected; saved work remains recoverable',expired:'Proposal expired; refresh to review current requirements',stale:'Proposal stale; task or accounting changed',resumed:'Same-task continuation resumed',continuation_failed:'Continuation needs engineering recovery; approved history and saved work retained',evidence_required:'More reliable evidence is required',admission_denied:'Existing admission controls deny continuation',not_required:'No additional resource authority required'};
 
-export function LifecycleOwnerApproval(){
+export function LifecycleOwnerApproval({chatId}:{chatId?:string}={}){
  const [result,setResult]=useState<Result|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const epoch=useRef(0),submitting=useRef(false);
  const cancelPending=useCallback(()=>{epoch.current++},[]);
  const refresh=useCallback(async(explicit=false)=>{
   const version=++epoch.current,token=await ownerSessionBearer();
   if(!token){if(version===epoch.current)setResult(null);return;}
-  const response=await fetch('/api/projects/lifecycle-approval'+(explicit?'?refresh=true':''),{headers:{Authorization:`Bearer ${token}`},cache:'no-store',signal:AbortSignal.timeout(20000)});
+  const query=new URLSearchParams();if(explicit)query.set('refresh','true');if(chatId)query.set('chatId',chatId);
+  const response=await fetch('/api/projects/lifecycle-approval?'+query,{headers:{Authorization:`Bearer ${token}`},cache:'no-store',signal:AbortSignal.timeout(20000)});
   const data:Result=await response.json();
   if(version!==epoch.current||submitting.current)return;
   setResult(data);setError(response.ok?'':data.error??'Approval status unavailable');
- },[]);
+ },[chatId]);
  useEffect(()=>{let active=true;const check=()=>{if(active&&!document.hidden&&!submitting.current)void refresh().catch(()=>{if(active)setError('Could not refresh approval status.')})};check();const timer=setInterval(check,15000);return()=>{active=false;cancelPending();clearInterval(timer)}},[refresh,cancelPending]);
  async function decide(decision:'approved'|'rejected'){
   const proposal=result?.proposal;if(!proposal||result?.state!=='pending'||submitting.current)return;
@@ -45,7 +46,7 @@ export function LifecycleOwnerApproval(){
   ['Cumulative dollar ceiling',dollars(p.current.ceilingMicrousd),dollars(p.proposed.ceilingMicrousd)],
   ['Execution expiration',date(p.current.expiresAt),p.proposed.durationSeconds?`${number(p.proposed.durationSeconds/3600)} hours from authenticated commit; exact expiration recorded at commit`:date(p.proposed.expiresAt)],
  ]:[];
- return <section aria-label="Development resource approval" className="my-4 rounded-xl border border-amber-400/60 bg-zinc-900 p-5 text-zinc-100">
+ return <section aria-label="Development resource approval" className="my-4 max-h-[55dvh] shrink-0 overflow-y-auto rounded-xl border border-amber-400/60 bg-zinc-900 p-5 text-zinc-100">
   <h3 className="text-lg font-semibold">Continue the original development task</h3>
   <p role="status" className="mt-2">{statuses[result.state]??result.state}</p>
   {p&&<>
