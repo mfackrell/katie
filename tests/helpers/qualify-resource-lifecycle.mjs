@@ -164,9 +164,10 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment,{ad
   for(const row of historical.calls)assert.deepEqual((await ledger()).calls.find(c=>c.id===row.id),row);
   for(const row of historical.exposures)assert.deepEqual((await ledger()).exposures.find(c=>c.call_id===row.call_id),row);
   fixture.completion=completion;fixture.continued=second;
+  report.acceptedFiles=[{path:'app/pilot/page.tsx',head:completion.reviewedHeadSha,sha256:hash(execFileSync('git',['--git-dir',remote,'show',completion.reviewedHeadSha+':app/pilot/page.tsx'],{encoding:'utf8'}))}];
   if(adequate){assert.equal(completion.repairPerformed,false);assert.equal(completion.repairVerification,null);}else{assert.equal(completion.repairVerification.after.passed,true);assert.equal(completion.repairVerification.after.head,completion.reviewedHeadSha);}
   fixture.verifierLog=JSON.parse(readFileSync(join(second.runtime,'qualification-verifier-tail.json'),'utf8')).tail;
-  fixture.receipt={version:1,repository:'mfackrell/katie',issue_number:829,run_id:adequate?131:132,pr_url:'https://github.com/mfackrell/katie/pull/829',outcome:'READY',tested_head_sha:completion.reviewedHeadSha,reviewed_head_sha:completion.reviewedHeadSha,checks:adequate?{build:'success',test:'true',review:'pass',repair:'skipped',retest:'skipped',final_review:'pass'}:{build:'success',test:'false',review:'changes_requested',repair:'success',retest:'true',final_review:'pass'},projectAcceptance:browser};
+  fixture.receipt={version:1,repository:'mfackrell/katie',issue_number:829,run_id:adequate?131:132,pr_url:'https://github.com/mfackrell/katie/pull/829',outcome:'READY',tested_head_sha:completion.reviewedHeadSha,reviewed_head_sha:completion.reviewedHeadSha,checks:adequate?{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''}:{build:'success',test:'false',review:'changes_requested',repair:'success',retest:'true',final_review:'pass'},projectAcceptance:browser};
   writeFileSync(join(root,'workflow.json'),JSON.stringify({...workflow,id:adequate?131:132,event:adequate?'issues':'workflow_dispatch',head_sha:release,conclusion:'success',created_at:new Date().toISOString()}));
   if(adequate){
    writeFileSync(join(root,'artifact.zip'),archive(first.diagnostics));
@@ -176,7 +177,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment,{ad
   const worker=load('@/lib/missions/worker');
   const developerClaim=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(developerClaim?.job.id,ids.task);
   await worker.executeClaim(developerClaim);
-  assert.equal((await one('agent_tasks','id',ids.task)).status,'ready');
+  const reconciledTask=await one('agent_tasks','id',ids.task);report.reconciledTask=reconciledTask;assert.equal(reconciledTask.status,'ready',JSON.stringify(reconciledTask));
   const completionJobs=[];
   for(let n=0;n<3;n++){
    if((await one('agent_missions','id',ids.mission)).status==='completed')break;
