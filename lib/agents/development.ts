@@ -1,3 +1,4 @@
+import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
@@ -101,9 +102,9 @@ export async function authenticatedLifecycleCheckpoint(taskId:string){
  const task=await readTask(taskId),context=await getDevelopmentProjectContext(taskId);
  if(!context||!task.repository_full_name||task.status!=='blocked')throw Error('A blocked original development task is required');
  const db=getSupabaseAdminClient(),client=github();
- const one=async(table:string,id:string)=>{const r=await db.from(table).select('*').eq('id',id).maybeSingle<any>();if(r.error||!r.data)throw Error('Required lifecycle evidence unavailable');return r.data;};
+ const one=async(table:string,id:string)=>{const r=await db.from(table).select('*').eq('id',id).maybeSingle<Record<string,unknown>>();if(r.error||!r.data)throw Error('Required lifecycle evidence unavailable');return r.data;};
  const project=await one('work_projects',context.projectId);
- const snap=await db.rpc<any>('benchmark_lifecycle_snapshot',{p_task:taskId});
+ const snap=await db.rpc<LifecycleSnapshot>('benchmark_lifecycle_snapshot',{p_task:taskId});
  if(snap.error||!snap.data)throw Error('Authoritative lifecycle snapshot unavailable');
  let releaseSha='';
  const reader=async(path:string,binary=false)=>{
@@ -116,7 +117,7 @@ export async function authenticatedLifecycleCheckpoint(taskId:string){
  if(!record)throw Error('Authenticated checkpoint required');
  await validateRecoveryRecords({record,completedEvidence:recoveryCompletedEvidence(record,diagnostics),task,context,project,
   trialId:snap.data.snapshot.approval.trial_id,accountId:snap.data.accountId,
-  readOne:async(table:string,column:string,value:string)=>{const r=await db.from(table).select('*').eq(column,value).maybeSingle<any>();if(r.error||!r.data)throw Error('Recovery provenance unavailable');return r.data;}});
+  readOne:async(table:string,column:string,value:string)=>{const r=await db.from(table).select('*').eq(column,value).maybeSingle<Record<string,unknown>>();if(r.error||!r.data)throw Error('Recovery provenance unavailable');return r.data;}});
  const [owner,repo]=task.repository_full_name.split('/');
  const refs=await client.git.listMatchingRefs({owner,repo,ref:'tags/katie-wip/'+taskId+'/'});
  if(!refs.data.length||refs.data.length>=1000)throw Error('Recovery checkpoint inventory unavailable');
@@ -124,7 +125,7 @@ export async function authenticatedLifecycleCheckpoint(taskId:string){
   .sort((a,b)=>{for(let i=0;i<3;i++)if(a.parts[i]!==b.parts[i])return a.parts[i]>b.parts[i]?-1:1;return 0;});
  if(ordered[0].sha!==record.checkpointSha||ordered[0].ref!==record.ref)throw Error('Latest durable checkpoint changed');
  const commit=await client.git.getCommit({owner,repo,commit_sha:record.checkpointSha});
- const {checkpointSha,ref,...metadata}=record;
+ const metadata=Object.fromEntries(Object.entries(record).filter(([key])=>key!=='checkpointSha'&&key!=='ref'));
  if(commit.data.tree.sha!==record.sourceTreeSha||commit.data.parents[0]?.sha!==record.completedCheckpointSha||
   digest(JSON.parse(commit.data.message))!==digest(metadata))throw Error('Checkpoint metadata differs');
  return {task,context,snapshot:snap.data,record,diagnostics,checkpoint:{...record,scopeHash:record.approvedScopeHash,runId:String(record.runId),releaseSha}};
@@ -134,7 +135,7 @@ export async function prepareLifecycleOwnerProposal(taskId:string){
  const evidence=await authenticatedLifecycleCheckpoint(taskId);
  const plan=lifecycleProposalFromSnapshot({snapshot:evidence.snapshot,record:evidence.record,observations:evidence.diagnostics.capacityObservations??[]});
  if(!plan.proposal)return {state:plan.state,reasons:plan.reasons??plan.assessment.uncertainties};
- const saved=await getSupabaseAdminClient().rpc<any>('benchmark_lifecycle_offer',{p_task:taskId,p_proposal:plan.proposal,p_checkpoint:evidence.checkpoint});
+ const saved=await getSupabaseAdminClient().rpc<LifecycleOffer>('benchmark_lifecycle_offer',{p_task:taskId,p_proposal:plan.proposal,p_checkpoint:evidence.checkpoint});
  if(saved.error||!saved.data)throw Error('Proposal changed before it could be saved');
  return {state:'pending',offer:saved.data};
 }

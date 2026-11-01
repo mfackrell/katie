@@ -13,6 +13,7 @@ const statuses:Record<string,string>={pending:'Awaiting owner approval',approved
 export function LifecycleOwnerApproval(){
  const [result,setResult]=useState<Result|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const epoch=useRef(0),submitting=useRef(false);
+ const cancelPending=useCallback(()=>{epoch.current++},[]);
  const refresh=useCallback(async(explicit=false)=>{
   const version=++epoch.current,token=await ownerSessionBearer();
   if(!token){if(version===epoch.current)setResult(null);return;}
@@ -21,7 +22,7 @@ export function LifecycleOwnerApproval(){
   if(version!==epoch.current||submitting.current)return;
   setResult(data);setError(response.ok?'':data.error??'Approval status unavailable');
  },[]);
- useEffect(()=>{let active=true;const check=()=>{if(active&&!document.hidden&&!submitting.current)void refresh().catch(()=>{if(active)setError('Could not refresh approval status.')})};check();const timer=setInterval(check,15000);return()=>{active=false;epoch.current++;clearInterval(timer)}},[refresh]);
+ useEffect(()=>{let active=true;const check=()=>{if(active&&!document.hidden&&!submitting.current)void refresh().catch(()=>{if(active)setError('Could not refresh approval status.')})};check();const timer=setInterval(check,15000);return()=>{active=false;cancelPending();clearInterval(timer)}},[refresh,cancelPending]);
  async function decide(decision:'approved'|'rejected'){
   const proposal=result?.proposal;if(!proposal||result?.state!=='pending'||submitting.current)return;
   submitting.current=true;epoch.current++;setBusy(true);setError('');

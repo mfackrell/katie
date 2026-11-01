@@ -1,1 +1,2 @@
-export function lifecycleProposalFromSnapshot(input:{snapshot:any;record:any;observations?:any[];pricing?:any;now?:number}):{assessment:any;state:string;proposal:any;reasons?:string[]};
+import type {LifecycleProposal,LifecycleSnapshot} from '../../lib/projects/lifecycle-owner-types';
+export function lifecycleProposalFromSnapshot(input:{snapshot:LifecycleSnapshot;record:unknown;observations?:unknown[];pricing?:unknown;now?:number}):{assessment:{uncertainties:string[]};state:string;proposal:LifecycleProposal|null;reasons?:string[]};

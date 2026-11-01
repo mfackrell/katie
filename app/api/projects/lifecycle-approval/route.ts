@@ -1,3 +1,4 @@
+import type {LifecycleSnapshot,LifecycleOffer,LifecycleDecision} from '@/lib/projects/lifecycle-owner-types';
 import {NextRequest,NextResponse} from 'next/server';
 import {z} from 'zod';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
@@ -25,21 +26,21 @@ export async function GET(request:NextRequest){
   if(!taskId)return reply({state:'none'});
   const authority=await db.from('benchmark_native_spending_approvals').select('id').eq('owner_id',principal).eq('task_id',taskId).limit(1).returns<{id:string}>();
   if(authority.error||!authority.data?.length)return reply({error:'Task ownership denied.'},403);
-  let result=await db.from('benchmark_lifecycle_proposals').select('*').eq('owner_id',principal).eq('task_id',taskId).order('created_at',{ascending:false}).limit(1).returns<any>();
+  let result=await db.from('benchmark_lifecycle_proposals').select('*').eq('owner_id',principal).eq('task_id',taskId).order('created_at',{ascending:false}).limit(1).returns<LifecycleOffer>();
   if(result.error)throw Error('Proposal records unavailable');
   if(!result.data?.length||request.nextUrl.searchParams.get('refresh')==='true'){
    const task=await db.from('agent_tasks').select('status').eq('id',taskId).maybeSingle<{status:string}>();
    if(task.data?.status==='blocked'){
     const prepared=await prepareLifecycleOwnerProposal(taskId);
-    if(!('offer' in prepared))return reply({...prepared,taskId});
+    if(!('offer' in prepared)||!prepared.offer)return reply({...prepared,taskId});
     result={data:[prepared.offer],error:null};
    }
   }
   const offer=result.data?.[0];if(!offer)return reply({state:'none',taskId});
-  const decision=await db.from('benchmark_lifecycle_decisions').select('*').eq('proposal_id',offer.id).maybeSingle<any>();
+  const decision=await db.from('benchmark_lifecycle_decisions').select('*').eq('proposal_id',offer.id).maybeSingle<LifecycleDecision>();
   if(decision.error)throw Error('Decision unavailable');
   if(decision.data){
-   let state=decision.data.decision;
+   let state:string=decision.data.decision;
    if(state==='approved'){
     const grants=await db.from('benchmark_execution_grants').select('id').eq('continuation_id',decision.data.continuation_id).limit(1).returns<{id:string}>();
     const task=await db.from('agent_tasks').select('status').eq('id',taskId).maybeSingle<{status:string}>();
@@ -49,7 +50,7 @@ export async function GET(request:NextRequest){
    return reply({state,taskId,proposal:offer.proposal,decision:decision.data});
   }
   let state=Date.parse(offer.expires_at)<=Date.now()?'expired':'pending';
-  if(state==='pending'){const current=await db.rpc<any>('benchmark_lifecycle_snapshot',{p_task:taskId});if(current.error||current.data?.snapshotHash!==offer.snapshot_hash)state='stale';}
+  if(state==='pending'){const current=await db.rpc<LifecycleSnapshot>('benchmark_lifecycle_snapshot',{p_task:taskId});if(current.error||current.data?.snapshotHash!==offer.snapshot_hash)state='stale';}
   return reply({state,taskId,proposal:offer.proposal});
  }catch{return reply({error:'Resource approval evidence is unavailable. Saved work and spending authority are unchanged.',state:'evidence_required'},409);}
 }
@@ -59,9 +60,9 @@ export async function POST(request:NextRequest){
   if(request.headers.get('origin')!==config.productionUrl)return reply({error:'Approve from the Katie production application.'},403);
   const parsed=input.safeParse(await request.json());if(!parsed.success)return reply({error:'Exact proposal and explicit decision required.'},400);
   const {taskId,proposalId,decision}=parsed.data,db=getSupabaseAdminClient();
-  const saved=await db.from('benchmark_lifecycle_proposals').select('*').eq('id',proposalId).eq('owner_id',principal).eq('task_id',taskId).maybeSingle<any>();
+  const saved=await db.from('benchmark_lifecycle_proposals').select('*').eq('id',proposalId).eq('owner_id',principal).eq('task_id',taskId).maybeSingle<LifecycleOffer>();
   if(saved.error||!saved.data)return reply({error:'Proposal ownership denied.'},403);
-  const prior=await db.from('benchmark_lifecycle_decisions').select('*').eq('proposal_id',proposalId).maybeSingle<any>();
+  const prior=await db.from('benchmark_lifecycle_decisions').select('*').eq('proposal_id',proposalId).maybeSingle<LifecycleDecision>();
   if(prior.error)throw Error('Decision unavailable');
   if(prior.data){if(prior.data.decision!==decision)return reply({error:'Proposal already decided.'},409);return reply({state:decision,decision:prior.data});}
   if(Date.parse(saved.data.expires_at)<=Date.now())return reply({error:'Proposal expired. Review a refreshed proposal.',state:'expired'},409);

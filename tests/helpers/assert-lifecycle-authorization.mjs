@@ -15,16 +15,17 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  await db.query("update project_runs set binding=binding||jsonb_build_object('taskId',$2::text,'projectId',$3::text,'baselineSha',(select baseline_sha from benchmark_three_arm_trials where id=$4),'contractHash',repeat('b',64),'contract',jsonb_build_object('path','/pilot','scenarios',jsonb_build_array())) where mission_id=$1",[mission,task,project,trial]);
  await db.query('set role service_role');
  const snapshot=async()=> (await db.query('select benchmark_lifecycle_snapshot($1) s',[task])).rows[0].s;
+ const hostFixture=process.env.KATIE_TEST_LIFECYCLE_HOST==='1'?await (await import('./qualify-lifecycle-continuation.mjs')).createLifecycleCheckpoint(db,{project,mission,task,trial,account,grant}):null;
  const initial=await snapshot();
  assert.equal(initial.position.developmentCalls-initial.position.developmentConsumedCalls,4);
  assert.equal(initial.position.completionCalls,4);assert.equal(initial.position.assessmentCalls,null);
- const record={taskId:task,projectId:project,originalBaselineSha:initial.binding.baselineSha,
+ const record=hostFixture?.record??{taskId:task,projectId:project,originalBaselineSha:initial.binding.baselineSha,
   approvedScopeHash:initial.binding.scopeHash,approvedScope:{contractHash:initial.binding.contractHash},
   checkpointSha:'d'.repeat(40),phase:'repair'};
- const checkpoint={...record,scopeHash:initial.binding.scopeHash,runId:'131',releaseSha:'b'.repeat(40)};
- const planned=lifecycleProposalFromSnapshot({snapshot:initial,record});
- assert.equal(planned.state,'awaiting_owner_approval',JSON.stringify(planned.reasons));assert.equal(planned.proposal.additions.nativeCalls,2);
- assert.equal(planned.proposal.proposed.developmentCalls,34);
+ const checkpoint=hostFixture?.checkpoint??{...record,scopeHash:initial.binding.scopeHash,runId:'131',releaseSha:'b'.repeat(40)};
+ const planned=lifecycleProposalFromSnapshot({snapshot:initial,record,observations:hostFixture?.observations??[]});
+ assert.equal(planned.state,'awaiting_owner_approval',JSON.stringify(planned.reasons));assert.equal(planned.proposal.additions.nativeCalls,hostFixture?4:2);
+ assert.equal(planned.proposal.proposed.developmentCalls,hostFixture?36:34);
  assert.equal(planned.proposal.proposed.completionCalls,4);
  const offer=async(p=planned.proposal)=>(await db.query('select benchmark_lifecycle_offer($1,$2,$3) p',[task,p,checkpoint])).rows[0].p;
  const saved=await offer();assert.equal((await offer()).id,saved.id);
@@ -51,11 +52,12 @@ export async function assertLifecycleAuthorization(db,rival,{project,mission,tas
  assert.equal((await db.query('select count(*)::int n from benchmark_lifecycle_decisions')).rows[0].n,1);
  assert.equal((await db.query(decision,args)).rows[0].r.continuationId,approved.continuationId);
  const after=await snapshot();assert.deepEqual(after.snapshot.calls,initial.snapshot.calls);assert.deepEqual(after.snapshot.exposures,initial.snapshot.exposures);
- assert.equal(after.position.developmentConsumedCalls,28);assert.equal(after.position.developmentCalls,34);
+ assert.equal(after.position.developmentConsumedCalls,28);assert.equal(after.position.developmentCalls,hostFixture?36:34);
  assert.equal((await db.query('select benchmark_continuation_live($1,$2,$3) ok',[approved.continuationId,account,project])).rows[0].ok,true);
  const amendment=(await db.query('select * from benchmark_development_resource_amendments where continuation_id=$1',[approved.continuationId])).rows[0];
  const claims=await Promise.all([db.query('select benchmark_claim_development_amendment($1,$2) ok',[amendment.id,args[4]]),rival.query('select benchmark_claim_development_amendment($1,$2) ok',[amendment.id,args[4]])]);
  assert.equal(claims.filter(r=>r.rows[0].ok).length,1);
+ if(hostFixture){await (await import('./qualify-lifecycle-continuation.mjs')).qualifyLifecycleContinuation(db,{project,mission,task,trial,account},hostFixture,amendment);return;}
  const issue='select benchmark_issue_development_amendment_grant($1,$2,$3,$4,$5) r';
  const issues=await Promise.allSettled([db.query(issue,[amendment.id,randomBytes(32).toString('hex'),amendment.approval_id,task,args[4]]),rival.query(issue,[amendment.id,randomBytes(32).toString('hex'),amendment.approval_id,task,args[4]])]);
  assert.equal(issues.filter(r=>r.status==='fulfilled').length,1,JSON.stringify(issues));
