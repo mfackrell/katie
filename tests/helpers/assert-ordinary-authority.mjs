@@ -49,6 +49,21 @@ export async function assertOrdinaryAuthority(db,rival){
  await assert.rejects(db.query(offer,[randomUUID(),job.id,limits,'gpt-5.3-codex']),/binding denied/);
  const proposal=(await db.query(offer,[owner,job.id,limits,'gpt-5.3-codex'])).rows[0].p;
  assert.equal(proposal.proposal.current.nativeAuthorityEstablished,false);
+ // A normal worker poll must not invalidate unchanged owner consent.
+ await db.query("update agent_tasks set status='dispatching',details='Waiting for owner authority',updated_at=clock_timestamp() where id=$1",[job.id]);
+ await db.query("update mission_assignments set status='waiting_external',attempts=attempts+1,lease=null,lease_until=null,heartbeat_at=clock_timestamp(),available_at=clock_timestamp(),updated_at=clock_timestamp(),result=jsonb_build_object('detail','Waiting for owner authority','external','{}'::jsonb) where id=$1",[job.id]);
+ await db.query("update agent_missions set updated_at=clock_timestamp(),detail='Polling saved task' where id=$1",[mission]);
+ await db.query("update work_projects set lease=gen_random_uuid(),lease_until=clock_timestamp()+interval '1 minute',updated_at=clock_timestamp(),detail='Polling saved task' where id=$1",[project]);
+ assert.equal((await db.query(offer,[owner,job.id,limits,'gpt-5.3-codex'])).rows[0].p.id,proposal.id);
+ for(const [sql,values] of [
+  ["update agent_tasks set input=input||' changed scope' where id=$1",[job.id]],
+  ['update work_projects set token_allowance=token_allowance-1 where id=$1',[project]],
+  ["update agent_tasks set status='completed' where id=$1",[job.id]]
+ ]){
+  await db.query('begin');await db.query(sql,values);
+  await assert.rejects(db.query('select developer_decide_initial($1,$2,$3,$4)',[owner,job.id,proposal.id,'approved']),/stale|history/);
+  await db.query('rollback');
+ }
  const before=(await db.query('select count(*)::int n from benchmark_full_continuations')).rows[0].n;
  const decide='select developer_decide_initial($1,$2,$3,$4) d',args=[owner,job.id,proposal.id,'approved'];
  await assert.rejects(db.query(decide,[randomUUID(),...args.slice(1)]),/owner proposal/);

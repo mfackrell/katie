@@ -20,3 +20,18 @@ test('ordinary continuation waits for dispatch and cannot consume the predecesso
  assert.deepEqual(filter(task,[{...old,id:102,created_at:'2026-11-01T12:01:00Z',head_sha:'new',event:'issues'}]),[]);
  assert.deepEqual(filter(task,[{...old,id:102,created_at:'2026-11-01T12:01:00Z',head_sha:'new'}]),[102]);
 });
+test('stopped or unverifiable ordinary rows do not starve later approvals',async()=>{
+ const start=source.indexOf('async function dispatchOrdinaryNativeDevelopment()'),end=source.indexOf('  const client=github(),binding=await repository(task);',start);
+ const prefix=stripTypeScriptTypes(source.slice(start,end)+'return task.id;}if(rows.data.length<8)return false;}}');
+ const rows=[...Array.from({length:8},(_,i)=>({id:'stopped'+i,task_id:'stopped'+i,project_id:'p',deadline:'2099-01-01',developer_authority:{}})),{id:'live',task_id:'live',project_id:'p',deadline:'2099-01-01',developer_authority:{}}];
+ let offset=0;
+ const query={select(){return this},is(){return this},or(){return this},order(){return this},range(start){offset=start;return this},async returns(){return {data:rows.slice(offset,offset+8)}}};
+ const seen=[];
+ const run=vm.runInNewContext(prefix+';dispatchOrdinaryNativeDevelopment',{
+  process:{env:{KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',VERCEL_ENV:'production',KATIE_NATIVE_HANDOFF_HMAC_KEY:'x'.repeat(32)}},Date,
+  getSupabaseAdminClient:()=>({from:()=>query}),qualifiedOrdinaryDevelopmentRelease:async()=>'release',readTask:async id=>({id}),
+  getDevelopmentProjectContext:async id=>{seen.push(id);if(id.startsWith('stopped'))throw Error('Approved project scope is unavailable or changed');return {projectId:'p'};}
+ });
+ assert.equal(await run(),'live');assert.deepEqual(seen,rows.map(r=>r.task_id));
+ rows.splice(8);assert.equal(await run(),false,'all ineligible rows return control to existing benchmark dispatch paths');
+});

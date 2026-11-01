@@ -183,13 +183,14 @@ end $$;
 -- of a historical coding approval. Legacy unmetered attempts cannot enroll.
 create function developer_initial_snapshot(p_owner uuid,p_task uuid) returns jsonb
 language plpgsql security definer set search_path=public as $$
-declare s jsonb; t agent_tasks; j mission_assignments; p work_projects; used bigint;
+declare s jsonb; material jsonb; t agent_tasks; j mission_assignments; p work_projects; used bigint;
 begin
  s:=developer_task_binding(p_owner,p_task);
  select * into t from agent_tasks where id=p_task;
  select * into j from mission_assignments where id=p_task;
  select * into p from work_projects where id=(s->'project'->>'id')::uuid;
- if exists(select 1 from benchmark_native_spending_approvals where task_id=p_task)
+ if t.status not in ('dispatching','blocked') or j.status not in ('queued','running','waiting_external','failed')
+  or exists(select 1 from benchmark_native_spending_approvals where task_id=p_task)
   or exists(select 1 from benchmark_budget_accounts where developer_task_id=p_task)
   or exists(select 1 from benchmark_budget_accounts a join benchmark_budget_calls c on c.account_id=a.id where a.developer_project_id=p.id and c.state<>'settled')
   or exists(select 1 from mission_calls c join mission_assignments a on a.id=c.job_id where a.mission_id=j.mission_id)
@@ -203,7 +204,16 @@ begin
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into used from agent_missions where project_id=p.id;
  s:=s||jsonb_build_object('projectEncumberedTokens',used,'authorityKind','ordinary-developer','nativeAuthorityEstablished',false,
   'ownerBinding',(select to_jsonb(b) from standalone_owner_bindings b where b.owner_id=p_owner and b.actor_id=p.actor_id and b.chat_id=p.chat_id));
- return jsonb_build_object('snapshot',s,'snapshotHash',encode(sha256(convert_to(project_canonical(s),'UTF8')),'hex'));
+ -- Worker polling does not amend scope or capacity. Retain the full snapshot
+ -- for inspection, but exclude only operational polling fields from consent.
+ -- Task external evidence, inputs, frozen binding, limits, consumption and owner
+ -- binding remain hashed; terminal task/assignment states are rejected above.
+ material:=s||jsonb_build_object(
+  'task',(s->'task')-array['status','details','updated_at'],
+  'assignment',(s->'assignment')-array['status','attempts','lease','lease_until','heartbeat_at','available_at','updated_at','detail','result'],
+  'mission',(s->'mission')-array['updated_at','detail'],
+  'project',(s->'project')-array['lease','lease_until','updated_at','detail']);
+ return jsonb_build_object('snapshot',s,'snapshotHash',encode(sha256(convert_to(project_canonical(material),'UTF8')),'hex'));
 end $$;
 revoke all on function developer_task_binding(uuid,uuid),developer_initial_snapshot(uuid,uuid),developer_validate_limits(jsonb) from public,anon,authenticated,service_role;
 grant execute on function developer_initial_snapshot(uuid,uuid) to service_role;

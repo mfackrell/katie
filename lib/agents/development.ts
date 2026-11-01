@@ -683,17 +683,24 @@ async function dispatchOrdinaryNativeDevelopment(){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).order('created_at',{ascending:false}).limit(8).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown}}>();
+ let release:string|null=null;
+ const now=new Date().toISOString();
+ // Traverse read-only pages so stale approvals cannot hide another task's authority.
+ for(let offset=0;;offset+=8){
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
- const release=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
+ release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
  for(const a of rows.data){
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
-  const task=await readTask(a.task_id),c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
-  if(a.previous_developer_approval_id){
-   const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
-   if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
-  }
+  let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;
+  try{
+   task=await readTask(a.task_id);c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
+   if(a.previous_developer_approval_id){
+    const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
+    if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+   }
+  }catch{continue;} // Ineligible or unavailable evidence denies this row, not unrelated approvals.
   const client=github(),binding=await repository(task);
   const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
   if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
@@ -722,7 +729,8 @@ async function dispatchOrdinaryNativeDevelopment(){
   }
   return true;
  }
- return false;
+ if(rows.data.length<8)return false;
+ }
 }
 export async function dispatchOwnerRenewedNativeDevelopment() {
  if(await dispatchOrdinaryNativeDevelopment())return true;
