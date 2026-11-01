@@ -209,6 +209,30 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node scripts/benchmark/closure-input-count-probe.mjs
 
+  ordinary-developer-authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+      KATIE_TEST_ORDINARY_AUTHORITY: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - name: Install disposable PostgreSQL
+        run: sudo apt-get install -y postgresql-16
+      - name: Ordinary authority and historical benchmark transactions without inference
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+
   native-recovery-lifecycle:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
