@@ -48,6 +48,7 @@ export async function qualifyResourceLifecycle(db,rival,ids,initialAmendment){
   first=await qualifyLifecycleContinuation(db,ids,fixture,initialAmendment,{runId:131,provider,signing,keepRoot:true,afterRun:async result=>result});
   assert.notEqual(first.code,0,first.log);assert.ok(first.diagnostics,first.log);assert.match(first.diagnostics.failure,/OWNER_APPROVAL_REQUIRED/);
   assert.deepEqual([...phaseCounts],[['implementation',6],['review',5]]);assert.equal(providerCalls,11);
+  for(const measured of observations)assert.deepEqual(first.diagnostics.capacityObservations.find(o=>o.id===measured.id),measured,'Authenticated clean-baseline measurements must survive into the owner proposal');
   const record=first.diagnostics.wipCheckpoint;assert.equal(record.phase,'repair');assert.equal(record.lastCompleted.review.verdict,'changes_requested');
   report.checkpoint=record;report.forecasts=first.diagnostics.capacityForecasts;assert.equal(report.forecasts.at(-1).status,'insufficient');assert.notEqual(report.forecasts[0].status,'insufficient');
   const historical=await ledger();for(const row of prior.calls)assert.deepEqual(historical.calls.find(c=>c.id===row.id),row);

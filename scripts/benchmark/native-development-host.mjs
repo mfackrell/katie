@@ -174,11 +174,14 @@ let recoveryPlan=null,priorCapacityObservations=[];
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
  const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
+ // Authenticated diagnostics may carry measured history even when the accepted
+ // predecessor stopped at the clean baseline and has no source to restore.
+ // Capacity adapters still validate every observation against settled receipts.
+ priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:ordinary?null:proof.trialId,authorityKind:ordinary?'ordinary-developer':undefined,accountId:account.id,readOne});
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
- priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  }
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
