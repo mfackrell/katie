@@ -58,6 +58,12 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const body = request.postData() ? request.postDataJSON() : null;
       const reply = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+      if (url.pathname === '/api/projects/lifecycle-approval') {
+        assert.equal(request.method(), 'GET');
+        assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
+        assert.equal(url.searchParams.get('chatId'), chatId);
+        return reply({ state: 'none' });
+      }
       if (url.pathname.startsWith('/api/standalone-accounting/')) {
         assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
         if (url.pathname.endsWith('/usage')) {
@@ -444,6 +450,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('button',{name:'Older active work',exact:true}).click();
     await usage.getByText(/attempt-older-paused/).first().waitFor();
     assert.equal(await usage.getByRole('button',{name:'Newest work',exact:true}).count(),1,'all-paused pages retain navigation');
+    assert.equal(await page.getByText('Continue the original development task', { exact: true }).count(), 0, 'ordinary conversation has no unrelated lifecycle proposal');
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {
