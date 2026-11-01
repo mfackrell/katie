@@ -30,7 +30,7 @@ test('host executes exact read-only pricing filter and preserves dollar ceiling 
  const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
  const start=source.indexOf('const pricing=await readVerifiedBenchmarkPricing('),end=source.indexOf('let delegatedTask=',start);
  assert.ok(start>0&&end>start);assert.ok(end<source.indexOf('const grantToken='));
- const execute=new (Object.getPrototypeOf(async function(){}).constructor)('db','readVerifiedBenchmarkPricing','assertBenchmarkDollarCeiling','approval','account','productionRuntime','continuation','denied',source.slice(start,end));
+ const execute=new (Object.getPrototypeOf(async function(){}).constructor)('db','readVerifiedBenchmarkPricing','assertBenchmarkDollarCeiling','approval','account','productionRuntime','continuation','denied','const ordinary=false;'+source.slice(start,end));
  let reads=0;const filters=[];
  const db={from(table){assert.equal(table,'model_registry');return {select(fields){assert.equal(fields,'pricing_input_per_1m,pricing_output_per_1m,pricing_status');return this;},eq(k,v){filters.push([k,v]);return this;},abortSignal(signal){assert.ok(signal instanceof AbortSignal);return this;},async maybeSingle(){reads++;return {data:price,status:200};}};}};
  await execute(db,readVerifiedBenchmarkPricing,assertBenchmarkDollarCeiling,{model:'gpt-5.3-codex',max_tokens:350000},{cap_tokens:350000},true);

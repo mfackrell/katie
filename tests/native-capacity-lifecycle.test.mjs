@@ -28,7 +28,7 @@ test('baseline infrastructure failure never consumes a model repair',async()=>{
  const r=await run({infrastructure:true,testResults:[false]});assert.deepEqual(r.phases,['implementation']);assert.match(r.error,/infrastructure/);
 });
 test('new authority is explicit and never reuses automatic process retry',()=>{
- assert.match(source,/let ownerApprovedSuccessor=continuation\?\.plan\?\.capacityRenewal===true/);
+ assert.match(source,/let ownerApprovedSuccessor=Boolean\(ordinary&&approval\.previous_developer_approval_id\)\|\|continuation\?\.plan\?\.capacityRenewal===true/);
  assert.match(source,/continuation.plan.version===6\?625000:550000/);
 });
 

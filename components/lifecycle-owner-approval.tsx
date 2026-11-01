@@ -3,8 +3,9 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 
 type Position={cumulativeTokens:number;developmentTokens:number;developmentCalls:number;completionCalls:number;completionTokens:number;assessmentTokens:number;assessmentCalls:number|null;expiresAt:number|null;ceilingMicrousd:string;accountEncumberedTokens?:number;developmentConsumedCalls?:number;developmentEncumberedTokens?:number;committedMicrousd?:string;outstandingMicrousd?:string;durationSeconds?:number|null};
-type Proposal={id:string;binding:{taskId:string;projectId:string;scopeHash:string};checkpointSha:string;scope:unknown;acceptance:unknown;currentPhase:string;completed:string[];remaining:string[];shortages:string[];uncertainties:string[];evidence:unknown;current:Position;proposed:Position;additions:{tokens:number;nativeCalls:number;developmentTokens:number;completionCalls:number;assessmentTokens:number;assessmentCalls:number};estimatedIncrementalMicrousd:string|null;conservativeIncrementalMicrousd:string|null;expiresAt:number};
-type Result={state:string;taskId?:string;proposal?:Proposal;error?:string;reasons?:string[]};
+type Proposal={version?:'lifecycle-owner-proposal-v1';id:string;binding:{taskId:string;projectId:string;scopeHash:string};checkpointSha:string;scope:unknown;acceptance:unknown;currentPhase:string;completed:string[];remaining:string[];shortages:string[];uncertainties:string[];evidence:unknown;current:Position;proposed:Position;additions:{tokens:number;nativeCalls:number;developmentTokens:number;completionCalls:number;assessmentTokens:number;assessmentCalls:number};estimatedIncrementalMicrousd:string|null;conservativeIncrementalMicrousd:string|null;expiresAt:number};
+type InitialProposal={version:'ordinary-native-authorization-v1';id:string;binding:{taskId:string;projectId:string;scopeHash:string};current:{nativeAuthorityEstablished:false;executionExpiresAt?:number;projectTokens:number;projectEncumberedTokens:number};proposed:Position&{perCallMicrousd:string;durationSeconds:number};model:string;scope:unknown;expiresAt:number;monetarySemantics:string};
+type Result={state:string;taskId?:string;proposal?:Proposal|InitialProposal;error?:string;reasons?:string[]};
 const dollars=(v:string|null|undefined)=>{if(v==null||!/^\d+(?:\.\d+)?$/.test(v))return 'Unknown';const cents=(BigInt(v.split('.')[0])+5000n)/10000n;return '$'+(cents/100n).toLocaleString('en-US')+'.'+(cents%100n).toString().padStart(2,'0');};
 const number=(v:number|null|undefined)=>v==null||!Number.isFinite(v)?'Unknown':v.toLocaleString();
 const date=(v:number|null)=>v==null?'At authenticated approval':new Date(v).toLocaleString();
@@ -37,6 +38,21 @@ export function LifecycleOwnerApproval({chatId}:{chatId?:string}={}){
  }
  if(!result||result.state==='none'||(!result.proposal&&!error))return null;
  const p=result.proposal;
+ if(p?.version==='ordinary-native-authorization-v1')return <section aria-label="Development resource approval" className="my-4 max-h-[55dvh] overflow-y-auto rounded-xl border border-amber-400/60 bg-zinc-900 p-5 text-zinc-100">
+  <h3 className="text-lg font-semibold">Authorize the original Developer task</h3>
+  <p role="status">{statuses[result.state]??result.state}</p>
+  <p className="mt-2 break-all">Task: {p.binding.taskId}<br/>Project: {p.binding.projectId}<br/>Approved scope: {p.binding.scopeHash}</p>
+  <p className="mt-2">At proposal creation, native spending authority is not yet established. Existing project tokens: {number(p.current.projectTokens)}; already encumbered: {number(p.current.projectEncumberedTokens)}. This proposal keeps the original scope and project token ceiling.</p>
+  <table className="mt-3 w-full text-left text-sm"><tbody>{[
+   ['Model',p.model],['Cumulative tokens',number(p.proposed.cumulativeTokens)],['Development tokens / calls',`${number(p.proposed.developmentTokens)} / ${number(p.proposed.developmentCalls)}`],
+   ['Protected completion tokens / calls',`${number(p.proposed.completionTokens)} / ${number(p.proposed.completionCalls)}`],['Protected assessment tokens / calls',`${number(p.proposed.assessmentTokens)} / ${number(p.proposed.assessmentCalls)}`],
+   ['New cumulative spending ceiling',dollars(String(p.proposed.ceilingMicrousd))],['Maximum per-call exposure',dollars(String(p.proposed.perCallMicrousd))],['Execution window',`${number(p.proposed.durationSeconds/3600)} hours from approval, bounded by the original project expiration ${date(p.current.executionExpiresAt??null)}`]
+  ].map(([label,value])=><tr key={label}><th className="py-2 pr-3 font-normal">{label}</th><td>{value}</td></tr>)}</tbody></table>
+  <p className="mt-2">These are requested maximum limits, not estimated spending or guaranteed completion capacity. Expected incremental spending remains unknown. Protected resources cannot be used for ordinary repair. Proposal expires {date(p.expiresAt)}.</p>
+  <details className="mt-3"><summary>Review exact authority and frozen scope</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(p,null,2)}</pre></details>
+  {result.state==='pending'&&<div className="mt-4 flex gap-3"><button disabled={busy} onClick={()=>void decide('approved')} className="rounded bg-amber-400 p-3 text-zinc-950">Approve exactly this authority</button><button disabled={busy} onClick={()=>void decide('rejected')} className="rounded border p-3">Reject authority</button></div>}
+  {error&&<p role="alert">{error}</p>}
+ </section>;
  const rows=p?[
   ['Cumulative token ceiling',number(p.current.cumulativeTokens),number(p.proposed.cumulativeTokens)],
   ['Development token ceiling',number(p.current.developmentTokens),number(p.proposed.developmentTokens)],
