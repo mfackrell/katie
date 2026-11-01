@@ -232,6 +232,17 @@ jobs:
         run: sudo apt-get install -y postgresql-16
       - name: Ordinary authority and historical benchmark transactions without inference
         run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Render actual PostgreSQL original-owner proposal in Chromium
+        env:
+          KATIE_ORDINARY_PROPOSAL_FILE: ${{ runner.temp }}/ordinary-owner-proposal.json
+        run: node --test tests/lifecycle-owner-approval-browser.test.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ordinary-owner-proposal
+          path: ${{ runner.temp }}/ordinary-owner-proposal.json
+          if-no-files-found: error
+
 
   ordinary-native-continuation:
     runs-on: ubuntu-24.04

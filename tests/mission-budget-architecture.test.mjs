@@ -76,6 +76,7 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
   '@/lib/orchestration/routing':{orchestrationChoices:async input=>{routes++;events.push({kind:'route',planning:input.planning});return choices;},orchestrationFailure:async()=> 'provider'},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    events.push({kind:name,...args});
+   if(name==='developer_bound_mission_authority')return null;
    if(name==='reserve_mission_call'){
     if(!authorized||used+args.p_tokens>remaining){denials++;return false;}
     used+=args.p_tokens;reservations.push(args);perCall.set(args.p_call,{reserved:args.p_tokens,settled:false});return true;
@@ -105,7 +106,7 @@ test('timeout reservation stays charged but accurate next-provider counting leav
  assert.equal(result.provider,'google');assert.equal(h.inferences.length,2);
  assert.equal(h.reservations[0].p_tokens,10000+256+16000);
  assert.equal(h.used(),h.reservations[0].p_tokens+30,'unknown first call was not refunded');
- assert.equal(h.actual(),30);assert.equal(h.events[0].planning,true);
+ assert.equal(h.actual(),30);assert.equal(h.events.find(e=>e.kind==='route').planning,true);
 });
 
 test('one unaffordable candidate is skipped without inference; next compatible model may fit',async()=>{

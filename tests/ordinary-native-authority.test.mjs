@@ -6,7 +6,7 @@ function fixture(){
  const proof={...binding,authorityKind:'ordinary-developer',accountId:'account',approvalId:'approval',releaseSha:'d'.repeat(40)};
  const approval={id:'approval',task_id:'task',project_id:'project',account_id:'account',owner_id:'owner',model:'gpt-5.3-codex',trial_id:null,continuation_id:null,deadline:new Date(Date.now()+3600000).toISOString(),developer_authority:{version:'ordinary-developer-v1'}};
  const project={id:'project',status:'running',phase:'development',approved_hash:binding.scopeHash};
- const account={id:'account',arm:'developer',trial_id:null,experiment_id:null,developer_project_id:'project'};
+ const account={id:'account',arm:'developer',trial_id:null,experiment_id:null,developer_project_id:'project',developer_task_id:'task'};
  const task={id:'task',external:{developerApprovalId:'approval',developerReleaseSha:proof.releaseSha}};
  const snapshot={authorityKind:'ordinary-developer',ownerId:'owner',accountId:'account',binding,model:approval.model,snapshot:{approval,grants:[]},position:{expiresAt:Date.now()+3600000,cumulativeTokens:180000,accountEncumberedTokens:55,developmentTokens:120000,developmentEncumberedTokens:55,completionTokens:60000,assessmentTokens:60000,developmentCalls:15,developmentConsumedCalls:11,completionCalls:4,assessmentCalls:4,assessmentConsumedCalls:0,ceilingMicrousd:'2000000'},exposureMicrousd:'1'};
  const db={rpc:async name=>{assert.equal(name,'benchmark_lifecycle_snapshot');return {data:snapshot,error:null};}};

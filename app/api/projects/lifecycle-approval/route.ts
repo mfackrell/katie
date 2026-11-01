@@ -59,6 +59,7 @@ export async function GET(request:NextRequest){
     const task=await db.from('agent_tasks').select('status').eq('id',taskId).maybeSingle<{status:string}>();
     if(task.data?.status==='blocked'&&grants.data?.length)state='continuation_failed';
     else if(grants.data?.length)state='resumed';
+    if(decision.data.developer_approval_id){const authority=await db.from('benchmark_native_spending_approvals').select('deadline,revoked_at').eq('id',decision.data.developer_approval_id).eq('owner_id',principal).maybeSingle<{deadline:string;revoked_at:string|null}>();if(authority.error||!authority.data)throw Error('Committed ordinary authority unavailable');if(authority.data.revoked_at)state='admission_denied';else if(Date.parse(authority.data.deadline)<=Date.now())state='expired';}
    }
    return reply({state,taskId,proposal:offer.proposal,decision:decision.data});
   }

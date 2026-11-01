@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {randomUUID,randomBytes} from 'node:crypto';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 // Disposable PostgreSQL only. These authenticated identities represent synthetic
@@ -33,6 +34,7 @@ export async function assertOrdinaryAuthority(db,rival){
  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development','Frozen display scope','Frozen display scope',$7,'mfackrell/katie',$1::text,'blocked','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo]);
  const limits={cumulativeTokens:180000,developmentTokens:120000,developmentCalls:15,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:3600};
  const prepared=(await db.query('select developer_prepare_initial($1,$2) p',[owner,job.id])).rows[0].p;
+ if(process.env.RUNNER_TEMP)writeFileSync(join(process.env.RUNNER_TEMP,'ordinary-owner-proposal.json'),JSON.stringify({...prepared.proposal,id:prepared.id}));
  assert.equal(prepared.proposal.version,'ordinary-native-authorization-v1');
  assert.equal(prepared.proposal.binding.taskId,job.id);
  assert.equal((await db.query('select developer_next_initial_task($1,$2) id',[owner,chat])).rows[0].id,job.id);
@@ -77,7 +79,7 @@ export async function assertOrdinaryAuthority(db,rival){
  assert.equal(snapshot.snapshot.calls.length,11);assert.equal(snapshot.snapshot.exposures.length,11);
  // SQL boundary fixture supplies a synthetic completed workflow/checkpoint.
  // Actual host and route qualification must independently prove that evidence.
- await db.query("update agent_tasks set status='blocked',external=external||jsonb_build_object('receipt',jsonb_build_object('outcome','BLOCKED','run_id',131)) where id=$1",[job.id]);
+ await db.query("update agent_tasks set status='blocked',external=external||jsonb_build_object('issueNumber',829,'receipt',jsonb_build_object('outcome','BLOCKED','run_id',131,'repository','mfackrell/katie','issue_number',829)) where id=$1",[job.id]);
  const hostFixture=process.env.KATIE_TEST_ORDINARY_HOST==='1'?await (await import('./qualify-lifecycle-continuation.mjs')).createLifecycleCheckpoint(db,{authorityKind:'ordinary-developer',task:job.id,project,mission,account:approved.account_id,grant:(await db.query('select * from benchmark_execution_grants where id=$1',[grant.grantId])).rows[0]}):null;
  const current=(await db.query('select benchmark_lifecycle_snapshot($1) s',[job.id])).rows[0].s;
  const record=hostFixture?.record??{taskId:job.id,projectId:project,originalBaselineSha:baseline,approvedScopeHash:scope,approvedScope:{contractHash:current.binding.contractHash},checkpointSha:'d'.repeat(40),phase:'repair'};
@@ -85,6 +87,18 @@ export async function assertOrdinaryAuthority(db,rival){
  const checkpoint=hostFixture?.checkpoint??{...record,scopeHash:scope,runId:'131',approvalId:approved.id,grantId:grant.grantId,releaseSha:release};
  const amendmentOffer=(await db.query('select benchmark_lifecycle_offer($1,$2,$3) o',[job.id,plan.proposal,checkpoint])).rows[0].o;
  const amendmentArgs=[owner,job.id,amendmentOffer.id,'approved',release];
+ await assert.rejects(db.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',[randomUUID(),...amendmentArgs.slice(1)]),/owner|denied/i);
+ await assert.rejects(db.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',[owner,randomUUID(),...amendmentArgs.slice(2)]),/owner|denied/i);
+ for(const [sql,args] of [
+  ["update agent_tasks set external=external||'{\"checkpointChanged\":true}'::jsonb where id=$1",[job.id]],
+  ['update work_projects set token_allowance=token_allowance-1 where id=$1',[project]],
+  ["update project_runs set binding=jsonb_set(binding,'{contract,tampered}','true'::jsonb) where mission_id=$1",[mission]],
+  ['update benchmark_execution_grants set revoked_at=clock_timestamp() where id=$1',[grant.grantId]]
+ ]){
+  await db.query('begin');await db.query(sql,args);
+  await assert.rejects(db.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',amendmentArgs),/stale|binding|revoked|changed/i);
+  await db.query('rollback');
+ }
  const amended=await Promise.all([db,rival].map(c=>c.query('select benchmark_lifecycle_decide($1,$2,$3,$4,$5) d',amendmentArgs)));
  assert.equal(amended[0].rows[0].d.approvalId,amended[1].rows[0].d.approvalId);
  const child=(await db.query('select * from benchmark_native_spending_approvals where id=$1',[amended[0].rows[0].d.approvalId])).rows[0];

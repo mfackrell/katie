@@ -50,3 +50,25 @@ Audit every legacy function affected by ordinary rows: issue, reserve, live, sto
 claim, settlement, effective limits, and projection triggers. Prove cross-mode denial
 with actual PostgreSQL transactions, including three reservations for two slots and
 concurrent first-amendment decisions. Preserve v5/v6/v7 benchmark regressions.
+
+## Task accounts and capability limits
+
+Each original development task has one ordinary account bound to its project and
+assignment. Subsequent amendments retain that account; a later project milestone
+requires its own original authenticated authority. Accounts do not transfer limits
+or erase earlier spending. Existing project-wide token admission aggregates every
+mission under the mission-state lock. Unsettled prior project-account calls prevent
+new enrollment. The final assessment binds the latest development task's account.
+
+The supported trusted native host remains `mfackrell/katie` with its approved pinned
+native model. Other repositories keep their existing dispatch contract. Ordinary
+calculation tools are retained. Separately billed research tools fail explicitly
+until their monetary exposure can be authenticated; the benchmark-only frozen
+no-tools restriction is not silently applied to ordinary tasks.
+
+Original proposals use the existing development mission's token/call allocation,
+with explicit protected completion and assessment reserves. Their proposed monetary
+maximum is the authorized token allocation times the greater verified input/output
+price, rounded upward in microUSD; this is a maximum, not a spending estimate.
+Original project token and expiration controls still apply. No record is enrolled
+by migration, and proposals create no authority before authenticated commitment.

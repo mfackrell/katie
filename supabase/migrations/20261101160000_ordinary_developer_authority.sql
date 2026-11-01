@@ -3,16 +3,17 @@
 -- Benchmark provenance remains mandatory for benchmark rows; ordinary rows have
 -- an explicit project binding and cannot carry experimental provenance.
 alter table benchmark_budget_accounts
+ add column developer_task_id uuid references agent_tasks(id),
  add column developer_project_id uuid references work_projects(id),
  alter column experiment_id drop not null;
 alter table benchmark_budget_accounts drop constraint benchmark_budget_accounts_arm_check;
 alter table benchmark_budget_accounts add constraint benchmark_budget_accounts_arm_check
  check(arm in ('direct','orchestrated','native','thin','full','developer'));
 alter table benchmark_budget_accounts add constraint budget_account_authority_kind check(
- (arm='developer' and developer_project_id is not null and trial_id is null and experiment_id is null)
- or (arm<>'developer' and developer_project_id is null and experiment_id is not null));
-create unique index developer_project_account on benchmark_budget_accounts(developer_project_id)
- where developer_project_id is not null;
+ (arm='developer' and developer_task_id is not null and developer_project_id is not null and trial_id is null and experiment_id is null)
+ or (arm<>'developer' and developer_task_id is null and developer_project_id is null and experiment_id is not null));
+create unique index developer_task_account on benchmark_budget_accounts(developer_task_id)
+ where developer_task_id is not null;
 
 alter table benchmark_native_spending_approvals
  add column developer_authority jsonb,
@@ -58,13 +59,14 @@ declare a benchmark_budget_accounts; p work_projects; j mission_assignments; m a
 begin
  if tg_table_name='benchmark_budget_accounts' then
   if tg_op='UPDATE' and (new.arm='developer' or old.arm='developer') and
-   (new.arm is distinct from old.arm or new.developer_project_id is distinct from old.developer_project_id
+   (new.developer_task_id is distinct from old.developer_task_id or new.arm is distinct from old.arm or new.developer_project_id is distinct from old.developer_project_id
     or new.owner_actor_id is distinct from old.owner_actor_id or new.cap_tokens is distinct from old.cap_tokens
     or new.trial_id is distinct from old.trial_id or new.experiment_id is distinct from old.experiment_id)
    then raise exception 'Original Developer account authority is immutable';end if;
   if new.arm<>'developer' then return new;end if;
   select * into p from work_projects where id=new.developer_project_id;
   if p.id is null or p.actor_id is distinct from new.owner_actor_id
+   or not exists(select 1 from mission_assignments bound_job join agent_missions bound_mission on bound_mission.id=bound_job.mission_id where bound_job.id=new.developer_task_id and bound_mission.project_id=p.id and bound_job.role='development')
    or exists(select 1 from benchmark_full_project_bindings where project_id=p.id)
    then raise exception 'Ordinary project account binding denied';end if;
  elsif tg_table_name='benchmark_native_spending_approvals' then
@@ -80,7 +82,7 @@ begin
   select * into j from mission_assignments where id=new.task_id;
   select * into m from agent_missions where id=j.mission_id;
   if p.id is null or j.id is null or j.role<>'development' or m.project_id is distinct from p.id
-   or a.developer_project_id is distinct from p.id or a.owner_actor_id is distinct from new.actor_id
+   or a.developer_task_id is distinct from new.task_id or a.developer_project_id is distinct from p.id or a.owner_actor_id is distinct from new.actor_id
    or p.actor_id is distinct from new.actor_id or p.chat_id is distinct from new.chat_id
    or new.developer_authority->>'scopeHash' is distinct from p.approved_hash
    or p.approved_hash is null or p.approval_hash is distinct from p.approved_hash
@@ -186,7 +188,8 @@ begin
  select * into j from mission_assignments where id=p_task;
  select * into p from work_projects where id=(s->'project'->>'id')::uuid;
  if exists(select 1 from benchmark_native_spending_approvals where task_id=p_task)
-  or exists(select 1 from benchmark_budget_accounts where developer_project_id=p.id)
+  or exists(select 1 from benchmark_budget_accounts where developer_task_id=p_task)
+  or exists(select 1 from benchmark_budget_accounts a join benchmark_budget_calls c on c.account_id=a.id where a.developer_project_id=p.id and c.state<>'settled')
   or exists(select 1 from mission_calls c join mission_assignments a on a.id=c.job_id where a.mission_id=j.mission_id)
   or coalesce(t.external->>'attempted','false')<>'false'
   or t.external ?| array['receipt','runId','issueNumber','prNumber','dispatchStartedAt']
@@ -218,6 +221,7 @@ begin
   'snapshotHash',s->>'snapshotHash','scope',jsonb_build_object('specification',s->'snapshot'->'project'->'spec','taskContract',s->'snapshot'->'binding'->'contract'),
   'remaining',jsonb_build_array('implementation','independent_review','repair_if_required','verification','final_review','completion','assessment'),'historicalNativeSpendingMicrousd','0',
   'current',jsonb_build_object('nativeAuthorityEstablished',false,'nativeCalls',null,'ceilingMicrousd',null,
+   'executionExpiresAt',floor(extract(epoch from (s->'snapshot'->'project'->>'deadline')::timestamptz)*1000)::bigint,
    'projectTokens',s->'snapshot'->'project'->'token_allowance','projectEncumberedTokens',s->'snapshot'->'projectEncumberedTokens'),
   'proposed',p_limits,'model',p_model,'guaranteedCompletion',false,
   'monetarySemantics','ceilingMicrousd is a new cumulative maximum for the original development task, completion and assessment; it is not estimated spending',
@@ -285,8 +289,8 @@ begin
  select * into j from mission_assignments where id=p_task;
  deadline:=least(p.deadline,clock_timestamp()+make_interval(secs=>(limits->>'durationSeconds')::integer));
  if deadline<=clock_timestamp() then raise exception 'Original project authority expired';end if;
- insert into benchmark_budget_accounts(experiment_id,arm,owner_actor_id,cap_tokens,developer_project_id)
- values(null,'developer',p.actor_id,(limits->>'cumulativeTokens')::bigint,p.id) returning id into acct;
+ insert into benchmark_budget_accounts(experiment_id,arm,owner_actor_id,cap_tokens,developer_project_id,developer_task_id)
+ values(null,'developer',p.actor_id,(limits->>'cumulativeTokens')::bigint,p.id,p_task) returning id into acct;
  insert into benchmark_mission_bindings(mission_id,account_id,experiment_id,baseline_sha,developer_project_id)
  values(j.mission_id,acct,null,p.baseline_sha,p.id);
  insert into benchmark_native_spending_approvals(owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority,developer_proposal_id)
@@ -316,7 +320,7 @@ begin
  select * into acct from benchmark_budget_accounts where id=a.account_id for update;
  select * into g from benchmark_execution_grants where developer_approval_id=a.id;
  limits:=a.developer_authority->'limits';
- if acct.id is null or acct.arm<>'developer' or acct.developer_project_id is distinct from a.project_id
+ if acct.id is null or acct.arm<>'developer' or acct.developer_task_id is distinct from p_task or acct.developer_project_id is distinct from a.project_id
   or not developer_validate_limits(limits) or a.developer_authority->'binding' is distinct from s->'binding'
   or a.developer_authority->'completionContract' is distinct from s->'project'->'completion_contract'
   then raise exception 'Ordinary resource binding unavailable';end if;
@@ -370,6 +374,7 @@ language sql stable security definer set search_path=public as $$
  join work_projects p on p.id=b.developer_project_id and p.id=m.project_id
  join benchmark_native_spending_approvals a on a.account_id=acct.id and a.developer_authority is not null
  where b.mission_id=p_mission and a.revoked_at is null and acct.frozen_at is null
+ and p.status='running' and m.status='running' and p.active_mission_id=m.id
  and a.deadline>now() and p.deadline>now() and a.developer_authority->>'scopeHash'=p.approved_hash
  and p.approved_hash=p.approval_hash and standalone_verify_scope(a.owner_id,p.actor_id,p.chat_id)
  and a.developer_authority->'completionContract'=p.completion_contract
@@ -743,7 +748,9 @@ language plpgsql security definer set search_path=public as $$
 declare a benchmark_budget_accounts;p work_projects;
 begin
  if new.project_id is null or new.project_kind<>'assessment' then return new;end if;
- select * into a from benchmark_budget_accounts where developer_project_id=new.project_id;
+ select account.* into a from benchmark_budget_accounts account join mission_assignments job on job.id=account.developer_task_id
+ join project_runs run on run.mission_id=job.mission_id
+ where account.developer_project_id=new.project_id order by run.milestone_index desc,run.created_at desc limit 1;
  if a.id is null then return new;end if;
  select * into p from work_projects where id=new.project_id;
  insert into benchmark_mission_bindings(mission_id,account_id,experiment_id,baseline_sha,developer_project_id)
@@ -755,3 +762,19 @@ create trigger developer_assessment_account after insert or update of project_id
  for each row execute function developer_bind_assessment_account();
 revoke all on function developer_bound_mission_authority(uuid),developer_bind_assessment_account() from public,anon,authenticated,service_role;
 grant execute on function developer_bound_mission_authority(uuid) to service_role;
+
+-- Ordinary spending rows cannot become durable authority without the matching
+-- append-only authenticated decision in the same transaction.
+create function developer_approval_decision_guard() returns trigger
+language plpgsql security definer set search_path=public as $$
+begin
+ if new.developer_authority is not null and not exists(
+  select 1 from benchmark_lifecycle_decisions d join benchmark_lifecycle_proposals proposal on proposal.id=d.proposal_id
+  where d.developer_approval_id=new.id and d.proposal_id=new.developer_proposal_id and d.decision='approved'
+   and d.owner_id=new.owner_id and proposal.owner_id=new.owner_id and proposal.task_id=new.task_id and proposal.project_id=new.project_id)
+  then raise exception 'Ordinary authority requires its committed exact owner decision';end if;
+ return new;
+end $$;
+create constraint trigger developer_approval_decision after insert on benchmark_native_spending_approvals
+ deferrable initially deferred for each row execute function developer_approval_decision_guard();
+revoke all on function developer_approval_decision_guard() from public,anon,authenticated,service_role;

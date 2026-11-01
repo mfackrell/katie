@@ -5,7 +5,7 @@ export async function readOrdinaryNativeAuthority({db,proof,approval,project,acc
  if(proof.authorityKind!=='ordinary-developer'||approval.developer_authority?.version!=='ordinary-developer-v1'
   ||approval.trial_id!==null||approval.continuation_id!==null||account.arm!=='developer'
   ||account.trial_id!==null||account.experiment_id!==null||account.developer_project_id!==project.id
-  ||proof.accountId!==account.id||approval.account_id!==account.id||approval.task_id!==task.id
+  ||account.developer_task_id!==task.id||proof.accountId!==account.id||approval.account_id!==account.id||approval.task_id!==task.id
   ||approval.project_id!==project.id||proof.releaseSha!==releaseSha||approval.model!=='gpt-5.3-codex'
   ||approval.consumed_at||approval.revoked_at||account.frozen_at
   ||task.external?.developerApprovalId!==approval.id||task.external?.developerReleaseSha!==releaseSha)deny();

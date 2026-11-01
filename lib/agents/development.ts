@@ -194,7 +194,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
     const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
-    if(!fullBinding)return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
+    if(!fullBinding&&task.repository_full_name==='mfackrell/katie')return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
     if(fullBinding){
       if(!fullDispatchEnabled||!nativeDispatchEnabled)
         throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');

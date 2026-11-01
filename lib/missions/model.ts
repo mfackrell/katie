@@ -61,7 +61,8 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   throw Error('Full benchmark paid execution is disabled');
  // Take Eleven's frozen tool profile has no premium/search tools. Its supplied
  // issue and contract are sufficient evidence for every DO phase.
- const effectiveTools=metered?'none':tools;
+ if(ordinary&&tools==='research')throw Error('Ordinary lifecycle research requires verified external-tool monetary authority; saved progress is preserved');
+ const effectiveTools=fullBinding?'none':tools;
  const executionDeadline=missionExecutionDeadline(claim);
  const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
  const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,...(reviewFormat?{reviewFormat}:{}),objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
