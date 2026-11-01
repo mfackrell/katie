@@ -33,6 +33,8 @@ export async function assertOrdinaryAuthority(db,rival){
  await db.query("insert into chats(id,actor_id,title) values($1,$2,'Synthetic developer')",[taskChat,agent.actor_id]);
  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development','Frozen display scope','Frozen display scope',$7,'mfackrell/katie',$1::text,'blocked','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo]);
  const limits={cumulativeTokens:180000,developmentTokens:120000,developmentCalls:15,completionTokens:60000,completionCalls:4,assessmentTokens:60000,assessmentCalls:4,perCallMicrousd:500000,ceilingMicrousd:2000000,durationSeconds:3600};
+ await db.query('begin');await db.query("update agent_tasks set repository_full_name='other/repository' where id=$1",[job.id]);
+ await assert.rejects(db.query('select developer_prepare_initial($1,$2) p',[owner,job.id]),/binding denied/);await db.query('rollback');
  const prepared=(await db.query('select developer_prepare_initial($1,$2) p',[owner,job.id])).rows[0].p;
  if(process.env.RUNNER_TEMP)writeFileSync(join(process.env.RUNNER_TEMP,'ordinary-owner-proposal.json'),JSON.stringify({...prepared.proposal,id:prepared.id}));
  assert.equal(prepared.proposal.version,'ordinary-native-authorization-v1');

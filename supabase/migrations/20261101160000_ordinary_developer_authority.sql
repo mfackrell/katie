@@ -135,6 +135,8 @@ begin
  select * into p from work_projects where id=m.project_id for update;
  select * into r from project_runs where project_id=p.id and mission_id=m.id;
  if p_owner is null or t.id is null or j.id is null or p.id is null or r.id is null
+  or t.repository_full_name is distinct from 'mfackrell/katie' or p.repository_full_name is distinct from 'mfackrell/katie'
+  or not exists(select 1 from repo_sync_runs repository where repository.id=p.repository_id and repository.repository_full_name='mfackrell/katie')
   or t.kind<>'development' or j.role<>'development' or m.project_kind<>'development'
   or t.agent_id is distinct from j.agent_id or t.repository_id is distinct from p.repository_id
   or p.active_mission_id is distinct from m.id or p.phase<>'development'
