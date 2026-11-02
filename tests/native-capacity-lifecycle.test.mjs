@@ -2,17 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
+import {capacityProgress} from '../scripts/benchmark/native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from '../scripts/benchmark/native-development-lifecycle.mjs';
 const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
 // Exercise the host's actual lifecycle control with nonbillable phase/verifier doubles.
 const text=source.slice(source.indexOf(" const verifyCandidate="),source.indexOf(' if(!evidencePath'));
-async function run({testResults=[true],verdicts=['pass','pass'],infrastructure=false,version6=true,ordinary=false}={}){
- const phases=[],verifications=[],durable=[];let callback,ci=0,decisions=0;
- const context={preserveWip:()=>durable.push(structuredClone(context.lastCompleted)),git:()=>String(ci),ordinary,pauseForCapacity:()=>{},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),recovery:null,lastCompleted:{},executeNativeDevelopmentLifecycle,continuation:{plan:{capacityRenewal:version6}},root:'/temp',process:{execPath:'node',env:{RUNNER_TEMP:'/temp'}},boundary:{root:'/work'},requestFile:'/request',diagnostics:{capacityForecasts:[]},diagnosticSecrets:[],gatewayFailure:null,child:null,join:(...x)=>x.join('/'),rmSync:()=>{},sanitizeEvidence:x=>x,saveDiagnostics:()=>{},denied:x=>{throw Error('NATIVE_HOST_DENIED: '+x)},readFileSync:()=>{if(infrastructure)return '{"kind":"infrastructure"}';throw Error('missing');},commitCandidate:()=>('head-'+phases.length),safelyRunPhase:async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};},spawn:()=>{const pass=testResults[Math.min(ci++,testResults.length-1)];verifications.push(pass);return {stdout:{on:()=>{}},stderr:{on:()=>{}},once:(event,fn)=>{if(event==='close')queueMicrotask(()=>fn(pass?0:1));}}}};
+async function run({testResults=[true],verdicts=['pass','pass'],infrastructure=false,version6=true,ordinary=false,recovery=null}={}){
+ const phases=[],verifications=[],durable=[],forecasts=[];let callback,ci=0,decisions=0;
+ const context={preserveWip:()=>durable.push(structuredClone(context.lastCompleted)),git:()=>String(ci),ordinary,pauseForCapacity:()=>{},forecastCapacity:async phase=>{forecasts.push(capacityProgress({binding:{},phase,recovery:context.capacityRecovery,completedStages:[...context.capacityCompletedStages],notRequiredStages:[...context.capacityNotRequiredStages]}));},latestCapacityForecast:{status:'indeterminate'},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),recovery,capacityRecovery:recovery,lastCompleted:recovery?.lastCompleted??{},executeNativeDevelopmentLifecycle,continuation:{plan:{capacityRenewal:version6}},root:'/temp',process:{execPath:'node',env:{RUNNER_TEMP:'/temp'}},boundary:{root:'/work'},requestFile:'/request',diagnostics:{capacityForecasts:[]},diagnosticSecrets:[],gatewayFailure:null,child:null,join:(...x)=>x.join('/'),rmSync:()=>{},sanitizeEvidence:x=>x,saveDiagnostics:()=>{},denied:x=>{throw Error('NATIVE_HOST_DENIED: '+x)},readFileSync:()=>{if(infrastructure)return '{"kind":"infrastructure"}';throw Error('missing');},commitCandidate:()=>('head-'+phases.length),safelyRunPhase:async(p,findings)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);return {verdict:verdicts[decisions++]??'pass',findings:'independent findings'};},spawn:()=>{const pass=testResults[Math.min(ci++,testResults.length-1)];verifications.push(pass);return {stdout:{on:()=>{}},stderr:{on:()=>{}},once:(event,fn)=>{if(event==='close')queueMicrotask(()=>fn(pass?0:1));}}}};
  // Implementation/repair return no review decision.
- context.safelyRunPhase=async(p,findings,binding)=>{phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);if(p==='review'||p==='final-review')return {reviewedHeadSha:binding?.candidateHead,verdict:verdicts[decisions++]??'pass',findings:'independent findings'};};
+ context.safelyRunPhase=async(p,findings,binding)=>{if(p==='repair')for(const s of ['repair','verification','final_review'])context.capacityCompletedStages.delete(s);await context.forecastCapacity(p);phases.push(p);if(p==='repair')assert.match(findings,/Trusted deterministic/);if(p==='review'||p==='final-review')return {reviewedHeadSha:binding?.candidateHead,verdict:verdicts[decisions++]??'pass',findings:'independent findings'};};
  let error;try{await vm.runInNewContext('(async()=>{'+text+'})()',context);}catch(e){error=e.message;}
- return {phases,verifications,error,completed:context.lastCompleted,durable};
+ return {phases,verifications,error,completed:context.lastCompleted,durable,forecasts};
 }
 test('deterministic failure reaches the same bounded repair even when initial source review passes',async()=>{
  const r=await run({testResults:[false,true]});assert.deepEqual(r.phases,['implementation','review','repair','final-review']);assert.deepEqual(r.verifications,[false,true]);assert.equal(r.error,undefined);
@@ -75,4 +76,14 @@ test('unchanged source cannot evade no-progress by rewording diagnostics',async(
   if(phase==='repair'){repairs++;return;}if(phase==='implementation')return;
   return {reviewedHeadSha:binding.candidateHead,verdict:'changes_requested',findings:'Review wording '+(++reviews)};
  }}),/NO_PROGRESS/);assert.equal(repairs,1);
+});
+test('recovered final review followed by failed repaired verification cannot restore stale passing progress',async()=>{
+ const head='head-0';
+ const r=await run({recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:{verification:{head,passed:true},review:{phase:'review',reviewedHeadSha:head,verdict:'pass',findings:'Initial review'},adaptiveRepair:{version:2,nextAction:'final-review',candidateHead:head,iteration:0,stagnant:0,seen:[]}}},testResults:[false,true],verdicts:['changes_requested','pass','pass']});
+ assert.equal(r.error,undefined);assert.deepEqual(r.phases,['final-review','repair','final-review','repair','final-review']);
+ const reviews=r.forecasts.filter(f=>f.phase==='final_review');assert.equal(reviews.length,3);
+ assert.ok(reviews[0].completedStages.includes('verification'));
+ assert.ok(!reviews[1].completedStages.includes('verification'),'Failed new candidate must not inherit restored passing verification');
+ assert.ok(reviews[2].completedStages.includes('verification'));
+ assert.ok(!r.forecasts.at(-1).notRequiredStages.includes('repair'),'Completed repairs cannot be relabeled not required');
 });

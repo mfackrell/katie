@@ -188,17 +188,19 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
+let capacityRecovery=recovery;
 // Advisory only. Recovery authentication above, grants/admission below remain
 // authoritative. Forecast errors never call denied() or change phase selection.
 const capacityObservations=[...priorCapacityObservations];
 let latestCapacityForecast,forecastGrantId=null;
 const capacityCompletedStages=new Set(recovery?.phase==='repair'?['implementation','initial_review']:[]),capacityNotRequiredStages=new Set();
 const forecastCapacity=async phase=>{
- try{latestCapacityForecast=await (ordinary?readOrdinaryLifecycleCapacity:readNativeLifecycleCapacity)({db,task,project,approval,continuation,context:wipContext,recovery,phase,grantId:forecastGrantId,completedStages:[...capacityCompletedStages],notRequiredStages:[...capacityNotRequiredStages],observations:capacityObservations});}
+ try{latestCapacityForecast=await (ordinary?readOrdinaryLifecycleCapacity:readNativeLifecycleCapacity)({db,task,project,approval,continuation,context:wipContext,recovery:capacityRecovery,phase,grantId:forecastGrantId,completedStages:[...capacityCompletedStages],notRequiredStages:[...capacityNotRequiredStages],observations:capacityObservations});}
  catch{latestCapacityForecast={version:'lifecycle-capacity-v1',kind:'forecast_not_authorization',status:'indeterminate',uncertainties:['forecast_unavailable']};}
  console.log('NATIVE_LIFECYCLE_CAPACITY='+JSON.stringify({status:latestCapacityForecast.status,shortages:latestCapacityForecast.shortages??[],phase:latestCapacityForecast.currentPhase??null}));
 };
-await forecastCapacity(recovery?.phase??'implementation');
+const recoveredAction=recovery?.lastCompleted?.adaptiveRepair?.nextAction;
+await forecastCapacity(recoveredAction==='complete'?'do_completion':recoveredAction??recovery?.phase??'implementation');
 
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
@@ -436,7 +438,7 @@ try{
  const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
   candidateIdentity:()=>git('rev-parse','HEAD^{tree}'),
   onIteration:evidence=>{diagnostics.repairIterations??=[];if(!diagnostics.repairIterations.some(old=>old.iteration===evidence.iteration&&old.candidateHead===evidence.candidateHead))diagnostics.repairIterations.push(evidence);diagnostics.repairIterations=diagnostics.repairIterations.slice(-64);saveDiagnostics();},
-  onCompleted:(evidence,full)=>{diagnostics.lifecycleEvidence=full;lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){const action=evidence.adaptiveRepair?.nextAction;activeWipPhase={phase:action==='repair'?'repair':action==='verification'?'review':action==='complete'?'final-review':action??'review',reviewFindings:evidence.review?.findings??'',boundary:true};preserveWip();}if(recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
+  onCompleted:(evidence,full)=>{diagnostics.lifecycleEvidence=full;lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){const action=evidence.adaptiveRepair?.nextAction;activeWipPhase={phase:action==='repair'?'repair':action==='verification'?'review':action==='complete'?'final-review':action??'review',reviewFindings:evidence.review?.findings??'',boundary:true};preserveWip();if(recovery)capacityRecovery={...recovery,phase:activeWipPhase.phase,checkpointSha:diagnostics.wipCheckpoint?.checkpointSha??recovery.checkpointSha,lastCompleted:evidence};}if(evidence.repairPerformed!==true&&recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
  lastCompleted={...lastCompleted,phase:'final-review',lifecycle:{...lifecycle,review:{...lifecycle.review,findings:String(lifecycle.review.findings??'').slice(0,1600)},finalReview:{...lifecycle.finalReview,findings:String(lifecycle.finalReview.findings??'').slice(0,1600)}}};
  await forecastCapacity('do_completion');diagnostics.capacityForecasts.push(latestCapacityForecast);saveDiagnostics();
  pauseForCapacity('do_completion');

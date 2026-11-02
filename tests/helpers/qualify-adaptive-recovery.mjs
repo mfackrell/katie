@@ -22,7 +22,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
  const fixture=await createLifecycleCheckpoint(db,ids,{initial:true}),{root,remote,context,baseline,one,repo}=fixture;
  const report={version:1,syntheticOnly:true,paidInference:0,taskId:ids.task,projectId:ids.project,baseline,contract:context.contract,checks,attempts:[],trace:[],authorizations:[],limitations:['Synthetic nonbillable provider and owner identities; real host, SDK, PostgreSQL, Git and verifier.','Seven-day diagnostics required; source not checkpointed before abrupt termination is not recoverable.']};
  const output=join(process.env.RUNNER_TEMP??root,'task3b-qualification');mkdirSync(output,{recursive:true});
- const ledger=async()=>(await db.query("select jsonb_build_object('calls',(select coalesce(jsonb_agg(to_jsonb(c) order by id),'[]') from benchmark_budget_calls c where account_id=$1),'exposures',(select coalesce(jsonb_agg(to_jsonb(e) order by call_id),'[]') from benchmark_dollar_exposures e where account_id=$1)) v",[ids.account])).rows[0].v;
+ const ledger=async()=>(await db.query("select jsonb_build_object('calls',(select coalesce(jsonb_agg(to_jsonb(c) order by id),'[]') from benchmark_budget_calls c where account_id=$1),'exposures',(select coalesce(jsonb_agg(to_jsonb(e) order by call_id),'[]') from benchmark_dollar_exposures e where account_id=$1),'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),'mission',(select to_jsonb(m) from agent_missions m where id=$2),'grants',(select coalesce(jsonb_agg(to_jsonb(g) order by execution_epoch),'[]') from benchmark_execution_grants g where account_id=$1),'approvals',(select coalesce(jsonb_agg(to_jsonb(a) order by created_at),'[]') from benchmark_native_spending_approvals a where account_id=$1)) v",[ids.account,ids.mission])).rows[0].v;
  const assertHistory=async old=>{const now=await ledger();for(const key of ['calls','exposures'])for(const row of old[key])assert.deepEqual(now[key].find(r=>(r.id??r.call_id)===(row.id??row.call_id)),row);};
  let run=131,repair=0,pending=null,requests=0,lines=[...broken],currentAuthority=authority;
  const source=()=>lines.join('\n')+'\n';
@@ -117,6 +117,10 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
   assert.equal(repair,3);assert.equal(report.trace.filter(t=>t.phase==='implementation'&&t.event==='completed').length,1);
   assert.equal(report.trace.filter(t=>t.phase==='review'&&t.event==='completed').length,1);
   const calls=await ledger();assert.ok(calls.calls.every(c=>c.state==='settled'));assert.equal(new Set(calls.calls.map(c=>c.id)).size,calls.calls.length);
+  assert.equal(calls.mission.calls+calls.mission.routing_calls,calls.calls.length);
+  assert.equal(Number(calls.account.spent_tokens),calls.calls.reduce((n,c)=>n+Number(c.actual_tokens),0));
+  assert.equal(calls.grants.length,3);assert.equal(calls.approvals.length,3);
+  for(const a of calls.approvals){assert.equal(a.developer_authority.limits.completionCalls,4);assert.equal(a.developer_authority.limits.developmentCalls,40);assert.equal(Number(a.max_tokens),180000);}
   report.finalLedger=calls;report.passed=true;console.log('TASK3B_MULTI_INTERRUPTION_PASS');
  }finally{if(report.passed)execFileSync('git',['--git-dir',remote,'bundle','create',join(output,'checkpoints.bundle'),'--all','^'+baseline]);writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2));rmSync(root,{recursive:true,force:true});}
 }

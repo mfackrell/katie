@@ -9,6 +9,7 @@ Inspection before implementation identified these integration deficiencies:
 * The controller publishes completed verification/review state in memory. The host does not durably checkpoint each published transition, leaving a gap until another provider request or graceful cleanup.
 * Restored diagnostics retain capacity observations but discard the previous attempt's bounded adaptive iteration receipts. The counters survive in the checkpoint, but resolved/new finding evidence is lost from the successor artifact.
 * Recovery previously reconstructed semantic failure evidence from 1,600-byte display summaries. Long actionable tails could disappear and unchanged failures could reset stagnation. Full bounded evidence now remains in existing authenticated diagnostics, referenced by checkpoint digests; missing, altered or cross-candidate evidence fails closed.
+* Forecast progress previously used the coarse original recovery phase, which could repeat completed work estimates or restore an old candidate PASS after a new failed repair. Forecasts now consume the latest durably published adaptive state.
 * No-progress stops are stored but not enforced on restart; the `repair` recovery shortcut can bypass a saved terminal no-progress decision.
 
 Existing authenticated Git restoration, scope gates, historical-call reconciliation, live phase authority and atomic provider admission are reused. No new authority or accounting mechanism is required. Seven-day trusted diagnostic retention and loss of changes preceding a durable checkpoint remain unchanged.

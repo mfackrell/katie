@@ -1,3 +1,4 @@
+import {capacityProgress} from './native-capacity-forecast.mjs';
 import {freshNativePhaseWork} from './native-phase-profile.mjs';
 import {assessLifecycleCapacity,STAGES} from './lifecycle-capacity.mjs';
 import {proposeLifecycleAmendment} from '../../lib/projects/lifecycle-authorization.mjs';
@@ -9,12 +10,10 @@ export function lifecycleProposalFromSnapshot({snapshot,record,observations=[],p
  if(!record || record.taskId!==b.taskId || record.projectId!==b.projectId ||
   record.originalBaselineSha!==b.baselineSha || record.approvedScopeHash!==b.scopeHash ||
   record.approvedScope?.contractHash!==b.contractHash)throw Error('Authenticated checkpoint binding differs');
- let completed=record.phase==='repair'?['implementation','initial_review']:
-  record.phase==='review'?['implementation']:record.phase==='final-review'?['implementation','initial_review','repair','verification']:
-  record.phase==='do_completion'?['implementation','initial_review','repair','verification','final_review']:[];
- const skippedRepair=['final-review','do_completion'].includes(record.phase)&&record.lastCompleted?.repairPerformed!==true&&record.lastCompleted?.lifecycle?.repairPerformed!==true;
- if(skippedRepair)completed=completed.filter(s=>s!=='repair');
- const phase=({'review':'initial_review','final-review':'final_review'})[record.phase]??record.phase;
+ const action=record.lastCompleted?.adaptiveRepair?.version===2?record.lastCompleted.adaptiveRepair.nextAction:null;
+ const requestedPhase=action==='complete'?'do_completion':action??record.phase;
+ const progress=capacityProgress({binding:b,recovery:record,phase:requestedPhase});
+ const completed=progress.completedStages,skippedRepair=progress.notRequiredStages.includes('repair'),phase=progress.phase;
  const calls=snapshot.snapshot.calls,seen=new Set();
  const verified=observations.filter(o=>{
   if(!Array.isArray(o.operationIds)||o.operationIds.length!==o.calls||new Set(o.operationIds).size!==o.calls)return false;
