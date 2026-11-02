@@ -91,6 +91,7 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
         sameOrderedGlyphs: expected.replace(/\s/gu, '') === actual.replace(/\s/gu, ''),
         fragmentCount: raster.fragments.length,
         endOfLineCount: raster.fragments.filter(part => part.hasEOL).length,
+        inferredLineBreakCount: raster.fragments.filter(part => part.lineBreakAfter && !part.hasEOL).length,
       });
       findings.push({ rule: 'reading-order', page: 0, detail: 'PDF text differs from document content or reading order.' });
     }
@@ -124,6 +125,25 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
         await p.render({ canvasContext: ctx, viewport }).promise;
         const content = await p.getTextContent();
         const items = content.items.filter((item: { str?: string }) => typeof item.str === 'string');
+        type GlyphItem = { str: string; hasEOL?: boolean; transform?: number[]; width?: number; height?: number };
+        const fragments: PdfTextFragment[] = new Array(items.length);
+        let nextVisible: GlyphItem | null = null;
+        for (let j = items.length - 1; j >= 0; j--) {
+          const item = items[j] as GlyphItem;
+          const x = item.transform?.[4], y = item.transform?.[5];
+          const nextX = nextVisible?.transform?.[4], nextY = nextVisible?.transform?.[5];
+          // Chromium occasionally fails to mark a physical wrap with hasEOL.
+          // Require BOTH a lower baseline and a horizontal reset before treating
+          // whitespace at the item boundary as PDF.js wrap padding.
+          const lineBreakAfter = typeof x === 'number' && typeof y === 'number' &&
+            typeof nextX === 'number' && typeof nextY === 'number' &&
+            Number.isFinite(x) && Number.isFinite(y) &&
+            Number.isFinite(nextX) && Number.isFinite(nextY) &&
+            y - nextY > Math.max(3, (item.height ?? 0) * 0.35) &&
+            nextX + 1 < x + Math.max(2, item.width ?? 0);
+          fragments[j] = { str: item.str, hasEOL: Boolean(item.hasEOL), ...(lineBreakAfter ? { lineBreakAfter: true } : {}) };
+          if (item.str.trim()) nextVisible = item;
+        }
         const natural = p.getViewport({ scale: 1 });
         const overflow = items.some((item: { str: string; transform: number[]; width: number; height: number }) => {
           const x = item.transform[4], y = item.transform[5];
@@ -131,7 +151,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
         });
         const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         let ink = 0; for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 180 && pixels[offset + 1] < 180 && pixels[offset + 2] < 180) ink++;
-        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), fragments: items.map((item: { str: string; hasEOL: boolean }) => ({str:item.str, hasEOL:Boolean(item.hasEOL)})), overflow, blank: ink < 40 });
+        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), fragments, overflow, blank: ink < 40 });
         canvas.width = canvas.height = 1; p.cleanup();
       }
       await document.destroy(); URL.revokeObjectURL(url); URL.revokeObjectURL(workerUrl);
