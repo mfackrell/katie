@@ -123,7 +123,7 @@ export async function qualifyTask3cCompletion(db,ids,fixture,engineering,host) {
   const closed=(await db.query('select finish_work_project($1,$2,$3,$4) value',[ids.project,randomUUID(),'complete',{}])).rows[0].value;
   assert.equal(closed,false,'Replayed project completion must be fenced');
   report.missionJobs=jobs;report.assessmentJobs=assessments;report.finalProject=final;report.finalBrowser=fixture.finalBrowser;report.finalAccount=account;report.finalLedgerHash=digest(after);report.events.push({stage:'authoritative-project-completed',projectId:ids.project,head:final.verified_sha,assessmentMissionId:final.active_mission_id,receipt:final.result});
-  assert.equal(report.negativeCases.length>=9,true,'All nine atomic negative acceptance cases must execute');
+  assert.equal(report.negativeCases.length>=12,true,'Every atomic negative acceptance case must execute');
   report.passed=true;
   console.log('TASK3C_INTEGRATED_PROJECT_CLOSURE_PASS');
  } finally {
@@ -149,6 +149,8 @@ async function assertAtomicRejects(db,ids,project,negativeCases){
    {name:'wrong-approved-scope',sql:"update agent_missions set project_evidence=jsonb_set(project_evidence,'{approvedScopeHash}',to_jsonb(repeat('f',64))) where id=$1",args:[assessment]},
    {name:'wrong-task-identity',sql:"update agent_missions set project_evidence=jsonb_set(project_evidence,'{finalIntegratedEvidence,taskId}',to_jsonb($2::text)) where id=$1",args:[assessment,randomUUID()]},
    {name:'missing-independent-assessment',sql:"update agent_missions set status='blocked' where id=$1",args:[assessment]},
+   {name:'rejected-assessment-review',sql:"update mission_assignments set result=jsonb_set(result,'{verdict}',to_jsonb('changes_requested'::text)) where mission_id=$1 and role='review'",args:[assessment]},
+   {name:'wrong-final-contract',sql:"update agent_missions set project_evidence=jsonb_set(project_evidence,'{approvedFinalContract,scenarios,0,name}',to_jsonb('Different contract'::text)) where id=$1",args:[assessment]},
    {name:'obsolete-browser-candidate',sql:"update agent_missions set project_evidence=jsonb_set(project_evidence,'{preview,browserAcceptance,headSha}',to_jsonb(repeat('f',40))) where id=$1",args:[assessment]},
    {name:'missing-acceptance-criterion',sql:"update work_projects set preview=jsonb_set(preview,'{browserAcceptance,checks}','[]'::jsonb) where id=$1",args:[ids.project]},
    {name:'wrong-project-identity',sql:'update agent_missions set project_id=null where id=$1',args:[assessment]}
@@ -167,5 +169,11 @@ async function assertAtomicRejects(db,ids,project,negativeCases){
   await db.query('rollback to savepoint task3c_expired');
   await db.query('release savepoint task3c_expired');
   negativeCases.push({name:'expired-project-authorization',rejected:true});
+  await db.query('savepoint task3c_direct');
+  await db.query("update mission_assignments set result=jsonb_set(result,'{verdict}',to_jsonb('changes_requested'::text)) where mission_id=$1 and role='review'",[assessment]);
+  await assert.rejects(db.query("update work_projects set status='completed' where id=$1",[ids.project]),/Final assessment is not bound/,'Direct privileged status writes must not bypass the independent reviewer');
+  await db.query('rollback to savepoint task3c_direct');
+  await db.query('release savepoint task3c_direct');
+  negativeCases.push({name:'direct-status-bypass-rejected',rejected:true});
  }finally{await db.query('rollback');}
 }
