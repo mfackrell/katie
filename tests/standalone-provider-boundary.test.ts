@@ -825,3 +825,113 @@ test('mixed unpriceable dimension and heuristic context is a billing error, not 
     error=>standaloneAccountingCause(error)?.code==='standalone_unsupported_billing');
   assert.equal(counts,0);assert.equal(paid,0);assert.equal(f.attempts.length,0);
 });
+
+
+test('short valid requests count provider-native input before admission; resume never recounts',async()=>{
+ const scenarios=[
+  {provider:'anthropic' as const,model:'claude-sonnet-4-6',path:'/v1/messages',
+   native:'https://api.anthropic.com/v1/messages/count_tokens',count:{input_tokens:20},
+   body:{model:'claude-sonnet-4-6',messages:[{role:'user',content:'Short ordinary message.'}],max_tokens:64},
+   receipt:{id:'counted-claude',model:'claude-sonnet-4-6',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',
+    usage:{input_tokens:20,output_tokens:3,cache_read_input_tokens:0,cache_creation_input_tokens:0}}},
+  {provider:'openai' as const,model:'gpt-5',path:'/v1/responses',
+   native:'https://api.openai.com/v1/responses/input_tokens',count:{input_tokens:20},
+   body:{model:'gpt-5',input:[{role:'user',content:'Short ordinary message.'}],max_output_tokens:64},
+   receipt:{id:'counted-openai',model:'gpt-5',status:'completed',output:[],
+    usage:{input_tokens:20,output_tokens:3,input_tokens_details:{cached_tokens:0}}}},
+  {provider:'google' as const,model:'gemini-2.5-flash',path:'/v1beta/models/gemini-2.5-flash:generateContent',
+   native:'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens',count:{totalTokens:20},
+   body:{contents:[{role:'user',parts:[{text:'Short ordinary message.'}]}],generationConfig:{maxOutputTokens:64}},
+   receipt:{responseId:'counted-google',modelVersion:'gemini-2.5-flash',
+    candidates:[{finishReason:'STOP',content:{parts:[{text:'ok'}]}}],
+    usageMetadata:{promptTokenCount:20,candidatesTokenCount:3,thoughtsTokenCount:0}}},
+ ];
+ for(const item of scenarios){
+  const f=fakeLedger();let counts=0,paid=0,sent='';
+  const host=item.provider==='anthropic'?'https://api.anthropic.com':item.provider==='openai'?'https://api.openai.com':'https://generativelanguage.googleapis.com';
+  const initial=prepareStandaloneRequest(item.provider,item.model,item.path,item.body);
+  const heuristic=estimatePreparedRequest(initial);
+  assert.equal(heuristic.status,'estimated','already fits context without native count');
+  assert.ok(heuristic.inputTokens>20);
+  const send=createAccountingFetch(item.provider,async(url,init)=>{
+   if(String(url)===item.native){
+    counts++;const counted=JSON.parse(String(init?.body));
+    if(item.provider==='google')assert.deepEqual(counted,{generateContentRequest:initial.payload});
+    else assert.equal(counted.model,item.model);
+    assert.equal(counted.max_output_tokens,undefined);assert.equal(counted.max_tokens,undefined);
+    return Response.json(item.count);
+   }
+   paid++;sent=String(init?.body);return Response.json(item.receipt);
+  },f.factory);
+  const input={method:'POST',body:JSON.stringify(item.body)};
+  await runWithStandaloneAccounting({...context,requestId:'count-'+item.provider},()=>send(host+item.path,input));
+  assert.equal(counts,1,item.provider);assert.equal(paid,1,item.provider);
+  const attempt=f.attempts[0];
+  assert.equal(attempt.state,'settled');
+  assert.equal(attempt.preflight_estimate.inputCountSource,'provider');
+  assert.equal(attempt.preflight_estimate.inputTokens,20);
+  assert.equal(sent,attempt.prepared_payload.serializedBody);
+  await runWithStandaloneAccounting({...context,requestId:'count-'+item.provider,resumed:true},()=>send(host+item.path,input));
+  assert.equal(counts,1,'native count reused from the saved quote');
+  assert.equal(paid,1,'no repeat generation');
+ }
+});
+
+test('failed native count retains old conservative normal-request estimate and completes one paid call',async()=>{
+ const f=fakeLedger();let counts=0,paid=0;
+ const body={model:'gpt-5',input:'Small but nontrivial prompt',max_output_tokens:64};
+ const original=prepareStandaloneRequest('openai','gpt-5','/v1/responses',body);
+ const oldQuote=estimatePreparedRequest(original);
+ const send=createAccountingFetch('openai',async(url,init)=>{
+  if(String(url).endsWith('/input_tokens')){counts++;return Response.json({error:'not available'},{status:503});}
+  paid++;assert.equal(String(init?.body),original.serializedBody);
+  return Response.json({id:'fallback-provider-receipt',model:'gpt-5',status:'completed',output:[],
+   usage:{input_tokens:12,output_tokens:4,input_tokens_details:{cached_tokens:0}}});
+ },f.factory);
+ await runWithStandaloneAccounting({...context,requestId:'fallback-count'},()=>send(
+  'https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify(body)}));
+ assert.equal(counts,1);assert.equal(paid,1);
+ assert.equal(f.attempts[0].preflight_estimate.inputCountSource,'heuristic');
+ assert.equal(f.attempts[0].preflight_estimate.inputTokens,oldQuote.inputTokens);
+ assert.equal(f.attempts[0].reserved_microusd,oldQuote.reservationMicrousd);
+});
+
+for(const streaming of [false,true]){
+ test('Grok '+(streaming?'SSE':'JSON')+' actual cost includes separately billed reasoning',async()=>{
+  const f=fakeLedger();let paid=0;
+  const receiptBody={id:'grok-reasoning',model:'grok-4.7',
+   choices:[{finish_reason:'stop',message:{content:'done'}}],
+   usage:{prompt_tokens:40308,completion_tokens:382,total_tokens:46991,
+    prompt_tokens_details:{cached_tokens:1152,audio_tokens:0,image_tokens:0},
+    completion_tokens_details:{reasoning_tokens:6301,audio_tokens:0}}};
+  const send=createAccountingFetch('grok',async()=>{
+   paid++;return new Response(streaming?'data: '+JSON.stringify(receiptBody)+'\n\ndata: [DONE]\n\n':JSON.stringify(receiptBody),
+    {headers:{'content-type':streaming?'text/event-stream':'application/json'}});
+  },f.factory);
+  const body={model:'grok-4.7',messages:[{role:'user',content:'x'.repeat(60000)}],max_tokens:4096,stream:streaming};
+  await runWithStandaloneAccounting({...context,requestId:'grok-reason-'+streaming},()=>send(
+   'https://api.x.ai/v1/chat/completions',{method:'POST',body:JSON.stringify(body)}));
+  assert.equal(paid,1,'Grok has no native count endpoint');
+  assert.equal(f.attempts[0].state,'settled');
+  assert.equal(f.attempts[0].usage?.outputTokens,6683,'382 visible plus 6301 reasoning');
+  assert.equal(f.attempts[0].actual_microusd,'118986','exact provider-reported charge');
+  assert.equal(f.attempts[0].preflight_estimate.outputAllowance,4096,'preflight policy unchanged');
+ });
+}
+
+test('Grok malformed reasoning or conflicting totals fail closed without false settlement',async()=>{
+ for(const v of [{reasoning:6301,total:46992},{reasoning:'6301',total:46991}]){
+  const f=fakeLedger();let sends=0;
+  const send=createAccountingFetch('grok',async()=>{sends++;return Response.json({
+   id:'inconsistent-grok',model:'grok-4.7',choices:[{finish_reason:'stop',message:{content:'ok'}}],
+   usage:{prompt_tokens:40308,completion_tokens:382,total_tokens:v.total,
+    completion_tokens_details:{reasoning_tokens:v.reasoning}},
+  });},f.factory);
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'invalid-grok-'+String(v.reasoning)},
+   ()=>send('https://api.x.ai/v1/chat/completions',{method:'POST',body:JSON.stringify({
+    model:'grok-4.7',messages:[{role:'user',content:'x'.repeat(60000)}],max_tokens:4096,
+   })})),isStandaloneAccountingError);
+  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
+  assert.equal(f.events.includes('settle'),false);
+ }
+});
