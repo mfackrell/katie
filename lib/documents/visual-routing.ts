@@ -43,7 +43,9 @@ export async function selectDocumentVisualInspector(input: {
     catch { return { provider, models: [] as string[] }; }
   }));
   const candidates = eligibleDocumentVisualCandidates(pricing, available);
-  const ranked = await rankControlPlaneByActualCost(candidates, input.params, pricing, input.activity);
+  // Keep the activity-bound exact-model replay check in production. The
+  // selector's optional snapshot is reserved for deterministic offline tests.
+  const ranked = await rankControlPlaneByActualCost(candidates, input.params, input.pricing, input.activity);
   if (!ranked.length) throw new StandaloneAccountingError(
     'no_priceable_document_vision',
     'No currently available document-inspection model has verified image pricing for these pages. No visual model was called and no files were delivered.',
