@@ -31,6 +31,25 @@ begin
        and j.mission_id=r.mission_id and j.role='development' and j.status='completed'
      where m.id=new.active_mission_id and m.project_id=new.id
        and m.project_kind='assessment' and m.status='completed'
+       and exists (
+         select 1 from public.mission_assignments reviewer
+         join public.mission_assignments composer on composer.mission_id=reviewer.mission_id
+           and composer.role='compose' and composer.status='completed'
+         where reviewer.mission_id=m.id and reviewer.role='review'
+           and reviewer.status='completed' and reviewer.agent_id<>composer.agent_id
+           and reviewer.result->>'verdict'='pass'
+           and jsonb_typeof(reviewer.result->'checks')='array'
+           and jsonb_array_length(reviewer.result->'checks')=6
+           and (select count(distinct c.value->>'id')
+                from jsonb_array_elements(reviewer.result->'checks') c(value))=6
+           and not exists (
+             select 1 from jsonb_array_elements(reviewer.result->'checks') c(value)
+             where c.value->>'passed' is distinct from 'true'
+               or c.value->>'id' not in
+                  ('requirement:assigned-outcome','criterion:1','criterion:2',
+                   'overall-objective','factual-support','prior-findings')
+           )
+       )
        and m.project_evidence->>'approvedScopeHash'=new.approved_hash
        and m.project_evidence->'approvedFinalContract'=new.spec->'finalContract'
        and m.project_evidence->'preview'=new.preview
