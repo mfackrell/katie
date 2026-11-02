@@ -15,7 +15,7 @@ import { createDocumentDownload } from '../lib/documents/download';
 import { resolveDocumentDownload } from '../lib/documents/client-download';
 import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
 import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
-import { renderDocument } from '../lib/documents/render';
+import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
@@ -395,6 +395,11 @@ test('real two-page DOCX/PDF request, rendering, inspection, correction and secu
     const extracted = await (mammoth.extractRawText as unknown as (input: { buffer: Buffer }) => Promise<{ value: string }>)({ buffer: produced.docx });
     assert.equal(normalizedText(extracted.value), normalizedText(contentText(fixture)));
     assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(fixture)));
+    const independentlyExtracted = await rasterizePdf(browser, produced.pdf);
+    assert.ok(independentlyExtracted.fragments.some(part => part.hasEOL),
+      'Real PDF.js extraction must retain EOL metadata for validation.');
+    assert.equal(pdfTextMatchesSource(independentlyExtracted.text, contentText(fixture),
+      independentlyExtracted.fragments), true);
     for (const image of produced.images) {
       const metadata = await sharp(image).metadata(); assert.equal(metadata.format, 'png');
       assert.equal(metadata.width, 918); assert.equal(metadata.height, 1188);
