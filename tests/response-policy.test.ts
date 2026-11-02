@@ -189,3 +189,66 @@ test("master router preserves purpose and project metadata when model selection 
   assert.equal(result.resolvedIntent.projectRelation, "same_project");
   assert.equal(result.resolvedIntent.intentSource, "llm");
 });
+
+
+const originalWorkConversationInstruction = [
+  "NEXT RESPONSE: a brief conversational answer or clarification, normally under 150 words.",
+  "Answer the user's current question. Acknowledge any facts supplied, explain unfamiliar terms plainly, and ask at most one necessary follow-up.",
+  "Not knowing a term does not establish a lack of experience doing the underlying work. Preserve any unanswered factual question.",
+  "Keep the active substantive task pending. Do not silently begin, resume, rewrite, or verify an application answer, report, analysis, code, or other deliverable in this response.",
+  "Earlier saved drafts and task instructions are background; they do not override the current conversational question.",
+].join("\n");
+
+test("social-emotional exchanges receive reciprocal guidance without dropping task boundaries", () => {
+  for (const message of [
+    "I don't particularly like being alone. I discovered that after Lindsey.",
+    "That is EXACTLY what it is.",
+    "I've been thinking about what it means to have someone around.",
+  ]) {
+    const result = decideResponsePolicy({
+      message, intent: "social-emotional", responsePurpose: "conversation",
+    });
+    assert.equal(result.purpose, "conversation", message);
+    assert.equal(result.requiresSubstantiveProcessing, false, message);
+    const instruction = result.generationInstruction ?? "";
+    assert.match(instruction, /Engage naturally rather than simply acknowledging or summarizing/);
+    assert.match(instruction, /Contribute your own perspective, curiosity, or humor/);
+    assert.doesNotMatch(instruction, /normally under 150 words|ask at most one necessary follow-up/);
+    assert.match(instruction, /Keep the active substantive task pending/);
+    assert.match(instruction, /Earlier saved drafts and task instructions are background/);
+  }
+});
+
+test("CFO work, engineering, greetings, and professional clarifications retain exact old instruction", () => {
+  const fixtures = [
+    { message: "What do you mean by sponsor reporting?", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
+    { message: "Can you explain the difference between EAC and ETC?", intent: "technical-debugging", responsePurpose: "conversation" },
+    { message: "What was the monthly close issue?", intent: "financial-analysis", responsePurpose: "conversation" },
+    { message: "We are debugging the code. Why did it fail?", intent: "technical-debugging", responsePurpose: "conversation" },
+    { message: "I feel discouraged by this client. What does that mean for our approach?", intent: "social-emotional", responsePurpose: "conversation", hasPendingDeliverable: true },
+    { message: "Thank you.", intent: "social-emotional", responsePurpose: "conversation" },
+    { message: "Hi Katie", intent: "social-emotional", responsePurpose: "conversation" },
+  ] as const;
+  for (const fixture of fixtures) {
+    const result = decideResponsePolicy(fixture);
+    assert.equal(result.purpose, "conversation", fixture.message);
+    assert.equal(result.generationInstruction, originalWorkConversationInstruction, fixture.message);
+  }
+});
+
+test("personal classification never overrides delivery, tools, or approvals", () => {
+  const cases = [
+    { message: "Write a memo about this experience.", intent: "social-emotional", responsePurpose: "conversation" },
+    { message: "Analyze the cash flow.", intent: "social-emotional", responsePurpose: "conversation" },
+    { message: "I feel lonely. Here is a PDF to review.", intent: "social-emotional", responsePurpose: "conversation", hasAttachments: true },
+    { message: "Review my file", intent: "social-emotional", responsePurpose: "conversation", requiresTools: true },
+    { message: "Please finish the draft", intent: "social-emotional", responsePurpose: "conversation", explicitReviewRetry: true },
+    { message: "Please produce the final document.", intent: "social-emotional", responsePurpose: "deliverable" },
+  ] as const;
+  for (const fixture of cases) {
+    const result = decideResponsePolicy(fixture);
+    assert.equal(result.purpose, "deliverable", fixture.message);
+    assert.equal(result.requiresSubstantiveProcessing, true, fixture.message);
+    assert.equal(result.generationInstruction, null, fixture.message);
+  }
+});
