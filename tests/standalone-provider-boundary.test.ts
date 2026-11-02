@@ -729,7 +729,7 @@ test('Nov 2 mini inflated heuristic obtains native count and preserves exact own
       assert.deepEqual(counted,{model:fixture.model,input:fixture.body.input},
         'native count must receive complete ordered model input, not the heuristic estimate');
       assert.equal(new Headers(init?.headers).get('authorization'),'Bearer fake-no-network');
-      assert.equal(counted.max_output_tokens,undefined,'output allowance is not input-token evidence');
+      assert.equal('max_output_tokens' in counted,false,'output allowance is not input-token evidence');
       return Response.json({object:'response.input_tokens',input_tokens:69133});
     }
     paid++;
@@ -752,7 +752,7 @@ test('Nov 2 mini inflated heuristic obtains native count and preserves exact own
   assert.equal(attempt.preflight_estimate.ownerApprovalRequired,'selected_model_uncached');
   assert.equal(attempt.estimator_version,'standalone-selected-model-uncached-v1');
   assert.notEqual(attempt.prepared_hash,fixture.initial.hash,'uncached proposal has a new frozen hash');
-  assert.deepEqual(attempt.prepared_payload.payload.input,fixture.body.input);
+  assert.deepEqual(JSON.parse(String(attempt.prepared_payload.serializedBody)).input,fixture.body.input);
   attempt.state='reserved'; // Owner approve_once is simulated; never bypass the real ledger.
   const result=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/responses',fixture.original));
   assert.equal((await result.json()).output[0].content[0].text,'Mocked completion');
