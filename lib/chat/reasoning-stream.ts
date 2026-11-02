@@ -274,3 +274,65 @@ export class ReasoningStateAccumulator {
     };
   }
 }
+
+/**
+ * A narrow boundary for malformed conversational output. The observed provider
+ * response started with a duration line followed by an editorial description
+ * of the user's message. Normal conversational answers pass through unchanged.
+ */
+const EDITORIAL_OPENING = /^\s*\d{1,3}(?:\.\d{1,3})?s[ \t]*\r?\n[ \t]*\r?\n[ \t]*The user is\b/i;
+
+export function resolveChatAnswer(raw: string): string | null {
+  if (!EDITORIAL_OPENING.test(raw)) return raw;
+
+  const explicit = /(?:^|\n)\s*(?:FINAL ANSWER|RESPONSE TO USER)\s*:\s*/gi;
+  let match: RegExpExecArray | null;
+  let answer: string | null = null;
+  while ((match = explicit.exec(raw)) !== null) {
+    const candidate = raw.slice(match.index + match[0].length).trim();
+    if (candidate.length > 12 && !EDITORIAL_OPENING.test(candidate)) answer = candidate;
+  }
+  if (answer) return answer;
+
+  // The incident's final answer directly followed an editorial sentence,
+  // without a line break. Require that sentence AND an addressed reply.
+  const boundary = /\bMatch (?:his|her|their) tone\b[^\n]{0,210}?[.!?](?=[A-Z][a-z])/gi;
+  while ((match = boundary.exec(raw)) !== null) {
+    if (match.index < 180) continue;
+    const candidate = raw.slice(match.index + match[0].length).trim();
+    if (candidate.length >= 12 && /\b(?:you|your|you're|you've)\b/i.test(candidate.slice(0,240))) {
+      answer = candidate;
+    }
+  }
+  return answer;
+}
+
+/** Delay the first streamed characters until the opening can be classified. */
+export class ChatAnswerStreamBoundary {
+  private pending = "";
+  private state: "checking" | "ordinary" | "held" = "checking";
+
+  write(delta: string): string {
+    if (!delta || this.state === "held") return "";
+    if (this.state === "ordinary") return delta;
+    this.pending += delta;
+    if (EDITORIAL_OPENING.test(this.pending)) {
+      this.pending = "";
+      this.state = "held";
+      return "";
+    }
+    if (this.pending.length < 160) return "";
+    const released = this.pending;
+    this.pending = "";
+    this.state = "ordinary";
+    return released;
+  }
+
+  flushAccepted(): string {
+    if (this.state !== "checking") return "";
+    this.state = "ordinary";
+    const released = this.pending;
+    this.pending = "";
+    return released;
+  }
+}

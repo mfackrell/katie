@@ -92,7 +92,7 @@ import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
-import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
+import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
 import {
   isCreativeNarrativeTurn,
   preferredClaudeCreativeModel,
@@ -2374,6 +2374,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask() && !documentProduction;
             if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
             const presentationFilter = presentationEnabled ? new PresentationStreamFilter() : null;
+            const chatAnswerBoundary = new ChatAnswerStreamBoundary();
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
@@ -2382,7 +2383,8 @@ ${savedProjectSourceWarning.retainedObjective}`;
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
               // the completed assistant response can still be persisted.
-              const visibleDelta = presentationFilter ? presentationFilter.write(delta) : delta;
+              const screenedDelta = chatAnswerBoundary.write(delta);
+              const visibleDelta = presentationFilter ? presentationFilter.write(screenedDelta) : screenedDelta;
               if (!visibleDelta) return;
               emitChunk({ type: "delta", text: visibleDelta });
               const reasoningUpdate = reasoningState.addDelta(visibleDelta);
@@ -3685,7 +3687,24 @@ ${chunkWorkflowSummary}`;
             // Final content and structured blocks are committed before the
             // authoritative content event. Interrupted streams never expose
             // unvalidated or unpersisted interactive components.
-            const rawAssistantText = result.text || streamedText;
+            const originalAssistantText = result.text || streamedText;
+            const rawAssistantText = resolveChatAnswer(originalAssistantText);
+            if (rawAssistantText === null) {
+              console.warn("[Chat API] Answer boundary rejected provider draft", {
+                requestId, provider: result.provider, model: result.model,
+                rawCharacterCount: originalAssistantText.length,
+              });
+              throw new Error("The model returned an incomplete conversational response. No reply was delivered.");
+            }
+            if (rawAssistantText !== originalAssistantText) {
+              console.info("[Chat API] Recovered final conversational response", {
+                requestId, provider: result.provider, model: result.model,
+              });
+            } else if (reviewMode !== "always" && !documentProduction) {
+              // Release short ordinary replies only after the complete answer passes.
+              const acceptedTail = chatAnswerBoundary.flushAccepted();
+              if (acceptedTail) enqueueDelta(acceptedTail);
+            }
             const presentationResult = presentationEnabled
               ? parsePresentationTail(rawAssistantText, imageAssets)
               : { text: rawAssistantText, presentation: null };
