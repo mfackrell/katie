@@ -8,7 +8,6 @@ export function documentRequest(message: string): { pages?: number } | null {
       /\b(?:do not|don't|never)\s+(?:create|produce|generate|make|export|save|convert)\b/i.test(message)) return null;
   // Format references used as INPUT must not turn PDF analysis into file production.
   const output = message.replace(/\b(?:attached|uploaded|source|existing|this|that)\s+(?:pdf|docx|word (?:document|file))\b/gi, 'source attachment');
-  const explicitOutput = /\b(?:as|in|into|to)\s+(?:a\s+)?(?:docx|word (?:document|file|version|copy)|pdf)\b/i.test(output);
   // Only an affirmative CURRENT instruction may start the document pipeline.
   // A discussion like "we are trying to get you to generate pdf's" contains
   // the same action words, but is a status report, not a generation request.
@@ -20,6 +19,10 @@ export function documentRequest(message: string): { pages?: number } | null {
       const boundary = Math.max(preceding.lastIndexOf('\n'), preceding.lastIndexOf('.'),
         preceding.lastIndexOf('!'), preceding.lastIndexOf('?'), preceding.lastIndexOf(';'));
       const lead = preceding.slice(boundary + 1).trimStart();
+      // An "as a PDF" reference in another sentence does not authorize a
+      // later advisory request to become document production.
+      const clauseRemainder = output.slice(production.index + production[0].length).split(/[.!?\n;]/, 1)[0];
+      const explicitOutput = /\b(?:as|in|into|to)\s+(?:a\s+)?(?:docx|word (?:document|file|version|copy)|pdf)\b/i.test(production[0] + clauseRemainder);
       // Imperative lead-ins also include "Use these notes to create a PDF"
       // and "Based on the résumé, generate a PDF"; these are real requests.
       const prefacedInstruction = /^(?:please\s+)?(?:use|take)\b[^.!?\n]{1,120}\b(?:to|and)\s+$/i.test(lead) ||
