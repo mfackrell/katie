@@ -140,6 +140,23 @@ export async function verifyTask4aContinuationPostgres(db,connect){
  const callsBefore=(await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization.a.authorizationId])).n;
  assert.equal(await reserve('openai:gpt-5.6-sol',1000),false,'Protected future calls remain fenced');
  assert.equal((await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization.a.authorizationId])).n,callsBefore);
+ // Real concurrent SQL sessions compete for one remaining admission slot.
+ // This isolated fixture commits only its own synthetic data and the global
+ // PostgreSQL advisory lock serializes both competing reservations.
+ await query(db,'reset role');
+ await query(db,"update project_continuation_authorizations set incremental_calls=14 where id=$1",[authorization.a.authorizationId]);
+ await query(db,'commit');
+ const rivals=await Promise.all([connect(),connect()]);
+ for(const client of rivals)await client.query('set role service_role');
+ const contested=await Promise.all(rivals.map((client)=>
+  client.query("select try_reserve_mission_capacity($1,$2,$3,$4,$5,false) ok",
+   [newCompose.id,currentLease,randomUUID(),'openai:gpt-5.6-sol',1000])
+ ));
+ assert.equal(contested.filter(x=>x.rows[0].ok===true).length,1,
+  'Exactly one concurrent provider admission may consume the final call slot');
+ await query(db,'begin');
+ await query(db,'set role service_role');
+ assert.equal((await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization.a.authorizationId])).n,2);
  // Unlike a finished provider call, an unconfirmed receipt remains reserved
  // and must refuse every future admission.
  await query(db,'reset role');
