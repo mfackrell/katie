@@ -74,3 +74,31 @@ test("an oversized pending buffer reports degraded coverage rather than silently
   assert.equal(value.history.length,90);
   assert.match(value.summary,/INTERMEDIATE MEMORY COVERAGE DEGRADED/);
 });
+
+
+test("overlapping pending and STM rows cannot duplicate persisted message IDs",async()=>{
+  // Reproduce the production bug: the pending fetch includes all sixty
+  // messages already in STM as well as the fifty-six genuinely older ones.
+  const staleOverlappingSTM=stm.map(message=>({
+    ...message,content:"STALE-RECOVERED-COPY-"+message.id,
+  }));
+  const {value,reads}=await run({pendingMessages:[...pending,...staleOverlappingSTM]});
+  assert.equal(reads,1);
+  assert.equal(value.history.length,116,"56 pending + 60 STM, not 176");
+  assert.equal(new Set(value.history.map(message=>message.id)).size,116);
+  assert.deepEqual(value.history.slice(0,56).map(m=>m.id),pending.map(m=>m.id));
+  assert.deepEqual(value.history.slice(56).map(m=>m.id),stm.map(m=>m.id));
+  for(let i=0;i<60;i++) {
+    assert.equal(value.history[i+56].content,stm[i].content,
+      "The authoritative STM instance must replace the older retrieved copy");
+  }
+});
+
+test("same text with different persisted IDs remains two legitimate conversation turns",async()=>{
+  const legitimate=stm.slice(0,2).map(m=>({...m,content:"Identical real messages"}));
+  const {value}=await run({pendingMessages:[...pending,...legitimate]});
+  assert.equal(value.history.length,116);
+  assert.equal(new Set(value.history.map(m=>m.id)).size,116);
+  // The two distinct IDs are retained, even though the text matches exactly.
+  assert.deepEqual(value.history.slice(56,58).map(m=>m.id),stm.slice(0,2).map(m=>m.id));
+});

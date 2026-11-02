@@ -186,9 +186,12 @@ class PostgrestQuery {
       if (filter.type === "or") {
         url.searchParams.set("or", `(${String(filter.value)})`);
       } else if (filter.type === "eq" || filter.type === "lt" || filter.type === "gt" || filter.type === "is") {
-        // URLSearchParams encodes once; pre-encoding leaves escaped timestamps
-        // and other literal values in the filter received by PostgREST.
-        url.searchParams.set(filter.field, `${filter.type}.${String(filter.value)}`);
+        // Repeated column filters are AND constraints in PostgREST. Using
+        // URLSearchParams.set() silently removed the earlier constraint
+        // (e.g. created_at.lt overwritten by created_at.gt), causing
+        // already-in-STM messages to be fetched a second time.
+        // URLSearchParams encodes each value exactly once.
+        url.searchParams.append(filter.field, `${filter.type}.${String(filter.value)}`);
       } else {
         const encodedValues = (filter.value as unknown[]).map((value) => `"${String(value)}"`).join(",");
         url.searchParams.set(filter.field, `in.(${encodedValues})`);

@@ -184,3 +184,71 @@ test("Supabase read retries origin 522 once while mutating RPC is never replayed
   assert.ok(write.error);
   assert.equal(writes,1,"Ambiguous writes must never replay");
 });
+
+
+test("PostgREST wire applies BOTH timestamp bounds on the same created_at column", async (t) => {
+  const client = loadClient(t);
+  const lower = "2026-10-31T17:00:48.021+00:00";
+  const upper = "2026-10-31T22:17:28.415+00:00";
+  const rows = [
+    { id: "already-summarized", chat_id: "chat-1", created_at: lower },
+    { id: "pending-1", chat_id: "chat-1", created_at: "2026-10-31T18:00:00.000+00:00" },
+    { id: "pending-2", chat_id: "chat-1", created_at: "2026-10-31T21:59:59.000+00:00" },
+    { id: "stm-overlap", chat_id: "chat-1", created_at: upper },
+    { id: "newer-stm", chat_id: "chat-1", created_at: "2026-11-02T15:26:36.942+00:00" },
+    { id: "unrelated-chat", chat_id: "chat-2", created_at: "2026-10-31T19:00:00.000+00:00" },
+  ];
+  let outbound: URL | undefined;
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    outbound = new URL(String(input));
+    assert.equal(init?.method, "GET");
+    const conditions = outbound.searchParams.getAll("created_at");
+    const selected = rows.filter(row =>
+      row.chat_id === "chat-1" && conditions.every(condition => {
+        const operator = condition.slice(0, 3);
+        const timestamp = condition.slice(3);
+        return operator === "gt." ? row.created_at > timestamp
+          : operator === "lt." ? row.created_at < timestamp : false;
+      }));
+    return Response.json(selected);
+  });
+
+  const result = await client.from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", "chat-1")
+    .lt("created_at", upper)
+    .gt("created_at", lower)
+    .order("created_at", { ascending: false })
+    .limit(121)
+    .returns<{id:string;chat_id:string;created_at:string}>();
+
+  assert.equal(result.error, null);
+  assert.deepEqual(outbound?.searchParams.getAll("created_at"), [
+    "lt." + upper, "gt." + lower,
+  ], "Both strict timestamp bounds must survive URL serialization");
+  assert.equal(outbound?.searchParams.get("chat_id"), "eq.chat-1");
+  assert.equal(outbound?.searchParams.get("order"), "created_at.desc");
+  assert.equal(outbound?.searchParams.get("limit"), "121");
+  assert.deepEqual(result.data?.map(row => row.id), ["pending-1", "pending-2"]);
+});
+
+test("repeated same-column predicates are conjunctive while other filters remain intact", async (t) => {
+  const client = loadClient(t);
+  let outbound: URL | undefined;
+  t.mock.method(globalThis, "fetch", async input => {
+    outbound = new URL(String(input));
+    return Response.json([]);
+  });
+  const result = await client.from("messages")
+    .eq("chat_id", "chat-1")
+    .eq("role", "user")
+    .lt("created_at", "2026-11-02T17:00:00.000Z")
+    .gt("created_at", "2026-10-30T00:00:00.000Z")
+    .returns();
+  assert.equal(result.error, null);
+  assert.deepEqual(outbound?.searchParams.getAll("created_at"), [
+    "lt.2026-11-02T17:00:00.000Z", "gt.2026-10-30T00:00:00.000Z",
+  ]);
+  assert.equal(outbound?.searchParams.get("chat_id"), "eq.chat-1");
+  assert.equal(outbound?.searchParams.get("role"), "eq.user");
+});

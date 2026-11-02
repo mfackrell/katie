@@ -63,6 +63,7 @@ import {
   fingerprintChatRequest,
 } from "@/lib/chat/request-idempotency";
 import { refreshShortTermMemory, messagesFromShortTermMemory } from "@/lib/memory/short-term";
+import { uniqueMessagesById } from "@/lib/memory/history-dedup";
 import { buildProviderPayloadCaptureTrace } from "@/lib/chat/provider-payload-trace";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
 import { handleExplicitMemoryMutation } from "@/lib/memory/explicit-memory";
@@ -1569,6 +1570,15 @@ async function executeChat(request: NextRequest) {
     let personaForGeneration = personaWithRepoContext;
     let loadedRepoContext: RepoGenerationContext | null = null;
     let repoContextDegraded: { reason: string } | null = null;
+    // Final provider-boundary guard: no repeated persisted message ID may
+    // reach any model, even if a future context source supplies overlap.
+    const preDedupHistoryCount = history.length;
+    history = uniqueMessagesById(history);
+    if (history.length !== preDedupHistoryCount) {
+      console.warn("[Chat API] Duplicate history message IDs removed before provider dispatch", {
+        requestId, chatId, duplicateCount: preDedupHistoryCount - history.length,
+      });
+    }
     const historyForProvider = history.map(({ role, content, createdAt }) => ({
       role,
       content: createdAt && Number.isFinite(Date.parse(createdAt))
