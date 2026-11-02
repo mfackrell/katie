@@ -88,6 +88,23 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
  });
 });
 
+test('Task 4A: reject untrusted contract paths before minting or transmitting a Preview cookie',async()=>{
+ await withFixtureEnv(async()=>{
+  const {verifyDeployedPreview}=modules()('@/lib/projects/preview');
+  const preview={url:origin,headSha:sha,deploymentId:1,statusId:2};
+  for(const path of ['https://attacker.test/steal','//attacker.test/steal','/%2f%2fattacker.test/steal']){
+   let requests=0,renders=0;
+   const contract={path,scenarios:[{name:'state',steps:[{action:'expectVisible',selector:'#state'}]}]};
+   await assert.rejects(verifyDeployedPreview(preview,contract,projectId,async()=>{
+    requests++;return edgeResponse();
+   },async()=>{renders++;return[];}),undefined,path);
+   assert.equal(requests,0,'Invalid path must not initiate even the credential-minting request');
+   assert.equal(renders,0,'Invalid path must not launch browser assertions');
+   record('reject pre-authentication contract path: '+path);
+  }
+ });
+});
+
 test('Task 4A: reachability check blocks cross-origin redirects before browser execution',async()=>{
  await withFixtureEnv(async()=>{
   const {verifyDeployedPreview,PreviewAccessUnavailable}=modules()('@/lib/projects/preview');
