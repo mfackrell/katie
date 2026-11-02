@@ -148,6 +148,9 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   const mobile = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   if (mobile.width > mobile.viewport + 20) throw new Error("Mobile presentation overflows: " + JSON.stringify(mobile));
+  // Qualify the central conversation progress UI at desktop width, where the
+  // separate right-side status rail is also present in the real workspace.
+  await page.setViewportSize({ width: 1280, height: 860 });
   const composer = page.getByPlaceholder("Ask Acceptance…");
   await composer.fill("Exercise the gated stream.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
