@@ -1,5 +1,6 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
@@ -180,6 +181,7 @@ const requestSchema = z.object({
   actorId: z.string().min(1),
   chatId: z.string().min(1),
   message: z.string().min(1),
+  documentSourceMessageId: z.string().uuid().optional(),
   images: z.array(z.string()).optional(),
   fileReferences: z.array(fileReferenceSchema).optional(),
   attachmentManifest: attachmentManifestSchema.optional(),
@@ -724,6 +726,7 @@ async function executeChat(request: NextRequest) {
       actorId,
       chatId,
       message,
+      documentSourceMessageId,
       images: requestImages,
       fileReferences,
       overrideProvider: suppliedOverrideProvider,
@@ -741,6 +744,21 @@ async function executeChat(request: NextRequest) {
     const overrideModel = captureCommand ? "claude-sonnet-5" : suppliedOverrideModel;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    let selectedDocumentSource: string | null = null;
+    if (documentSourceMessageId) {
+      // Explicit selection only. Never pick old documents heuristically from STM
+      // or mistake an assistant reply in a different conversation for the source.
+      if (message !== SAVED_DOCUMENT_EXPORT_PROMPT || !documentProduction ||
+          requestImages?.length || fileReferences?.length || currentAgentTask())
+        return NextResponse.json({error:"Invalid saved-document export request."},{status:400});
+      const original=await getMessageById(chatId,documentSourceMessageId);
+      try {selectedDocumentSource=savedDocumentContent(original);}
+      catch {return NextResponse.json({error:"The selected saved message is not a usable document source."},{status:422});}
+      console.info("[DocumentExport] using explicitly selected saved content", {
+        requestId: trackedRequestId, actorId, chatId, sourceMessageId:documentSourceMessageId,
+        sourceChars:selectedDocumentSource.length,
+      });
+    }
     // Exact outbound payload capture is explicitly requested, text-only and owner-grant scoped.
     // This never records ordinary conversations and never grants diagnostic access to guests.
     if (providerPayloadCapture) {
@@ -2709,7 +2727,11 @@ ${chunkWorkflowSummary}`;
 
                 const generation = documentProduction
                   ? await (async () => {
-                      const result = await provider.generate(finalParams);
+                      // The owner selected an already saved assistant document.
+                      // Rendering must not call a drafting model to rewrite it.
+                      const result: ProviderResponse = selectedDocumentSource
+                        ? {provider:provider.name, model:modelId, text:selectedDocumentSource}
+                        : await provider.generate(finalParams);
                       return { result, streamedText: '' };
                     })()
                   : (selfToolsEnabled && selfInspectionRequest)
@@ -3084,6 +3106,7 @@ ${chunkWorkflowSummary}`;
                 };
               },
               detectRefusal: (generationResult, candidate) =>
+                selectedDocumentSource ? false :
                 (stillImageVisionRequest && isExplicitVisionPolicyRefusal(generationResult.text ?? ""))
                   ? false // Explicit safety/policy refusals must never trigger Grok fallback.
                   : hasVideoInput && videoReplyTarget &&
@@ -3473,7 +3496,10 @@ ${chunkWorkflowSummary}`;
             if (escalatedConversation) {
               console.warn("[ResponsePolicy] Unexpected substantive output requires review", { requestId });
             }
-            if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) && !pendingVideoAssistantMessageId) {
+            if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) &&
+                !pendingVideoAssistantMessageId && !selectedDocumentSource) {
+              // Explicit export preserves the owner's selected source exactly;
+              // the existing final file rendering/visual inspection still applies.
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
               const reviewed = await runRequiredDraftReview({
                 requestId,
