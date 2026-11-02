@@ -3,6 +3,7 @@ import {verifiedPreviewUrl} from '@/lib/agents/development';
 import {digest} from './contract';
 import type {BrowserContract} from './store';
 export class PreviewAccessUnavailable extends Error {constructor(){super('Deployed Preview requires authentication. Configure the production-only preview acceptance connection, then resume this project. Deployment protection remains enabled.');this.name='PreviewAccessUnavailable';}}
+function samePreviewOrigin(location:string,origin:string){try{return new URL(location,origin+'/').origin===origin;}catch{return false;}}
 // Only Vercel's edge sees the automation secret. Its manual redirect mints an
 // HttpOnly cookie restricted to this exact deployment URL; application requests
 // and the browser never receive the project-wide secret or a trusted OIDC token.
@@ -14,7 +15,7 @@ export async function previewCookies(origin:string,request:typeof fetch=fetch):P
  await response.body?.cancel();
  // Never follow a cross-origin redirect with authentication material.
  const destination=response.headers.get('location');
- if(response.status<300||response.status>=400||(destination&&new URL(destination,origin+'/').origin!==origin))throw new PreviewAccessUnavailable();
+ if(response.status<300||response.status>=400||(destination&&!samePreviewOrigin(destination,origin)))throw new PreviewAccessUnavailable();
  // Validate attributes on the _vercel_jwt cookie itself, not on another
  // Set-Cookie header. Only a usable host-scoped, Secure HttpOnly cookie passes.
  const lines=response.headers.getSetCookie?.()??[];
@@ -39,7 +40,7 @@ export async function verifyDeployedPreview(preview:{url:string;headSha:string;d
  const safe=verifiedPreviewUrl(preview.url);if(!safe)throw Error('Verified Vercel Preview origin required');const origin=new URL(safe).origin;
  const cookies=await previewCookies(origin,request);
  const check=await request(new URL(contract.path,origin),{headers:cookies.length?{cookie:'_vercel_jwt='+cookies[0].value}:{},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(10000)});await check.body?.cancel();
- if([401,403].includes(check.status)||check.status>=300&&check.status<400&&(!check.headers.get('location')||new URL(check.headers.get('location')!,origin).origin!==origin))throw new PreviewAccessUnavailable();
+ if([401,403].includes(check.status)||check.status>=300&&check.status<400&&(!check.headers.get('location')||!samePreviewOrigin(check.headers.get('location')!,origin)))throw new PreviewAccessUnavailable();
  const checks=await run(contract,origin,{deployed:true,cookies,timeout:75000});
  return{version:1,projectId,contractHash:digest(contract),headSha:preview.headSha,deploymentId:preview.deploymentId,statusId:preview.statusId,url:new URL(contract.path,origin).href,checkedAt:new Date().toISOString(),passed:checks.length===contract.scenarios.length&&checks.every((c,i)=>c.passed&&c.name===contract.scenarios[i].name),checks};
 }
