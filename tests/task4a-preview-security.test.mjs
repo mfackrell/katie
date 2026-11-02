@@ -66,6 +66,7 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
   for(const [name,response] of [
    ['missing cookie',new Response(null,{status:302,headers:{location:'/'}})],
    ['expired max-age',edgeResponse('_vercel_jwt=old; Secure; HttpOnly; Max-Age=0')],
+   ['unusable short max-age',edgeResponse('_vercel_jwt=old; Secure; HttpOnly; Max-Age=1')],
    ['expired expires',edgeResponse('_vercel_jwt=old; Secure; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT')],
    ['parent-domain cookie',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly; Domain=.vercel.app')],
    ['wrong host cookie',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly; Domain=other.vercel.app')],
@@ -80,6 +81,7 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
   }
   const reauth=await previewCookies(origin,async()=>edgeResponse('_vercel_jwt=ok; Secure; HttpOnly; Max-Age=120','/'));
   assert.equal(reauth[0].value,'ok');record('usable expiring Max-Age cookie','positive');
+  assert.ok(reauth[0].expires <= Math.floor(Date.now()/1000)+120,'browser cookie expiry cannot outlive Vercel cookie');
   let crossHostCalls=0;
   await assert.rejects(previewCookies('https://katie-abcdef124-other-team.vercel.app',async()=>{crossHostCalls++;return edgeResponse();}),PreviewAccessUnavailable);
   assert.equal(crossHostCalls,0,'secret cannot be forwarded to another deployment or team');record('cross-deployment credential forwarding rejected');
