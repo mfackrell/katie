@@ -1251,7 +1251,10 @@ export function ChatPanel({
     if(!chatId||!actorId||projectApprovalPending||loading)return;
     setProjectApprovalPending(true);setProjectApprovalError(null);
     try{
-      const response=await fetch('/api/projects',{method:'PATCH',headers:{'Content-Type':'application/json'},
+      const bearer=await ownerSessionBearer();
+      if(!bearer)throw Error('Sign in as Katie owner to approve project resources.');
+      const response=await fetch('/api/projects',{method:'PATCH',
+       headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},
        body:JSON.stringify({actorId,chatId,scopeHash:hash,authorizedCeiling:ceiling,renewalHours:hours})});
       const result=await response.json() as {error?:string};
       if(!response.ok)throw Error(result.error??'Resource approval failed');
