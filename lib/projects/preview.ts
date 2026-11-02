@@ -25,7 +25,6 @@ export async function previewCookies(origin:string,request:typeof fetch=fetch):P
  const parts=raw.split(';'),jwt=parts.shift()!.trim().slice('_vercel_jwt='.length);
  if(!jwt||jwt.length>4096||/[\s,;]/.test(jwt))throw new PreviewAccessUnavailable();
  const attributes=new Map(parts.map(part=>{const i=part.indexOf('=');return [part.slice(0,i<0?undefined:i).trim().toLowerCase(),i<0?'':part.slice(i+1).trim()] as const;}));
- const hostname=new URL(origin).hostname;
  // An explicit Domain attribute creates a domain cookie, not a host-only cookie.
  // Refuse it even when the value equals the deployment hostname.
  const domainAttributePresent=attributes.has('domain');
