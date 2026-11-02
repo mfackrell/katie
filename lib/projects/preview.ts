@@ -26,18 +26,20 @@ export async function previewCookies(origin:string,request:typeof fetch=fetch):P
  if(!jwt||jwt.length>4096||/[\s,;]/.test(jwt))throw new PreviewAccessUnavailable();
  const attributes=new Map(parts.map(part=>{const i=part.indexOf('=');return [part.slice(0,i<0?undefined:i).trim().toLowerCase(),i<0?'':part.slice(i+1).trim()] as const;}));
  const hostname=new URL(origin).hostname;
- const cookieDomain=attributes.get('domain');
+ // An explicit Domain attribute creates a domain cookie, not a host-only cookie.
+ // Refuse it even when the value equals the deployment hostname.
+ const domainAttributePresent=attributes.has('domain');
  const maxAge=attributes.get('max-age');
  const expires=attributes.get('expires');
  // The deployed browser phase has a 75-second deadline; a cookie that expires
  // before that bounded acceptance could finish is not usable authentication.
  const ttl=maxAge!==undefined?Number(maxAge):expires!==undefined?(Date.parse(expires)-Date.now())/1000:300;
  if(!attributes.has('httponly')||!attributes.has('secure')||
-    (cookieDomain&&cookieDomain.replace(/^\./,'').toLowerCase()!==hostname)||
+    domainAttributePresent||
     (attributes.has('path')&&attributes.get('path')!=='/')||
     (maxAge!==undefined&&!/^\d+$/.test(maxAge))||
     !Number.isFinite(ttl)||ttl<90)throw new PreviewAccessUnavailable();
- return[{name:'_vercel_jwt',value:jwt,domain:hostname,path:'/',httpOnly:true,secure:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+Math.min(300,Math.floor(ttl))}];
+ return[{name:'_vercel_jwt',value:jwt,url:origin+'/',httpOnly:true,secure:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+Math.min(300,Math.floor(ttl))}];
 }
 export async function verifyDeployedPreview(preview:{url:string;headSha:string;deploymentId:number;statusId:number},contract:BrowserContract,projectId:string,request:typeof fetch=fetch,run=runScenarios){
  // Validate the contract before any credential minting or network request.
