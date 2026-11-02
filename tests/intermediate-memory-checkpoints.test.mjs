@@ -45,7 +45,9 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
   const storage=readFileSync("lib/data/persistence-store.ts","utf8");
   const admin=readFileSync("lib/data/supabase/admin.ts","utf8");
   assert.match(assembly,/getPendingIntermediateContext\(chatId, cutoff, stmHistory\[0\]\.createdAt, 120\)/);
-  assert.match(assembly,/const history = \[\.\.\.pendingHistory, \.\.\.stmHistory\]/);
+  assert.match(assembly,/const joinedHistory = \[\.\.\.pendingHistory, \.\.\.stmHistory\]/);
+  assert.match(assembly,/const history = uniqueMessagesById\(joinedHistory\)/);
+  assert.match(admin,/url\.searchParams\.append\(filter\.field,/);
   assert.match(assembly,/INTERMEDIATE MEMORY COVERAGE DEGRADED/);
   assert.match(storage,/export async function getPendingIntermediateContext/);
   assert.match(storage,/\.lt\("created_at", beforeCreatedAt\)/);
