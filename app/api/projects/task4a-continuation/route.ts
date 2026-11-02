@@ -45,10 +45,10 @@ export async function POST(request:NextRequest){
  try{
   const db=getSupabaseAdminClient();
   const {data:project,error:projectError}=await db.from('work_projects')
-   .select('id,status,phase,actor_id,chat_id').eq('id',original).maybeSingle();
+   .select('id,status,phase,actor_id,chat_id').eq('id',original).maybeSingle<ProjectRow>();
   if(projectError||!project||project.status!=='paused'||project.phase!=='research')
    return reply({error:'Original owner-paused project is no longer eligible. No new authorization was created.'},409);
-  const {data:current,error:proposalError}=await db.rpc('task4a_continuation_proposal',{p_id:original});
+  const {data:current,error:proposalError}=await db.rpc<ProposalRow|null>('task4a_continuation_proposal',{p_id:original});
   if(proposalError||!current||current.ready!==true||current.digest!==input.proposalDigest)
    return reply({error:'The financial proposal or verified model prices changed. Refresh before authorizing.'},409);
   const {data:committed,error}=await db.rpc<RecoveryRow>('authorize_task4a_expired_research',{
