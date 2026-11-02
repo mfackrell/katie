@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser } from 'playwright-core';
 import { PAGE, documentPageStyle, type Layout } from './generate';
-import { contentText, normalizedText, type DocumentSpec, type Inspection, type Finding } from './model';
+import { contentText, pdfTextMatchesSource, type DocumentSpec, type Inspection, type Finding } from './model';
 
 export const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 export type RenderedDocument = { pdf: Buffer; images: Buffer[]; heights: number[]; inspection: Inspection };
@@ -84,7 +84,7 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
     const findings = [...layout.findings, ...raster.findings];
     if (spec.targetPages !== undefined && raster.images.length !== spec.targetPages)
       findings.push({ rule: 'page-count', page: 0, detail: `Expected ${spec.targetPages} pages; rendered ${raster.images.length}.` });
-    if (normalizedText(raster.text) !== normalizedText(contentText(spec)))
+    if (!pdfTextMatchesSource(raster.text, contentText(spec)))
       findings.push({ rule: 'reading-order', page: 0, detail: 'PDF text differs from document content or reading order.' });
     return { pdf, images: raster.images, heights: layout.heights, inspection: {
       pageCount: raster.images.length, findings, extractedText: raster.text, pageHashes: raster.images.map(sha256), visual: 'pending',
