@@ -124,6 +124,14 @@ test('initial overfull pagination may retry once, but final PDF fidelity always 
 test('document capability disclaimers reroute before rendering and never become document text', async () => {
   const disclaimer = "I can't create, render, or download actual Word or PDF files. That's outside my technical capabilities.\n\nHere are manual options.";
   assert.equal(isDocumentCapabilityDenial(disclaimer), true);
+  // Exact shape of the Nov 2 production failure (request 0be4ad18):
+  // metadata preceded the refusal, causing the earlier anchored check to miss.
+  const timestamped = '[Message timestamp: 2026-10-31T22:04:12.509Z]\n\nI cannot create, generate, render, inspect or deliver actual Word documents, PDFs, or download links.\n\nI am a text-based AI without file tools.';
+  assert.equal(isDocumentCapabilityDenial(timestamped), true);
+  assert.equal(isDocumentCapabilityDenial('[Timestamp: 2026-11-02T13:24:40Z]\n\n' + disclaimer), true);
+  assert.equal(isDocumentCapabilityDenial('[Generated at: 2026-11-02T13:24:40Z]\n\n' + disclaimer), true);
+  assert.equal(isDocumentCapabilityDenial('[Message timestamp: 2026-11-02T13:24:40Z]\n\n# Executive Summary\n\n- Accurate source facts.'), false);
+  assert.equal(isDocumentCapabilityDenial('[Message timestamp: 2026-11-02T13:24:40Z]\n\nI cannot create prohibited or unsafe PDF materials.'), false);
   assert.equal(isDocumentCapabilityDenial('Sorry, I cannot generate Word documents because I have no file tools.'), true);
   assert.equal(isDocumentCapabilityDenial('As a text-based AI, I cannot produce a PDF document myself.'), true);
   assert.equal(isDocumentCapabilityDenial('# Memo\n\nI cannot create the documents until compliance approves the records.'), false);
@@ -137,7 +145,7 @@ test('document capability disclaimers reroute before rendering and never become 
     attempts: ['initial', 'alternate'], shouldRetryRefusal: true,
     runAttempt: async candidate => {
       calls.push(candidate);
-      return { provider: 'anthropic', model: candidate, text: candidate === 'initial' ? disclaimer : '# Executive Summary\n\n- Produced accurate reporting.' };
+      return { provider: 'anthropic', model: candidate, text: candidate === 'initial' ? timestamped : '# Executive Summary\n\n- Produced accurate reporting.' };
     },
     detectRefusal: reply => isDocumentCapabilityDenial(reply.text) || isLikelyProviderRefusal(reply, reply.provider),
   });
@@ -145,7 +153,7 @@ test('document capability disclaimers reroute before rendering and never become 
   assert.match(selected.result.text, /Executive Summary/);
   const context = { userId: scope.ownerId, actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId };
   await assert.rejects(runWithStandaloneAccounting(context, () => deliverDocument({
-    result: { provider: 'anthropic', model: 'refusal', text: disclaimer },
+    result: { provider: 'anthropic', model: 'refusal', text: timestamped },
     provider: { name: 'anthropic', listModels: async()=>[], generate: async()=>{ throw new Error('Should not call a paid model'); } },
     params: { name: 'Document specialist', persona: '', summary: '', history: [], user: 'Produce a Word file', modelId: 'refusal' },
     actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId,
