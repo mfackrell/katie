@@ -48,7 +48,7 @@ export async function verifyDeployedPreview(preview:{url:string;headSha:string;d
  // on an immutable deployment, with no arbitrary path, query, hash or alias.
  const target=new URL(preview.url);
  const safe=immutablePreviewUrl(target.origin);
- if(!safe||target.href!==new URL(contract.path,safe).href)throw Error('Verified immutable Vercel Preview origin and approved path required');
+ if(!safe||target.href!==new URL(contract.path,safe).href)throw Error('Verified Vercel immutable Preview origin and approved path required');
  const origin=target.origin;
  const cookies=await previewCookies(origin,request);
  const check=await request(new URL(contract.path,origin),{headers:cookies.length?{cookie:'_vercel_jwt='+cookies[0].value}:{},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(10000)});await check.body?.cancel();
