@@ -2956,7 +2956,7 @@ export function ChatPanel({
         <div className="space-y-2 text-xs" aria-live="polite">
           <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
           {imageObservationStages.length > 0 && <ul aria-label="Image analysis stages" className="space-y-1 text-zinc-400">{imageObservationStages.map((stage,index)=><li key={`${index}:${stage}`}>{stage}</li>)}</ul>}
-          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
+          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} streamingAnswer={streamingAnswer} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
         </div>, statusMount
       ) : null}
       {!statusRailOpen && showLiveReasoningExplainer && reasoningPopupVisible ? (
@@ -2966,6 +2966,7 @@ export function ChatPanel({
               loading={loading}
               state={reasoningState}
               statusMessage={statusMessage}
+              streamingAnswer={streamingAnswer}
               collaborationActive={collaborationActive}
               collaborationActivity={collaborationActivity}
               collaborationSummary={collaborationSummary}
