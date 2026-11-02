@@ -129,6 +129,7 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query("grant select on model_registry to service_role");
   await db.query("insert into model_registry(provider_name,model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,is_active,source_metadata) values ('openai','gpt-5.6-sol','estimated',4,20,true,'{}'),('openai','gpt-5.3-codex','estimated',1.75,14,true,'{}')");
   await db.query(readFileSync('supabase/migrations/20261102211500_task4a_continuation_admission.sql','utf8'));
+  await db.query(readFileSync('tests/fixtures/task4a-benchmark-baseline-functions.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261102211600_task4a_expired_research_owner_recovery.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261102211700_task4a_verified_model_price_sources.sql','utf8'));
   // Fixture's dynamically verified source time is deliberately fresh even if
