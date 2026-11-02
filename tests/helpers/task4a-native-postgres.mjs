@@ -62,10 +62,21 @@ export async function verifyTask4aNativePostgres(db,connect){
   return {call,op:row.op};
  };
  const usage=(input=300,output=200)=>({input_tokens:input,output_tokens:output,total_tokens:input+output});
+ // PostgreSQL transaction errors abort the current transaction until a
+ // savepoint rollback. Test every expected denial without poisoning later
+ // assertions or assuming a rejected call was admitted.
+ const expectDeny=async(thunk,pattern,message)=>{
+  await query(db,'savepoint expected_native_deny');
+  try{await assert.rejects(thunk(),pattern,message);}
+  finally{
+   await query(db,'rollback to savepoint expected_native_deny');
+   await query(db,'release savepoint expected_native_deny');
+  }
+ };
  const settle=async(call,request,record=usage())=> (await one(db,
   'select task4a_native_reconcile_provider_usage($1,$2,$3::jsonb,true) state',[call,request,record])).state;
  assert.equal(await live(),true);
- await assert.rejects(reserve(1000,'unapproved-model'),/model denied/);
+ await expectDeny(()=>reserve(1000,'unapproved-model'),/model denied/);
  // A near-limit multi-call sequence below proves protected reserves cannot be borrowed.
  const first=await reserve();
  assert.ok(first.op,'Native admission produces one existing canonical operation');
@@ -73,18 +84,18 @@ export async function verifyTask4aNativePostgres(db,connect){
  assert.equal(booked.project_continuation_id,authorization);
  assert.equal(booked.project_pricing_evidence.model,'openai:gpt-5.3-codex');
  assert.ok(Number(booked.project_reserved_microusd)>0);
- await assert.rejects(reserve(),/unresolved/,'No second call while first provider receipt is missing');
+ await expectDeny(()=>reserve(),/unresolved/,'No second call while first provider receipt is missing');
  assert.equal(await settle(first.call,'provider-response-one'), 'settled');
  assert.equal(await settle(first.call,'provider-response-one'), 'settled','Exact same receipt replays without new usage');
- await assert.rejects(settle(first.call,'provider-response-other'),/association denied|conflict/);
+ await expectDeny(()=>settle(first.call,'provider-response-other'),/association denied|conflict/);
  assert.equal((await one(db,'select count(*)::int n from mission_calls where id=$1',[first.call])).n,1);
  assert.equal((await one(db,'select actual_tokens from mission_calls where id=$1',[first.call])).actual_tokens,500);
  const intact=await one(db,'select actual_tokens,calls,routing_calls from agent_missions where id=$1',[historical]);
  assert.equal(Number(intact.actual_tokens),76519);assert.equal(intact.calls,4);assert.equal(intact.routing_calls,5);
  await query(db,'reset role');await query(db,"update model_registry set pricing_status='missing' where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
- await assert.rejects(reserve(),/not authorized|pricing unverified/);
+ await expectDeny(()=>reserve(),/not authorized|pricing unverified/);
  await query(db,'reset role');await query(db,"update model_registry set pricing_status='verified',pricing_output_per_1m=10000 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
- await assert.rejects(reserve(1000),/capacity|reserve exhausted/,'Adversarial price hike must enforce dollar ceiling');
+ await expectDeny(()=>reserve(1000),/capacity|reserve exhausted/,'Adversarial price hike must enforce dollar ceiling');
  await query(db,'reset role');await query(db,"update model_registry set pricing_output_per_1m=14 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
  await query(db,'savepoint paused');
  await query(db,"update work_projects set status='paused' where id=$1",[project]);
@@ -98,8 +109,8 @@ export async function verifyTask4aNativePostgres(db,connect){
  await query(db,'rollback to savepoint revoked');await query(db,'release savepoint revoked');
  assert.equal(await live(),true);
  const second=await reserve(1000);
- await assert.rejects(reserve(1000),/unresolved/,'Pending native receipt blocks concurrency');
- await assert.rejects(settle(second.call,'provider-response-missing',null),/linked usage/);
+ await expectDeny(()=>reserve(1000),/unresolved/,'Pending native receipt blocks concurrency');
+ await expectDeny(()=>settle(second.call,'provider-response-missing',null),/linked usage/);
  await settle(second.call,'provider-response-two');
  // Temporarily narrow only the synthetic grant, proving that development cannot
  // borrow the protected 120k assessment/completion headroom.
@@ -108,7 +119,7 @@ export async function verifyTask4aNativePostgres(db,connect){
  await query(db,'update project_continuation_authorizations set incremental_tokens=120001 where id=$1',[authorization]);
  await query(db,'alter table project_continuation_authorizations enable trigger task4a_authority_immutable_update');
  await query(db,'set role service_role');
- await assert.rejects(reserve(1000),/capacity|reserve exhausted/,'Protected completion and assessment reserves remain fenced');
+ await expectDeny(()=>reserve(1000),/capacity|reserve exhausted/,'Protected completion and assessment reserves remain fenced');
  await query(db,'reset role');
  await query(db,'alter table project_continuation_authorizations disable trigger task4a_authority_immutable_update');
  await query(db,'update project_continuation_authorizations set incremental_tokens=440326 where id=$1',[authorization]);
