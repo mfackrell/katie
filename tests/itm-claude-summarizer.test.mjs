@@ -284,7 +284,7 @@ test("v2 explicitly reauthorizes a v1 blocked batch once, without resetting the 
 test("10,000 reconciliation tokens support a near-ceiling prior ITM with a concise complete result",async()=>{
   const prior={version:2,summary:"Important prior context. ".repeat(670).slice(0,14774),
     summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const concise="Curated continuity. ".repeat(340).slice(0,6500);
+  const concise="Curated continuity. ".repeat(340).slice(0,6500).trim();
   const h=harness({history:messageHistory(92),prior,
     responses:n=>reply(n===1?"New batch corrections and decisions.":concise)});
   assert.equal(await h.run(),"committed");
