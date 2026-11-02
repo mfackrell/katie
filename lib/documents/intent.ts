@@ -13,18 +13,22 @@ export function documentRequest(message: string): { pages?: number } | null {
   // A discussion like "we are trying to get you to generate pdf's" contains
   // the same action words, but is a status report, not a generation request.
   // Inspect each candidate: an actual instruction may follow a status report.
-  const requestLead = /^(?:(?:hey\s+)?katie[,:]?\s+)?(?:(?:please|now|also|just|then|kindly|go\s+ahead\s+and)\s+|(?:can|could|would|will)\s+you(?:\s+please)?(?:\s+help\s+me(?:\s+to)?)?\s+|(?:i|we)\s+(?:want|need|would\s+like|would\s+appreciate)\s+(?:you\s+)?to\s+|(?:i['’]d|we['’]d)\s+like\s+(?:you\s+)?to\s+|let['’]s\s+|let\s+us\s+|help\s+me(?:\s+to)?\s+)*$/i;
+  const requestLead = /^(?:(?:hey\s+)?katie[,:]?\s+)?(?:(?:please|now|also|just|then|kindly|go\s+ahead\s+and)\s+|(?:can|could|would|will)\s+you(?:\s+please)?(?:\s+help\s+me(?:\s+to)?)?\s+|(?:i|we)\s+(?:want|need|would\s+like|would\s+appreciate)\s+(?:you\s+)?to\s+|(?:i['’]d|we['’]d)\s+like\s+(?:you\s+)?to\s+|let['’]s\s+|let\s+us\s+|help\s+me(?:\s+to)?\s+|you\s+(?:need\s+to|have\s+to|must|should)\s+)*$/i;
   const requested = [...output.matchAll(/\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/gi)]
     .some(production => {
       const preceding = output.slice(0, production.index);
       const boundary = Math.max(preceding.lastIndexOf('\n'), preceding.lastIndexOf('.'),
         preceding.lastIndexOf('!'), preceding.lastIndexOf('?'), preceding.lastIndexOf(';'));
       const lead = preceding.slice(boundary + 1).trimStart();
+      // Imperative lead-ins also include "Use these notes to create a PDF"
+      // and "Based on the résumé, generate a PDF"; these are real requests.
+      const prefacedInstruction = /^(?:please\s+)?(?:use|take)\b[^.!?\n]{1,120}\b(?:to|and)\s+$/i.test(lead) ||
+        /^(?:based\s+on|using|with|from|for)\b[^.!?\n]{1,120},\s*(?:please\s+)?$/i.test(lead);
       // "Build a PDF generator" and "Make sure Katie can generate a PDF"
       // request engineering capability, not a PDF artifact.
       const capabilityTask = /\b(?:make\s+sure|able\s+to|capable\s+of|ability\s+to|capability\s+to|feature\s+(?:to|that|for)|support\s+for|tool\s+(?:to|that|for)|system\s+(?:to|that)|backend\s+(?:to|that)|pipeline\s+(?:to|that)|endpoint\s+(?:to|that)|api\s+to)\b/i.test(production[0]) ||
         /^\s*(?:generator|generation|renderer|rendering|exporter|converter|pipeline|capability|support|feature|tool|engine|code)\b/i.test(output.slice(production.index + production[0].length));
-      return requestLead.test(lead) && !capabilityTask &&
+      return (requestLead.test(lead) || prefacedInstruction) && !capabilityTask &&
         (explicitOutput || !/\b(?:recommendations|advice|risks|explain|how to|about|source attachment)\b/i.test(production[1]));
     });
   if (!requested) return null;
