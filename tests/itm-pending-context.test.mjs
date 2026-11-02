@@ -7,6 +7,12 @@ import ts from "typescript";
 const compiled=ts.transpileModule(readFileSync("lib/memory/assemble-context.ts","utf8"),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
 }).outputText;
+// Execute the REAL shared deduplicator, rather than a stub that could mask
+// production regressions in the assembler/provider boundary.
+const dedupModule={exports:{}};
+runInNewContext(ts.transpileModule(readFileSync("lib/memory/history-dedup.ts","utf8"),{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+}).outputText,{module:dedupModule,exports:dedupModule.exports});
 const msg=(id,role,time,content="Original source evidence")=>({
   id,chatId:"chat",role,content,createdAt:new Date(time).toISOString(),
 });
@@ -41,6 +47,7 @@ function run({latestCursor="2026-10-31T17:00:00.000Z",pendingMessages=pending,tr
       filterConversationalMessages:m=>m,
     },
     "@/lib/router/actor-routing-profile":{createNeutralActorRoutingProfile:()=>({})},
+    "@/lib/memory/history-dedup":dedupModule.exports,
   };
   runInNewContext(compiled,{
     module,exports:module.exports,process:{env:{}},
@@ -86,8 +93,8 @@ test("overlapping pending and STM rows cannot duplicate persisted message IDs",a
   assert.equal(reads,1);
   assert.equal(value.history.length,116,"56 pending + 60 STM, not 176");
   assert.equal(new Set(value.history.map(message=>message.id)).size,116);
-  assert.deepEqual(value.history.slice(0,56).map(m=>m.id),pending.map(m=>m.id));
-  assert.deepEqual(value.history.slice(56).map(m=>m.id),stm.map(m=>m.id));
+  assert.deepEqual(Array.from(value.history.slice(0,56),m=>m.id),pending.map(m=>m.id));
+  assert.deepEqual(Array.from(value.history.slice(56),m=>m.id),stm.map(m=>m.id));
   for(let i=0;i<60;i++) {
     assert.equal(value.history[i+56].content,stm[i].content,
       "The authoritative STM instance must replace the older retrieved copy");
@@ -100,5 +107,5 @@ test("same text with different persisted IDs remains two legitimate conversation
   assert.equal(value.history.length,116);
   assert.equal(new Set(value.history.map(m=>m.id)).size,116);
   // The two distinct IDs are retained, even though the text matches exactly.
-  assert.deepEqual(value.history.slice(56,58).map(m=>m.id),stm.slice(0,2).map(m=>m.id));
+  assert.deepEqual(Array.from(value.history.slice(56,58),m=>m.id),stm.slice(0,2).map(m=>m.id));
 });
