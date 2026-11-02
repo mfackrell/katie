@@ -1048,6 +1048,16 @@ export function ChatPanel({
     scrollToBottom();
   }, [messages, loading]);
 
+  // Follow the expanding central response only when the user is already near
+  // the latest message. Do not yank the view back if they scroll up to read.
+  useEffect(() => {
+    if (!loading || !streamingAnswer) return;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+    if (distanceFromBottom < 260) container.scrollTop = container.scrollHeight;
+  }, [loading, streamingAnswer]);
+
   useEffect(() => {
     let cancelled = false;
 
