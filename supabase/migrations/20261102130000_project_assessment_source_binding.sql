@@ -24,6 +24,8 @@ begin
     )
     or not exists (
      select 1 from public.agent_missions m
+     join public.project_runs assessment_run on assessment_run.mission_id=m.id
+       and assessment_run.project_id=new.id and assessment_run.kind='assessment'
      join public.project_runs r on r.project_id=new.id
        and r.kind='development' and r.outcome->>'head'=new.verified_sha
        and r.binding->>'scopeHash'=new.approved_hash
@@ -31,6 +33,17 @@ begin
        and j.mission_id=r.mission_id and j.role='development' and j.status='completed'
      where m.id=new.active_mission_id and m.project_id=new.id
        and m.project_kind='assessment' and m.status='completed'
+       and assessment_run.outcome->>'reviewedMissionId'=m.id::text
+       and assessment_run.outcome#>>'{receipt,version}'='1'
+       and assessment_run.outcome#>>'{receipt,projectId}'=new.id::text
+       and assessment_run.outcome#>>'{receipt,taskId}'=j.id::text
+       and assessment_run.outcome#>>'{receipt,developmentMissionId}'=r.mission_id::text
+       and assessment_run.outcome#>>'{receipt,assessmentMissionId}'=m.id::text
+       and assessment_run.outcome#>>'{receipt,verifiedSha}'=new.verified_sha
+       and assessment_run.outcome#>>'{receipt,approvedScopeHash}'=new.approved_hash
+       and assessment_run.outcome#>>'{receipt,finalContractHash}'=
+           encode(sha256(convert_to(project_canonical(new.spec->'finalContract'),'UTF8')),'hex')
+       and assessment_run.outcome#>'{receipt,browserAcceptance}'=new.preview->'browserAcceptance'
        and exists (
          select 1 from public.mission_assignments reviewer
          join public.mission_assignments composer on composer.mission_id=reviewer.mission_id
