@@ -1,3 +1,7 @@
+/** An explicit, user-selected source action; never infer an approved document from chat history. */
+export const SAVED_DOCUMENT_EXPORT_PROMPT =
+  'Export this saved response as a Word document and PDF. Preserve its wording without rewriting. Inspect the rendered pages and provide both download links.';
+
 /** Cheap routing only. No renderer, storage client or model is loaded by this module. */
 export function documentRequest(message: string): { pages?: number } | null {
   if (/^\s*(?:explain\b|how\s+(?:do|does|can|to)\b|what\s+(?:is|are)\b)/i.test(message) ||
