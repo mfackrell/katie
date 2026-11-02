@@ -38,7 +38,7 @@ export function explicitlyReferencesAttachment(message: string, file: Conversati
 
 export function requestedAttachmentKind(message: string): "video" | "image" | "spreadsheet" | "pdf" | "document" | null {
   if (/\b(video|clip|recording)\b/i.test(message)) return "video";
-  if (/\b(photo|picture|image)\b/i.test(message)) return "image";
+  if (/\b(photos?|pictures?|images?)\b/i.test(message)) return "image";
   if (/\b(spreadsheet|workbook|excel)\b/i.test(message)) return "spreadsheet";
   if (/\bpdf\b/i.test(message)) return "pdf";
   if (/\b(document|word file)\b/i.test(message)) return "document";
@@ -62,7 +62,7 @@ export function selectFollowUpAttachments(message: string, history: Message[]): 
   if (named.length) return [...new Map(named.map(file => [file.id, file])).values()].slice(-5);
   // Explicit media references work after intervening turns. Short deictic follow-ups
   // apply only while the latest attachment remains the current conversational topic.
-  const explicit = /\b(video|clip|recording|attachment|document|spreadsheet|pdf|photo|picture|image|uploaded file)\b/i.test(message);
+  const explicit = /\b(video|clip|recording|attachment|document|spreadsheet|pdf|photos?|pictures?|images?|uploaded file)\b/i.test(message);
   const deictic = /\b(it|that|this|those|there|what about|what else|why|explain|more detail|continue|she|he|her|his|they|their|its)\b/i.test(message) && message.length < 350;
   const latestUser = history.filter(item => item.role === "user").at(-1);
   const stillActive = latestUser?.attachments?.some(file => file.conversationUsage !== "contextual" && latest.attachments?.some(other => other.id === file.id));
