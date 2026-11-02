@@ -127,7 +127,7 @@ export async function qualifyTask3cCompletion(db,ids,fixture,engineering,host) {
   const closed=(await db.query('select finish_work_project($1,$2,$3,$4) value',[ids.project,randomUUID(),'complete',{}])).rows[0].value;
   assert.equal(closed,false,'Replayed project completion must be fenced');
   report.missionJobs=jobs;report.assessmentJobs=assessments;report.finalProject=final;report.finalBrowser=fixture.finalBrowser;report.finalAccount=account;report.finalLedgerHash=digest(after);report.events.push({stage:'authoritative-project-completed',projectId:ids.project,head:final.verified_sha,assessmentMissionId:final.active_mission_id,receipt:final.result});
-  assert.equal(report.negativeCases.length>=14,true,'Valid control and all negative acceptance cases must execute');
+  assert.equal(report.negativeCases.length>=19,true,'Valid control and all negative acceptance cases must execute');
   report.passed=true;
   console.log('TASK3C_INTEGRATED_PROJECT_CLOSURE_PASS');
  } finally {
@@ -198,5 +198,21 @@ async function assertAtomicRejects(db,ids,project,negativeCases){
   await db.query('rollback to savepoint task3c_direct');
   await db.query('release savepoint task3c_direct');
   negativeCases.push({name:'direct-status-bypass-rejected',rejected:true});
+  // The original completion RPC checks deadlines, scopes and leases. Prove
+  // a privileged direct UPDATE cannot bypass those checks with VALID
+  // reviewer, browser and candidate evidence.
+  for(const [name,sql] of [
+   ['direct-expired-deadline',"update work_projects set deadline=now()-interval '1 second' where id=$1"],
+   ['direct-missing-lease',"update work_projects set lease=null where id=$1"],
+   ['direct-blocked-project',"update work_projects set status='blocked' where id=$1"],
+   ['direct-revoked-scope',"update work_projects set approval_hash=repeat('f',64) where id=$1"]
+  ]){
+   await db.query('savepoint task3c_authority');
+   await db.query(sql,[ids.project]);
+   await assert.rejects(db.query("update work_projects set status='completed' where id=$1",[ids.project]),/Final assessment is not bound/,name);
+   await db.query('rollback to savepoint task3c_authority');
+   await db.query('release savepoint task3c_authority');
+   negativeCases.push({name,rejected:true});
+  }
  }finally{await db.query('rollback');}
 }
