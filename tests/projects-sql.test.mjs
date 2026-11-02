@@ -1,5 +1,6 @@
 import {verifyProjectLifecyclePostgres} from './helpers/project-lifecycle-postgres.mjs';
 import {verifyTask4aContinuationPostgres} from './helpers/task4a-continuation-postgres.mjs';
+import {verifyTask4aNativePostgres} from './helpers/task4a-native-postgres.mjs';
 import {verifyDevelopmentDispatchRecoverySql} from './helpers/development-dispatch-recovery-sql.mjs';
 import {verifySpecificationLifecycleSql} from './helpers/specification-lifecycle-sql.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync,mkdtempSync,rmSync,readdirSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';import pg from 'pg';import {randomUUID} from 'node:crypto';
@@ -137,6 +138,11 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query("update model_registry set pricing_verified_at=now() where provider_name='openai' and model_id in ('gpt-5.6-sol','gpt-5.3-codex')");
   await db.query('set role service_role');
   await verifyTask4aContinuationPostgres(db,connect);
+  await db.query('reset role');
+  await db.query(readFileSync('tests/fixtures/task4a-native-bridge-sql.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261102211800_task4a_native_developer_bridge.sql','utf8'));
+  await db.query('set role service_role');
+  await verifyTask4aNativePostgres(db,connect);
   await verifyProjectLifecyclePostgres(db);
   await assert.rejects(db.query("set role anon;select recover_project_development_dispatch('44444444-4444-4444-8444-444444444444');"),/permission denied/);
   await db.query('reset role');await db.query('set role service_role');

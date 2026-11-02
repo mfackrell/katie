@@ -59,7 +59,7 @@ function synthetic({authorized=true,reservation=true,receipt=true,providerRespon
   :{providerRequestId:null,actualTokens:null};};
  upstream.nonbillableFixture=true;
  const call=()=>forwardAuthorizedModelRequest({
-  db,grantToken:'synthetic-grant-no-provider',trialId:null,developerProjectId:id,task4a:true,
+  db,grantToken:'x'.repeat(40),trialId:null,developerProjectId:id,task4a:true,
   executionEpoch:1,model:'gpt-5.3-codex',requestBody:{model:'gpt-5.3-codex',input:[],max_output_tokens:20},
   upperTokens:120,upstream,providerNamespace:'openai-responses',
   recordReceipt:async({providerRequestId,usage})=>{
@@ -96,7 +96,7 @@ test('ordinary and benchmark modes retain their original RPCs',async()=>{
   const events=[],db={rpc:async name=>{events.push(name);return{data:name===variant.live?true:'call-id',error:null};}};
   const upstream=async()=>({providerRequestId:'provider',actualTokens:1,usage:{total_tokens:1}});
   upstream.nonbillableFixture=true;
-  await forwardAuthorizedModelRequest({...variant,db,grantToken:'synthetic',
+  await forwardAuthorizedModelRequest({...variant,db,grantToken:'x'.repeat(40),
    executionEpoch:1,model:'gpt-5.3-codex',
    requestBody:{model:'gpt-5.3-codex',input:[],max_output_tokens:1},upperTokens:20,
    upstream,providerNamespace:'openai-responses',recordReceipt:async()=>{}});
