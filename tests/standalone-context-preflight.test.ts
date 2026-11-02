@@ -5,6 +5,7 @@ import { selectContextCapacityUpgrade } from '../lib/standalone-accounting/conte
 import { estimatePreparedRequest, freezePreparedRequest, PROVIDER_COUNT_ESTIMATOR_VERSION } from '../lib/standalone-accounting/estimate';
 import { getModelPrice, PRICING_SNAPSHOT } from '../lib/standalone-accounting/pricing';
 import { runWithRefusalFallback } from '../lib/router/refusal-detection';
+import { classifyGenerationFailure, describeGenerationFailure } from '../lib/router/provider-error';
 import { standaloneTechnicalBlocker } from '../lib/standalone-accounting/context';
 
 test('native Anthropic count uses unchanged frozen model/system/messages and never sends output allowance',async()=>{
@@ -137,4 +138,16 @@ test('only technical pre-dispatch context errors reroute; approval/uncertain spe
     }),/standalone_/);
     assert.deepEqual(attempted,[current]);assert.equal(replacements,0);
   }
+});
+
+test('pre-dispatch context codes do not masquerade as paid provider failures, including nested SDK causes',()=>{
+  const uncertain=Object.assign(new Error('local capacity unknown'),{code:'standalone_context_capacity_unverified'});
+  const overflow=Object.assign(new Error('local verified overflow'),{code:'standalone_context_window_exceeded'});
+  assert.equal(classifyGenerationFailure(uncertain),'model');
+  assert.equal(describeGenerationFailure(uncertain),'context capacity could not be verified before generation');
+  assert.equal(classifyGenerationFailure({cause:{cause:overflow}}),'model');
+  assert.equal(describeGenerationFailure({cause:{cause:overflow}}),"verified input plus output exceeds the selected model's context window");
+  const actualProviderError=Object.assign(new Error('provider rate limit'),{status:429,code:'rate_limit'});
+  assert.equal(classifyGenerationFailure(actualProviderError),'provider');
+  assert.equal(describeGenerationFailure(actualProviderError),'the provider rate-limited the request');
 });

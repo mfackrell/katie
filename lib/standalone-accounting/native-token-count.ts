@@ -46,7 +46,12 @@ export async function countNativePreparedInput(
     }
     const data = await response.json() as { input_tokens?: unknown; totalTokens?: unknown };
     const count = prepared.provider === 'google' ? data.totalTokens : data.input_tokens;
-    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) return null;
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      console.info('[Accounting] Provider token count unavailable', {
+        provider: prepared.provider, model: prepared.model, reason: 'malformed_count',
+      });
+      return null;
+    }
     console.info('[Accounting] Provider input count verified', {provider: prepared.provider, model: prepared.model, inputTokens: count});
     return count;
   } catch (error) {

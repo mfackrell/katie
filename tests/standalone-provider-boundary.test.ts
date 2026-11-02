@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import OpenAI from 'openai';
 import { createAccountingFetch } from '../lib/standalone-accounting/dispatch';
 import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, isStandaloneAccountingError, standaloneAccountingCause } from '../lib/standalone-accounting/context';
-import { freezePreparedRequest, estimatePreparedRequest } from '../lib/standalone-accounting/estimate';
+import { freezePreparedRequest, prepareStandaloneRequest, estimatePreparedRequest } from '../lib/standalone-accounting/estimate';
 import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
 import { OpenAiProvider } from '../lib/providers/openai-provider';
@@ -20,13 +20,13 @@ import { claudeCachedSystem } from '../lib/providers/claude-cache';
 const context = { userId: 'owner', actorId: 'actor', chatId: 'chat', requestId: 'request' };
 const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] }) };
 const receipt = (id = 'receipt-1') => new Response(JSON.stringify({ id, choices: [{ message: { content: 'hello' } }], usage: { prompt_tokens: 100, completion_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
-function fakeLedger(paused = false) {
+function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT) {
   const attempts: LedgerAttempt[] = [];
   const events: string[] = [];
   const identifiers: Array<{ requestId: string | null; responseId: string | null }> = [];
   const service = {
     async uncertainExposureAccepted() { return false; },
-    async loadPricing() { return {snapshot:PRICING_SNAPSHOT,retrievedAt:new Date().toISOString()}; },
+    async loadPricing() { return {snapshot:pricing,retrievedAt:new Date().toISOString()}; },
     async registerPricing() { events.push('pricing'); return true; },
     async lookupAttempt(_owner: string, _request: string, key: string) { return attempts.find(item => item.attempt_key === key) ?? null; },
     async admit(input: AdmitAttemptInput) {
@@ -687,4 +687,139 @@ test('unverified oversized context has no approvable ledger attempt or paid disp
     error=>standaloneAccountingCause(error)?.code==='standalone_context_capacity_unverified');
   assert.equal(counts,1);assert.equal(paid,0);
   assert.equal(fake.attempts.length,0,'non-priceable technical context does not manufacture an approval');
+});
+
+/** Reproduces the November 2, 2026 GPT-5.4 mini context-admission shape
+ * without retaining user text or hitting a paid provider. The input byte
+ * heuristic equals the observed 321,685; provider counts below are mocks. */
+function november2MiniFixture() {
+  const model='gpt-5.4-mini';
+  const reviewed=PRICING_SNAPSHOT.models.find(row=>row.provider==='openai'&&row.model==='gpt-5-mini')!;
+  const pricing:PricingSnapshot={...PRICING_SNAPSHOT,version:'sanitized-20261102-mini-272k',models:[
+    ...PRICING_SNAPSHOT.models,{...reviewed,model,maxContextTokens:272000,responsesOnly:true}
+  ]};
+  const makeBody=(history:string)=>({
+    model,max_output_tokens:4096,prompt_cache_key:'sanitized-same-chat-cache-hint',
+    input:[
+      {role:'system',content:[{type:'input_text',text:history}]},
+      {role:'user',content:[{type:'input_text',text:'Respond using all of the preserved history in sequence.'}]},
+    ],
+  });
+  const seed='Historical chronology, actor state, and business reference text. '.repeat(4000);
+  const seedEstimate=estimatePreparedRequest(prepareStandaloneRequest('openai',model,'/v1/responses',makeBody(seed)),pricing);
+  const extra=321685-seedEstimate.inputTokens;
+  assert.ok(extra>0,'fixture seed must leave room for exact observed heuristic');
+  const body=makeBody(seed+'X'.repeat(extra));
+  const initial=prepareStandaloneRequest('openai',model,'/v1/responses',body);
+  assert.equal(estimatePreparedRequest(initial,pricing).inputTokens,321685);
+  return {model,pricing,body,initial,original:{
+    method:'POST',headers:{authorization:'Bearer fake-no-network', 'content-type':'application/json'},
+    body:JSON.stringify(body),
+  }};
+}
+
+test('Nov 2 mini inflated heuristic obtains native count and preserves exact owner-approved uncached replay',async()=>{
+  const fixture=november2MiniFixture();
+  const f=fakeLedger(true,fixture.pricing);
+  let native=0,paid=0;
+  const send=createAccountingFetch('openai',async(url,init)=>{
+    if(String(url)==='https://api.openai.com/v1/responses/input_tokens'){
+      native++;
+      const counted=JSON.parse(String(init?.body));
+      assert.deepEqual(counted,{model:fixture.model,input:fixture.body.input},
+        'native count must receive complete ordered model input, not the heuristic estimate');
+      assert.equal(new Headers(init?.headers).get('authorization'),'Bearer fake-no-network');
+      assert.equal('max_output_tokens' in counted,false,'output allowance is not input-token evidence');
+      return Response.json({object:'response.input_tokens',input_tokens:69133});
+    }
+    paid++;
+    const saved=f.attempts[0].prepared_payload;
+    assert.equal(String(init?.body),saved.serializedBody,'provider must receive only the frozen approved body');
+    assert.deepEqual(JSON.parse(String(init?.body)).input,fixture.body.input,'no missing, repeated or reordered history');
+    assert.equal(JSON.parse(String(init?.body)).prompt_cache_key,undefined,'only unreviewed optional hint is dropped');
+    return Response.json({id:'mock-mini-receipt',model:fixture.model,status:'completed',output:[
+      {type:'message',role:'assistant',content:[{type:'output_text',text:'Mocked completion',annotations:[]}]}
+    ],usage:{input_tokens:69133,output_tokens:128,input_tokens_details:{cached_tokens:0}}});
+  },f.factory);
+  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',fixture.original)),
+    error=>standaloneAccountingCause(error)?.code==='standalone_approval_required');
+  assert.equal(native,1);assert.equal(paid,0,'counting and quote must not spend');
+  assert.equal(f.attempts.length,1);
+  const attempt=f.attempts[0];
+  assert.equal(attempt.preflight_estimate.inputTokens,69133);
+  assert.equal(attempt.preflight_estimate.outputAllowance,4096);
+  assert.equal(attempt.preflight_estimate.inputCountSource,'provider');
+  assert.equal(attempt.preflight_estimate.ownerApprovalRequired,'selected_model_uncached');
+  assert.equal(attempt.estimator_version,'standalone-selected-model-uncached-v1');
+  assert.notEqual(attempt.prepared_hash,fixture.initial.hash,'uncached proposal has a new frozen hash');
+  assert.deepEqual(JSON.parse(String(attempt.prepared_payload.serializedBody)).input,fixture.body.input);
+  attempt.state='reserved'; // Owner approve_once is simulated; never bypass the real ledger.
+  const result=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/responses',fixture.original));
+  assert.equal((await result.json()).output[0].content[0].text,'Mocked completion');
+  assert.equal(native,1,'resume must preserve exact provider-native count evidence');
+  assert.equal(paid,1,'one and only one authorized generation');
+  assert.equal(f.attempts.length,1);assert.equal(attempt.state,'settled');
+  assert.equal(attempt.usage?.inputTokens,69133);
+});
+
+test('Nov 2 mini without an optional cache hint may use native-counted context without escalation',async()=>{
+  const fixture=november2MiniFixture();
+  const body={...fixture.body};
+  delete (body as {prompt_cache_key?:string}).prompt_cache_key;
+  const f=fakeLedger(false,fixture.pricing);let native=0,paid=0;
+  const send=createAccountingFetch('openai',async(url,init)=>{
+    if(String(url).endsWith('/input_tokens')){native++;return Response.json({object:'response.input_tokens',input_tokens:69133});}
+    paid++;assert.deepEqual(JSON.parse(String(init?.body)).input,body.input);
+    return Response.json({id:'mini-uncached-mock',model:fixture.model,status:'completed',output:[],usage:{input_tokens:69133,output_tokens:64}});
+  },f.factory);
+  await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{...fixture.original,body:JSON.stringify(body)}));
+  assert.equal(native,1);assert.equal(paid,1);assert.equal(f.attempts.length,1);
+  assert.equal(f.attempts[0].preflight_estimate.inputCountSource,'provider');
+});
+
+test('Nov 2 mini genuinely oversized provider-native input is rejected without charge or approval',async()=>{
+  const fixture=november2MiniFixture();
+  const f=fakeLedger(false,fixture.pricing);let counts=0,paid=0;
+  const send=createAccountingFetch('openai',async(url)=>{
+    if(String(url).endsWith('/input_tokens')){counts++;return Response.json({object:'response.input_tokens',input_tokens:270000});}
+    paid++;return Response.json({});
+  },f.factory);
+  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',fixture.original)),
+    error=>standaloneAccountingCause(error)?.code==='standalone_context_window_exceeded');
+  assert.equal(counts,1);assert.equal(paid,0);assert.equal(f.attempts.length,0);
+});
+
+test('Nov 2 mini native count HTTP, timeout, and malformed responses fail closed with correct uncertainty',async()=>{
+  const fixture=november2MiniFixture();
+  const cases=[
+    {name:'http',response:()=>Response.json({error:{message:'unavailable'}},{status:503})},
+    {name:'timeout',response:()=>Promise.reject(Object.assign(new Error('fixture timeout'),{name:'TimeoutError'}))},
+    {name:'malformed',response:()=>Response.json({object:'response.input_tokens',input_tokens:'69133'})},
+    {name:'invalid-json',response:()=>new Response('not-json',{status:200})},
+  ];
+  for(const scenario of cases){
+    const f=fakeLedger(false,fixture.pricing);let count=0,paid=0;
+    const send=createAccountingFetch('openai',async(url)=>{
+      if(String(url).endsWith('/input_tokens')){count++;return scenario.response();}
+      paid++;return Response.json({});
+    },f.factory);
+    await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',fixture.original)),
+      error=>standaloneAccountingCause(error)?.code==='standalone_context_capacity_unverified',scenario.name);
+    assert.equal(count,1,scenario.name);assert.equal(paid,0,scenario.name);
+    assert.equal(f.attempts.length,0,scenario.name);
+  }
+});
+
+test('mixed unpriceable dimension and heuristic context is a billing error, not a false capacity upgrade',async()=>{
+  const fixture=november2MiniFixture();
+  const body={...fixture.body,service_tier:'priority'};
+  const f=fakeLedger(false,fixture.pricing);let counts=0,paid=0;
+  const send=createAccountingFetch('openai',async(url)=>{
+    if(String(url).endsWith('/input_tokens'))counts++;
+    else paid++;
+    return Response.json({});
+  },f.factory);
+  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{...fixture.original,body:JSON.stringify(body)})),
+    error=>standaloneAccountingCause(error)?.code==='standalone_unsupported_billing');
+  assert.equal(counts,0);assert.equal(paid,0);assert.equal(f.attempts.length,0);
 });

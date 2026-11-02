@@ -274,12 +274,18 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     // Persisted native counts are immutable evidence for the exact hash and model.
     // Resume must not silently recalculate or substitute a different reservation.
     const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
-    const countedInput = attempt?.estimator_version === PROVIDER_COUNT_ESTIMATOR_VERSION &&
+    // The owner-selected uncached quote retains its distinct approval estimator
+    // identity, but can still contain a provider-native input count. Restore the
+    // exact hash-bound evidence on resume instead of reverting to byte heuristics.
+    const savedProviderCount = attempt?.estimator_version === PROVIDER_COUNT_ESTIMATOR_VERSION ||
+      attempt?.estimator_version === 'standalone-selected-model-uncached-v1' &&
+      savedEstimate?.inputCountSource === 'provider';
+    const countedInput = savedProviderCount &&
       savedEstimate?.inputCountSource === 'provider' &&
       savedEstimate.requestHash === prepared.hash &&
       Number.isSafeInteger(savedEstimate.inputTokens) && savedEstimate.inputTokens >= 0
       ? { inputTokens: savedEstimate.inputTokens, requestHash: prepared.hash } : undefined;
-    if (attempt?.estimator_version === PROVIDER_COUNT_ESTIMATOR_VERSION && !countedInput) {
+    if (savedProviderCount && !countedInput) {
       throw failure('estimate_changed', 'Stored provider count evidence does not match this prepared request.');
     }
     if(attempt&&['paused','reserved'].includes(attempt.state)){
@@ -308,6 +314,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if (nativeCount !== null) {
         estimate = stampOwnerApproval(estimatePreparedRequest(prepared,pricing,{inputTokens:nativeCount,requestHash:prepared.hash}));
       }
+    }
+    // A mixed unsupported request is a billing/schema failure, not evidence
+    // that its true context size is over capacity. Do not misroute that failure.
+    if (estimate.issues.includes(contextIssue) && estimate.issues.some(issue => issue !== contextIssue)) {
+      throw Object.assign(failure('unsupported_billing',
+        'This provider request has unsupported fields or billing dimensions: ' + estimate.issues.filter(issue => issue !== contextIssue).join('; ')),
+        { issues: estimate.issues });
     }
     if (estimate.issues.includes(contextIssue)) {
       const confirmed = estimate.inputCountSource === 'provider';
