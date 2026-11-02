@@ -227,7 +227,17 @@ async function advance(p: Project) {
             const url = new URL(p.spec!.finalContract.path, live.url).href;
             if(!p.preview?.browserAcceptance?.passed)throw Error('Actual deployed browser evidence is required before completion');
             if(live.deploymentId!==p.preview.deploymentId||live.statusId!==p.preview.statusId||url!==p.preview.url){await finish('preview',{...live,url});return;}
-            await finish('complete', { result: projectClosure(p,url), preview: { ...live, url }, verified_head: p.verified_sha, reviewedMissionId:m.id });
+            await finish('complete', {
+                result: projectClosure(p,url), preview: { ...live, url },
+                verified_head: p.verified_sha, reviewedMissionId:m.id,
+                receipt: {
+                    version:1, projectId:p.id, taskId:finalRun.outcome.taskId,
+                    developmentMissionId:finalRun.mission_id, assessmentMissionId:m.id,
+                    verifiedSha:p.verified_sha, approvedScopeHash:p.approved_hash,
+                    finalContractHash:digest(p.spec!.finalContract),
+                    browserAcceptance:p.preview.browserAcceptance,
+                },
+            });
             return;
         }
     }
