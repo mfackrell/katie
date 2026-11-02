@@ -1,0 +1,78 @@
+name: Task 3C integrated nonbillable qualification
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/**'
+      - 'lib/missions/**'
+      - 'tests/helpers/qualify-task3c.mjs'
+      - 'tests/helpers/qualify-adaptive-recovery.mjs'
+      - 'tests/helpers/assert-capacity-renewal.mjs'
+      - 'tests/helpers/lifecycle-qualification-adapters.mjs'
+      - 'tests/benchmark-renewal-postgres.test.mjs'
+      - 'tests/projects-runtime.test.mjs'
+      - 'tests/projects-sql.test.mjs'
+      - 'supabase/migrations/*project_assessment*'
+      - '.github/workflows/task3c-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integrated-task3c:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'feat/task-3c-closure-binding'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      ANTHROPIC_API_KEY: ''
+      GOOGLE_API_KEY: ''
+      GROK_API_KEY: ''
+      XAI_API_KEY: ''
+      KATIE_TEST_TASK3C: '1'
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_REQUIRE_NATIVE_BWRAP: '1'
+    steps:
+      - name: Checkout exact workflow candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify PR checkout commit
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          echo "Task 3C candidate: $(git rev-parse HEAD)"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Install pinned native Codex SDK (no inference)
+        run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Install disposable PostgreSQL and sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat postgresql-16
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Fetch immutable original synthetic baseline
+        run: git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+      - name: Syntax check Task 3C integration
+        run: |
+          node --check tests/helpers/qualify-task3c.mjs
+          node --check tests/helpers/qualify-adaptive-recovery.mjs
+          node --check tests/helpers/lifecycle-qualification-adapters.mjs
+      - name: Prove three repairs, two fresh recoveries, mission workers, independent assessment, browser and SQL project closure
+        timeout-minutes: 55
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Retain machine-readable continuous qualification trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task3c-integration-trace
+          path: |
+            ${{ runner.temp }}/task3c-qualification/
+            ${{ runner.temp }}/task3b-qualification/
+          if-no-files-found: warn
+          retention-days: 90
