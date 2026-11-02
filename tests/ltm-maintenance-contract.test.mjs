@@ -14,7 +14,7 @@ test("semantic consolidation requires independent completeness and source checks
   assert.match(maintenance,/value:group\.value\.trim\(\)/);
   assert.match(maintenance,/COMPREHENSIVE_REVIEW_EVERY_USER_MESSAGES = 100/);
   assert.match(maintenance,/count % COMPREHENSIVE_REVIEW_EVERY_USER_MESSAGES !== 0/);
-  assert.match(maintenance,/\.eq\("role", "user"\)/);
+  assert.match(maintenance,/admin\.rpc\("count_actor_user_messages"/);
   assert.doesNotMatch(maintenance,/count_actor_conversational_messages/);
   assert.match(maintenance,/seen\.size !== originals\.length/);
 });
@@ -33,4 +33,11 @@ test("storage requires revision and content match and keeps reversible history",
   assert.match(migration,/previous_content jsonb not null/);
   assert.match(migration,/enable row level security/);
   assert.match(migration,/grant execute on function public\.commit_actor_ltm_maintenance.*service_role/);
+});
+
+test("actor-wide maintenance count RPC counts only user messages and has service-role-only access", () => {
+  const migration=readFileSync("supabase/migrations/20261102144500_count_actor_user_messages.sql","utf8");
+  assert.match(migration,/where actor_id = p_actor_id and role = 'user'/);
+  assert.match(migration,/revoke all on function public\.count_actor_user_messages\(uuid\) from public, anon, authenticated/);
+  assert.match(migration,/grant execute on function public\.count_actor_user_messages\(uuid\) to service_role/);
 });
