@@ -314,3 +314,21 @@ test("captured first pass matches sent JSON", async () => {
     assert.equal(sent.messages.at(-1).content, baseParams.user);
   } finally { globalThis.fetch = priorFetch; }
 });
+
+test("Claude requests only a final user-facing reply and no intermediate snippets", async () => {
+  const priorFetch = globalThis.fetch;
+  let system = "";
+  globalThis.fetch = (async (_url, init) => {
+    const payload = JSON.parse(String(init?.body)) as { system: string | Array<{ text: string }> };
+    system = typeof payload.system === "string"
+      ? payload.system
+      : payload.system.map(block => block.text).join("");
+    return jsonResponse({ content: [{ type: "text", text: "A direct answer." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const response = await new ClaudeProvider("test-key").generate(baseParams);
+    assert.equal(response.text, "A direct answer.");
+    assert.match(system, /Respond only with the final answer intended for the user/);
+    assert.doesNotMatch(system, /intermediate snippets can be safely shown in a live explainer UI/);
+  } finally { globalThis.fetch = priorFetch; }
+});
