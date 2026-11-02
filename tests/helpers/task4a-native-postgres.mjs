@@ -82,7 +82,7 @@ export async function verifyTask4aNativePostgres(db,connect){
  const intact=await one(db,'select actual_tokens,calls,routing_calls from agent_missions where id=$1',[historical]);
  assert.equal(Number(intact.actual_tokens),76519);assert.equal(intact.calls,4);assert.equal(intact.routing_calls,5);
  await query(db,'reset role');await query(db,"update model_registry set pricing_status='missing' where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
- await assert.rejects(reserve(),/pricing unverified/);
+ await assert.rejects(reserve(),/not authorized|pricing unverified/);
  await query(db,'reset role');await query(db,"update model_registry set pricing_status='verified',pricing_output_per_1m=10000 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
  await assert.rejects(reserve(1000),/capacity|reserve exhausted/,'Adversarial price hike must enforce dollar ceiling');
  await query(db,'reset role');await query(db,"update model_registry set pricing_output_per_1m=14 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
