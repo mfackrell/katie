@@ -4,6 +4,10 @@ import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/cont
 const test = (name: string, fn: () => Promise<void>) => nodeTest(name, () => runWithOrchestratorAccounting(fn));
 import assert from "node:assert/strict";
 import { ClaudeProvider } from "../lib/providers/claude-provider";
+import { decideResponsePolicy } from "../lib/chat/response-policy";
+import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
+import { getAdaptiveResponseCompositionInstruction } from "../lib/chat/adaptive-response-composition";
+import { readFileSync } from "node:fs";
 
 const baseParams = {
   name: "Katie",
@@ -331,4 +335,57 @@ test("Claude requests only a final user-facing reply and no intermediate snippet
     assert.match(system, /Respond only with the final answer intended for the user/);
     assert.doesNotMatch(system, /intermediate snippets can be safely shown in a live explainer UI/);
   } finally { globalThis.fetch = priorFetch; }
+});
+
+test("actual Anthropic system payload changes only the style for personal conversation", async () => {
+  const previousFetch = globalThis.fetch;
+  const wirePayloads: Array<{ system: string | Array<{ text: string }>; messages: unknown[] }> = [];
+  const auditSystems: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    wirePayloads.push(JSON.parse(String(init?.body)) as { system: string | Array<{ text: string }>; messages: unknown[] });
+    return jsonResponse({ content: [{ type: "text", text: "A plain answer." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    // The same actor + global professional instructions are present in both
+    // outgoing requests; only responsePolicy.generationInstruction differs.
+    const actorAndGlobal = [
+      "Katie actor personality (unchanged).",
+      getDeliverableStandardInstruction(),
+      getAdaptiveResponseCompositionInstruction(),
+    ].join("\n\n");
+    const work = decideResponsePolicy({
+      message: "What does sponsor reporting mean?",
+      intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true,
+    });
+    const personal = decideResponsePolicy({
+      message: "I discovered I don't like being alone.",
+      intent: "social-emotional", responsePurpose: "conversation",
+    });
+    for (const choice of [work, personal]) {
+      await new ClaudeProvider("offline-test-key").generate({
+        ...baseParams,
+        cacheablePersona: actorAndGlobal,
+        persona: [actorAndGlobal, choice.generationInstruction].filter(Boolean).join("\n\n"),
+        user: "Fixture conversation message.",
+        onProviderSystemPrepared: audit => { auditSystems.push(audit.systemMessages.join("\n")); },
+      });
+    }
+    assert.equal(wirePayloads.length, 2);
+    const systems = wirePayloads.map(payload => typeof payload.system === "string"
+      ? payload.system
+      : payload.system.map(part => part.text).join(""));
+    assert.deepEqual(auditSystems, systems);
+    assert.match(systems[0], /KATIE_DELIVERABLE_COMPLETION_STANDARD/);
+    assert.match(systems[1], /KATIE_DELIVERABLE_COMPLETION_STANDARD/);
+    assert.match(systems[0], /NEXT RESPONSE: a brief conversational answer or clarification/);
+    assert.match(systems[1], /Engage naturally rather than simply acknowledging or summarizing/);
+    assert.doesNotMatch(systems[1], /normally under 150 words|ask at most one necessary follow-up/);
+    assert.equal(systems[1].replace(personal.generationInstruction!, work.generationInstruction!), systems[0],
+      "Only the personal-conversation instructions may differ in the actual provider system payload");
+    assert.deepEqual(wirePayloads[0].messages, wirePayloads[1].messages);
+    const route = readFileSync("app/api/chat/route.ts", "utf8");
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
