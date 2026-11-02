@@ -28,7 +28,7 @@ export type PdfTextFragment = { str: string; hasEOL: boolean };
 
 function foldPdfGlyphs(input: string): string {
   return input.normalize('NFKC')
-    .replace(/[•●]/g, '')
+    .replace(/[•●]\s*/g, '')
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"');
 }
