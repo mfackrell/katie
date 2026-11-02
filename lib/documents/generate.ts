@@ -4,6 +4,14 @@ import type { Block, DocumentSpec } from './model';
 export const PAGE = { width: 612, height: 792, margin: 46.8, font: 11, maxPages: 8 } as const;
 export type Layout = { pages: number[][]; spacing: number; compact?: true };
 
+// Document hierarchy comes from explicit semantic blocks, not document-specific
+// keywords or model-invented presentation decisions. Body text remains 11pt.
+export const DOCUMENT_TYPE = {
+  bodyHalfPoints: 22,
+  headingHalfPoints: [38, 27, 23] as const,
+  headingColors: ['172B4D', '23466F', '334E68'] as const,
+} as const;
+
 export class DocumentPageFitError extends Error {
   constructor(readonly pages: number) {
     super(`Content cannot fit ${pages} pages at readable 11-point type. Content was preserved; no files were delivered.`);
@@ -25,9 +33,20 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
     heading: block.kind === 'heading' ? [HeadingLevel.TITLE, HeadingLevel.HEADING_1, HeadingLevel.HEADING_2][block.level - 1] : undefined,
     keepNext: block.kind === 'heading',
     keepLines: true,
-    spacing: { before: block.kind === 'heading' ? pageStyle.headingBeforeTwips : 0, after: layout.spacing * 20, line: pageStyle.lineTwips },
+    spacing: {
+      before: block.kind === 'heading'
+        ? pageStyle.headingBeforeTwips * (block.level === 1 ? 2 : 1)
+        : 0,
+      after: block.kind === 'heading' ? Math.max(layout.spacing, 4) * 20 : layout.spacing * 20,
+      line: pageStyle.lineTwips,
+    },
     ...(block.kind === 'bullet' ? { numbering: { reference: 'document-bullets', level: 0 }, indent: { left: 240, hanging: 180 } } : {}),
-    children: [new TextRun({ text: block.text, font: 'Arial', size: block.kind === 'heading' ? [34, 25, 23][block.level - 1] : 22, bold: block.kind === 'heading', color: '000000' })],
+    children: [new TextRun({
+      text: block.text, font: 'Arial',
+      size: block.kind === 'heading' ? DOCUMENT_TYPE.headingHalfPoints[block.level - 1] : DOCUMENT_TYPE.bodyHalfPoints,
+      bold: block.kind === 'heading',
+      color: block.kind === 'heading' ? DOCUMENT_TYPE.headingColors[block.level - 1] : '20242A',
+    })],
   });
   const table = (block: Extract<Block, { kind: 'table' }>) => new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
@@ -46,7 +65,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
     numbering: { config: [{ reference: 'document-bullets', levels: [{ level: 0, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT,
       style: { run: { font: 'Arial', size: 18 }, paragraph: { indent: { left: 240, hanging: 180 } } } }] }] },
     styles: { default: { document: { run: { font: 'Arial', size: 22, color: '000000' }, paragraph: { spacing: { line: pageStyle.lineTwips, after: layout.spacing * 20 } } } },
-      paragraphStyles: [{ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: 34, color: '000000', bold: true } }] },
+      paragraphStyles: [{ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: DOCUMENT_TYPE.headingHalfPoints[0], color: DOCUMENT_TYPE.headingColors[0], bold: true } }] },
     sections: layout.pages.map(indices => ({
       properties: { page: { size: { width: PAGE.width * 20, height: PAGE.height * 20 }, margin: { top: pageStyle.margin * 20, bottom: pageStyle.margin * 20, left: pageStyle.margin * 20, right: pageStyle.margin * 20 } } },
       children: indices.map(index => spec.blocks[index].kind === 'table' ? table(spec.blocks[index] as Extract<Block, { kind: 'table' }>) : paragraph(spec.blocks[index] as Exclude<Block, { kind: 'table' }>)),
