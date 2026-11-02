@@ -105,6 +105,21 @@ test('Task 4A: reject untrusted contract paths before minting or transmitting a 
  });
 });
 
+test('Task 4A: immutable Preview root is required before authentication',async()=>{
+ await withFixtureEnv(async()=>{
+  const {verifyDeployedPreview}=modules()('@/lib/projects/preview');
+  const contract={path:'/pilot',scenarios:[{name:'state',steps:[{action:'expectVisible',selector:'#state'}]}]};
+  for(const url of [origin+'/other',origin+'/?ignored=1','https://katie-git-feature-mark-fackrells-projects.vercel.app/']){
+   let requests=0;
+   await assert.rejects(verifyDeployedPreview({url,headSha:sha,deploymentId:1,statusId:2},contract,projectId,async()=>{
+    requests++;return edgeResponse();
+   }),undefined,url);
+   assert.equal(requests,0,'Mutable or non-root Preview URL cannot trigger an authenticated request');
+   record('reject non-immutable acceptance origin: '+url);
+  }
+ });
+});
+
 test('Task 4A: reachability check blocks cross-origin redirects before browser execution',async()=>{
  await withFixtureEnv(async()=>{
   const {verifyDeployedPreview,PreviewAccessUnavailable}=modules()('@/lib/projects/preview');
