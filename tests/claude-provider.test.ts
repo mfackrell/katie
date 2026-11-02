@@ -367,7 +367,7 @@ test("actual Anthropic system payload changes only the style for personal conver
         cacheablePersona: actorAndGlobal,
         persona: [actorAndGlobal, choice.generationInstruction].filter(Boolean).join("\n\n"),
         user: "Fixture conversation message.",
-        onProviderSystemPrepared: audit => { auditSystems.push(audit.systemMessages.join("\n")); },
+        onProviderSystemPrepared: async audit => { auditSystems.push(audit.systemMessages.join("\n")); },
       });
     }
     assert.equal(wirePayloads.length, 2);
