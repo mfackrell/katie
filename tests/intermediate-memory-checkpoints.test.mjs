@@ -58,7 +58,7 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 test("reconciliation has an explicit 10,000-token bound and versioned fail-closed recovery",()=>{
   assert.match(summary,/RECONCILE_MAX_TOKENS = 10000/);
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v3-priority-recovery"/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v4-episodic-continuity"/);
   assert.match(summary,/max_tokens: RECONCILE_MAX_TOKENS/);
   assert.match(summary,/return completedText\(response, "reconciliation", ITM_HARD_MAX_CHARACTERS\)/);
   assert.match(summary,/if \(response\.stop_reason !== "end_turn" \|\| !text \|\| text\.length > maxCharacters\)/);
@@ -75,4 +75,21 @@ test("oversized reconciliation has exactly one bounded priority recovery and unc
   assert.match(summary,/completedText\(response, "reconciliation draft", ITM_RECOVERY_DRAFT_MAX_CHARACTERS\)/);
   assert.match(summary,/completedText\(recovered, "priority recovery", ITM_ACCEPT_MAX_CHARACTERS\)/);
   assert.match(summary,/p_expected_cursor: expectedCursor, p_content: payload/);
+});
+
+
+test("v4 prompt revision separates rolling episodic ITM from durable LTM",()=>{
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v4-episodic-continuity"/);
+  assert.match(summary,/Your only purpose is conversational continuity/);
+  assert.match(summary,/DO NOT preserve lasting biographical facts/);
+  assert.match(summary,/DROP: permanent biography/);
+  assert.match(summary,/MAXIMUM OUTPUT: 6,000 characters including spaces/);
+  assert.match(summary,/Give reasonable priority to recent conversations/);
+  assert.match(summary,/ITM is rolling memory, not an archive/);
+  assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
+  assert.match(summary,/ITM_HARD_MAX_CHARACTERS = 15000/);
+  assert.match(summary,/ITM_ACCEPT_MAX_CHARACTERS = 7500/);
+  assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
+  assert.match(summary,/RECONCILE_MAX_TOKENS = 10000/);
+  assert.match(summary,/RECOVERY_MAX_TOKENS = 4000/);
 });
