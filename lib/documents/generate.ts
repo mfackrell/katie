@@ -76,10 +76,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
 /** Balanced contiguous partitions, respecting heading/next-block adjacency. Never drops content. */
 export function paginate(spec: DocumentSpec, heights: number[], pages: number, spacing = 4, compact?: true): Layout {
   if (heights.length !== spec.blocks.length || heights.some(h => !Number.isFinite(h) || h <= 0)) throw new Error('Incomplete document layout measurements.');
-  // Rendering checks actual text bounds against the printable margins.
-  // Reserve only a small rounding tolerance here; a 12pt extra inset
-  // previously made valid semantic page starts appear impossible.
-  const capacity = (PAGE.height - 2 * documentPageStyle({ compact }).margin - 2) * 96 / 72;
+  const capacity = (PAGE.height - 2 * documentPageStyle({ compact }).margin - 12) * 96 / 72;
   const sums = [0]; for (const h of heights) sums.push(sums.at(-1)! + h);
   const target = sums.at(-1)! / pages;
   const dp = Array.from({ length: pages + 1 }, () => Array(heights.length + 1).fill(Infinity));

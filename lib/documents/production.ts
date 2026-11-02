@@ -71,7 +71,7 @@ export async function produceDocument(input: {
       });
       throw new Error('Text fidelity or ATS reading-order validation failed. No files delivered.');
     }
-    const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 2) * 96 / 72;
+    const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 12) * 96 / 72;
     const minimum = Math.max(1, Math.ceil(rendered.heights.reduce((a, b) => a + b, 0) / capacity));
     const pages = spec.targetPages ?? Math.min(PAGE.maxPages, minimum);
     try {
