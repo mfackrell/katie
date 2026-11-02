@@ -201,6 +201,28 @@ test('Task 4A: reachability check blocks cross-origin redirects before browser e
  });
 });
 
+
+test('Task 4A: protected Preview HTTP errors never reach browser acceptance',async()=>{
+ await withFixtureEnv(async()=>{
+  const {verifyDeployedPreview,PreviewAccessUnavailable}=modules()('@/lib/projects/preview');
+  const contract={path:'/pilot',scenarios:[{name:'state',steps:[{action:'expectVisible',selector:'#state'}]}]};
+  const preview={url:origin+'/pilot',headSha:sha,deploymentId:1,statusId:2};
+  for(const status of [400,404,429,500,502,503]){
+   let requests=0,renders=0;
+   const request=async(_url,options)=>{
+    requests++;
+    return options.headers?.['x-vercel-protection-bypass']?edgeResponse():new Response('Unavailable',{status});
+   };
+   await assert.rejects(verifyDeployedPreview(preview,contract,projectId,request,async()=>{
+    renders++;return[{name:'state',passed:true}];
+   }),PreviewAccessUnavailable);
+   assert.equal(requests,2);
+   assert.equal(renders,0,'No HTTP error response may proceed to browser acceptance');
+   record('reject protected Preview application HTTP '+status);
+  }
+ });
+});
+
 test('Task 4A: production deployment discovery validates real receipt, draft SHA, bot status, immutable origin and fresh head',async()=>{
  await withFixtureEnv(async()=>{
   const binding={projectId,contractHash,scenarioNames:['state']};
