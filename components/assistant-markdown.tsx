@@ -5,6 +5,54 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { remarkCurrencyProse } from "@/lib/chat/markdown-currency";
+import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
+import { resolveDocumentDownload } from "@/lib/documents/client-download";
+import { useState, type ReactNode } from "react";
+
+/** A normal browser link cannot attach the owner token kept in Supabase's
+ * browser session. Fetch the private file with verified owner/guest credentials,
+ * then download the returned bytes; never leak a token in the link or URL. */
+function PrivateDocumentLink({href,children}:{href:string;children:ReactNode}) {
+  const [pending,setPending]=useState(false);
+  const [error,setError]=useState("");
+  async function download(){
+    if(pending)return;
+    const target=resolveDocumentDownload(href,window.location.origin);
+    if(!target){setError("Invalid document link.");return;}
+    setPending(true);setError("");
+    try{
+      const token=await ownerSessionBearer();
+      const response=await fetch(target.path,{
+        method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
+        headers:token?{Authorization:"Bearer "+token}:{},
+      });
+      if(!response.ok||response.headers.get("content-type")?.split(";")[0]!==target.mime)
+        throw new Error("Document access denied.");
+      const file=await response.blob();
+      if(file.size===0||file.size>8_000_000)throw new Error("Invalid document.");
+      const url=URL.createObjectURL(file);
+      try{
+        const anchor=document.createElement("a");
+        anchor.href=url;
+        anchor.download=target.filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }finally{
+        // Permit the browser's download to begin before releasing the object.
+        window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }
+    }catch{
+      setError("Document unavailable or access denied. Check the conversation's owner session.");
+    }finally{setPending(false);}
+  }
+  return <span>
+    <a href={href} aria-busy={pending}
+      className="font-medium text-sky-300 underline decoration-sky-400/40 underline-offset-4 transition hover:text-sky-200 hover:decoration-sky-300"
+      onClick={event=>{event.preventDefault();void download();}}>{pending?"Downloading…":children}</a>
+    {error&&<span role="alert" className="ml-2 text-amber-300">{error}</span>}
+  </span>;
+}
 
 /** One Markdown renderer for ordinary and interleaved assistant prose. */
 export function AssistantMarkdown({ children }: { children: string }) {
@@ -48,16 +96,16 @@ export function AssistantMarkdown({ children }: { children: string }) {
           </blockquote>
         ),
         hr: () => <hr className="my-6 border-white/10" />,
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium text-sky-300 underline decoration-sky-400/40 underline-offset-4 transition hover:text-sky-200 hover:decoration-sky-300"
-          >
-            {children}
-          </a>
-        ),
+        a: ({ href, children }) => href?.startsWith("/api/documents/download?")
+          ? <PrivateDocumentLink href={href}>{children}</PrivateDocumentLink>
+          : <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-sky-300 underline decoration-sky-400/40 underline-offset-4 transition hover:text-sky-200 hover:decoration-sky-300"
+            >
+              {children}
+            </a>,
         pre: ({ children }) => (
           <pre className="my-4 overflow-x-auto rounded-2xl border border-white/10 bg-black/35 p-4 text-[13px] leading-6 text-zinc-100 shadow-inner">
             {children}
