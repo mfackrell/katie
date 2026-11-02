@@ -88,24 +88,23 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
   assert.equal(cookies[0].httpOnly,true);
   assert.equal(cookies[0].secure,true);
   assert.equal(JSON.stringify(cookies).includes('fixture-only-edge-secret'),false);record('valid edge-only host-scoped Secure HttpOnly cookie','positive');
-  // Verify actual Chromium cookie-jar semantics, not only the shape returned to
-  // Playwright. Child and sibling subdomains must never receive this credential.
-  const [{chromium:playwright},{default:binary}]=await Promise.all([
-   import('playwright-core'),import('@sparticuz/chromium')
-  ]);
-  let browser;
-  try{
-   browser=await playwright.launch({executablePath:await binary.executablePath(),args:binary.args,headless:true,timeout:20000});
-   const context=await browser.newContext({serviceWorkers:'block'});
-   await context.addCookies(cookies);
-   assert.equal((await context.cookies(origin)).length,1);
-   assert.equal((await context.cookies('https://sub.'+host)).length,0,
-    'host-only cookie must not reach a child subdomain');
-   assert.equal((await context.cookies('https://katie-abcdef124-mark-fackrells-projects.vercel.app')).length,0,
-    'host-only cookie must not reach sibling deployment');
-   await context.close();
-   record('real Chromium cookie jar restricts authorization to exact Preview host','positive');
-  }finally{await browser?.close();}
+  // Playwright addCookies(url) is NOT a reliable host-only isolation
+  // mechanism. The live browser adapter must keep this credential out of
+  // Chromium and authorize only exact-origin route.fetch calls.
+  const {protectedPreviewHeaders}=await import('../scripts/project-browser-engine.mjs');
+  const routeHeaders=protectedPreviewHeaders(origin+'/pilot',origin,{'cookie':'untrusted=1'},cookies);
+  assert.equal(routeHeaders.cookie,'_vercel_jwt=fixture-cookie');
+  assert.equal(routeHeaders['x-vercel-skip-toolbar'],'1');
+  for(const other of ['https://sub.'+host+'/pilot',
+   'https://katie-abcdef124-mark-fackrells-projects.vercel.app/pilot',
+   'https://attacker.test/pilot']){
+   assert.throws(()=>protectedPreviewHeaders(other,origin,{},cookies),/exact deployment origin/);
+   record('browser route rejects off-origin bypass header: '+other);
+  }
+  assert.throws(()=>protectedPreviewHeaders(origin+'/pilot',origin,{},[{
+   ...cookies[0],url:'https://sub.'+host+'/'
+  }]),/exact deployment origin/);
+  record('reject wrong-origin browser authorization object');
 
   delete process.env.PROJECT_PREVIEW_BYPASS_SECRET;
   let called=false;
