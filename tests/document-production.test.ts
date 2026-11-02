@@ -41,7 +41,7 @@ function storageFixture() {
 
 test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', () => {
   const source = 'Led a family-owned business with e-commerce and multi-entity reporting.';
-  const pdfExtract = 'Led a family-\\nowned business with e-\\ncommerce and multi-entity reporting.';
+  const pdfExtract = 'Led a family-\nowned business with e-\ncommerce and multi-entity reporting.';
   assert.equal(pdfTextMatchesSource(pdfExtract, source), true);
   assert.equal(pdfTextMatchesSource(source, source), true);
   assert.equal(pdfTextMatchesSource('Led a family-owned business with e-commerce.', source), false, 'missing words remain fatal');
