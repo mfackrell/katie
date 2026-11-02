@@ -8,6 +8,11 @@ on:
       - 'tests/task4a-preview-security.test.mjs'
       - 'tests/helpers/lifecycle-preview-transport.mjs'
       - 'tests/helpers/project-lifecycle-postgres.mjs'
+      - 'tests/projects-sql.test.mjs'
+      - 'tests/helpers/task4a-continuation-postgres.mjs'
+      - 'supabase/migrations/20261102211500_task4a_continuation_admission.sql'
+      - 'supabase/migrations/20261102211600_task4a_expired_research_owner_recovery.sql'
+      - 'supabase/migrations/20261102211700_task4a_verified_model_price_sources.sql'
       - 'docs/qualifications/task4a-readiness-2026-11-02.json'
       - '.github/workflows/task4a-qualification.yml'
 
