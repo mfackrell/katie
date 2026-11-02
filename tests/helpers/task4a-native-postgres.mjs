@@ -30,8 +30,8 @@ export async function verifyTask4aNativePostgres(db,connect){
  await query(db,'insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index,binding) values($1,$2,$3,1,0,$4)',[
   project,mission,'development',{projectId:project,scopeHash:scope,contractHash:contract,baselineSha:source,baseSha:source,version:1,contract:{path:'/pilot',scenarios:[{name:'state',steps:[{action:'expectText',selector:'#state',value:'Ready'}]}]}}
  ]);
- await query(db,"insert into mission_assignments(id,mission_id,job_key,role,agent_id,instruction,status) values($1,$2,'develop','development',$3,'Approved native synthetic execution','waiting_external')",[task,mission,team[0].id]);
- await query(db,"select create_agent_task($1,$2,'Synthetic native browser app','development',$3)",[task,team[0].id,repo]);
+ await query(db,"insert into mission_assignments(id,mission_id,job_key,role,agent_id,instruction,status) values($1,$2,'develop','development',$3,'Approved native synthetic execution','waiting_external')",[task,mission,team[0]]);
+ await query(db,"select create_agent_task($1,$2,'Synthetic native browser app','development',$3)",[task,team[0],repo]);
  await query(db,"update agent_tasks set status='dispatching',external='{}'::jsonb where id=$1",[task]);
  await query(db,"insert into project_continuation_authorizations(id,project_id,actor_id,chat_id,source_mission_id,approval_digest,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence) values($1,$2,$3,$4,$5,$6,now()+interval '4 hours',440326,53,15000000,60000,60000,6,6,array['openai:gpt-5.6-sol','openai:gpt-5.3-codex'],76519,9,now()-interval '1 minute','[]'::jsonb)",[
   authorization,project,actor,chat,historical,digest
