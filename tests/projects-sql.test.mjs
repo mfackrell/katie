@@ -1,4 +1,5 @@
 import {verifyProjectLifecyclePostgres} from './helpers/project-lifecycle-postgres.mjs';
+import {verifyTask4aContinuationPostgres} from './helpers/task4a-continuation-postgres.mjs';
 import {verifyDevelopmentDispatchRecoverySql} from './helpers/development-dispatch-recovery-sql.mjs';
 import {verifySpecificationLifecycleSql} from './helpers/specification-lifecycle-sql.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync,mkdtempSync,rmSync,readdirSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';import pg from 'pg';import {randomUUID} from 'node:crypto';
@@ -121,7 +122,20 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await verifyDevelopmentDispatchRecoverySql(db);
   await db.query('reset role');
   await db.query(readFileSync('supabase/migrations/20261102130000_project_assessment_source_binding.sql','utf8'));
+  // The production model registry already exists. This disposable isolated
+  // PostgreSQL runner creates only the minimum matching pricing columns.
+  await db.query("create table if not exists model_registry(provider_name text,model_id text,pricing_status text,pricing_input_per_1m numeric,pricing_output_per_1m numeric,pricing_verified_at timestamptz,is_active boolean)");
+  await db.query("alter table model_registry add column if not exists source_metadata jsonb, add column if not exists verification_updated_at timestamptz");
+  await db.query("grant select on model_registry to service_role");
+  await db.query("insert into model_registry(provider_name,model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,is_active,source_metadata) values ('openai','gpt-5.6-sol','estimated',4,20,true,'{}'),('openai','gpt-5.3-codex','estimated',1.75,14,true,'{}')");
+  await db.query(readFileSync('supabase/migrations/20261102211500_task4a_continuation_admission.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261102211600_task4a_expired_research_owner_recovery.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261102211700_task4a_verified_model_price_sources.sql','utf8'));
+  // Fixture's dynamically verified source time is deliberately fresh even if
+  // this CI test runs days after the November 2 source observation.
+  await db.query("update model_registry set pricing_verified_at=now() where provider_name='openai' and model_id in ('gpt-5.6-sol','gpt-5.3-codex')");
   await db.query('set role service_role');
+  await verifyTask4aContinuationPostgres(db,connect);
   await verifyProjectLifecyclePostgres(db);
   await assert.rejects(db.query("set role anon;select recover_project_development_dispatch('44444444-4444-4444-8444-444444444444');"),/permission denied/);
   await db.query('reset role');await db.query('set role service_role');
