@@ -36,7 +36,7 @@ export async function verifyTask4aContinuationPostgres(db,connect){
  await query(db,'update work_projects set active_mission_id=$2 where id=$1',[pid,mid]);
  await query(db,"insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index) values($1,$2,'research',1,0)",[pid,mid]);
  await query(db,"update mission_assignments set status='completed',result='{\"text\":\"Saved plan\"}'::jsonb where mission_id=$1 and job_key='plan'",[mid]);
- const saved=JSON.stringify({deliverable:'First line\nSecond line',composerNotes:'Original material retained'});
+ const saved=JSON.stringify({deliverable:'First line: original source research, relevant routing and Preview protection constraints remain material to the full project.\nSecond line: authentication, source matching and independent review stay mandatory.',composerNotes:'Original material retained'});
  const jobs=[
   ['one','work',team[1],'Source research one','completed',{text:'Saved authoritative first research',sources:[]}],
   ['two','work',team[2],'Source research two','completed',{text:'Saved authoritative second research',sources:[]}],
