@@ -37,6 +37,8 @@ test('retrospective, diagnostic and quoted document-generation wording is not an
     'How do you generate a PDF?',
     'Review this PDF and give me the key risks.',
     'Make recommendations about the PDF.',
+    'I sent a report in PDF yesterday. Can you make recommendations about that PDF?',
+    'The report is in PDF. Could you make recommendations about the PDF?',
     "Don't create a PDF.",
   ]) assert.equal(documentRequest(message), null, message);
 });
@@ -61,6 +63,7 @@ test('affirmative current requests still trigger document production, including 
     "Let's generate a PDF.",
     "I'd like you to generate a PDF.",
     'Create a summary of this PDF as a Word document.',
+    'Create recommendations about the annual PDF as a Word document.',
     SAVED_DOCUMENT_EXPORT_PROMPT,
     "We've been trying to get you to generate pdf's. Please generate a PDF now.",
   ]) assert.deepEqual(documentRequest(message), {}, message);
