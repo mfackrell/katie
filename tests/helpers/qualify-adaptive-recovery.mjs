@@ -125,6 +125,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
   assert.equal(Number(calls.account.spent_tokens),calls.calls.reduce((n,c)=>n+Number(c.actual_tokens),0));
   assert.equal(calls.grants.length,3);assert.equal(calls.approvals.length,3);
   for(const a of calls.approvals){assert.equal(a.developer_authority.limits.completionCalls,4);assert.equal(a.developer_authority.limits.developmentCalls,40);assert.equal(Number(a.max_tokens),180000);}
-  report.finalLedger=calls;report.passed=true;console.log('TASK3B_MULTI_INTERRUPTION_PASS');
+  report.finalLedger=calls;if(process.env.KATIE_TEST_TASK3C==='1')await (await import('./qualify-task3c.mjs')).qualifyTask3cCompletion(db,ids,fixture,report,result);
+  report.passed=true;console.log('TASK3B_MULTI_INTERRUPTION_PASS');
  }finally{if(report.passed)execFileSync('git',['--git-dir',remote,'bundle','create',join(output,'checkpoints.bundle'),'--all','^'+baseline]);writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2));rmSync(root,{recursive:true,force:true});}
 }
