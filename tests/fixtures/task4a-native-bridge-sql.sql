@@ -2,6 +2,9 @@
 -- The real ordinary Developer grants and accounting are exercised by existing
 -- native/ordinary qualification. Here the real Task4A SQL runs against synthetic
 -- linked native operations with no provider, owner, or production credential.
+-- The full production account schema generates primary keys; the shared
+-- lightweight project fixture pre-creates its ID column without a default.
+alter table public.benchmark_budget_accounts alter column id set default gen_random_uuid();
 alter table public.benchmark_budget_accounts
  add column if not exists owner_actor_id uuid,
  add column if not exists developer_project_id uuid,
