@@ -21,14 +21,56 @@ export const blockText = (block: Block) => block.kind === 'table' ? block.rows.f
 export const normalizedText = (value: string) => value.normalize('NFKC').replace(/[•●]/g, '').replace(/\s+/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
 export const contentText = (spec: DocumentSpec) => spec.blocks.map(blockText).join('\n');
 
-/** PDF text extractors can insert whitespace after a hyphen when a compound
- * word wraps between lines (for example, "family-\nowned"). Only ignore
- * that extraction artifact; never ignore omissions, reordering, or edits. */
-export function pdfTextMatchesSource(extracted: string, source: string): boolean {
+/** PDF.js distinguishes glyphs from its synthetic end-of-line separators.
+ * Never accept missing, changed, duplicated, or reordered non-whitespace
+ * glyphs. Only allow spacing changes caused by explicit PDF.js EOL markers. */
+export type PdfTextFragment = { str: string; hasEOL: boolean };
+
+function foldPdfGlyphs(input: string): string {
+  return input.normalize('NFKC')
+    .replace(/[•●]\s*/g, '')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"');
+}
+
+export function pdfTextMatchesSource(extracted: string, source: string, fragments?: readonly PdfTextFragment[]): boolean {
   const expected = normalizedText(source);
   const actual = normalizedText(extracted);
-  return actual === expected ||
-    actual.replace(/([\p{L}\p{N}])-\s+([\p{L}\p{N}])/gu, '$1-$2') === expected;
+  if (actual === expected ||
+    actual.replace(/([\p{L}\p{N}])-\s+([\p{L}\p{N}])/gu, '$1-$2') === expected) return true;
+  if (!fragments?.length) return false;
+
+  // This preliminary check is strict about character identity and order.
+  // Whitespace alone is ambiguous until we verify each insertion against the
+  // extractor's actual EOL metadata.
+  if (actual.replace(/\s/gu, '') !== expected.replace(/\s/gu, '')) return false;
+
+  let offset = 0;
+  let previousEndOfLine = false;
+  for (const fragment of fragments) {
+    const normalizedFragment = foldPdfGlyphs(fragment.str).replace(/\s+/gu, ' ');
+    // A trailing separator on an end-of-line item is the same synthetic
+    // boundary as hasEOL; match only against the source's actual word break.
+    const text = fragment.hasEOL ? normalizedFragment.replace(/ $/, '') : normalizedFragment;
+    let atStart = true;
+    for (const glyph of text) {
+      if (glyph === ' ') {
+        if (expected[offset] === ' ') {
+          offset++;
+        } else if (offset === 0 || offset === expected.length || (atStart && previousEndOfLine)) {
+          // PDF.js can add leading whitespace immediately after a wrapped line.
+          // Do not permit arbitrary inserted spaces inside an ordinary text run.
+        } else return false;
+      } else {
+        if (expected[offset] !== glyph) return false;
+        offset++;
+        atStart = false;
+      }
+    }
+    if (fragment.hasEOL && expected[offset] === ' ') offset++;
+    previousEndOfLine = fragment.hasEOL;
+  }
+  return offset === expected.length;
 }
 
 

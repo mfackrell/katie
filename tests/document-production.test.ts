@@ -15,7 +15,7 @@ import { createDocumentDownload } from '../lib/documents/download';
 import { resolveDocumentDownload } from '../lib/documents/client-download';
 import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
 import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
-import { renderDocument } from '../lib/documents/render';
+import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
@@ -40,6 +40,67 @@ function storageFixture() {
     } as unknown as Parameters<typeof createDocumentStore>[0],
   };
 }
+
+test('PDF.js EOL fragment alignment preserves exact ordered glyphs', () => {
+  const joined = (parts: Array<{str:string;hasEOL:boolean}>) =>
+    parts.map(part=>part.str+(part.hasEOL ? '\n' : '')).join('');
+
+  const source = 'Led financial forecasting across teams.';
+  const wrapped = [
+    { str: 'Led finan', hasEOL: true },
+    { str: 'cial forecasting', hasEOL: true },
+    { str: 'across teams.', hasEOL: false },
+  ];
+  assert.equal(pdfTextMatchesSource(joined(wrapped), source), false,
+    'The old string-only check cannot distinguish artificial line breaks from word spaces.');
+  assert.equal(pdfTextMatchesSource(joined(wrapped), source, wrapped), true);
+  const padded = [
+    {str:'Led finan ',hasEOL:true},
+    {str:' cial forecasting',hasEOL:true},
+    {str:'across teams.',hasEOL:false},
+  ];
+  assert.equal(pdfTextMatchesSource(joined(padded),source,padded),true,
+    'Whitespace on the edges of a physical PDF line must not split a source word.');
+
+
+  const wrappedHyphen = [
+    { str: 'Led family-', hasEOL: true },
+    { str: 'owned financial', hasEOL: true },
+    { str: 'reporting.', hasEOL: false },
+  ];
+  assert.equal(pdfTextMatchesSource(joined(wrappedHyphen),
+    'Led family-owned financial reporting.', wrappedHyphen), true);
+
+  const listSource = 'Experience\nManaged budgets\nReduced expenses.';
+  const bullets = [
+    { str: 'Experience', hasEOL: true },
+    { str: '• Managed budgets', hasEOL: true },
+    { str: '• Reduced expenses.', hasEOL: false },
+  ];
+  assert.equal(pdfTextMatchesSource(joined(bullets), listSource, bullets), true);
+
+  const invalid = [
+    {str:'Led finan',hasEOL:true},
+    {str:'cial forecasts',hasEOL:true},
+    {str:'across teams.',hasEOL:false},
+  ];
+  assert.equal(pdfTextMatchesSource(joined(invalid), source, invalid), false,
+    'Changed letters fail even when only PDF line endings differ.');
+  const unsupportedWhitespace = [{str:'Led finan cial forecasting across teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(unsupportedWhitespace), source, unsupportedWhitespace), false,
+    'An arbitrary inserted space is not an EOL artifact.');
+  const missing = [{str:'Led financial forecasting teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(missing), source, missing), false);
+  const reordered = [{str:'Financial led forecasting across teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(reordered), source, reordered), false);
+  const duplicated = [{str:'Led financial financial forecasting across teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(duplicated), source, duplicated), false);
+
+  const renderCode = readFileSync('lib/documents/render.ts','utf8');
+  assert.match(renderCode,/pdfTextMatchesSource\(raster\.text, contentText\(spec\), raster\.fragments\)/);
+  assert.match(renderCode,/hasEOL:Boolean\(item\.hasEOL\)/);
+  assert.match(renderCode,/sameOrderedGlyphs/);
+});
 
 test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', () => {
   const source = 'Led a family-owned business with e-commerce and multi-entity reporting.';
@@ -334,6 +395,11 @@ test('real two-page DOCX/PDF request, rendering, inspection, correction and secu
     const extracted = await (mammoth.extractRawText as unknown as (input: { buffer: Buffer }) => Promise<{ value: string }>)({ buffer: produced.docx });
     assert.equal(normalizedText(extracted.value), normalizedText(contentText(fixture)));
     assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(fixture)));
+    const independentlyExtracted = await rasterizePdf(browser, produced.pdf);
+    assert.ok(independentlyExtracted.fragments.some(part => part.hasEOL),
+      'Real PDF.js extraction must retain EOL metadata for validation.');
+    assert.equal(pdfTextMatchesSource(independentlyExtracted.text, contentText(fixture),
+      independentlyExtracted.fragments), true);
     for (const image of produced.images) {
       const metadata = await sharp(image).metadata(); assert.equal(metadata.format, 'png');
       assert.equal(metadata.width, 918); assert.equal(metadata.height, 1188);
