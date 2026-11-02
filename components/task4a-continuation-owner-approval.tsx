@@ -37,7 +37,15 @@ export function Task4aContinuationOwnerApproval({chatId}:{chatId:string}){
  },[eligible]);
  useEffect(()=>{void refresh();},[refresh]);
  const consent=state?.continuation;
- if(!eligible||!consent||!consent.ready||!consent.proposal||!consent.digest)return null;
+ if(!eligible)return null;
+ if(state?.error)return <section aria-label="Task 4A authorization status" className="rounded-xl border p-3 text-sm">
+  <p>{state.error}</p><button type="button" className="underline" onClick={()=>{void refresh();}}>Refresh owner authorization</button>
+ </section>;
+ if(consent&&!consent.ready)return <section aria-label="Task 4A authorization prerequisite" className="rounded-xl border p-3 text-sm">
+  <p>Task 4A approval is not available until its safety prerequisites pass: {consent.reason??'Current verified pricing or preserved research eligibility is unavailable'}.</p>
+  <button type="button" className="underline" onClick={()=>{void refresh();}}>Refresh qualification</button>
+ </section>;
+ if(!consent?.ready||!consent.proposal||!consent.digest)return null;
  const p=consent.proposal;
  const approve=async()=>{
   if(loading)return;
