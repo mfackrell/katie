@@ -23,6 +23,7 @@ import {applyMissionRevisionPatch,recoverMissionRevisionPatch,recoverMissionRevi
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from './review-instructions';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
 import { researchRecoveryEvidence } from './research-evidence';
+import {recoverSavedResearchCompose} from './saved-compose-recovery';
 import { measureDeliverable } from './review-length';
 import { getObjectiveFirstInstruction } from '@/lib/chat/deliverable-standard';
 import { projectReviewAssessment, PROJECT_ACCEPTANCE_IDS, PROJECT_REVIEW_INSTRUCTION } from '@/lib/projects/completion';
@@ -77,6 +78,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const patchBase=()=>patchContinuation?.text??originalPatchBase;
  const patchHash=()=>patchContinuation?.revisionPatch.resultHash??String(job.payload.revisionPatchBaseHash);
  const remainingPatchCharacters=()=>typeof originalPatchBase==='string'?Math.min(6000,Math.ceil(originalPatchBase.length*0.35))-(patchContinuation?.changedCharacters??0):0;
+ // Research composer retries preserve the already paid text. Repair only JSON
+ // control-character encoding, without accepting a draft past word limits/review.
+ const savedResearchDraft=job.role==='compose'&&mission.project_kind==='research'?recoverSavedResearchCompose(job.result?.rejectedDeliverableResponse):null;
+ const savedResearchMeasure=savedResearchDraft?measureDeliverable(mission.objective,savedResearchDraft.deliverable):null;
  const context=()=>{
   if(specificationPatchBase)return JSON.stringify({objective:mission.objective,assignment:job.instruction,candidate:{text:specificationPatchBase,sha256:specificationTextHash(specificationPatchBase)},validation:job.result?.specificationValidationFeedback,patchValidation:job.result?.specificationPatchFeedback,independentReviewFindings:priorReviews,instruction:'Return only exact before/after edits resolving these actual diagnostics. Preserve all other requirements, states and test steps. At most eight unique nonoverlapping edits, at most 6000 original characters and 35% of the original candidate. The complete patched candidate must pass unchanged validation and fresh independent review.'});
   if(patchContinuation?.unfinishedSpan)return JSON.stringify({objective:'Finish the one unfinished edit by shortening its actual source span, preserving every fact, source ID, qualification and coverage limitation. All preceding completed edits are already applied. Return only exact before/after edits within editableSpan; no other text can change.',measuredWholeCandidate:measureDeliverable(mission.objective,patchContinuation.text),remainingPatchCharacters:remainingPatchCharacters(),candidateHash:patchHash(),editableSpan:patchContinuation.unfinishedSpan,scope:'Only this remaining span is assigned to this editor. The entire candidate, all source artifacts and prior findings remain saved for full independent review.'});
@@ -86,7 +91,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
      :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
        if(!raw||typeof raw!=='object'||Array.isArray(raw))return raw;
        return Object.fromEntries(Object.entries(raw as Record<string,unknown>)
-         .filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedDeliverable:job.result?.rejectedDeliverable,revisionPatchFeedback:job.result?.revisionPatchFeedback,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,priorReviewFindings:job.role==='revise'?revisionFindings:undefined,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review'&&(job.role!=='work'||job.dependencies.includes(j.job_key))).map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+         .filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,
+   ...(savedResearchDraft?{savedResearchComposition:{text:savedResearchDraft.deliverable,sourceSha256:savedResearchDraft.sourceSha256,measuredWords:savedResearchMeasure?.wordCount,wordLimit:savedResearchMeasure?.wordLimit,instruction:'This was generated and billed previously. Do not redo research. Preserve factual statements and references, correct the prior JSON format, reduce length if needed, and submit the complete deliverable for normal independent review.'}}:{}),
+   deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedDeliverable:job.result?.rejectedDeliverable,revisionPatchFeedback:job.result?.revisionPatchFeedback,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,priorReviewFindings:job.role==='revise'?revisionFindings:undefined,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review'&&(job.role!=='work'||job.dependencies.includes(j.job_key))).map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix='';
@@ -110,6 +117,16 @@ export async function executeClaim(claim:Claim,model=missionModel){
   }
   return rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:{...result,...(operationalEvidence&&job.role!=='plan'?{operationalEvidence}: {})},p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
  };
+ if(savedResearchDraft&&savedResearchMeasure&&
+    (savedResearchMeasure.wordLimit===null||savedResearchMeasure.wordCount<=savedResearchMeasure.wordLimit)){
+  // Fenced normal mission completion, not a database status or approval bypass.
+  // Preserve the rejected raw artifact, model diagnostics and charge record.
+  await commit({...job.result,text:savedResearchDraft.deliverable,
+   composerNotes:savedResearchDraft.composerNotes,sources:[],calculations:[],
+   recovery:{kind:'saved_research_json_normalization',sourceSha256:savedResearchDraft.sourceSha256,
+    escapedLineBreaks:savedResearchDraft.escapedLineBreaks,independentReviewRequired:true}});
+  return;
+ }
  if(targetedPatch&&job.result?.incompleteReason==='max_output_tokens'&&typeof job.result?.partialText==='string'){
   const base=completed.find(j=>j.job_key==='compose')?.result?.text;
   if(typeof base==='string'&&!mission.project_id){
