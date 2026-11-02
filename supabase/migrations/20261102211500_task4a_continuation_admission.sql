@@ -106,7 +106,7 @@ begin
      into existing_tokens,existing_calls,existing_dollars
     from mission_calls c where c.project_continuation_id=authority.id;
    if exists(select 1 from mission_calls c where c.project_continuation_id=authority.id
-     and (c.status<>'completed' or c.actual_tokens>c.reserved_tokens)) then return false;end if;
+     and (c.status='uncertain' or c.actual_tokens>c.reserved_tokens)) then return false;end if;
    upper_dollars:=ceil(p_tokens*greatest(price.pricing_input_per_1m,price.pricing_output_per_1m)*1.65);
    if existing_tokens+p_tokens>authority.incremental_tokens
     or existing_calls+1>authority.incremental_calls
