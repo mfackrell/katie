@@ -2956,7 +2956,7 @@ export function ChatPanel({
         <div className="space-y-2 text-xs" aria-live="polite">
           <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
           {imageObservationStages.length > 0 && <ul aria-label="Image analysis stages" className="space-y-1 text-zinc-400">{imageObservationStages.map((stage,index)=><li key={`${index}:${stage}`}>{stage}</li>)}</ul>}
-          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} streamingAnswer={streamingAnswer} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
+          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
         </div>, statusMount
       ) : null}
       {!statusRailOpen && showLiveReasoningExplainer && reasoningPopupVisible ? (
@@ -2966,7 +2966,6 @@ export function ChatPanel({
               loading={loading}
               state={reasoningState}
               statusMessage={statusMessage}
-              streamingAnswer={streamingAnswer}
               collaborationActive={collaborationActive}
               collaborationActivity={collaborationActivity}
               collaborationSummary={collaborationSummary}
@@ -3140,20 +3139,28 @@ export function ChatPanel({
               ))}
           </div>
         ))}
-        {loading && streamingAnswer && (
-          <div aria-label="Streaming assistant response" aria-busy="true" className="max-w-full rounded-[24px] border border-white/10 bg-white/[0.04] px-5 py-4 text-zinc-100/95">
-            <AssistantMarkdown>{streamingAnswer}</AssistantMarkdown>
-          </div>
-        )}
         {loading && (
-          <div className="flex w-fit items-center gap-3 rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
-            <p className="italic text-zinc-400">
-              {uploadingFiles
-                ? "Uploading attachments..."
-                : statusMessage ||
-                  `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
-            </p>
+          <div
+            aria-label="Katie response progress"
+            aria-busy="true"
+            className={`${streamingAnswer ? "w-full max-w-4xl" : "w-fit max-w-full"} rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm sm:px-5 sm:py-4`}
+          >
+            <div className="flex items-center gap-3">
+              <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+              <p className="min-w-0 italic text-zinc-400">
+                {streamingAnswer
+                  ? "Katie is responding…"
+                  : uploadingFiles
+                    ? "Uploading attachments..."
+                    : statusMessage ||
+                      `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
+              </p>
+            </div>
+            {streamingAnswer ? (
+              <div aria-label="Streaming assistant response" className="mt-3 border-t border-white/10 pt-3 text-zinc-100/95">
+                <AssistantMarkdown>{streamingAnswer}</AssistantMarkdown>
+              </div>
+            ) : null}
           </div>
         )}
         <div className="pointer-events-none sticky bottom-3 z-10 ml-auto hidden w-fit flex-col gap-2 pr-1 sm:bottom-4 sm:flex">
