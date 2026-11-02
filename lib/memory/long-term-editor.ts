@@ -9,7 +9,26 @@ import {
 import { filterConversationalMessages } from "@/lib/memory/short-term";
 
 import { createClaudeMemoryClient, MEMORY_EDITOR_MODEL } from "@/lib/memory/claude-memory-client";
-const MEMORY_EDITOR_HISTORY_MESSAGES = 60;
+const MEMORY_EDITOR_HISTORY_MESSAGES = 12; // Six recent completed exchanges.
+const EXPLICIT_EDITOR_HISTORY_MESSAGES = 60; // Preserve the full explicit-change context.
+const INCREMENTAL_RELATED_MEMORY_LIMIT = 8;
+const MATCH_STOP_WORDS = new Set(["with", "from", "that", "this", "what", "when", "have", "been", "will", "would", "could", "should", "them", "they", "their", "about", "your", "mine", "just", "want", "need", "because", "into", "were", "there", "user", "mark", "katie", "and", "the", "for", "now", "today"]);
+
+// Retrieve a few relevant entries for incremental editing, without asking a
+// model to reevaluate the complete provenance-rich long-term memory snapshot.
+export function selectRelatedLongTermMemories(message: string, entries: LongTermEntry[]): LongTermEntry[] {
+  const words = [...new Set((message.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [])
+    .filter(word => !MATCH_STOP_WORDS.has(word)))].slice(0, 80);
+  if (!words.length) return [];
+  return entries.map(entry => {
+    const key = entry.key.toLowerCase(), value = entry.value.toLowerCase();
+    const score = words.reduce((sum, word) =>
+      sum + (key.includes(word) ? 3 : 0) + (value.includes(word) ? 1 : 0), 0);
+    return { entry, score };
+  }).filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.entry.key.localeCompare(b.entry.key))
+    .slice(0, INCREMENTAL_RELATED_MEMORY_LIMIT).map(item => item.entry);
+}
 const MAX_LONG_TERM_ENTRIES = 160;
 
 const MEMORY_JUDGMENT_GUIDANCE = [
@@ -422,9 +441,10 @@ export async function maybeUpdateLongTermMemory(
       return;
     }
 
+    const historyLimit = options.required ? EXPLICIT_EDITOR_HISTORY_MESSAGES : MEMORY_EDITOR_HISTORY_MESSAGES;
     const [currentLongTermMemory, rawRecentMessages, actor] = await Promise.all([
       getLongTermMemory(actorId, chatId),
-      getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_MESSAGES + 40),
+      getRecentMessages(chatId, historyLimit + 12),
       getActorById(actorId),
     ]);
 
@@ -436,7 +456,7 @@ export async function maybeUpdateLongTermMemory(
     const pendingUser = latestRaw?.role === "user" && latestRaw.content === latestUserMessage &&
       !completedMessages.some(m => m.id === latestRaw.id) ? latestRaw : null;
     const recentMessages = [
-      ...completedMessages.slice(-(MEMORY_EDITOR_HISTORY_MESSAGES - (pendingUser ? 1 : 0))),
+      ...completedMessages.slice(-(historyLimit - (pendingUser ? 1 : 0))),
       ...(pendingUser ? [pendingUser] : []),
     ];
     const recentUserIds = new Set(
@@ -450,6 +470,20 @@ export async function maybeUpdateLongTermMemory(
         Object.keys(currentLongTermMemory).length === 0 ? "empty" : "non-empty",
       recentMessageCount: recentMessages.length,
       longTermVersion: currentLongTermMemory.version ?? null,
+    });
+
+    const entries = currentEntries(currentLongTermMemory);
+    const related = options.required ? [] : selectRelatedLongTermMemories(latestUserMessage, entries);
+    const existingForEditor = options.required ? currentLongTermMemory : {
+      version: 3, purpose: LONG_TERM_PURPOSE,
+      entries: related.map(entry => ({ key: entry.key, category: entry.category, value: entry.value })),
+    };
+    const memoryIndex = options.required ? "" : JSON.stringify(entries.map(entry => ({
+      key: entry.key, category: entry.category, preview: entry.value.slice(0, 160),
+    })));
+    console.info("[LongTermMemoryEditor] Incremental memory retrieval", {
+      actorId, chatId, totalEntries: entries.length, relatedEntries: related.length,
+      historyMessages: recentMessages.length,
     });
 
     const response = await client.chat.completions.create({
@@ -516,7 +550,8 @@ export async function maybeUpdateLongTermMemory(
             `actorPurposeAndInstructions: ${actor?.purpose ?? ""}`,
             `chatId: ${chatId}`,
             `latestUserMessage: ${latestUserMessage}`,
-            `existingLongTermMemoryContent: ${JSON.stringify(currentLongTermMemory)}`,
+            `existingLongTermMemoryContent: ${JSON.stringify(existingForEditor)}`,
+            ...(options.required ? [] : [`existingMemoryKeyIndex: ${memoryIndex}`]),
             "recentRoleAttributedMessages:",
             formatTranscript(recentMessages),
             "Output JSON only.",

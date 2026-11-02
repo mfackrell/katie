@@ -12,16 +12,19 @@ test("semantic consolidation requires independent completeness and source checks
   assert.match(maintenance,/verdicts\[0\]\.complete !== true/);
   assert.match(maintenance,/verdicts\[0\]\.sameSubject !== true/);
   assert.match(maintenance,/value:group\.value\.trim\(\)/);
-  assert.match(maintenance,/CLEANUP_EVERY_MESSAGES = 30/);
-  assert.match(maintenance,/count % CLEANUP_EVERY_MESSAGES !== 0/);
+  assert.match(maintenance,/COMPREHENSIVE_REVIEW_EVERY_USER_MESSAGES = 100/);
+  assert.match(maintenance,/count % COMPREHENSIVE_REVIEW_EVERY_USER_MESSAGES !== 0/);
+  assert.match(maintenance,/\.eq\("role", "user"\)/);
+  assert.doesNotMatch(maintenance,/count_actor_conversational_messages/);
   assert.match(maintenance,/seen\.size !== originals\.length/);
 });
 test("cleanup is independent from normal automatic memory saving",()=>{
   assert.match(editor,/await mergeActorLongTermMemoryEntries\(actorId, changes\)/);
   assert.doesNotMatch(editor,/maybeMaintainActorMemory/);
   const route=readFileSync("app/api/chat/route.ts","utf8");
-  assert.match(route,/maybeUpdateLongTermMemory\(actorId, chatId, message\)/);
-  assert.match(route,/maybeRunThirtyMessageCleanup\(actorId\)/);
+  assert.match(route,/maybeUpdateRelevantLongTermMemory\(actorId, chatId, message\)/);
+  assert.match(route,/maybeRunHundredUserMessageReview\(actorId\)/);
+  assert.doesNotMatch(route,/maybeUpdateLongTermMemory\(actorId, chatId, message\)/);
   assert.match(route,/Promise\.allSettled/);
 });
 test("storage requires revision and content match and keeps reversible history",()=>{
