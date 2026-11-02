@@ -26,7 +26,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
  const output=join(process.env.RUNNER_TEMP??root,'task3b-qualification');mkdirSync(output,{recursive:true});
  const ledger=async()=>(await db.query("select jsonb_build_object('calls',(select coalesce(jsonb_agg(to_jsonb(c) order by id),'[]') from benchmark_budget_calls c where account_id=$1),'exposures',(select coalesce(jsonb_agg(to_jsonb(e) order by call_id),'[]') from benchmark_dollar_exposures e where account_id=$1),'account',(select to_jsonb(a) from benchmark_budget_accounts a where id=$1),'mission',(select to_jsonb(m) from agent_missions m where id=$2),'grants',(select coalesce(jsonb_agg(to_jsonb(g) order by execution_epoch),'[]') from benchmark_execution_grants g where account_id=$1),'approvals',(select coalesce(jsonb_agg(to_jsonb(a) order by created_at),'[]') from benchmark_native_spending_approvals a where account_id=$1)) v",[ids.account,ids.mission])).rows[0].v;
  const assertHistory=async old=>{const now=await ledger();for(const key of ['calls','exposures'])for(const row of old[key])assert.deepEqual(now[key].find(r=>(r.id??r.call_id)===(row.id??row.call_id)),row);};
- let run=131,repair=0,resumedRepair2=false,pending=null,requests=0,lines=[...broken],currentAuthority=authority;
+ let run=131,repair=0,resumedRepair2=false,pending=null,requests=0,lines=[...broken],currentAuthority=authority,finalHost=null;
  const source=()=>lines.join('\n')+'\n';
  const provider=async(body,path)=>{
   if(path.endsWith('/input_tokens'))return {type:'application/json',body:JSON.stringify({object:'response.input_tokens',input_tokens:3})};
@@ -78,7 +78,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
     assert.equal(result.code,0,result.log);const receipt=JSON.parse(readFileSync(result.evidence));assert.equal(receipt.taskId,ids.task);assert.equal(receipt.repairIterations,3);assert.equal(receipt.finalReview.verdict,'pass');
     assert.deepEqual(d.phases.map(p=>p.phase),['final-review']);assert.equal(d.repairIterations.length,3);
     assert.equal(JSON.parse(readFileSync(join(result.runtime,'qualification-browser-acceptance.json'))).passed,true);
-    report.completion=receipt;report.finalSourceHash=hash(readFileSync(join(result.workspace,'app/pilot/state.ts'),'utf8'));break;
+    report.completion=receipt;finalHost=result;report.finalSourceHash=hash(readFileSync(join(result.workspace,'app/pilot/state.ts'),'utf8'));break;
    }
    assert.notEqual(result.code,0,result.log);assert.ok(record,result.log);
    assert.equal(record.lastCompleted.adaptiveRepair.iteration,run===131?1:3);
@@ -125,7 +125,7 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
   assert.equal(Number(calls.account.spent_tokens),calls.calls.reduce((n,c)=>n+Number(c.actual_tokens),0));
   assert.equal(calls.grants.length,3);assert.equal(calls.approvals.length,3);
   for(const a of calls.approvals){assert.equal(a.developer_authority.limits.completionCalls,4);assert.equal(a.developer_authority.limits.developmentCalls,40);assert.equal(Number(a.max_tokens),180000);}
-  report.finalLedger=calls;if(process.env.KATIE_TEST_TASK3C==='1')await (await import('./qualify-task3c.mjs')).qualifyTask3cCompletion(db,ids,fixture,report,result);
+  report.finalLedger=calls;if(process.env.KATIE_TEST_TASK3C==='1')await (await import('./qualify-task3c.mjs')).qualifyTask3cCompletion(db,ids,fixture,report,finalHost);
   report.passed=true;console.log('TASK3B_MULTI_INTERRUPTION_PASS');
  }finally{if(report.passed)execFileSync('git',['--git-dir',remote,'bundle','create',join(output,'checkpoints.bundle'),'--all','^'+baseline]);writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2));rmSync(root,{recursive:true,force:true});}
 }
