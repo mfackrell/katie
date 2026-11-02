@@ -17,6 +17,9 @@ import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } fr
 import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
+import { eligibleDocumentVisualCandidates, selectDocumentVisualInspector } from '../lib/documents/visual-routing';
+import { PRICING_SNAPSHOT, type PricingSnapshot } from '../lib/standalone-accounting/pricing';
+import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
 import type { LlmProvider } from '../lib/providers/types';
@@ -196,7 +199,10 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
   const markdown = fixture.blocks.map(block => block.kind === 'heading' ? '#'.repeat(block.level) + ' ' + block.text : block.kind === 'bullet' ? '- ' + block.text : block.kind === 'paragraph' ? block.text : '').join('\n\n');
   const input = { result: { provider: 'anthropic' as const, model: 'fixture-model', text: markdown }, provider,
     params: { name: 'BTG Application Specialist', persona: '', summary: '', history: [], user: 'Produce a two-page Word document and PDF', modelId: 'fixture-model' },
-    actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId, targetPages: 2, deadlineMs: Date.now() + 100000 };
+    actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId, targetPages: 2, deadlineMs: Date.now() + 100000,
+    // The fixture supplies its own model because it exercises authorization,
+    // correction and delivery; model selection is separately tested below.
+    selectVisualInspector: async () => ({ provider, modelId: 'fixture-model' }) };
   try {
     await assert.rejects(deliverDocument(input), /authorized conversation/);
     const context = { userId: scope.ownerId, actorId: scope.actorId, chatId: scope.chatId, requestId: scope.requestId };
@@ -212,6 +218,47 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     if (oldKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = oldKey;
     await new Promise<void>((resolve, reject) => storageServer.close(error => error ? reject(error) : resolve()));
   }
+});
+
+test('document page inspection selects a truly billable vision model before any provider transmission', async () => {
+  // Source model is text-priceable but has no reviewed image billing. The
+  // document engine must never reuse it to analyze PDF page images.
+  const unpriced = { provider: 'openai' as const, model: 'gpt-6.1-sol',
+    inputNanoUsd: '150', outputNanoUsd: '600', maxContextTokens: 400000,
+    maxOutputTokens: 16000, source: 'synthetic-only' };
+  const known = PRICING_SNAPSHOT.models.find(m => m.provider === 'openai' && m.model === 'gpt-4o-mini');
+  assert.ok(known?.vision);
+  const pricing: PricingSnapshot = { ...PRICING_SNAPSHOT,version: 'document-vision-qualification-test',
+    models: [unpriced,known] };
+  const provider = new OpenAiProvider('synthetic-test-key');
+  provider.listModels = async () => ['gpt-6.1-sol', 'gpt-4o-mini'];
+  const eligible = eligibleDocumentVisualCandidates(pricing,[{provider,models:await provider.listModels()}]);
+  assert.deepEqual(eligible.map(item => item.modelId),['gpt-4o-mini']);
+  const pixels = await sharp({create:{width:512,height:512,channels:3,background:{r:255,g:255,b:255}}}).png().toBuffer();
+  const params = {name:'Document Inspector', persona:'Inspect the actual rendered page',
+    summary:'', history:[], user:'Inspect the included PDF page image', requestIntent:'vision-analysis',
+    images:['data:image/png;base64,'+pixels.toString('base64')]};
+  let networkCalls = 0;
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => { networkCalls++; throw new Error('No paid provider network calls in qualification'); };
+  try {
+    await runWithStandaloneAccounting({userId:scope.ownerId,actorId:scope.actorId,chatId:scope.chatId,requestId:scope.requestId},async () => {
+      const selected=await selectDocumentVisualInspector({params,activity:'document-visual-0',
+        providers:[provider],pricing});
+      assert.equal(selected.provider.name,'openai');
+      assert.equal(selected.modelId,'gpt-4o-mini');
+      assert.equal(getAccountingScope()?.kind,'standalone');
+      const current=getAccountingScope();
+      if (current?.kind === 'standalone') assert.equal(current.counter.size,0,
+        'Dry-run selection does not reserve, call or spend anything.');
+    });
+    assert.equal(networkCalls,0,'Vision price preflight must never contact a provider');
+    await assert.rejects(selectDocumentVisualInspector({
+      params,activity:'document-visual-1',providers:[provider],
+      pricing:{...pricing,models:[unpriced]},
+    }),/No currently available document-inspection model has verified image pricing/);
+    assert.equal(networkCalls,0,'Unpriced-only models must fail closed without provider calls');
+  } finally {globalThis.fetch=oldFetch;}
 });
 
 test('initial overfull pagination may retry once, but final PDF fidelity always fails closed', () => {
