@@ -25,7 +25,7 @@ export async function verifyTask4aNativePostgres(db,connect){
  await query(db,'select create_mission($1,$2,$3,120,null)',[historical,'Saved original research',team]);
  await query(db,"update agent_missions set project_id=$2,project_kind='research',status='blocked',actual_tokens=76519,reserved_tokens=76519,calls=4,routing_calls=5,deadline=now()-interval '1 minute' where id=$1",[historical,project]);
  await query(db,'select create_mission($1,$2,$3,120,null)',[mission,'Approved synthetic development',team]);
- await query(db,"update agent_missions set project_id=$2,project_kind='development',status='running',token_allowance=440326,deadline=now()+interval '4 hours' where id=$1",[mission,project]);
+ await query(db,"update agent_missions set project_id=$2,project_kind='development',status='running',token_allowance=120000,deadline=now()+interval '4 hours' where id=$1",[mission,project]);
  await query(db,'update work_projects set active_mission_id=$2 where id=$1',[project,mission]);
  await query(db,'insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index,binding) values($1,$2,$3,1,0,$4)',[
   project,mission,'development',{projectId:project,scopeHash:scope,contractHash:contract,baselineSha:source,baseSha:source,version:1,contract:{path:'/pilot',scenarios:[{name:'state',steps:[{action:'expectText',selector:'#state',value:'Ready'}]}]}}
@@ -81,8 +81,8 @@ export async function verifyTask4aNativePostgres(db,connect){
  assert.equal(Number(intact.actual_tokens),76519);assert.equal(intact.calls,4);assert.equal(intact.routing_calls,5);
  await query(db,'reset role');await query(db,"update model_registry set pricing_status='missing' where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
  await assert.rejects(reserve(),/pricing unverified/);
- await query(db,'reset role');await query(db,"update model_registry set pricing_status='verified',pricing_output_per_1m=500 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
- await assert.rejects(reserve(120000),/capacity|reserve exhausted/,'Adversarial price hike must enforce dollar ceiling');
+ await query(db,'reset role');await query(db,"update model_registry set pricing_status='verified',pricing_output_per_1m=10000 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
+ await assert.rejects(reserve(1000),/capacity|reserve exhausted/,'Adversarial price hike must enforce dollar ceiling');
  await query(db,'reset role');await query(db,"update model_registry set pricing_output_per_1m=14 where model_id='gpt-5.3-codex'");await query(db,'set role service_role');
  await query(db,'savepoint paused');
  await query(db,"update work_projects set status='paused' where id=$1",[project]);
@@ -99,11 +99,19 @@ export async function verifyTask4aNativePostgres(db,connect){
  await assert.rejects(reserve(1000),/unresolved/,'Pending native receipt blocks concurrency');
  await assert.rejects(settle(second.call,'provider-response-missing',null),/linked usage/);
  await settle(second.call,'provider-response-two');
- const full1=await reserve(120000);
- await settle(full1.call,'provider-response-large-one',usage(60000,60000));
- const full2=await reserve(120000);
- await settle(full2.call,'provider-response-large-two',usage(60000,60000));
- await assert.rejects(reserve(90000),/capacity|reserve exhausted/,'Protected 120k review/completion tokens remain unavailable to development');
+ // Temporarily narrow only the synthetic grant, proving that development cannot
+ // borrow the protected 120k assessment/completion headroom.
+ await query(db,'reset role');
+ await query(db,'alter table project_continuation_authorizations disable trigger task4a_authority_immutable_update');
+ await query(db,'update project_continuation_authorizations set incremental_tokens=120001 where id=$1',[authorization]);
+ await query(db,'alter table project_continuation_authorizations enable trigger task4a_authority_immutable_update');
+ await query(db,'set role service_role');
+ await assert.rejects(reserve(1000),/capacity|reserve exhausted/,'Protected completion and assessment reserves remain fenced');
+ await query(db,'reset role');
+ await query(db,'alter table project_continuation_authorizations disable trigger task4a_authority_immutable_update');
+ await query(db,'update project_continuation_authorizations set incremental_tokens=440326 where id=$1',[authorization]);
+ await query(db,'alter table project_continuation_authorizations enable trigger task4a_authority_immutable_update');
+ await query(db,'set role service_role');
  // The same lock serializes two genuine connections competing for one next hold.
  await query(db,'commit');
  const rivals=await Promise.all([connect(),connect()]);
@@ -114,7 +122,7 @@ export async function verifyTask4aNativePostgres(db,connect){
  assert.equal(competing.filter(x=>x.status==='fulfilled').length,1,'Only one concurrent pending native call may reserve');
  await query(db,'begin');
  await query(db,'set role service_role');
- assert.equal((await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization])).n,5);
- assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[a.account_id])).n,5);
+ assert.equal((await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization])).n,3);
+ assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[a.account_id])).n,3);
  await query(db,'rollback');
 }

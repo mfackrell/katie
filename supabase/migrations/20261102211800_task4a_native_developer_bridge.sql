@@ -24,6 +24,28 @@ create trigger task4a_authority_immutable_update before update
 revoke all on function public.task4a_authority_immutable()
  from public,anon,authenticated;
 
+-- Read-only, exact-project principal resolution. The generic service role has
+-- no direct SELECT on standalone_owner_bindings and must not gain it.
+create or replace function public.task4a_original_owner_id(p_actor uuid,p_chat uuid)
+returns uuid language plpgsql stable security definer set search_path=public as $
+declare p public.work_projects;found_owner uuid;
+begin
+ select * into p from public.work_projects
+  where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
+   and actor_id=p_actor and chat_id=p_chat;
+ if p.id is null then return null;end if;
+ select b.owner_id into found_owner from public.standalone_owner_bindings b
+  where b.actor_id=p.actor_id and b.chat_id=p.chat_id and b.revoked_at is null;
+ if found_owner is null
+  or public.standalone_verify_scope(found_owner,p.actor_id,p.chat_id) is distinct from true
+ then return null;end if;
+ return found_owner;
+end $;
+revoke all on function public.task4a_original_owner_id(uuid,uuid)
+ from public,anon,authenticated;
+grant execute on function public.task4a_original_owner_id(uuid,uuid)
+ to service_role;
+
 -- Only the approved original project may use this type of signed native grant.
 -- A paused project, a changed scope, an unbound task or an inactive price deny it.
 create or replace function public.task4a_native_authority_ready(
@@ -47,9 +69,6 @@ begin
     on approval.task_id=t.id and approval.project_id=p.id
   join public.benchmark_budget_accounts acct
     on acct.id=approval.account_id and acct.developer_task_id=t.id
-  join public.standalone_owner_bindings owner
-    on owner.owner_id=approval.owner_id and owner.actor_id=p.actor_id
-       and owner.chat_id=p.chat_id and owner.revoked_at is null
   where p.id=p_project and p.status='running' and p.phase='development'
     and p.deadline>clock_timestamp() and m.status='running'
     and m.project_kind='development' and j.role='development'
@@ -62,6 +81,7 @@ begin
     and p.repository_full_name='mfackrell/katie'
     and t.repository_full_name='mfackrell/katie' and t.repository_id=p.repository_id
     and t.kind='development' and t.agent_id=j.agent_id
+    and approval.owner_id=public.task4a_original_owner_id(p.actor_id,p.chat_id)
     and approval.model='gpt-5.3-codex'
     and approval.actor_id=p.actor_id and approval.chat_id=p.chat_id
     and approval.trial_id is null and approval.continuation_id is null
@@ -137,10 +157,8 @@ begin
       and price.source_metadata->>'pricing_verification_source'
        ='https://developers.openai.com/api/docs/models/gpt-5.3-codex')
  then return false;end if;
- select owner.owner_id into owner_id from public.standalone_owner_bindings owner
-  where owner.actor_id=p.actor_id and owner.chat_id=p.chat_id
-   and owner.revoked_at is null;
- if owner_id is null or not public.standalone_verify_scope(owner_id,p.actor_id,p.chat_id)
+ owner_id:=public.task4a_original_owner_id(p.actor_id,p.chat_id);
+ if owner_id is null
  then return false;end if;
  select id into earlier from public.benchmark_native_spending_approvals where task_id=p_task;
  if earlier is not null then

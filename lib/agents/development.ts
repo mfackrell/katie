@@ -720,7 +720,7 @@ async function dispatchOrdinaryNativeDevelopment(){
   const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
-  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,scopeHash:c.scopeHash,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
+  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
