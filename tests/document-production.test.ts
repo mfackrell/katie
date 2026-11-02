@@ -11,8 +11,8 @@ import { contentText, documentSchema, normalizedText, parseDocument } from '../l
 import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial } from '../lib/documents/intent';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
-import { produceDocument, shouldStopForReadingOrder } from '../lib/documents/production';
-import { generateDocx } from '../lib/documents/generate';
+import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
+import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
 import { renderDocument } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
@@ -119,6 +119,41 @@ test('initial overfull pagination may retry once, but final PDF fidelity always 
   assert.equal(shouldStopForReadingOrder([reading, overflow], 1), true, 'mismatch after repair must stop delivery');
   assert.equal(shouldStopForReadingOrder([overflow], 0), false);
   assert.equal(shouldStopForReadingOrder([], 1), false);
+});
+
+test('two-page 11pt compact layout preserves content when standard pagination cannot fit', async () => {
+  // 50 blocks whose measured heights exceed standard two-page capacity,
+  // but fit within two 0.5-inch-margin compact pages without changing type size.
+  const spec = documentSchema.parse({
+    title: 'Anonymous layout stress fixture', targetPages: 2,
+    blocks: Array.from({ length: 50 }, (_, i) => ({ kind: 'paragraph' as const, text: `Synthetic financial reporting line ${i + 1}.` })),
+  });
+  const heights = Array(50).fill(37.3);
+  assert.throws(() => paginate(spec, heights, 2, 4), DocumentPageFitError);
+  const compact = paginate(spec, heights, 2, 2, true);
+  assert.deepEqual(compact.pages.map(p => p.length), [25, 25]);
+  assert.deepEqual(compact.pages.flat(), spec.blocks.map((_, i) => i));
+  assert.equal(documentPageStyle(compact).lineTwips, 240);
+  assert.equal(documentPageStyle(compact).margin, 36);
+  assert.equal(shouldTryCompactLayout(new DocumentPageFitError(2), 0, spec, { pages: [spec.blocks.map((_, i) => i)], spacing: 4 }), true);
+  assert.equal(shouldTryCompactLayout(new DocumentPageFitError(2), 1, spec, compact), false);
+  assert.equal(shouldTryCompactLayout(new DocumentPageFitError(2), 0, { ...spec, targetPages: 3 }, compact), false);
+  const reading = { rule: 'reading-order' as const, page: 0, detail: 'Unfinished first-page measurement' };
+  const overflow = { rule: 'overflow' as const, page: 1, detail: 'Overfull measuring page' };
+  assert.equal(shouldStopForReadingOrder([reading, overflow], 1, true), false);
+  assert.equal(shouldStopForReadingOrder([reading], 1, true), true);
+  // Confirm that the real DOCX/PDF renderer honors the compact margins, not
+  // just the pagination arithmetic. The source text remains unchanged.
+  const small = parseDocument('# Financial report\n\n- Reviewed reconciliations and improved cash forecasting.', 1);
+  const layout = { pages: [small.blocks.map((_, i) => i)], spacing: 2, compact: true as const };
+  const browser = await launchWebsiteBrowser();
+  try {
+    const bytes = await generateDocx(small, layout);
+    const rendered = await renderDocument(browser, bytes, small, layout);
+    assert.equal(rendered.inspection.pageCount, 1);
+    assert.deepEqual(rendered.inspection.findings, []);
+    assert.equal(normalizedText(rendered.inspection.extractedText), normalizedText(contentText(small)));
+  } finally { await browser.close(); }
 });
 
 test('document capability disclaimers reroute before rendering and never become document text', async () => {
