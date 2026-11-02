@@ -54,6 +54,14 @@ test('PDF.js EOL fragment alignment preserves exact ordered glyphs', () => {
   assert.equal(pdfTextMatchesSource(joined(wrapped), source), false,
     'The old string-only check cannot distinguish artificial line breaks from word spaces.');
   assert.equal(pdfTextMatchesSource(joined(wrapped), source, wrapped), true);
+  const padded = [
+    {str:'Led finan ',hasEOL:true},
+    {str:' cial forecasting',hasEOL:true},
+    {str:'across teams.',hasEOL:false},
+  ];
+  assert.equal(pdfTextMatchesSource(joined(padded),source,padded),true,
+    'Whitespace on the edges of a physical PDF line must not split a source word.');
+
 
   const wrappedHyphen = [
     { str: 'Led family-', hasEOL: true },
