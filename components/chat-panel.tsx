@@ -6,6 +6,7 @@ import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
+import { SAVED_DOCUMENT_EXPORT_PROMPT } from "@/lib/documents/intent";
 import {
   ClipboardEvent,
   FormEvent,
@@ -1620,7 +1621,9 @@ export function ChatPanel({
 
     setAccountingResumeFailure("");
     const replySnapshot = reactionContent ? null : replyTo;
-    const content = reactionContent ?? (replySnapshot
+    const documentSourceMessageId = replySnapshot?.role === "assistant" &&
+      input.trim() === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
+    const content = reactionContent ?? (documentSourceMessageId ? input.trim() : replySnapshot
       ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${input.trim()}`
       : input.trim());
     const composerImages = reactionContent ? [] : [...selectedImages];
@@ -1738,6 +1741,7 @@ export function ChatPanel({
           actorId,
           chatId,
           message: requestContent,
+          documentSourceMessageId,
           images: requestImages,
           fileReferences: refsToSend,
           attachmentManifest: countCurrentAttachments([...priorReferences,...filesToUpload.map(file=>({mimeType:file.type})),...videosToUpload.map(file=>({mimeType:file.type}))],composerImages.map(image=>image.preview)),
@@ -3028,6 +3032,16 @@ export function ChatPanel({
                 setReplyTo({id:message.id,role:message.role,content:message.content});
                 requestAnimationFrame(()=>textareaRef.current?.focus());
               }} className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/10">Reply</button>
+              {message.role === "assistant" && !managedAgentId && message.content.trimStart().startsWith("#") && (
+                <button type="button" disabled={loading}
+                  aria-label="Export this saved response as Word and PDF"
+                  onClick={() => {
+                    setReplyTo({id:message.id,role:message.role,content:message.content});
+                    setInput(SAVED_DOCUMENT_EXPORT_PROMPT);
+                    requestAnimationFrame(()=>textareaRef.current?.focus());
+                  }}
+                  className="shrink-0 rounded-lg border border-sky-400/25 px-2 py-1 text-[11px] text-sky-300 hover:bg-sky-400/10 disabled:opacity-40">Word/PDF</button>
+              )}
               <button
                 type="button"
                 onClick={() =>

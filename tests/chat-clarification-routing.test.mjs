@@ -247,7 +247,7 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     return { result, taskProgress, escalatedConversation, reviewCompleted };
   })()`), {
     ...f.globals, ...f.helpers, ...selection,
-    message, messageForGeneration: generationMessage, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
+    message, messageForGeneration: generationMessage, selectedDocumentSource: null, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     taskProgressAssistantMessageId: 'current-answer', provider, providers: [provider], modelId: 'fixture-haiku',
     ownerCaptureTrace: undefined,
     cacheablePersona: 'Katie persona', name: 'Katie', personaForGeneration: 'Katie persona', summary: '', historyForProvider: history,

@@ -8,7 +8,8 @@ import sharp from 'sharp';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import { qualifyDocument, QUALIFIED_PAGES } from '../lib/documents/qualification';
 import { contentText, documentSchema, normalizedText, parseDocument, pdfTextMatchesSource } from '../lib/documents/model';
-import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial } from '../lib/documents/intent';
+import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT } from '../lib/documents/intent';
+import { savedDocumentContent } from '../lib/documents/saved-source';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
 import { resolveDocumentDownload } from '../lib/documents/client-download';
@@ -247,6 +248,30 @@ test('anonymous 850-word resume-shaped fixture completes genuine two-page produc
     assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(spec)));
     assert.ok(produced.corrections <= 3);
   } finally { await browser.close(); }
+});
+
+test('explicit saved source export preserves approved document text without a drafting model', () => {
+  assert.deepEqual(documentRequest(SAVED_DOCUMENT_EXPORT_PROMPT),{});
+  const resume='# Executive resume\n\n## Experience\n- Restructured finance and improved reporting.';
+  const editorial='\n\n---\n\n**Changes made:** Reviewer notes are not document content.';
+  assert.equal(savedDocumentContent({role:'assistant',content:resume+editorial}),resume);
+  assert.equal(savedDocumentContent({role:'assistant',content:resume}),resume);
+  assert.throws(()=>savedDocumentContent({role:'user',content:resume}),/Select a saved assistant/);
+  assert.throws(()=>savedDocumentContent({role:'assistant',content:'Katie could not complete this request.'}),/not a usable/);
+  assert.throws(()=>savedDocumentContent({role:'assistant',content:"I cannot create, render, or deliver Word and PDF files."}),/not a usable/);
+  // Inspect actual chat wiring: explicit message ID, actor/chat-scoped DB lookup,
+  // and no provider.generate for draft text in the selected-source branch.
+  const route=readFileSync('app/api/chat/route.ts','utf8');
+  const panel=readFileSync('components/chat-panel.tsx','utf8');
+  assert.match(route,/documentSourceMessageId: z\.string\(\)\.uuid\(\)\.optional\(\)/);
+  assert.match(route,/getMessageById\(chatId,documentSourceMessageId\)/);
+  assert.match(route,/selectedDocumentSource=savedDocumentContent\(original\)/);
+  assert.match(route,/selectedDocumentSource\s*\?\s*\{provider:provider\.name, model:modelId, text:selectedDocumentSource\}\s*:\s*await provider\.generate\(finalParams\)/);
+  assert.match(route,/!pendingVideoAssistantMessageId && !selectedDocumentSource/);
+  assert.match(route,/selectedDocumentSource \? false/);
+  assert.match(panel,/documentSourceMessageId,/);
+  assert.match(panel,/setInput\(SAVED_DOCUMENT_EXPORT_PROMPT\)/);
+  assert.match(panel,/Export this saved response as Word and PDF/);
 });
 
 test('document capability disclaimers reroute before rendering and never become document text', async () => {
