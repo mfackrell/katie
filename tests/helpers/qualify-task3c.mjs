@@ -45,9 +45,10 @@ export async function qualifyTask3cCompletion(db,ids,fixture,engineering,host) {
  writeFileSync(join(root,'artifact.zip'),archive(host.diagnostics));
  writeFileSync(join(root,'artifacts.json'),JSON.stringify({total_count:1,artifacts:[{id:133,name:'native-execution-diagnostics',expired:false,size_in_bytes:readFileSync(join(root,'artifact.zip')).length,workflow_run:{id:133,head_sha:release}}]}));
  const client=postgresClient({query:(...args)=>db.query(...args)},trace);
- const preview=modules()('@/lib/projects/preview');
- const load=modules({'@/lib/projects/preview':previewTransport(preview,{fixture,trace}),'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
- const worker=load('@/lib/missions/worker'),projects=load('@/lib/projects/worker');
+ // Load worker modules only AFTER synthetic fetch and credentials are installed.
+ // VM modules capture fetch at load time; preloading silently probed the real
+ // provider endpoint instead of the isolated /v1/models fixture.
+ let load,worker,projects;
  const ledger=async()=>(await db.query('select to_jsonb(c) value from benchmark_budget_calls c where account_id=$1 order by id',[ids.account])).rows.map(x=>x.value);
  const historical=await ledger();
  try{
@@ -60,6 +61,9 @@ export async function qualifyTask3cCompletion(db,ids,fixture,engineering,host) {
    if(target.href===config.productionDatabaseUrl+'/auth/v1/user')return Response.json({id:ids.owner,is_anonymous:false});
    throw Error('Task 3C synthetic transport forbids external network: '+target.origin);
   };
+  const preview=modules()('@/lib/projects/preview');
+  load=modules({'@/lib/projects/preview':previewTransport(preview,{fixture,trace}),'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>client},'@octokit/rest':{Octokit:githubTransport({fixture,release,trace,issue})}});
+  worker=load('@/lib/missions/worker');projects=load('@/lib/projects/worker');
   await db.query("update model_registry set source_metadata=jsonb_build_object('pricing_verification_source','https://developers.openai.com/api/docs/models/gpt-5.3-codex','pricing_verification_date',current_date::text) where provider_name='openai' and normalized_model_id='gpt-5.3-codex'");
   const registry=load('@/lib/models/registry');
   const refreshed=await registry.refreshModelRegistry([{name:'openai',listModels:async()=>['gpt-5.3-codex']}]);
