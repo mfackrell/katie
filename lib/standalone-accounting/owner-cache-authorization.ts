@@ -6,6 +6,7 @@ import type { PricingSnapshot } from './pricing';
  * unchanged. Only optional cache metadata is removed before any paid send. */
 export const OWNER_SELECTED_UNCACHED = 'selected_model_uncached' as const;
 const UNREVIEWED_CACHE = 'No reviewed no-fee cache metadata policy for this exact model';
+const CONTEXT_ISSUE = 'Estimated input plus output exceeds supported context window';
 
 export function proposeSelectedModelUncached(
   original: FrozenPreparedRequest,
@@ -14,14 +15,20 @@ export function proposeSelectedModelUncached(
   if (original.provider !== 'openai' ||
       original.payload.prompt_cache_key === undefined && original.payload.prompt_cache_retention === undefined) return null;
   const first = estimatePreparedRequest(original, pricing);
-  if (!first.issues.includes(UNREVIEWED_CACHE)) return null;
+  // A byte-based context estimate is not proof of overflow. Permit only that
+  // uncertainty to survive cache-hint removal so dispatch can count the final
+  // immutable payload before offering an owner-approved uncached attempt.
+  if (!first.issues.includes(UNREVIEWED_CACHE) ||
+      first.issues.some(issue => issue !== UNREVIEWED_CACHE && issue !== CONTEXT_ISSUE)) return null;
   const uncachedPayload = { ...original.payload };
   delete uncachedPayload.prompt_cache_key;
   delete uncachedPayload.prompt_cache_retention;
   const replacement = freezePreparedRequest(original.provider, original.model, original.endpoint, uncachedPayload);
-  // Other unsupported dimensions and models remain blocked; approval is not a
-  // generic escape hatch for missing prices, capacity or unsafe transports.
-  if (estimatePreparedRequest(replacement, pricing).status !== 'estimated') return null;
+  // Allow an estimated-only context issue through to the native-count preflight.
+  // Missing prices, invalid output caps and every other unsupported dimension
+  // must still block before any paid transmission or owner approval.
+  const estimate = estimatePreparedRequest(replacement, pricing);
+  if (estimate.issues.some(issue => issue !== CONTEXT_ISSUE)) return null;
   return replacement;
 }
 
