@@ -86,7 +86,11 @@ export function paginate(spec: DocumentSpec, heights: number[], pages: number, s
     for (let start = p - 1; start < end; start++) {
       const height = sums[end] - sums[start];
       if (height > capacity) continue;
-      const cost = dp[p - 1][start] + (height - target) ** 2;
+      // Prefer a semantic section boundary to continuing a previous section
+      // at the top of a page, but never sacrifice content fidelity or page fit.
+      const continuationPenalty = start > 0 && spec.blocks[start].kind !== 'heading'
+        ? capacity * capacity : 0;
+      const cost = dp[p - 1][start] + (height - target) ** 2 + continuationPenalty;
       if (cost < dp[p][end]) { dp[p][end] = cost; previous[p][end] = start; }
     }
   }
