@@ -194,7 +194,19 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
     const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
-    if(!fullBinding&&task.repository_full_name==='mfackrell/katie')return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
+    if(!fullBinding&&task.repository_full_name==='mfackrell/katie'){
+      if(project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'){
+        // Preparation is a no-op unless the *original* project has both an
+        // authenticated continuation and a separately approved coding scope.
+        const result=await getSupabaseAdminClient().rpc<boolean>('task4a_prepare_native_development',{
+          p_project:project.projectId,p_task:task.id,p_scope:project.scopeHash,
+          p_contract:project.contractHash,p_baseline:project.baselineSha
+        });
+        if(result.error||result.data!==true)return persist(task,'dispatching','Waiting for verified Task 4A owner, scope and native spending authority. No external work submitted.');
+        return persist(task,'dispatching','Task 4A native authority prepared; existing authenticated dispatcher will submit the bounded development task.');
+      }
+      return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
+    }
     if(fullBinding){
       if(!fullDispatchEnabled||!nativeDispatchEnabled)
         throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');
@@ -704,10 +716,11 @@ async function dispatchOrdinaryNativeDevelopment(){
   const client=github(),binding=await repository(task);
   const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
   if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
-  const proof:DeveloperDispatchPayload={authorityKind:'ordinary-developer',taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
+  const task4aId=typeof a.developer_authority?.task4aContinuationId==='string'?a.developer_authority.task4aContinuationId:null;
+  const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
-  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
+  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,scopeHash:c.scopeHash,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);

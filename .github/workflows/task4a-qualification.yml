@@ -19,6 +19,15 @@ on:
       - 'supabase/migrations/20261102211500_task4a_continuation_admission.sql'
       - 'supabase/migrations/20261102211600_task4a_expired_research_owner_recovery.sql'
       - 'supabase/migrations/20261102211700_task4a_verified_model_price_sources.sql'
+      - 'supabase/migrations/20261102211800_task4a_native_developer_bridge.sql'
+      - 'scripts/benchmark/developer-dispatch-contract.mjs'
+      - 'scripts/benchmark/developer-dispatch-contract.d.mts'
+      - 'scripts/benchmark/native-development-host.mjs'
+      - 'scripts/benchmark/native-dispatch-cli.mjs'
+      - 'scripts/benchmark/ordinary-native-authority.mjs'
+      - 'scripts/benchmark/authenticated-native-gateway.mjs'
+      - 'scripts/benchmark/native-http-bridge.mjs'
+      - 'tests/task4a-native-bridge.test.mjs'
       - 'docs/qualifications/task4a-readiness-2026-11-02.json'
       - '.github/workflows/task4a-qualification.yml'
 
@@ -63,6 +72,8 @@ jobs:
           NODE
       - name: Verify authenticated Task 4A owner approval endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
+      - name: Verify Task 4A signed native gateway and unchanged legacy routes
+        run: node --test tests/task4a-native-bridge.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)

@@ -10,6 +10,7 @@ create table public.project_continuation_authorizations (
  source_mission_id uuid not null references public.agent_missions(id) on delete restrict,
  approval_digest text not null check(approval_digest ~ '^[a-f0-9]{64}$'),
  authorized_at timestamptz not null default now(),
+ revoked_at timestamptz,
  deadline timestamptz not null,
  incremental_tokens bigint not null check(incremental_tokens between 10000 and 10000000),
  incremental_calls integer not null check(incremental_calls between 1 and 200),
@@ -87,7 +88,7 @@ begin
   select * into authority from project_continuation_authorizations
    where project_id=m.project_id;
   if found then
-   if authority.deadline<=clock_timestamp() or authority.authorized_at>clock_timestamp()
+   if authority.deadline<=clock_timestamp() or authority.revoked_at is not null or authority.authorized_at>clock_timestamp()
     or p_model<>all(authority.allowed_models) then return false;end if;
    model_provider:=split_part(p_model,':',1);
    chosen_model:=substring(p_model from length(model_provider)+2);
@@ -105,7 +106,7 @@ begin
      into existing_tokens,existing_calls,existing_dollars
     from mission_calls c where c.project_continuation_id=authority.id;
    if exists(select 1 from mission_calls c where c.project_continuation_id=authority.id
-     and (c.status='uncertain' or c.actual_tokens>c.reserved_tokens)) then return false;end if;
+     and (c.status<>'completed' or c.actual_tokens>c.reserved_tokens)) then return false;end if;
    upper_dollars:=ceil(p_tokens*greatest(price.pricing_input_per_1m,price.pricing_output_per_1m)*1.65);
    if existing_tokens+p_tokens>authority.incremental_tokens
     or existing_calls+1>authority.incremental_calls
