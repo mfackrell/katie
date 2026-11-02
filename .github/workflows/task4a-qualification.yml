@@ -1,0 +1,51 @@
+name: Task 4A protected Preview nonbillable qualification
+
+on:
+  pull_request:
+    paths:
+      - 'lib/agents/development.ts'
+      - 'lib/projects/preview.ts'
+      - 'tests/task4a-preview-security.test.mjs'
+      - 'tests/helpers/lifecycle-preview-transport.mjs'
+      - 'docs/qualifications/task4a-readiness-2026-11-02.json'
+      - '.github/workflows/task4a-qualification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  task4a-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install repository dependencies without running scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Production-validator Preview security fixture matrix
+        run: |
+          mkdir -p task4a-qualification
+          KATIE_TEST_REPORT_PATH=task4a-qualification/test-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/task4a-preview-security.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const report=JSON.parse(readFileSync('task4a-qualification/test-report.json','utf8'));
+          if(!report.success||report.counts.tests!==4||report.counts.passed!==4||report.counts.failed||report.counts.skipped||report.counts.todo||report.completed!==4)
+            throw new Error('Task 4A negative-case matrix missing or failed');
+          const receipt={version:1,task:'4A',headSha:process.env.GITHUB_SHA,assertions:report.counts,
+            evidenceClass:'DETERMINISTIC_FIXTURE',fixturePassed:true,
+            actualGitHubVercelLiveValidated:false,protectedPreviewHttpAccessValidated:false,
+            projectCompletionVerified:false,task4aVerdict:'BLOCKED_LIVE_TARGET',
+            paidProviderInference:0};
+          writeFileSync('task4a-qualification/receipt.json',JSON.stringify(receipt,null,2)+'\n');
+          console.log('Task 4A deterministic source-validator qualification: PASS; live requirement: BLOCKED');
+          NODE
+      - name: Retain independently inspectable machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4a-deterministic-qualification
+          path: task4a-qualification/
+          retention-days: 90
