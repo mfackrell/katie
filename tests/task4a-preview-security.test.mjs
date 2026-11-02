@@ -31,6 +31,34 @@ const cookieRequest=async(_url,options)=>{
  return edgeResponse();
 };
 
+test('Task 4A: recover saved research JSON formatting without changing facts or waiving review',async()=>{
+ const {recoverSavedResearchCompose}=modules()('@/lib/missions/saved-compose-recovery');
+ const raw=`{"deliverable":"First research line
+Second research line","composerNotes":"Retained internal notes"}`;
+ const recovered=recoverSavedResearchCompose(raw);
+ assert.equal(recovered?.deliverable,'First research line\nSecond research line');
+ assert.equal(recovered?.composerNotes,'Retained internal notes');
+ assert.equal(recovered?.escapedLineBreaks,1);
+ assert.match(recovered?.sourceSha256,/^[0-9a-f]{64}$/);
+ record('saved billed response with literal line break recovered without inference','positive');
+ for(const bad of [
+  '{"deliverable":"text"}',
+  '{"deliverable":"text","composerNotes":2}',
+  '{"deliverable":"text","composerNotes":"","unapproved":true}',
+  '{"deliverable":"text","composerNotes":""} appended text',
+  '{"deliverable":"text\tbroken","composerNotes":""}',
+  'x'.repeat(20001)
+ ]){
+  assert.equal(recoverSavedResearchCompose(bad),null);
+  record('reject invalid saved research composition');
+ }
+ const {measureDeliverable}=modules()('@/lib/missions/review-length');
+ const bound=measureDeliverable('Produce a research report in at most 700 words.','w '.repeat(705));
+ assert.equal(bound.wordCount,705);
+ assert.equal(bound.wordLimit,700);
+ record('saved JSON normalization does not waive the independent word-count gate');
+});
+
 test('Task 4A: source-bound immutable URL validator rejects aliases, paths, queries and invalid hosts',async()=>{
  await withFixtureEnv(async()=>{
   const {immutablePreviewUrl}=modules()('@/lib/agents/development');
