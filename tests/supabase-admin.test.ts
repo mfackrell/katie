@@ -235,7 +235,7 @@ test("PostgREST wire applies BOTH timestamp bounds on the same created_at column
 test("repeated same-column predicates are conjunctive while other filters remain intact", async (t) => {
   const client = loadClient(t);
   let outbound: URL | undefined;
-  t.mock.method(globalThis, "fetch", async input => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     outbound = new URL(String(input));
     return Response.json([]);
   });

@@ -339,7 +339,7 @@ test("actual Grok HTTP request and provider audit never duplicate overlapping ST
   assert.equal(submitted.at(-1)?.role,"user");
 });
 
-test("chat route applies last-chance ID dedup before creating provider history",()=>{
+test("chat route applies last-chance ID dedup before creating provider history",async()=>{
   const route=readFileSync("app/api/chat/route.ts","utf8");
   const collapse=route.indexOf("history = uniqueMessagesById(history);");
   const serialized=route.indexOf("const historyForProvider = history.map(");
