@@ -52,8 +52,8 @@ import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { loadVisualContinuity, storeVisualAnchor, verifyVisualContinuity } from "@/lib/chat/visual-continuity";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
-import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { maybeRunThirtyMessageCleanup } from "@/lib/memory/long-term-maintenance";
+import { maybeUpdateRelevantLongTermMemory } from "@/lib/memory/relevance-screen";
+import { maybeRunHundredUserMessageReview } from "@/lib/memory/long-term-maintenance";
 import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage, getMessageById } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
@@ -3737,10 +3737,10 @@ ${chunkWorkflowSummary}`;
             const persistAccountedMemory = async () => {
               console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
               try {
-                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateLongTermMemory(actorId, chatId, message));
+                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateRelevantLongTermMemory(actorId, chatId, message));
                 const cleanup = retention.then(
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunThirtyMessageCleanup(actorId)),
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunThirtyMessageCleanup(actorId)),
+                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
+                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
                 );
                 const memoryResults = await Promise.allSettled([
                   retention,
