@@ -307,7 +307,30 @@ export function resolveChatAnswer(raw: string): string | null {
   return answer;
 }
 
-/** Delay the first streamed characters until the opening can be classified. */
+/**
+ * Keep only prefixes that can still become the known editorial-opening
+ * signature. Ordinary words diverge immediately, so short user-visible
+ * answers can stream before completion without loosening the leak guard.
+ */
+function couldBeginEditorialOpening(value: string): boolean {
+  const prefix = value.trimStart();
+  if (!prefix) return true;
+
+  // The guarded opening begins with a numeric duration such as "1.5s".
+  // A partial duration must remain buffered across arbitrary SSE splits.
+  const lines = prefix.split(/\r?\n/);
+  if (lines.length > 3) return false;
+  const first = lines[0].replace(/\r$/, "");
+  if (!/^\d{1,3}(?:\.\d{0,3})?s?[ \t]*$/i.test(first)) return false;
+  if (lines.length === 1) return true;
+  if (lines[1].trim()) return false;
+  if (lines.length === 2) return true;
+
+  // After the blank line, only a prefix of "The user is" is suspect.
+  return "the user is".startsWith(lines[2].trimStart().toLowerCase());
+}
+
+/** Hold only a possible editorial prefix; release ordinary text immediately. */
 export class ChatAnswerStreamBoundary {
   private pending = "";
   private state: "checking" | "ordinary" | "held" = "checking";
@@ -321,7 +344,7 @@ export class ChatAnswerStreamBoundary {
       this.state = "held";
       return "";
     }
-    if (this.pending.length < 160) return "";
+    if (couldBeginEditorialOpening(this.pending)) return "";
     const released = this.pending;
     this.pending = "";
     this.state = "ordinary";
