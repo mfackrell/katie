@@ -6,6 +6,7 @@ import { getAdaptiveResponseCompositionInstruction } from "@/lib/chat/adaptive-r
 import { getChatContextState, getPendingIntermediateContext, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory } from "@/lib/memory/short-term";
+import { uniqueMessagesById } from "@/lib/memory/history-dedup";
 import type { ActorRoutingProfile, Message } from "@/lib/types/chat";
 import { createNeutralActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 
@@ -51,10 +52,18 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     ? await getPendingIntermediateContext(chatId, cutoff, stmHistory[0].createdAt, 120)
     : { messages: [] as Message[], truncated: false };
   const pendingHistory = filterConversationalMessages(pending.messages);
-  const history = [...pendingHistory, ...stmHistory];
+  const joinedHistory = [...pendingHistory, ...stmHistory];
+  const history = uniqueMessagesById(joinedHistory);
+  const deduplicated = joinedHistory.length - history.length;
+  if (deduplicated > 0) {
+    console.warn("[ITM Context] Duplicate message IDs removed before provider context", {
+      chatId, duplicateCount: deduplicated,
+    });
+  }
   if (pendingHistory.length || pending.truncated) {
     console.info("[ITM Context] Pending source coverage", {
-      chatId, pendingMessages: pendingHistory.length, truncated: pending.truncated,
+      chatId, pendingMessages: pendingHistory.length,
+      uniqueMessages: history.length, truncated: pending.truncated,
     });
   }
   const summaryBase = (typeof intermediateMemory.summary === "string" && intermediateMemory.summary.trim()) ||
