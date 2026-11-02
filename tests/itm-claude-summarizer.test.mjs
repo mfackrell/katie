@@ -138,9 +138,9 @@ test("reconcile prompt receives existing ITM but source-summary prompt never doe
   assert.equal(h.calls.length,2);
   assert.ok(!h.calls[0].body.messages[0].content.includes("Older meaningful relationship history."));
   assert.ok(h.calls[1].body.messages[0].content.includes("Older meaningful relationship history."));
-  assert.ok(h.calls[1].body.system.includes("consequential older information can outrank"));
-  assert.ok(h.calls[1].body.system.includes("explicit corrections"));
-  assert.ok(h.calls[1].body.system.includes("age alone") || h.calls[1].body.system.includes("Age alone"));
+  assert.ok(h.calls[1].body.system.includes("older discussions that remain open"));
+  assert.ok(h.calls[1].body.system.includes("Later user clarifications take precedence"));
+  assert.ok(h.calls[1].body.system.includes("Give reasonable priority to recent conversations"));
   assert.equal(h.memory().summarizedThroughMessageId,"m59");
   assert.equal(h.memory().sourceMessageCount,60);
 });
@@ -250,8 +250,8 @@ test("output budgets, model, accounting and source preservation are explicit",as
   assert.equal(h.calls.every(c=>c.path==="/messages"),true);
   assert.equal(h.calls.every(c=>c.body.model==="claude-sonnet-5-5"),true);
   assert.ok(h.calls[0].body.system.includes("Message timestamps date the telling"));
-  assert.ok(h.calls[1].body.system.includes("Preserve uncertainty"));
-  assert.ok(h.calls[1].body.system.includes("original conversation remains durably stored"));
+  assert.ok(h.calls[1].body.system.includes("Keep speaker attribution and uncertainty"));
+  assert.ok(h.calls[1].body.system.includes("omitting a detail does not delete its original messages"));
 });
 
 test("a stale checkpoint claim and a concurrent moved checkpoint never write over stored history",async()=>{
@@ -262,7 +262,7 @@ test("a stale checkpoint claim and a concurrent moved checkpoint never write ove
 });
 
 
-test("v3 permits one attempt for an earlier blocked v2 batch and retains old failure evidence",async()=>{
+test("v4 permits one attempt for the v3-blocked batch and retains older failure evidence",async()=>{
   const prior={version:2,summary:"P".repeat(14774),summarizedThroughMessageId:"m1",sourceMessageCount:2};
   const h=harness({history:messageHistory(92),prior,
     responses:n=>reply(n===1?"Only the 30 new source messages.":"A concise fully reconciled ITM.")});
@@ -270,11 +270,13 @@ test("v3 permits one attempt for an earlier blocked v2 batch and retains old fai
   const batchEnd="m31";
   h.claims.set("two-stage-30-messages-v1:"+batchEnd,"blocked");
   h.claims.set("two-stage-30-messages-v2-reconcile-10000:"+batchEnd,"blocked");
+  h.claims.set("two-stage-30-messages-v3-priority-recovery:"+batchEnd,"blocked");
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2,"one two-stage paid attempt under the corrected processor");
   assert.equal(h.calls[1].body.max_tokens,10000);
   const claim=h.events.find(e=>e.name==="claim_intermediate_memory_batch");
-  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v3-priority-recovery");
+  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v4-episodic-continuity");
+  assert.equal(h.claims.get("two-stage-30-messages-v3-priority-recovery:"+batchEnd),"blocked");
   assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-10000:"+batchEnd),"blocked");
   assert.equal(h.claims.get("two-stage-30-messages-v1:"+batchEnd),"blocked",
     "old failure evidence must remain untouched");
@@ -328,9 +330,9 @@ test("15,276-character completed reconciliation gets one priority recovery and a
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,3);
   assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,10000,4000]);
-  assert.ok(h.calls[1].body.system.includes("selective memory"));
-  assert.ok(h.calls[2].body.system.includes("FIRST retain explicit user corrections"));
-  assert.ok(h.calls[2].body.system.includes("OMIT repeated status reports"));
+  assert.ok(h.calls[1].body.system.includes("ITM is rolling memory, not an archive"));
+  assert.ok(h.calls[2].body.system.includes("KEEP: recognizable recent topics"));
+  assert.ok(h.calls[2].body.system.includes("DROP: permanent biography"));
   assert.ok(h.calls[2].body.messages[0].content.includes(prior.summary));
   assert.ok(h.calls[2].body.messages[0].content.includes(newFacts));
   assert.ok(h.calls[2].body.messages[0].content.includes(verbose));
@@ -364,7 +366,7 @@ test("priority recovery with max_tokens is rejected, checkpoint retained, no fou
   assert.deepEqual(h.memory(),prior);
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,3);
-  assert.equal(h.claims.get("two-stage-30-messages-v3-priority-recovery:m31"),"blocked");
+  assert.equal(h.claims.get("two-stage-30-messages-v4-episodic-continuity:m31"),"blocked");
 });
 
 test("recovery payment or approval denial does not trigger further calls or replace ITM",async()=>{
@@ -378,4 +380,43 @@ test("recovery payment or approval denial does not trigger further calls or repl
   assert.deepEqual(h.memory(),prior);
   assert.equal(await h.run(),"deferred");
   assert.equal(h.calls.length,3);
+});
+
+
+test("all three ITM prompts retain conversational episodes rather than LTM biography",async()=>{
+  const existing={
+    version:2,summary:"Prior episode: we discussed a project and postponed a decision.",
+    summarizedThroughMessageId:"m1",sourceMessageCount:2,
+  };
+  const responses=n=>reply(n===1?"The user revisited a postponed discussion.":n===2?
+    "Current conversations and unfinished follow-ups.":"Recovered episodic continuity.");
+  const h=harness({history:messageHistory(92),prior:existing,responses});
+  assert.equal(await h.run(),"committed");
+  const [batch,editor]=h.calls.map(x=>x.body.system);
+  assert.match(batch,/episodic ITM, not long-term memory \(LTM\)/);
+  assert.match(editor,/What were we talking about that the other day|we talked about that the other day/i);
+  assert.match(editor,/PRESERVE recent discussions/);
+  assert.match(editor,/PRESERVE unfinished discussions/);
+  assert.match(editor,/DO NOT preserve lasting biographical facts/);
+  assert.match(editor,/Give reasonable priority to recent conversations/);
+  assert.match(editor,/MAXIMUM OUTPUT: 6,000 characters/);
+  assert.match(editor,/DROP the least useful episodes/);
+  assert.doesNotMatch(editor,/Retention order:|enduring context and important qualifications|chronological inventory/i);
+  assert.match(h.calls[1].body.messages[0].content,/6,000 characters/);
+  assert.equal(h.calls.length,2);
+  assert.equal(h.memory().summary,"Current conversations and unfinished follow-ups.");
+});
+
+test("single recovery applies the same episodic-only retention rules without raising budgets",async()=>{
+  const h=harness({responses:n=>reply(n===1?"New open discussion.":n===2?"X".repeat(11386):"Recent unresolved topic.")});
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,10000,4000]);
+  const editor=h.calls[2].body.system;
+  assert.match(editor,/What were we talking about the other day/);
+  assert.match(editor,/DROP: permanent biography/);
+  assert.match(editor,/KEEP older discussions when they are still open/);
+  assert.match(editor,/MAXIMUM OUTPUT: 6,000 characters/);
+  assert.match(h.calls[2].body.messages[0].content,/6,000 characters/);
+  assert.equal(h.memory().summary,"Recent unresolved topic.");
+  assert.equal(h.writes.length,1);
 });
