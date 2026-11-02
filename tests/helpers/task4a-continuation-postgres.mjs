@@ -7,6 +7,7 @@ const one=async(db,sql,values=[])=>(await query(db,sql,values)).rows[0];
 export async function verifyTask4aContinuationPostgres(db,connect){
  // Disposable isolated PostgreSQL only. Never import or mutate production rows.
  await query(db,'reset role');
+ await query(db,'begin');
  const baseline=await one(db,"select * from work_projects where id='44444444-4444-4444-8444-444444444444'");
  assert.ok(baseline,'Project fixture baseline');
  const pilotId='a03df077-9cf9-4e26-a819-fd40535b57e3';
@@ -150,5 +151,6 @@ export async function verifyTask4aContinuationPostgres(db,connect){
  await query(db,"update work_projects set status='stopped' where id=$1",[pid]);
  await query(db,"update agent_missions set status='blocked' where id=$1",[recoveredId]);
  await query(db,'set role service_role');
+ await query(db,'commit');
  // No repair in the fixture ever calls a real provider.
 }
