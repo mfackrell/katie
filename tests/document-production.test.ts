@@ -25,6 +25,20 @@ import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalo
 import type { LlmProvider } from '../lib/providers/types';
 
 
+test('pagination prefers semantic section starts when both pages can fit unchanged content', () => {
+  const spec = documentSchema.parse({title:'General report',targetPages:2,blocks:[
+    {kind:'heading',level:1,text:'Opening'},
+    {kind:'paragraph',text:'First section body'},
+    {kind:'heading',level:2,text:'Analysis'},
+    {kind:'paragraph',text:'Second section body'},
+    {kind:'heading',level:2,text:'Conclusions'},
+    {kind:'paragraph',text:'Third section body'},
+  ]});
+  const layout = paginate(spec,[100,260,80,260,80,260],2,2,true);
+  assert.deepEqual(layout.pages,[ [0,1], [2,3,4,5] ]);
+  assert.deepEqual(layout.pages.flat(),[0,1,2,3,4,5]);
+});
+
 test('semantic document hierarchy stays distinct without reducing readable body text', async () => {
   assert.equal(DOCUMENT_TYPE.bodyHalfPoints, 22);
   assert.ok(DOCUMENT_TYPE.headingHalfPoints[0] > DOCUMENT_TYPE.headingHalfPoints[1]);
