@@ -6,7 +6,15 @@ create function public.project_assessment_completion_guard()
 returns trigger language plpgsql security definer set search_path=public as $guard$
 begin
  if new.status='completed' and old.status is distinct from 'completed' then
-  if new.phase is distinct from 'assessment'
+  -- A privileged direct UPDATE must not finalize a blocked, expired or
+  -- unleased project even when older review/browser evidence still matches.
+  -- These are the same authoritative admission preconditions as
+  -- finish_work_project; they apply to every route into completed.
+  if old.status is distinct from 'running'
+    or old.lease is null or old.lease_until is null
+    or old.lease_until <= now() or old.deadline <= now()
+    or old.approved_hash is distinct from old.approval_hash
+    or new.phase is distinct from 'assessment'
     or new.verified_sha is null or new.approved_hash is null or new.spec is null
     or new.active_mission_id is null
     or new.preview->'browserAcceptance'->>'passed' is distinct from 'true'
