@@ -146,6 +146,16 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
     if (typeof inValue === 'number') input = inValue;
     if (typeof outValue === 'number') output = outValue;
     if (provider === 'google' && typeof usage.thoughtsTokenCount === 'number') output = (typeof outValue === 'number' ? outValue : 0) + usage.thoughtsTokenCount;
+    if (provider === 'grok' && typeof outValue === 'number') {
+      // Grok bills reasoning separately from visible completion tokens.
+      const reasoning = (usage.completion_tokens_details as Record<string, unknown> | undefined)?.reasoning_tokens;
+      if (reasoning !== undefined && (typeof reasoning !== 'number' || !Number.isSafeInteger(reasoning) || reasoning < 0)) unsupportedUsage = true;
+      else if (typeof reasoning === 'number') output = outValue + reasoning;
+      // Conflicting provider totals cannot be settled as cheap output.
+      if (usage.total_tokens !== undefined &&
+        (typeof usage.total_tokens !== 'number' || !Number.isSafeInteger(usage.total_tokens) ||
+         typeof input !== 'number' || typeof output !== 'number' || input + output !== usage.total_tokens)) unsupportedUsage = true;
+    }
     const details = (usage.input_tokens_details ?? usage.prompt_tokens_details) as Record<string, unknown> | undefined;
     const cachedValue = details?.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount;
     if (typeof cachedValue === 'number') cached = cachedValue;
@@ -301,11 +311,12 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     }
     let estimate = stampOwnerApproval(estimatePreparedRequest(prepared,pricing,countedInput));
     const contextIssue = 'Estimated input plus output exceeds supported context window';
-    // Exact input counting is worth the free provider preflight for large
-    // prompts, especially whenever the byte-based heuristic would reject the
-    // model. Never use a browser-supplied token count or alter the frozen body.
+    // Use native counts for ordinary eligible estimates too, not just
+    // oversized byte heuristics. Skip unsupported payloads and replay.
     if (!attempt && estimate.issues.every(issue => issue === contextIssue) &&
-        (estimate.inputTokens >= 100_000 || estimate.issues.includes(contextIssue))) {
+        (provider === 'anthropic' && prepared.endpoint === '/v1/messages' ||
+         provider === 'openai' && prepared.endpoint === '/v1/responses' ||
+         provider === 'google' && /^\/v1(?:beta)?\/models\/[^/]+:(?:generateContent|streamGenerateContent)$/.test(prepared.endpoint))) {
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       const nativeCount = await cachedWorkflowValue(
         `context-count:${attemptKey}:${prepared.hash}`,

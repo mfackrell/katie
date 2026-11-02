@@ -368,7 +368,8 @@ const actualAccountingFetch = createAccountingFetch;
 function googleFixture(t: TestContext) {
   const fake = fakeLedger(true), sent: string[] = [];
   t.mock.method(accountingDispatch, 'createAccountingFetch', (provider: Parameters<typeof createAccountingFetch>[0]) =>
-    actualAccountingFetch(provider, async (_url, init) => {
+    actualAccountingFetch(provider, async (url, init) => {
+      if (String(url).endsWith(':countTokens')) return Response.json({ totalTokens: 100 });
       sent.push(String(init?.body));
       return new Response(JSON.stringify({ responseId: 'google-fixture', modelVersion: 'gemini-2.5-flash',
         candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [{ text: JSON.stringify({
@@ -395,7 +396,7 @@ test('saved attachment selector approves normalized Google REST bytes and sends 
   }) }] }]);
   assert.ok(quoted.payload.systemInstruction);
   assert.equal(a.preflight_estimate.requestHash, quoted.hash);
-  assert.equal(estimatePreparedRequest(quoted).reservationMicrousd, a.reserved_microusd);
+  assert.equal(estimatePreparedRequest(quoted, PRICING_SNAPSHOT, { requestHash: quoted.hash, inputTokens: 100 }).reservationMicrousd, a.reserved_microusd);
   // The approval RPC itself is exercised against PostgreSQL in the ledger suite.
   const approvedHash = a.prepared_hash; a.state = 'reserved';
   const decision = await runWithStandaloneAccounting(context, select);
@@ -452,7 +453,10 @@ test('cost admission allows a cheap Pro name and pauses an expensive ordinary na
   let current:PricingSnapshot={...snapshot};
   f.service.loadPricing=async version=>({snapshot:version===snapshot.version?snapshot:current,retrievedAt:new Date().toISOString()});
   const admit=f.service.admit;f.service.admit=async input=>{const a=await admit(input);a.state=BigInt(input.reservedMicrousd)>5000n?'paused':'reserved';return a;};
-  const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
+  const send=createAccountingFetch('openai',async(url)=>{
+   if(String(url).endsWith('/input_tokens'))return Response.json({input_tokens:100});
+   sends++;return receipt();
+  },f.factory);
   const payload={method:'POST',body:JSON.stringify({model,input:'hello',max_output_tokens:10})};
   const execute=()=>runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',payload));
   if(shouldPause){
@@ -593,7 +597,10 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
   const f=fakeLedger();let sends=0;
   const stream=provider==='openai'?'data: '+JSON.stringify({choices:[{delta:{content:'partial'},finish_reason:'length'}]})+'\n\ndata: [DONE]\n\n'
    :'data: '+JSON.stringify({type:'message_delta',delta:{stop_reason:'max_tokens'}})+'\n\ndata: '+JSON.stringify({type:'message_stop'})+'\n\n';
-  const send=createAccountingFetch(provider,async()=>{sends++;return new Response(stream,{headers:{'content-type':'text/event-stream'}});},f.factory);
+  const send=createAccountingFetch(provider,async(url)=>{
+   if(String(url).endsWith('/count_tokens'))return Response.json({input_tokens:100});
+   sends++;return new Response(stream,{headers:{'content-type':'text/event-stream'}});
+  },f.factory);
   const url=provider==='openai'?'https://api.openai.com/v1/chat/completions':'https://api.anthropic.com/v1/messages';
   const body={method:'POST',body:JSON.stringify({model:provider==='openai'?'gpt-4o':'claude-sonnet-5-5',messages:[{role:'user',content:'hello'}],stream:true})};
   await assert.rejects(runWithStandaloneAccounting(context,()=>send(url,body)),isStandaloneAccountingError);
@@ -607,7 +614,8 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
 test('legacy explicit Google observation replays accepted block without observing twice',async t=>{
  const f=fakeLedger();let sends=0;const oldKey=process.env.GOOGLE_API_KEY;process.env.GOOGLE_API_KEY='offline-fixture';
  t.after(()=>{if(oldKey===undefined)delete process.env.GOOGLE_API_KEY;else process.env.GOOGLE_API_KEY=oldKey;});
- t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async()=>{
+ t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async(url)=>{
+  if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});
   sends++;return Response.json({responseId:'saved-blocked-observation',modelVersion:'gemini-2.5-flash',promptFeedback:{blockReason:'OTHER'},usageMetadata:{promptTokenCount:10}});
  },f.factory));
  const image={fileId:'file',fileName:'photo.png',mimeType:'image/png',preview:'Stored photo metadata',imageDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII='};
@@ -625,7 +633,7 @@ test('legacy explicit Google observation replays accepted block without observin
 
 test('auto-authorized incomplete usage replays genuine Gemini selector output without approval or retransmission',async()=>{
  const f=fakeLedger();f.service.uncertainExposureAccepted=async()=>true;let sends=0;
- const send=createAccountingFetch('google',async()=>{sends++;return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"selections":[]}'}]}}]});},f.factory);
+ const send=createAccountingFetch('google',async(url)=>{if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});sends++;return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"selections":[]}'}]}}]});},f.factory);
  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
  const init={method:'POST',body:JSON.stringify({contents:[{role:'user',parts:[{text:'Select relevant saved attachments'}]}],generationConfig:{maxOutputTokens:1000}})};
  for(let i=0;i<3;i++){const response=await runWithStandaloneAccounting({...context,resumed:i>0},()=>send(url,init));assert.equal(response.status,200);assert.match(await response.text(),/selections/);}
@@ -822,4 +830,114 @@ test('mixed unpriceable dimension and heuristic context is a billing error, not 
   await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{...fixture.original,body:JSON.stringify(body)})),
     error=>standaloneAccountingCause(error)?.code==='standalone_unsupported_billing');
   assert.equal(counts,0);assert.equal(paid,0);assert.equal(f.attempts.length,0);
+});
+
+
+test('short valid requests count provider-native input before admission; resume never recounts',async()=>{
+ const scenarios=[
+  {provider:'anthropic' as const,model:'claude-sonnet-4-6',path:'/v1/messages',
+   native:'https://api.anthropic.com/v1/messages/count_tokens',count:{input_tokens:20},
+   body:{model:'claude-sonnet-4-6',messages:[{role:'user',content:'Short ordinary message.'}],max_tokens:64},
+   receipt:{id:'counted-claude',model:'claude-sonnet-4-6',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',
+    usage:{input_tokens:20,output_tokens:3,cache_read_input_tokens:0,cache_creation_input_tokens:0}}},
+  {provider:'openai' as const,model:'gpt-5',path:'/v1/responses',
+   native:'https://api.openai.com/v1/responses/input_tokens',count:{input_tokens:20},
+   body:{model:'gpt-5',input:[{role:'user',content:'Short ordinary message.'}],max_output_tokens:64},
+   receipt:{id:'counted-openai',model:'gpt-5',status:'completed',output:[],
+    usage:{input_tokens:20,output_tokens:3,input_tokens_details:{cached_tokens:0}}}},
+  {provider:'google' as const,model:'gemini-2.5-flash',path:'/v1beta/models/gemini-2.5-flash:generateContent',
+   native:'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens',count:{totalTokens:20},
+   body:{contents:[{role:'user',parts:[{text:'Short ordinary message.'}]}],generationConfig:{maxOutputTokens:64}},
+   receipt:{responseId:'counted-google',modelVersion:'gemini-2.5-flash',
+    candidates:[{finishReason:'STOP',content:{parts:[{text:'ok'}]}}],
+    usageMetadata:{promptTokenCount:20,candidatesTokenCount:3,thoughtsTokenCount:0}}},
+ ];
+ for(const item of scenarios){
+  const f=fakeLedger();let counts=0,paid=0,sent='';
+  const host=item.provider==='anthropic'?'https://api.anthropic.com':item.provider==='openai'?'https://api.openai.com':'https://generativelanguage.googleapis.com';
+  const initial=prepareStandaloneRequest(item.provider,item.model,item.path,item.body);
+  const heuristic=estimatePreparedRequest(initial);
+  assert.equal(heuristic.status,'estimated','already fits context without native count');
+  assert.ok(heuristic.inputTokens>20);
+  const send=createAccountingFetch(item.provider,async(url,init)=>{
+   if(String(url)===item.native){
+    counts++;const counted=JSON.parse(String(init?.body));
+    if(item.provider==='google')assert.deepEqual(counted,{generateContentRequest:initial.payload});
+    else assert.equal(counted.model,item.model);
+    assert.equal(counted.max_output_tokens,undefined);assert.equal(counted.max_tokens,undefined);
+    return Response.json(item.count);
+   }
+   paid++;sent=String(init?.body);return Response.json(item.receipt);
+  },f.factory);
+  const input={method:'POST',body:JSON.stringify(item.body)};
+  await runWithStandaloneAccounting({...context,requestId:'count-'+item.provider},()=>send(host+item.path,input));
+  assert.equal(counts,1,item.provider);assert.equal(paid,1,item.provider);
+  const attempt=f.attempts[0];
+  assert.equal(attempt.state,'settled');
+  assert.equal(attempt.preflight_estimate.inputCountSource,'provider');
+  assert.equal(attempt.preflight_estimate.inputTokens,20);
+  assert.equal(sent,attempt.prepared_payload.serializedBody);
+  await runWithStandaloneAccounting({...context,requestId:'count-'+item.provider,resumed:true},()=>send(host+item.path,input));
+  assert.equal(counts,1,'native count reused from the saved quote');
+  assert.equal(paid,1,'no repeat generation');
+ }
+});
+
+test('failed native count retains old conservative normal-request estimate and completes one paid call',async()=>{
+ const f=fakeLedger();let counts=0,paid=0;
+ const body={model:'gpt-5',input:'Small but nontrivial prompt',max_output_tokens:64};
+ const original=prepareStandaloneRequest('openai','gpt-5','/v1/responses',body);
+ const oldQuote=estimatePreparedRequest(original);
+ const send=createAccountingFetch('openai',async(url,init)=>{
+  if(String(url).endsWith('/input_tokens')){counts++;return Response.json({error:'not available'},{status:503});}
+  paid++;assert.equal(String(init?.body),original.serializedBody);
+  return Response.json({id:'fallback-provider-receipt',model:'gpt-5',status:'completed',output:[],
+   usage:{input_tokens:12,output_tokens:4,input_tokens_details:{cached_tokens:0}}});
+ },f.factory);
+ await runWithStandaloneAccounting({...context,requestId:'fallback-count'},()=>send(
+  'https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify(body)}));
+ assert.equal(counts,1);assert.equal(paid,1);
+ assert.equal(f.attempts[0].preflight_estimate.inputCountSource,'heuristic');
+ assert.equal(f.attempts[0].preflight_estimate.inputTokens,oldQuote.inputTokens);
+ assert.equal(f.attempts[0].reserved_microusd,oldQuote.reservationMicrousd);
+});
+
+for(const streaming of [false,true]){
+ test('Grok '+(streaming?'SSE':'JSON')+' actual cost includes separately billed reasoning',async()=>{
+  const f=fakeLedger();let paid=0;
+  const receiptBody={id:'grok-reasoning',model:'grok-4.7',
+   choices:[{finish_reason:'stop',message:{content:'done'}}],
+   usage:{prompt_tokens:40308,completion_tokens:382,total_tokens:46991,
+    prompt_tokens_details:{cached_tokens:1152,audio_tokens:0,image_tokens:0},
+    completion_tokens_details:{reasoning_tokens:6301,audio_tokens:0}}};
+  const send=createAccountingFetch('grok',async()=>{
+   paid++;return new Response(streaming?'data: '+JSON.stringify(receiptBody)+'\n\ndata: [DONE]\n\n':JSON.stringify(receiptBody),
+    {headers:{'content-type':streaming?'text/event-stream':'application/json'}});
+  },f.factory);
+  const body={model:'grok-4.7',messages:[{role:'user',content:'x'.repeat(60000)}],max_tokens:4096,stream:streaming};
+  await runWithStandaloneAccounting({...context,requestId:'grok-reason-'+streaming},()=>send(
+   'https://api.x.ai/v1/chat/completions',{method:'POST',body:JSON.stringify(body)}));
+  assert.equal(paid,1,'Grok has no native count endpoint');
+  assert.equal(f.attempts[0].state,'settled');
+  assert.equal(f.attempts[0].usage?.outputTokens,6683,'382 visible plus 6301 reasoning');
+  assert.equal(f.attempts[0].actual_microusd,'118986','exact provider-reported charge');
+  assert.equal(f.attempts[0].preflight_estimate.outputAllowance,4096,'preflight policy unchanged');
+ });
+}
+
+test('Grok malformed reasoning or conflicting totals fail closed without false settlement',async()=>{
+ for(const v of [{reasoning:6301,total:46992},{reasoning:'6301',total:46991}]){
+  const f=fakeLedger();let sends=0;
+  const send=createAccountingFetch('grok',async()=>{sends++;return Response.json({
+   id:'inconsistent-grok',model:'grok-4.7',choices:[{finish_reason:'stop',message:{content:'ok'}}],
+   usage:{prompt_tokens:40308,completion_tokens:382,total_tokens:v.total,
+    completion_tokens_details:{reasoning_tokens:v.reasoning}},
+  });},f.factory);
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'invalid-grok-'+String(v.reasoning)},
+   ()=>send('https://api.x.ai/v1/chat/completions',{method:'POST',body:JSON.stringify({
+    model:'grok-4.7',messages:[{role:'user',content:'x'.repeat(60000)}],max_tokens:4096,
+   })})),isStandaloneAccountingError);
+  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
+  assert.equal(f.events.includes('settle'),false);
+ }
 });
