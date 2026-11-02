@@ -117,13 +117,22 @@ test('Task 4A: immutable Preview root is required before authentication',async()
    assert.equal(requests,0,'Mutable or non-root Preview URL cannot trigger an authenticated request');
    record('reject non-immutable acceptance origin: '+url);
   }
+  const requests=[];
+  const passed=await verifyDeployedPreview({url:origin+'/pilot',headSha:sha,deploymentId:1,statusId:2},contract,projectId,async (url,options)=>{
+   requests.push(String(url));
+   return options.headers?.['x-vercel-protection-bypass']?edgeResponse():new Response('Fixture application',{status:200});
+  },async()=>[{name:'state',passed:true,detail:'Bound approved fixture'}]);
+  assert.equal(requests.length,2);
+  assert.equal(requests[1],origin+'/pilot','App HTTP request must match approved path');
+  assert.equal(passed.passed,true);
+  record('approved app path on immutable deployment succeeds','positive');
  });
 });
 
 test('Task 4A: reachability check blocks cross-origin redirects before browser execution',async()=>{
  await withFixtureEnv(async()=>{
   const {verifyDeployedPreview,PreviewAccessUnavailable}=modules()('@/lib/projects/preview');
-  const preview={url:origin,headSha:sha,deploymentId:1,statusId:2};
+  const preview={url:origin+'/pilot',headSha:sha,deploymentId:1,statusId:2};
   const contract={path:'/pilot',scenarios:[{name:'state',steps:[{action:'expectVisible',selector:'#state'}]}]};
   let renders=0,requests=0;
   const request=async(_url,options)=>{
