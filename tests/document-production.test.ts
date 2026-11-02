@@ -13,7 +13,7 @@ import { savedDocumentContent } from '../lib/documents/saved-source';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
 import { resolveDocumentDownload } from '../lib/documents/client-download';
-import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
+import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout, repeatedVisualSpacingPages, visualReportSchema } from '../lib/documents/production';
 import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
@@ -311,6 +311,66 @@ test('initial overfull pagination may retry once, but final PDF fidelity always 
   assert.equal(shouldStopForReadingOrder([reading, overflow], 1), true, 'mismatch after repair must stop delivery');
   assert.equal(shouldStopForReadingOrder([overflow], 0), false);
   assert.equal(shouldStopForReadingOrder([], 1), false);
+});
+
+test('visual spacing recommendations converge or fail closed, never masquerading as a pass', () => {
+  // Mirrors the Nov 2 production verdicts: page 1 passed while page 2
+  // repeatedly asked for optional bullet spacing adjustments.
+  const first = visualReportSchema.parse({ pages: [
+    {page: 1, verdict: 'pass', repair: 'none', observations: 'Clearly readable and no clipping or overlap.'},
+    {page: 2, verdict: 'repair', repair: 'increase_spacing', observations: 'Readable bullets but minor spacing could improve.'},
+  ] });
+  const repeated = visualReportSchema.parse({ pages: [
+    {page: 1, verdict: 'pass', repair: 'none', observations: 'Clearly readable and no clipping or overlap.'},
+    {page: 2, verdict: 'repair', repair: 'increase_spacing', observations: 'Overall acceptable but spacing could improve.'},
+  ] });
+  const improved = visualReportSchema.parse({ pages: [
+    {page: 1, verdict: 'pass', repair: 'none', observations: 'Readability and layout have passed.'},
+    {page: 2, verdict: 'pass', repair: 'none', observations: 'Spacing is professionally acceptable.'},
+  ] });
+  assert.deepEqual(repeatedVisualSpacingPages(null, repeated), []);
+  assert.deepEqual(repeatedVisualSpacingPages(first, repeated), [2],
+    'A repeated page-specific repair must not trigger another paid loop.');
+  assert.deepEqual(repeatedVisualSpacingPages(first, improved), []);
+  const inspectionContract = readFileSync('lib/documents/service.ts', 'utf8');
+  assert.match(inspectionContract, /Minor crowding or spacing variation that does not materially impair legibility/);
+  assert.match(inspectionContract, /REPAIR requires a concrete material defect/);
+});
+
+test('actual rendered PDF is reinspected after one spacing correction and blocks repetitive repairs', { timeout: 120000 }, async () => {
+  const spec = parseDocument('# Operating summary\n\n- Improved reporting and increased visibility across operating teams.\n- Strengthened cash forecasting and monthly close processes.', 1);
+  const browser = await launchWebsiteBrowser();
+  try {
+    let calls = 0;
+    const accepted = await produceDocument({ spec, browser, deadlineMs: Date.now() + 60000,
+      inspect: async rendered => {
+        const first = calls++ === 0;
+        return { pages: rendered.images.map((_, i) => ({
+          page: i + 1, verdict: first ? 'repair' as const : 'pass' as const,
+          repair: first ? 'increase_spacing' as const : 'none' as const,
+          observations: 'Text and headings are readable; inspect paragraph spacing in rendered output.',
+        })) };
+      },
+    });
+    assert.equal(calls, 2, 'The corrected Word/PDF must be rendered and inspected again.');
+    assert.equal(accepted.corrections, 1);
+    assert.equal(accepted.inspection.visual, 'passed');
+    assert.equal(accepted.inspection.pageCount, 1);
+    assert.deepEqual(accepted.inspection.findings, []);
+    assert.equal(normalizedText(accepted.inspection.extractedText), normalizedText(contentText(spec)));
+
+    let repeatedCalls = 0;
+    await assert.rejects(produceDocument({ spec, browser, deadlineMs: Date.now() + 60000,
+      inspect: async rendered => {
+        repeatedCalls++;
+        return { pages: rendered.images.map((_, i) => ({
+          page: i + 1, verdict: 'repair' as const, repair: 'increase_spacing' as const,
+          observations: 'Some bullet spacing might still be improved.',
+        })) };
+      },
+    }), /still requires spacing changes after an attempted correction/);
+    assert.equal(repeatedCalls, 2, 'Repeat cosmetic feedback must stop without another inspector call.');
+  } finally { await browser.close(); }
 });
 
 test('two-page 11pt compact layout preserves content when standard pagination cannot fit', async () => {
