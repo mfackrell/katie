@@ -58,7 +58,7 @@ declare
  j mission_assignments; m agent_missions; project_limit bigint; project_used bigint;
  authority project_continuation_authorizations; price model_registry;
  existing_tokens bigint; existing_calls integer; existing_dollars numeric;
- upper_dollars numeric; evidence jsonb; model_provider text; model_id text;
+ upper_dollars numeric; evidence jsonb; model_provider text; chosen_model text;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into j from mission_assignments where id=p_id;if not found then return false;end if;
@@ -90,15 +90,15 @@ begin
    if authority.deadline<=clock_timestamp() or authority.authorized_at>clock_timestamp()
     or p_model<>all(authority.allowed_models) then return false;end if;
    model_provider:=split_part(p_model,':',1);
-   model_id:=substring(p_model from length(model_provider)+2);
-   select * into price from model_registry where provider_name=model_provider and model_id=model_id;
+   chosen_model:=substring(p_model from length(model_provider)+2);
+   select * into price from model_registry where provider_name=model_provider and model_id=chosen_model;
    if not found or price.is_active is distinct from true
     or price.pricing_status is distinct from 'verified'
     or price.pricing_verified_at is null or price.pricing_verified_at<now()-interval '24 hours'
     or price.pricing_verified_at>now()
     or coalesce(price.pricing_input_per_1m,0)<=0 or coalesce(price.pricing_output_per_1m,0)<=0
     or price.source_metadata->>'pricing_verification_source'
-       is distinct from 'https://developers.openai.com/api/docs/models/'||model_id
+       is distinct from 'https://developers.openai.com/api/docs/models/'||chosen_model
     or model_provider<>'openai' then return false;end if;
    select coalesce(sum(greatest(c.reserved_tokens,coalesce(c.actual_tokens,0))),0),
           count(*),coalesce(sum(c.project_reserved_microusd),0)
