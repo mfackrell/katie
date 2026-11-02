@@ -1,6 +1,6 @@
 import {runScenarios,type PreviewCookie} from '../../scripts/project-browser-engine.mjs';
 import {verifiedPreviewUrl} from '@/lib/agents/development';
-import {digest} from './contract';
+import {browserContract,digest} from './contract';
 import type {BrowserContract} from './store';
 export class PreviewAccessUnavailable extends Error {constructor(){super('Deployed Preview requires authentication. Configure the production-only preview acceptance connection, then resume this project. Deployment protection remains enabled.');this.name='PreviewAccessUnavailable';}}
 function samePreviewOrigin(location:string,origin:string){try{return new URL(location,origin+'/').origin===origin;}catch{return false;}}
@@ -40,6 +40,9 @@ export async function previewCookies(origin:string,request:typeof fetch=fetch):P
  return[{name:'_vercel_jwt',value:jwt,domain:hostname,path:'/',httpOnly:true,secure:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+Math.min(300,Math.floor(ttl))}];
 }
 export async function verifyDeployedPreview(preview:{url:string;headSha:string;deploymentId:number;statusId:number},contract:BrowserContract,projectId:string,request:typeof fetch=fetch,run=runScenarios){
+ // Validate the contract before any credential minting or network request.
+ // An absolute contract.path would otherwise redirect cookie-bearing fetch off-origin.
+ browserContract.parse(contract);
  const safe=verifiedPreviewUrl(preview.url);if(!safe)throw Error('Verified Vercel Preview origin required');const origin=new URL(safe).origin;
  const cookies=await previewCookies(origin,request);
  const check=await request(new URL(contract.path,origin),{headers:cookies.length?{cookie:'_vercel_jwt='+cookies[0].value}:{},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(10000)});await check.body?.cancel();
