@@ -21,6 +21,17 @@ export const blockText = (block: Block) => block.kind === 'table' ? block.rows.f
 export const normalizedText = (value: string) => value.normalize('NFKC').replace(/[•●]/g, '').replace(/\s+/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
 export const contentText = (spec: DocumentSpec) => spec.blocks.map(blockText).join('\n');
 
+/** PDF text extractors can insert whitespace after a hyphen when a compound
+ * word wraps between lines (for example, "family-\nowned"). Only ignore
+ * that extraction artifact; never ignore omissions, reordering, or edits. */
+export function pdfTextMatchesSource(extracted: string, source: string): boolean {
+  const expected = normalizedText(source);
+  const actual = normalizedText(extracted);
+  return actual === expected ||
+    actual.replace(/([\p{L}\p{N}])-\s+([\p{L}\p{N}])/gu, '$1-$2') === expected;
+}
+
+
 // Only a finite text grammar is accepted; no HTML, images, remote resources, fields or macros.
 const inline = (value: string) => value.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/`([^`]+)`/g, '$1').trim();
 export function parseDocument(markdown: string, targetPages?: number): DocumentSpec {

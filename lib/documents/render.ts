@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser } from 'playwright-core';
-import { PAGE } from './generate';
-import { contentText, normalizedText, type DocumentSpec, type Inspection, type Finding } from './model';
+import { PAGE, documentPageStyle, type Layout } from './generate';
+import { contentText, pdfTextMatchesSource, type DocumentSpec, type Inspection, type Finding } from './model';
 
 export const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 export type RenderedDocument = { pdf: Buffer; images: Buffer[]; heights: number[]; inspection: Inspection };
@@ -11,7 +11,7 @@ export type RenderedDocument = { pdf: Buffer; images: Buffer[]; heights: number[
 /** These are read locally, never fetched from a CDN. Explicit Next tracing packages them. */
 async function script(path: string) { return readFile(join(process.cwd(), 'node_modules', path), 'utf8'); }
 
-export async function renderDocument(browser: Browser, bytes: Buffer, spec: DocumentSpec): Promise<RenderedDocument> {
+export async function renderDocument(browser: Browser, bytes: Buffer, spec: DocumentSpec, layoutOptions?: Pick<Layout, 'compact'>): Promise<RenderedDocument> {
   if (bytes.length > 2_000_000) throw new Error('DOCX exceeds rendering bounds.');
   const context = await browser.newContext({ viewport: { width: 816, height: 1056 }, serviceWorkers: 'block' });
   await context.route('**/*', route => route.abort()); // Generated text cannot initiate network access.
@@ -77,14 +77,14 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
           findings.push({ rule: 'whitespace', page: index + 1, detail: 'Page uses less than one quarter of its content area.' });
       });
       return { heights, findings };
-    }, PAGE);
+    }, { ...PAGE, margin: documentPageStyle(layoutOptions).margin });
     if (!layout.heights.length || layout.heights.length !== spec.blocks.length) throw new Error('DOCX renderer did not preserve the document blocks.');
     const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true, tagged: true });
     const raster = await rasterizePdf(browser, pdf);
     const findings = [...layout.findings, ...raster.findings];
     if (spec.targetPages !== undefined && raster.images.length !== spec.targetPages)
       findings.push({ rule: 'page-count', page: 0, detail: `Expected ${spec.targetPages} pages; rendered ${raster.images.length}.` });
-    if (normalizedText(raster.text) !== normalizedText(contentText(spec)))
+    if (!pdfTextMatchesSource(raster.text, contentText(spec)))
       findings.push({ rule: 'reading-order', page: 0, detail: 'PDF text differs from document content or reading order.' });
     return { pdf, images: raster.images, heights: layout.heights, inspection: {
       pageCount: raster.images.length, findings, extractedText: raster.text, pageHashes: raster.images.map(sha256), visual: 'pending',

@@ -7,12 +7,12 @@ import mammoth from 'mammoth';
 import sharp from 'sharp';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import { qualifyDocument, QUALIFIED_PAGES } from '../lib/documents/qualification';
-import { contentText, documentSchema, normalizedText, parseDocument } from '../lib/documents/model';
+import { contentText, documentSchema, normalizedText, parseDocument, pdfTextMatchesSource } from '../lib/documents/model';
 import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial } from '../lib/documents/intent';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
-import { produceDocument, shouldStopForReadingOrder } from '../lib/documents/production';
-import { generateDocx } from '../lib/documents/generate';
+import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
+import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
 import { renderDocument } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
@@ -38,6 +38,16 @@ function storageFixture() {
     } as unknown as Parameters<typeof createDocumentStore>[0],
   };
 }
+
+test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', () => {
+  const source = 'Led a family-owned business with e-commerce and multi-entity reporting.';
+  const pdfExtract = 'Led a family-\nowned business with e-\ncommerce and multi-entity reporting.';
+  assert.equal(pdfTextMatchesSource(pdfExtract, source), true);
+  assert.equal(pdfTextMatchesSource(source, source), true);
+  assert.equal(pdfTextMatchesSource('Led a family-owned business with e-commerce.', source), false, 'missing words remain fatal');
+  assert.equal(pdfTextMatchesSource('Led a family-owned company with e-commerce and multi-entity reporting.', source), false, 'changed content remains fatal');
+  assert.equal(pdfTextMatchesSource('Led an e-commerce business with family-owned and multi-entity reporting.', source), false, 'reordering remains fatal');
+});
 
 test('document routing is explicit and ordinary text requests remain inert', () => {
   assert.deepEqual(documentRequest('Produce a professionally formatted two-page Word document and PDF'), { pages: 2 });
@@ -119,6 +129,89 @@ test('initial overfull pagination may retry once, but final PDF fidelity always 
   assert.equal(shouldStopForReadingOrder([reading, overflow], 1), true, 'mismatch after repair must stop delivery');
   assert.equal(shouldStopForReadingOrder([overflow], 0), false);
   assert.equal(shouldStopForReadingOrder([], 1), false);
+});
+
+test('two-page 11pt compact layout preserves content when standard pagination cannot fit', async () => {
+  // 50 blocks whose measured heights exceed standard two-page capacity,
+  // but fit within two 0.5-inch-margin compact pages without changing type size.
+  const spec = documentSchema.parse({
+    title: 'Anonymous layout stress fixture', targetPages: 2,
+    blocks: Array.from({ length: 50 }, (_, i) => ({ kind: 'paragraph' as const, text: `Synthetic financial reporting line ${i + 1}.` })),
+  });
+  const heights = Array(50).fill(37.3);
+  assert.throws(() => paginate(spec, heights, 2, 4), DocumentPageFitError);
+  const compact = paginate(spec, heights, 2, 2, true);
+  assert.deepEqual(compact.pages.map(p => p.length), [25, 25]);
+  assert.deepEqual(compact.pages.flat(), spec.blocks.map((_, i) => i));
+  assert.equal(documentPageStyle(compact).lineTwips, 240);
+  assert.equal(documentPageStyle(compact).margin, 36);
+  assert.equal(shouldTryCompactLayout(new DocumentPageFitError(2), 0, spec, { pages: [spec.blocks.map((_, i) => i)], spacing: 4 }), true);
+  assert.equal(shouldTryCompactLayout(new DocumentPageFitError(2), 1, spec, compact), false);
+  assert.equal(shouldTryCompactLayout(new DocumentPageFitError(2), 0, { ...spec, targetPages: 3 }, compact), false);
+  const reading = { rule: 'reading-order' as const, page: 0, detail: 'Unfinished first-page measurement' };
+  const overflow = { rule: 'overflow' as const, page: 1, detail: 'Overfull measuring page' };
+  assert.equal(shouldStopForReadingOrder([reading, overflow], 1, true), false);
+  assert.equal(shouldStopForReadingOrder([reading], 1, true), true);
+  // Confirm that the real DOCX/PDF renderer honors the compact margins, not
+  // just the pagination arithmetic. The source text remains unchanged.
+  const small = parseDocument('# Financial report\n\n- Reviewed reconciliations and improved cash forecasting.', 1);
+  const layout = { pages: [small.blocks.map((_, i) => i)], spacing: 2, compact: true as const };
+  const browser = await launchWebsiteBrowser();
+  try {
+    const bytes = await generateDocx(small, layout);
+    const rendered = await renderDocument(browser, bytes, small, layout);
+    assert.equal(rendered.inspection.pageCount, 1);
+    assert.deepEqual(rendered.inspection.findings, []);
+    assert.equal(normalizedText(rendered.inspection.extractedText), normalizedText(contentText(small)));
+  } finally { await browser.close(); }
+});
+
+test('anonymous 850-word resume-shaped fixture completes genuine two-page production without dropping blocks', { timeout: 120000 }, async () => {
+  // Block shapes and sizes mirror a challenging two-page executive resume.
+  // Synthetic words only: no private resumes or user text in tests/artifacts.
+  const shape: Array<[number, number, number]> = [
+    [1,13,2],[0,65,8],[2,7,1],[0,557,76],[2,80,9],[0,75,8],[0,71,9],
+    [-1,231,32],[-1,181,21],[-1,100,14],[-1,180,27],[-1,283,38],
+    [0,75,8],[0,65,11],[-1,147,25],[-1,134,19],[-1,158,25],[-1,166,16],
+    [0,37,5],[0,34,5],[-1,121,17],[-1,108,14],[-1,198,21],
+    [0,84,10],[0,38,4],[-1,127,19],[-1,192,20],[2,30,3],
+    [0,83,13],[0,350,37],[-1,262,28],[-1,152,19],[-1,258,34],
+    [-1,144,14],[-1,177,21],[-1,190,22],[2,28,5],[0,54,10],
+    [-1,142,16],[0,89,14],[-1,199,24],[-1,101,16],
+    [0,44,8],[-1,194,25],[0,83,14],[-1,159,18],
+    [2,9,1],[0,22,3],[0,83,10],
+  ];
+  const syntheticWords = (chars: number, count: number) => {
+    const letters = chars - count + 1, perWord = Math.floor(letters / count), rest = letters % count;
+    return Array.from({ length: count }, (_, i) => {
+      const size = perWord + (i < rest ? 1 : 0);
+      const stem = ['management', 'forecasting', 'accounting', 'operations', 'financial'][i % 5];
+      return stem.repeat(Math.ceil(size / stem.length)).slice(0, size);
+    }).join(' ');
+  };
+  const spec = documentSchema.parse({
+    title: 'Synthetic executive resume', targetPages: 2,
+    blocks: shape.map(([kind, chars, words]) => ({
+      ...(kind > 0 ? { kind: 'heading' as const, level: kind as 1 | 2 } :
+        kind < 0 ? { kind: 'bullet' as const } : { kind: 'paragraph' as const }),
+      text: syntheticWords(chars, words),
+    })),
+  });
+  assert.equal(spec.blocks.length, 49);
+  assert.ok(contentText(spec).split(/\s+/).length >= 800);
+  const browser = await launchWebsiteBrowser();
+  try {
+    const produced = await produceDocument({ spec, browser, deadlineMs: Date.now() + 110000,
+      inspect: async rendered => ({ pages: rendered.images.map((_, i) => ({
+        page: i + 1, verdict: 'pass' as const, repair: 'none' as const,
+        observations: 'Synthetic raster inspected by the deterministic acceptance fixture.' })) }),
+    });
+    assert.equal(produced.inspection.pageCount, 2);
+    assert.deepEqual(produced.inspection.findings, []);
+    assert.equal(produced.inspection.visual, 'passed');
+    assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(spec)));
+    assert.ok(produced.corrections <= 3);
+  } finally { await browser.close(); }
 });
 
 test('document capability disclaimers reroute before rendering and never become document text', async () => {
