@@ -32,6 +32,21 @@ describe('explicit same-model authorization when OpenAI cache metadata is unrevi
     expect(quote.estimatorVersion).toBe('standalone-selected-model-uncached-v1');
     expect(quote.assumptions.join(' ')).toMatch(/Owner authorization is required/);
   });
+  it('keeps an otherwise valid oversized heuristic eligible for exact native preflight only',()=>{
+    const narrow: PricingSnapshot = {...pricing,models:pricing.models.map(row=>row.model===model ? {...row,maxContextTokens:272000} : row)};
+    const initial=prepare({messages:[{role:'system',content:'Preserved project context. '.repeat(14000)}]});
+    const first=estimatePreparedRequest(initial,narrow);
+    expect(first.issues).toContain('No reviewed no-fee cache metadata policy for this exact model');
+    expect(first.issues).toContain('Estimated input plus output exceeds supported context window');
+    const replacement=proposeSelectedModelUncached(initial,narrow)!;
+    expect(replacement).toBeDefined();
+    expect(replacement.payload.messages).toEqual(initial.payload.messages);
+    expect(estimatePreparedRequest(replacement,narrow).issues).toEqual(['Estimated input plus output exceeds supported context window']);
+    const verified=estimatePreparedRequest(replacement,narrow,{requestHash:replacement.hash,inputTokens:69133});
+    expect(verified.status).toBe('estimated');
+    expect(ownerSelectedUncachedEstimate(verified,true).ownerApprovalRequired).toBe(OWNER_SELECTED_UNCACHED);
+    expect(proposeSelectedModelUncached(prepare({service_tier:'priority',messages:[{role:'user',content:'x'.repeat(330000)}]}),narrow)).toBeNull();
+  });
   it('does not create an approval path for missing model rates, unsupported paid dimensions or non-OpenAI models',()=>{
     const unknown=prepareStandaloneRequest('openai','unknown-not-priced','/v1/chat/completions',{model:'unknown-not-priced',messages:[],prompt_cache_key:'x'});
     expect(proposeSelectedModelUncached(unknown,pricing)).toBeNull();
