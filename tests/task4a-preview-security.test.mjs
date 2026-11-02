@@ -93,7 +93,12 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
   // Chromium and authorize only exact-origin route.fetch calls.
   const {protectedPreviewHeaders}=await import('../scripts/project-browser-engine.mjs');
   const routeHeaders=protectedPreviewHeaders(origin+'/pilot',origin,{'cookie':'untrusted=1'},cookies);
-  assert.equal(routeHeaders.cookie,'_vercel_jwt=fixture-cookie');
+  assert.equal(routeHeaders.cookie,'untrusted=1; _vercel_jwt=fixture-cookie');
+  const replaced=protectedPreviewHeaders(origin+'/pilot',origin,{
+   Cookie:'session=app-cookie; _vercel_jwt=old-token'
+  },cookies);
+  assert.equal(replaced.cookie,'session=app-cookie; _vercel_jwt=fixture-cookie',
+   'Preserve unrelated app cookies without duplicating the Preview bypass cookie');
   assert.equal(routeHeaders['x-vercel-skip-toolbar'],'1');
   for(const other of ['https://sub.'+host+'/pilot',
    'https://katie-abcdef124-mark-fackrells-projects.vercel.app/pilot',
