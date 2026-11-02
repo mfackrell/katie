@@ -10,6 +10,12 @@ on:
       - 'tests/helpers/project-lifecycle-postgres.mjs'
       - 'tests/projects-sql.test.mjs'
       - 'tests/helpers/task4a-continuation-postgres.mjs'
+      - 'tests/task4a-continuation-owner.test.mjs'
+      - 'app/api/projects/task4a-continuation/route.ts'
+      - 'lib/projects/owner-authorization.ts'
+      - 'lib/missions/model.ts'
+      - 'components/task4a-continuation-owner-approval.tsx'
+      - 'components/chat-panel.tsx'
       - 'supabase/migrations/20261102211500_task4a_continuation_admission.sql'
       - 'supabase/migrations/20261102211600_task4a_expired_research_owner_recovery.sql'
       - 'supabase/migrations/20261102211700_task4a_verified_model_price_sources.sql'
@@ -55,6 +61,8 @@ jobs:
           writeFileSync('task4a-qualification/receipt.json',JSON.stringify(receipt,null,2)+'\n');
           console.log('Task 4A deterministic source-validator qualification: PASS; live requirement: BLOCKED');
           NODE
+      - name: Verify authenticated Task 4A owner approval endpoint
+        run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
