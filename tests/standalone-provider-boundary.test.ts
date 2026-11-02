@@ -453,7 +453,10 @@ test('cost admission allows a cheap Pro name and pauses an expensive ordinary na
   let current:PricingSnapshot={...snapshot};
   f.service.loadPricing=async version=>({snapshot:version===snapshot.version?snapshot:current,retrievedAt:new Date().toISOString()});
   const admit=f.service.admit;f.service.admit=async input=>{const a=await admit(input);a.state=BigInt(input.reservedMicrousd)>5000n?'paused':'reserved';return a;};
-  const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
+  const send=createAccountingFetch('openai',async(url)=>{
+   if(String(url).endsWith('/input_tokens'))return Response.json({input_tokens:100});
+   sends++;return receipt();
+  },f.factory);
   const payload={method:'POST',body:JSON.stringify({model,input:'hello',max_output_tokens:10})};
   const execute=()=>runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',payload));
   if(shouldPause){
@@ -594,7 +597,10 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
   const f=fakeLedger();let sends=0;
   const stream=provider==='openai'?'data: '+JSON.stringify({choices:[{delta:{content:'partial'},finish_reason:'length'}]})+'\n\ndata: [DONE]\n\n'
    :'data: '+JSON.stringify({type:'message_delta',delta:{stop_reason:'max_tokens'}})+'\n\ndata: '+JSON.stringify({type:'message_stop'})+'\n\n';
-  const send=createAccountingFetch(provider,async()=>{sends++;return new Response(stream,{headers:{'content-type':'text/event-stream'}});},f.factory);
+  const send=createAccountingFetch(provider,async(url)=>{
+   if(String(url).endsWith('/count_tokens'))return Response.json({input_tokens:100});
+   sends++;return new Response(stream,{headers:{'content-type':'text/event-stream'}});
+  },f.factory);
   const url=provider==='openai'?'https://api.openai.com/v1/chat/completions':'https://api.anthropic.com/v1/messages';
   const body={method:'POST',body:JSON.stringify({model:provider==='openai'?'gpt-4o':'claude-sonnet-5-5',messages:[{role:'user',content:'hello'}],stream:true})};
   await assert.rejects(runWithStandaloneAccounting(context,()=>send(url,body)),isStandaloneAccountingError);
