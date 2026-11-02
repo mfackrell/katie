@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser } from 'playwright-core';
 import { PAGE, documentPageStyle, type Layout } from './generate';
-import { contentText, pdfTextMatchesSource, type DocumentSpec, type Inspection, type Finding } from './model';
+import { contentText, pdfTextMatchesSource, normalizedText, type PdfTextFragment, type DocumentSpec, type Inspection, type Finding } from './model';
 
 export const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 export type RenderedDocument = { pdf: Buffer; images: Buffer[]; heights: number[]; inspection: Inspection };
@@ -84,8 +84,16 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
     const findings = [...layout.findings, ...raster.findings];
     if (spec.targetPages !== undefined && raster.images.length !== spec.targetPages)
       findings.push({ rule: 'page-count', page: 0, detail: `Expected ${spec.targetPages} pages; rendered ${raster.images.length}.` });
-    if (!pdfTextMatchesSource(raster.text, contentText(spec)))
+    if (!pdfTextMatchesSource(raster.text, contentText(spec), raster.fragments)) {
+      const expected=normalizedText(contentText(spec)), actual=normalizedText(raster.text);
+      console.warn('[DocumentFidelity] source/PDF difference class', {
+        expectedChars: expected.length, extractedChars: actual.length,
+        sameOrderedGlyphs: expected.replace(/\\s/gu, '') === actual.replace(/\\s/gu, ''),
+        fragmentCount: raster.fragments.length,
+        endOfLineCount: raster.fragments.filter(part => part.hasEOL).length,
+      });
       findings.push({ rule: 'reading-order', page: 0, detail: 'PDF text differs from document content or reading order.' });
+    }
     return { pdf, images: raster.images, heights: layout.heights, inspection: {
       pageCount: raster.images.length, findings, extractedText: raster.text, pageHashes: raster.images.map(sha256), visual: 'pending',
     } };
@@ -108,7 +116,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
       pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
       const document = await pdfjs.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)), isEvalSupported: false }).promise;
       if (document.numPages > maxPages || document.numPages < 1) throw new Error('PDF page count exceeds rendering bounds.');
-      const results: Array<{ png: string; text: string; overflow: boolean; blank: boolean }> = [];
+      const results: Array<{ png: string; text: string; fragments: PdfTextFragment[]; overflow: boolean; blank: boolean }> = [];
       for (let i = 1; i <= document.numPages; i++) {
         const p = await document.getPage(i), viewport = p.getViewport({ scale: 1.5 });
         const canvas = window.document.createElement('canvas'); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
@@ -123,7 +131,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
         });
         const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         let ink = 0; for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 180 && pixels[offset + 1] < 180 && pixels[offset + 2] < 180) ink++;
-        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), overflow, blank: ink < 40 });
+        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), fragments: items.map((item: { str: string; hasEOL: boolean }) => ({str:item.str, hasEOL:Boolean(item.hasEOL)})), overflow, blank: ink < 40 });
         canvas.width = canvas.height = 1; p.cleanup();
       }
       await document.destroy(); URL.revokeObjectURL(url); URL.revokeObjectURL(workerUrl);
@@ -131,7 +139,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
     }, { main, worker, data: pdf.toString('base64'), maxPages: PAGE.maxPages });
     const images = pages.map(p => Buffer.from(p.png.split(',')[1], 'base64'));
     if (images.reduce((sum, b) => sum + b.length, 0) > 12_000_000) throw new Error('Document raster exceeds inspection budget.');
-    return { images, text: pages.map(p => p.text).join('\n'), findings: pages.flatMap((p, i): Finding[] => [
+    return { images, text: pages.map(p => p.text).join('\n'), fragments: pages.flatMap((p, i) => i === 0 ? p.fragments : [{str:'',hasEOL:true},...p.fragments]), findings: pages.flatMap((p, i): Finding[] => [
       ...(p.overflow ? [{ rule: 'overflow' as const, page: i + 1, detail: 'PDF text lies outside page bounds.' }] : []),
       ...(p.blank ? [{ rule: 'whitespace' as const, page: i + 1, detail: 'Rasterized PDF page has no readable ink.' }] : []),
     ]) };
