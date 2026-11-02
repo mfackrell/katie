@@ -26,7 +26,16 @@ export function answeredDocumentRequest(progress: {
  * Only examine the opening of the answer; actual document copy may discuss
  * file capabilities later without constituting a refusal. */
 export function isDocumentCapabilityDenial(value: string): boolean {
-  const start = value.replace(/[\u2018\u2019]/g, "'").trim().slice(0, 600);
+  // Models sometimes echo an upstream "[Message timestamp: ...]" annotation
+  // before their actual reply. It must not hide a file-capability denial.
+  // Strip only explicitly recognized leading metadata, never arbitrary prose.
+  let start = value.replace(/[\u2018\u2019]/g, "'").trimStart();
+  for (let i = 0; i < 3; i++) {
+    const next = start.replace(/^\[(?:message timestamp|timestamp|generated at):[^\]\r\n]{1,100}\]\s*/i, '').trimStart();
+    if (next === start) break;
+    start = next;
+  }
+  start = start.slice(0, 900);
   if (!start || /^(?:#{1,3}\s|[-*+]\s|CLARIFICATION_REQUIRED:)/i.test(start)) return false;
   const introduction = start.split(/\n\s*\n/)[0].replace(/\s+/g, ' ');
   return /^(?:sorry[\s,.!:—-]*)?(?:i\s+(?:can't|cannot|can not|am unable to|don't have|do not have)|as an? (?:text-based )?(?:ai|language model)\b|unfortunately\b)/i.test(introduction)
