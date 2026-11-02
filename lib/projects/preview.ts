@@ -29,12 +29,15 @@ export async function previewCookies(origin:string,request:typeof fetch=fetch):P
  const cookieDomain=attributes.get('domain');
  const maxAge=attributes.get('max-age');
  const expires=attributes.get('expires');
+ // The deployed browser phase has a 75-second deadline; a cookie that expires
+ // before that bounded acceptance could finish is not usable authentication.
+ const ttl=maxAge!==undefined?Number(maxAge):expires!==undefined?(Date.parse(expires)-Date.now())/1000:300;
  if(!attributes.has('httponly')||!attributes.has('secure')||
     (cookieDomain&&cookieDomain.replace(/^\./,'').toLowerCase()!==hostname)||
     (attributes.has('path')&&attributes.get('path')!=='/')||
-    (maxAge!==undefined&&(!/^\d+$/.test(maxAge)||Number(maxAge)<=0))||
-    (maxAge===undefined&&expires!==undefined&&(!Number.isFinite(Date.parse(expires))||Date.parse(expires)<=Date.now())))throw new PreviewAccessUnavailable();
- return[{name:'_vercel_jwt',value:jwt,domain:new URL(origin).hostname,path:'/',httpOnly:true,secure:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+300}];
+    (maxAge!==undefined&&!/^\d+$/.test(maxAge))||
+    !Number.isFinite(ttl)||ttl<90)throw new PreviewAccessUnavailable();
+ return[{name:'_vercel_jwt',value:jwt,domain:hostname,path:'/',httpOnly:true,secure:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+Math.min(300,Math.floor(ttl))}];
 }
 export async function verifyDeployedPreview(preview:{url:string;headSha:string;deploymentId:number;statusId:number},contract:BrowserContract,projectId:string,request:typeof fetch=fetch,run=runScenarios){
  const safe=verifiedPreviewUrl(preview.url);if(!safe)throw Error('Verified Vercel Preview origin required');const origin=new URL(safe).origin;
