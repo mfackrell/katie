@@ -39,6 +39,21 @@ test('pagination prefers semantic section starts when both pages can fit unchang
   assert.deepEqual(layout.pages.flat(),[0,1,2,3,4,5]);
 });
 
+test('pagination retains a near-capacity semantic page boundary inside actual printable margins', () => {
+  const spec = documentSchema.parse({ title:'Multi-section report', targetPages:2, blocks:[
+    {kind:'heading',level:1,text:'Overview'},
+    {kind:'paragraph',text:'Summary text'},
+    {kind:'heading',level:2,text:'Analysis'},
+    {kind:'paragraph',text:'Supporting evidence'},
+    {kind:'paragraph',text:'Conclusions and next actions'},
+  ]});
+  // The second page needs 924 CSS pixels. The renderer permits this within
+  // the printable margins, while the old additional 12pt reserve rejected it.
+  const layout = paginate(spec,[100,250,80,400,444],2,4);
+  assert.deepEqual(layout.pages,[[0,1],[2,3,4]]);
+  assert.deepEqual(layout.pages.flat(),[0,1,2,3,4]);
+});
+
 test('semantic document hierarchy stays distinct without reducing readable body text', async () => {
   assert.equal(DOCUMENT_TYPE.bodyHalfPoints, 22);
   assert.ok(DOCUMENT_TYPE.headingHalfPoints[0] > DOCUMENT_TYPE.headingHalfPoints[1]);
