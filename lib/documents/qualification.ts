@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser } from 'playwright-core';
 import { documentSchema } from './model';
@@ -18,6 +18,11 @@ export async function qualifyDocument(browser: Browser, deadlineMs: number) {
     // repair path must catch overflow and rebuild the real DOCX before acceptance.
     initialLayout: { pages: [spec.blocks.map((_, i) => i)], spacing: 4 },
     inspect: async rendered => {
+      // Preserve the actual changed raster for independent review before
+      // modifying any qualification fingerprint. Never auto-approve changes.
+      const output = join(process.cwd(), 'test-artifacts/documents');
+      await mkdir(output, { recursive: true });
+      await Promise.all(rendered.images.map((image, i) => writeFile(join(output, `candidate-page-${i + 1}.png`), image)));
       if (rendered.images.length !== QUALIFIED_PAGES.length || rendered.images.some((image, i) => sha256(image) !== QUALIFIED_PAGES[i]))
         throw new Error('Qualification raster changed; independent visual review is required.');
       return { pages: rendered.images.map((_, i) => ({ page: i + 1, verdict: 'pass' as const, repair: 'none' as const,
