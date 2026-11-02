@@ -1,8 +1,12 @@
-import test from 'node:test';
+import test,{after} from 'node:test';
+import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
 
+const cases=[];
+function record(name,kind='negative'){cases.push({name,kind,verdict:'PASS',evidenceClass:'DETERMINISTIC_FIXTURE',validator:'actual production code'});}
+after(()=>{if(process.env.KATIE_TASK4A_CASE_REPORT)writeFileSync(process.env.KATIE_TASK4A_CASE_REPORT,JSON.stringify({version:1,task:'4A',headSha:process.env.QUALIFICATION_HEAD_SHA??null,cases},null,2)+'\n');});
 const host='katie-abcdef123-mark-fackrells-projects.vercel.app';
 const origin='https://'+host;
 const sha='a'.repeat(40);
@@ -30,7 +34,7 @@ const cookieRequest=async(_url,options)=>{
 test('Task 4A: source-bound immutable URL validator rejects aliases, paths, queries and invalid hosts',async()=>{
  await withFixtureEnv(async()=>{
   const {immutablePreviewUrl}=modules()('@/lib/agents/development');
-  assert.equal(immutablePreviewUrl(origin),origin+'/');
+  assert.equal(immutablePreviewUrl(origin),origin+'/');record('valid immutable Vercel deployment origin','positive');
   for(const candidate of [
    origin+'/other',origin+'/?x=1',origin+'/#fragment',
    'https://katie-git-feature-mark-fackrells-projects.vercel.app',
@@ -40,7 +44,7 @@ test('Task 4A: source-bound immutable URL validator rejects aliases, paths, quer
    'https://other-abcdef123-mark-fackrells-projects.vercel.app',
    'https://katie-abcdef123-mark-fackrells-projects.vercel.app.evil.test',
    'http://'+host,'https://user@'+host,'https://'+host+':8443/',
-  ])assert.equal(immutablePreviewUrl(candidate),null,candidate);
+  ]){assert.equal(immutablePreviewUrl(candidate),null,candidate);record('reject immutable URL: '+candidate);}
  });
 });
 
@@ -53,11 +57,11 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
   assert.equal(cookies[0].name,'_vercel_jwt');
   assert.equal(cookies[0].httpOnly,true);
   assert.equal(cookies[0].secure,true);
-  assert.equal(JSON.stringify(cookies).includes('fixture-only-edge-secret'),false);
+  assert.equal(JSON.stringify(cookies).includes('fixture-only-edge-secret'),false);record('valid edge-only host-scoped Secure HttpOnly cookie','positive');
   delete process.env.PROJECT_PREVIEW_BYPASS_SECRET;
   let called=false;
   await assert.rejects(previewCookies(origin,async()=>{called=true;return new Response('Unprotected app',{status:200});}),/requires authentication/);
-  assert.equal(called,false,'missing credential may never be treated as an unprotected success');
+  assert.equal(called,false,'missing credential may never be treated as an unprotected success');record('missing bypass credential cannot accept HTTP 200');
   process.env.PROJECT_PREVIEW_BYPASS_SECRET='fixture-only-edge-secret';
   for(const [name,response] of [
    ['missing cookie',new Response(null,{status:302,headers:{location:'/'}})],
@@ -72,13 +76,13 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
    ['off-origin redirect',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly','https://attacker.test/')],
    ['invalid redirect',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly','https://%')],
   ]){
-   await assert.rejects(previewCookies(origin,async()=>response),PreviewAccessUnavailable,name);
+   await assert.rejects(previewCookies(origin,async()=>response),PreviewAccessUnavailable,name);record('reject cookie: '+name);
   }
   const reauth=await previewCookies(origin,async()=>edgeResponse('_vercel_jwt=ok; Secure; HttpOnly; Max-Age=120','/'));
-  assert.equal(reauth[0].value,'ok');
+  assert.equal(reauth[0].value,'ok');record('usable expiring Max-Age cookie','positive');
   let crossHostCalls=0;
   await assert.rejects(previewCookies('https://katie-abcdef124-other-team.vercel.app',async()=>{crossHostCalls++;return edgeResponse();}),PreviewAccessUnavailable);
-  assert.equal(crossHostCalls,0,'secret cannot be forwarded to another deployment or team');
+  assert.equal(crossHostCalls,0,'secret cannot be forwarded to another deployment or team');record('cross-deployment credential forwarding rejected');
  });
 });
 
@@ -94,7 +98,7 @@ test('Task 4A: reachability check blocks cross-origin redirects before browser e
   };
   await assert.rejects(verifyDeployedPreview(preview,contract,projectId,request,async()=>{renders++;return[];}),PreviewAccessUnavailable);
   assert.equal(requests,2);
-  assert.equal(renders,0);
+  assert.equal(renders,0);record('off-origin app redirect blocked before rendering');
  });
 });
 
@@ -129,7 +133,7 @@ test('Task 4A: production deployment discovery validates real receipt, draft SHA
   const reset=()=>{settings={...settings,pr:basePr,afterPr:null,deployment:deploy,status,prReads:0,ghReads:0,dbRepo:'mfackrell/katie'};};
   reset();const valid=await developmentPreview(task,binding);
   assert.equal(valid.headSha,sha);assert.equal(valid.deploymentId,101);assert.equal(valid.statusId,202);
-  assert.equal(valid.url,origin+'/');assert.equal(settings.prReads,2);
+  assert.equal(valid.url,origin+'/');assert.equal(settings.prReads,2);record('same-head approved draft and Vercel bot success','positive');
   const negatives=[
    ['wrong connected repository',{dbRepo:'another/repo'},'reject'],
    ['PR repository mismatch',{pr:{...basePr,head:{...basePr.head,repo:{full_name:'other/repo'}}}},'reject'],
@@ -153,9 +157,10 @@ test('Task 4A: production deployment discovery validates real receipt, draft SHA
    reset();settings={...settings,...change};
    if(expected==='reject')await assert.rejects(developmentPreview(task,binding),undefined,name);
    else assert.equal(await developmentPreview(task,binding),null,name);
+   record('reject GitHub deployment evidence: '+name);
   }
-  reset();await assert.rejects(developmentPreview({...task,status:'blocked'},binding),/Head-bound/);
-  await assert.rejects(developmentPreview({...task,external:{...task.external,receipt:{...accepted,tested_head_sha:'b'.repeat(40)}}},binding),/Head-bound/);
+  reset();await assert.rejects(developmentPreview({...task,status:'blocked'},binding),/Head-bound/);record('non-ready task rejected');
+  await assert.rejects(developmentPreview({...task,external:{...task.external,receipt:{...accepted,tested_head_sha:'b'.repeat(40)}}},binding),/Head-bound/);record('invalid completion receipt rejected');
   await assert.rejects(developmentPreview({...task,external:{...task.external,receipt:{...accepted,projectAcceptance:{...accepted.projectAcceptance,projectId:randomUUID()}}}},binding),/Head-bound/);
   await assert.rejects(developmentPreview({...task,external:{...task.external,receipt:{...accepted,projectAcceptance:undefined}}},binding),/Head-bound/);
   assert.ok(settings.ghReads===0,'invalid completion receipts never inspect deployments');
