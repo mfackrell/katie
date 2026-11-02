@@ -12,7 +12,7 @@ import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
- {timeout:process.env.KATIE_TEST_TASK3B==='1'?2400000:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1'||process.env.KATIE_TEST_ORDINARY_HOST==='1'||process.env.KATIE_TEST_TASK2C==='1')?1500000:180000},async()=>{
+ {timeout:(process.env.KATIE_TEST_TASK3B==='1'||process.env.KATIE_TEST_TASK3C==='1')?2400000:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1'||process.env.KATIE_TEST_ORDINARY_HOST==='1'||process.env.KATIE_TEST_TASK2C==='1')?1500000:180000},async()=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
  const root=mkdtempSync(join(tmpdir(),'katie-continuation-')),data=join(root,'data');
  const clients=[];let started=false;
@@ -54,7 +54,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
     await db.query(readFileSync('supabase/migrations/'+name+'.sql','utf8'));
 
   for(const file of ['20261027233957_benchmark_production_owner_qualification.sql','20261028134500_benchmark_dashboard_task_approval.sql',
-   '20261026120000_project_completion_control.sql','20261027172000_specification_lifecycle_recovery.sql','20261028135500_benchmark_bounded_assessment.sql',
+   '20261026120000_project_completion_control.sql','20261102130000_project_assessment_source_binding.sql','20261027172000_specification_lifecycle_recovery.sql','20261028135500_benchmark_bounded_assessment.sql',
    '20261028180638_specification_draft_history.sql','20261028180911_benchmark_owner_continuation.sql','20261028181030_continuation_specification_scheduler.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   await db.query(`create table provider_health(provider_name text primary key,status text,reason text,failure_count int,blocked_until timestamptz,updated_at timestamptz);grant all on provider_health to service_role`);

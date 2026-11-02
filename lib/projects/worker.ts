@@ -16,7 +16,7 @@ import {runSpecialistResourceBatch} from './specialist-dispatch';
 import {announceBlockedRecoveryResources} from './recovery-budget';
 import {recoverSpecificationRoute} from './specification-route-recovery';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
-import { projectClosure, projectImpediment } from './completion';
+import { projectClosure, projectImpediment, assertProjectAssessmentBinding } from './completion';
 export async function baseline(p: Project) {
  let fullBaseline:string|null=null;
  if(p.profile==='game'){
@@ -217,12 +217,27 @@ async function advance(p: Project) {
         if (p.phase === 'assessment') {
             const finalRun = [...runs].reverse().find(r => r.kind === 'development' && r.outcome?.head === p.verified_sha);
             if (!finalRun?.binding || typeof finalRun.outcome?.taskId !== 'string') throw Error('Final verified task binding is missing');
+            try { assertProjectAssessmentBinding(p, m, finalRun.outcome.taskId); }
+            catch {
+                await finish('block', { detail: 'Final assessment is not bound to the accepted task, candidate and approved contract. Saved engineering remains available; completion is withheld.' });
+                return;
+            }
             const live = await developmentPreview(await readTask(finalRun.outcome.taskId), acceptanceBinding(finalRun.binding));
             if (!live || live.headSha !== p.verified_sha) { await finish('wait', { detail: 'Final preview evidence is not currently verified; completion is withheld.' }); return; }
             const url = new URL(p.spec!.finalContract.path, live.url).href;
             if(!p.preview?.browserAcceptance?.passed)throw Error('Actual deployed browser evidence is required before completion');
             if(live.deploymentId!==p.preview.deploymentId||live.statusId!==p.preview.statusId||url!==p.preview.url){await finish('preview',{...live,url});return;}
-            await finish('complete', { result: projectClosure(p,url), preview: { ...live, url }, verified_head: p.verified_sha, reviewedMissionId:m.id });
+            await finish('complete', {
+                result: projectClosure(p,url), preview: { ...live, url },
+                verified_head: p.verified_sha, reviewedMissionId:m.id,
+                receipt: {
+                    version:1, projectId:p.id, taskId:finalRun.outcome.taskId,
+                    developmentMissionId:finalRun.mission_id, assessmentMissionId:m.id,
+                    verifiedSha:p.verified_sha, approvedScopeHash:p.approved_hash,
+                    finalContractHash:digest(p.spec!.finalContract),
+                    browserAcceptance:p.preview.browserAcceptance,
+                },
+            });
             return;
         }
     }

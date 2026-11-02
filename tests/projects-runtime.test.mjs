@@ -42,7 +42,7 @@ function coordinator({deployedPassed=true}={}){let continuation=null;let p=struc
  const db={from:table=>({select(){return this;},eq(){return this;},not(){return this;},in(){return this;},order(){return this;},limit:async()=>({data:[],error:null}),maybeSingle:async()=>({data:table==='benchmark_full_project_bindings'&&continuation?{trial_id:'renewed-full-trial'}:p,error:null})})};
  const rpc=async(name,args)=>{if(name==='benchmark_active_full_continuation')return continuation;if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p.status==='running'?structuredClone(p):null;assert.equal(name,'finish_work_project');calls.push(structuredClone(args));if(args.p_action==='child'){
    const mid=randomUUID(),ctx=args.p_data.kind==='development'?{version:1,projectId:id,scopeHash:p.approved_hash,baseSha:p.verified_sha??p.baseline_sha,contractHash:digest(p.spec.milestones[p.milestone_index].contract),contract:p.spec.milestones[p.milestone_index].contract}:null;
-   p.active_mission_id=mid;runs.push({mission_id:mid,kind:args.p_data.kind,ordinal:++counter,milestone_index:p.milestone_index,binding:ctx,outcome:null});missions.set(mid,{mission:{id:mid,status:'running'},jobs:[]});
+   p.active_mission_id=mid;runs.push({mission_id:mid,kind:args.p_data.kind,ordinal:++counter,milestone_index:p.milestone_index,binding:ctx,outcome:null});missions.set(mid,{mission:{id:mid,status:'running',project_id:p.id,project_kind:args.p_data.kind,project_evidence:structuredClone(args.p_data.evidence)},jobs:[]});
   }else if(args.p_action==='advance'){const r=runs.find(r=>r.mission_id===p.active_mission_id);r.outcome=args.p_data;p.verified_sha=args.p_data.head;p.milestone_index++;p.active_mission_id=null;if(p.milestone_index===p.spec.milestones.length)p.phase='delivery';}
   else if(args.p_action==='preview'){p.preview=args.p_data;p.phase='browser_check';p.active_mission_id=null;}
   else if(args.p_action==='browser'){p.preview.browserAcceptance=args.p_data;p.phase='assessment';}
@@ -602,4 +602,19 @@ test('same-task Full renewal reaches final assessment without restarting specifi
   const saved=f.missions.get(f.p.active_mission_id);saved.mission.status='completed';saved.mission.result='Independent whole-project acceptance';
   await f.tick();assert.equal(f.p.status,'completed');
  }finally{for(const[k,v]of Object.entries(prior)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
+});
+
+for(const defect of ['missing evidence','wrong candidate','wrong scope','wrong contract','wrong task','wrong reviewer candidate','obsolete assessed browser'])test('final assessment closure rejects '+defect,async()=>{
+ const f=coordinator();await f.tick();f.complete('c'.repeat(40));await f.tick();await f.tick();f.complete('d'.repeat(40));await f.tick();
+ f.setPreview({url:'https://pilot.vercel.app/pilot',headSha:'d'.repeat(40),deploymentId:1,statusId:2});await f.tick();await f.tick();await f.tick();
+ const m=f.missions.get(f.p.active_mission_id).mission;m.status='completed';m.result='Assessment PASS';
+ const evidence=m.project_evidence;
+ if(defect==='missing evidence')delete m.project_evidence;
+ if(defect==='wrong candidate')evidence.finalIntegratedEvidence.head='e'.repeat(40);
+ if(defect==='wrong scope')evidence.approvedScopeHash='f'.repeat(64);
+ if(defect==='wrong contract')evidence.approvedFinalContract.scenarios[0].steps[1].value='Wrong';
+ if(defect==='wrong task')evidence.finalIntegratedEvidence.taskId=randomUUID();
+ if(defect==='wrong reviewer candidate')evidence.finalIntegratedEvidence.verification.reviewedHeadSha='e'.repeat(40);
+ if(defect==='obsolete assessed browser')evidence.preview.browserAcceptance.headSha='e'.repeat(40);
+ await f.tick();assert.notEqual(f.p.status,'completed');assert.equal(f.calls.at(-1).p_action,'block');assert.match(f.calls.at(-1).p_data.detail,/assessment is not bound/);
 });
