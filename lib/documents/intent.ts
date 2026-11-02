@@ -20,7 +20,11 @@ export function documentRequest(message: string): { pages?: number } | null {
       const boundary = Math.max(preceding.lastIndexOf('\n'), preceding.lastIndexOf('.'),
         preceding.lastIndexOf('!'), preceding.lastIndexOf('?'), preceding.lastIndexOf(';'));
       const lead = preceding.slice(boundary + 1).trimStart();
-      return requestLead.test(lead) &&
+      // "Build a PDF generator" and "Make sure Katie can generate a PDF"
+      // request engineering capability, not a PDF artifact.
+      const capabilityTask = /\b(?:make\s+sure|able\s+to|capable\s+of|ability\s+to|capability\s+to|feature\s+(?:to|that|for)|support\s+for|tool\s+(?:to|that|for)|system\s+(?:to|that)|backend\s+(?:to|that)|pipeline\s+(?:to|that)|endpoint\s+(?:to|that)|api\s+to)\b/i.test(production[0]) ||
+        /^\s*(?:generator|generation|renderer|rendering|exporter|converter|pipeline|capability|support|feature|tool|engine|code)\b/i.test(output.slice(production.index + production[0].length));
+      return requestLead.test(lead) && !capabilityTask &&
         (explicitOutput || !/\b(?:recommendations|advice|risks|explain|how to|about|source attachment)\b/i.test(production[1]));
     });
   if (!requested) return null;
