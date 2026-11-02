@@ -41,6 +41,59 @@ function storageFixture() {
   };
 }
 
+test('PDF.js EOL fragment alignment preserves exact ordered glyphs', () => {
+  const joined = (parts: Array<{str:string;hasEOL:boolean}>) =>
+    parts.map(part=>part.str+(part.hasEOL ? '\n' : '')).join('');
+
+  const source = 'Led financial forecasting across teams.';
+  const wrapped = [
+    { str: 'Led finan', hasEOL: true },
+    { str: 'cial forecasting', hasEOL: true },
+    { str: 'across teams.', hasEOL: false },
+  ];
+  assert.equal(pdfTextMatchesSource(joined(wrapped), source), false,
+    'The old string-only check cannot distinguish artificial line breaks from word spaces.');
+  assert.equal(pdfTextMatchesSource(joined(wrapped), source, wrapped), true);
+
+  const wrappedHyphen = [
+    { str: 'Led family-', hasEOL: true },
+    { str: 'owned financial', hasEOL: true },
+    { str: 'reporting.', hasEOL: false },
+  ];
+  assert.equal(pdfTextMatchesSource(joined(wrappedHyphen),
+    'Led family-owned financial reporting.', wrappedHyphen), true);
+
+  const listSource = 'Experience\nManaged budgets\nReduced expenses.';
+  const bullets = [
+    { str: 'Experience', hasEOL: true },
+    { str: '• Managed budgets', hasEOL: true },
+    { str: '• Reduced expenses.', hasEOL: false },
+  ];
+  assert.equal(pdfTextMatchesSource(joined(bullets), listSource, bullets), true);
+
+  const invalid = [
+    {str:'Led finan',hasEOL:true},
+    {str:'cial forecasts',hasEOL:true},
+    {str:'across teams.',hasEOL:false},
+  ];
+  assert.equal(pdfTextMatchesSource(joined(invalid), source, invalid), false,
+    'Changed letters fail even when only PDF line endings differ.');
+  const unsupportedWhitespace = [{str:'Led finan cial forecasting across teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(unsupportedWhitespace), source, unsupportedWhitespace), false,
+    'An arbitrary inserted space is not an EOL artifact.');
+  const missing = [{str:'Led financial forecasting teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(missing), source, missing), false);
+  const reordered = [{str:'Financial led forecasting across teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(reordered), source, reordered), false);
+  const duplicated = [{str:'Led financial financial forecasting across teams.',hasEOL:false}];
+  assert.equal(pdfTextMatchesSource(joined(duplicated), source, duplicated), false);
+
+  const renderCode = readFileSync('lib/documents/render.ts','utf8');
+  assert.match(renderCode,/pdfTextMatchesSource\(raster\.text, contentText\(spec\), raster\.fragments\)/);
+  assert.match(renderCode,/hasEOL:Boolean\(item\.hasEOL\)/);
+  assert.match(renderCode,/sameOrderedGlyphs/);
+});
+
 test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', () => {
   const source = 'Led a family-owned business with e-commerce and multi-entity reporting.';
   const pdfExtract = 'Led a family-\nowned business with e-\ncommerce and multi-entity reporting.';
