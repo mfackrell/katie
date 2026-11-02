@@ -123,7 +123,7 @@ export async function qualifyTask3cCompletion(db,ids,fixture,engineering,host) {
   const closed=(await db.query('select finish_work_project($1,$2,$3,$4) value',[ids.project,randomUUID(),'complete',{}])).rows[0].value;
   assert.equal(closed,false,'Replayed project completion must be fenced');
   report.missionJobs=jobs;report.assessmentJobs=assessments;report.finalProject=final;report.finalBrowser=fixture.finalBrowser;report.finalAccount=account;report.finalLedgerHash=digest(after);report.events.push({stage:'authoritative-project-completed',projectId:ids.project,head:final.verified_sha,assessmentMissionId:final.active_mission_id,receipt:final.result});
-  assert.equal(report.negativeCases.length>=12,true,'Every atomic negative acceptance case must execute');
+  assert.equal(report.negativeCases.length>=14,true,'Valid control and all negative acceptance cases must execute');
   report.passed=true;
   console.log('TASK3C_INTEGRATED_PROJECT_CLOSURE_PASS');
  } finally {
@@ -142,6 +142,25 @@ async function assertAtomicRejects(db,ids,project,negativeCases){
   const claim=(await db.query('select claim_work_project() c')).rows[0].c;
   assert.equal(claim?.id,ids.project);
   const assessment=claim.active_mission_id;
+  const development=(await db.query("select mission_id,outcome from project_runs where project_id=$1 and kind='development' and outcome->>'head'=$2 order by ordinal desc limit 1",[ids.project,claim.verified_sha])).rows[0];
+  assert.ok(development?.outcome?.taskId,'Original development receipt required for valid completion control');
+  const contractHash=(await db.query("select encode(sha256(convert_to(project_canonical($1::jsonb),'UTF8')),'hex') hash",[JSON.stringify(claim.spec.finalContract)])).rows[0].hash;
+  const completion={result:'Completed: frozen synthetic project',preview:claim.preview,verified_head:claim.verified_sha,reviewedMissionId:assessment,receipt:{
+   version:1,projectId:ids.project,taskId:development.outcome.taskId,developmentMissionId:development.mission_id,
+   assessmentMissionId:assessment,verifiedSha:claim.verified_sha,approvedScopeHash:claim.approved_hash,
+   finalContractHash:contractHash,browserAcceptance:claim.preview.browserAcceptance
+  }};
+  const complete=() => db.query("select finish_work_project($1,$2,'complete',$3::jsonb) ok",[ids.project,claim.lease,JSON.stringify(completion)]);
+  await db.query('savepoint task3c_valid_control');
+  assert.equal((await complete()).rows[0].ok,true,'Unmodified original project must complete with the same authentic receipt');
+  await db.query('rollback to savepoint task3c_valid_control');
+  await db.query('release savepoint task3c_valid_control');
+  negativeCases.push({name:'positive-closure-control',accepted:true,rolledBack:true});
+  await db.query('savepoint task3c_missing_receipt');
+  await assert.rejects(db.query("select finish_work_project($1,$2,'complete',$3::jsonb)",[ids.project,claim.lease,JSON.stringify({...completion,receipt:null})]),/Final assessment is not bound/);
+  await db.query('rollback to savepoint task3c_missing_receipt');
+  await db.query('release savepoint task3c_missing_receipt');
+  negativeCases.push({name:'missing-structured-closure-receipt',rejected:true});
   const cases=[
    {name:'missing-native-completion-task',sql:"update project_runs set outcome=outcome-'taskId' where project_id=$1 and kind='development'",args:[ids.project]},
    {name:'missing-final-verification',sql:"update project_runs set outcome=jsonb_set(outcome,'{verification,testedHeadSha}','null'::jsonb) where project_id=$1 and kind='development'",args:[ids.project]},
@@ -158,14 +177,14 @@ async function assertAtomicRejects(db,ids,project,negativeCases){
   for(const item of cases){
    await db.query('savepoint task3c_negative');
    await db.query(item.sql,item.args);
-   await assert.rejects(db.query("select finish_work_project($1,$2,'complete','{}'::jsonb)",[ids.project,claim.lease]),/bound|independent|acceptance|required|contract|candidate/i,item.name);
+   await assert.rejects(complete(),/bound|independent|acceptance|required|contract|candidate/i,item.name);
    await db.query('rollback to savepoint task3c_negative');
    await db.query('release savepoint task3c_negative');
    negativeCases.push({name:item.name,rejected:true});
   }
   await db.query('savepoint task3c_expired');
   await db.query("update work_projects set deadline=now()-interval '1 second' where id=$1",[ids.project]);
-  assert.equal((await db.query("select finish_work_project($1,$2,'complete','{}'::jsonb) ok",[ids.project,claim.lease])).rows[0].ok,false);
+  assert.equal((await complete()).rows[0].ok,false);
   await db.query('rollback to savepoint task3c_expired');
   await db.query('release savepoint task3c_expired');
   negativeCases.push({name:'expired-project-authorization',rejected:true});
