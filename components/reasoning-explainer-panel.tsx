@@ -66,7 +66,6 @@ export function ReasoningExplainerPanel({
   loading,
   state,
   statusMessage,
-  streamingAnswer = "",
   collaborationActive = false,
   collaborationActivity = [],
   collaborationSummary,
@@ -75,13 +74,12 @@ export function ReasoningExplainerPanel({
   loading: boolean;
   state: ReasoningUiState;
   statusMessage?: string;
-  streamingAnswer?: string;
   collaborationActive?: boolean;
   collaborationActivity?: CollaborationActivityItem[];
   collaborationSummary?: CollaborationSummary | null;
   onClose?: () => void;
 }) {
-  const isWaitingToStart = loading && !state.startedAt && !streamingAnswer;
+  const isWaitingToStart = loading && !state.startedAt;
   const hasFinalAnswer = Boolean(state.finalAnswer);
   const cleanLiveExplainer = useMemo(() => sanitizeLiveExplainer(state.liveExplainer ?? ""), [state.liveExplainer]);
 
@@ -145,17 +143,6 @@ export function ReasoningExplainerPanel({
             )}
           </div>
         </section>
-
-        {loading && streamingAnswer ? (
-          <section aria-label="Live response preview">
-            <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Live response</p>
-            <div className="max-h-40 overflow-y-auto rounded-md bg-white/[0.03] px-2.5 py-2 text-[12px] leading-5 text-zinc-100">
-              <p className="whitespace-pre-wrap break-words">
-                {streamingAnswer.length > 1600 ? `…${streamingAnswer.slice(-1600)}` : streamingAnswer}
-              </p>
-            </div>
-          </section>
-        ) : null}
 
         {collaborationActivity.length > 0 ? (
           <section>
