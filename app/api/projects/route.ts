@@ -113,7 +113,7 @@ async function verifiedResourceOwner(request:NextRequest):Promise<boolean>{
  if(!bearer||!/^Bearer [A-Za-z0-9._~-]+$/.test(bearer)||bearer.length>8192||
     !endpoint||!key||!ownerId)return false;
  try{
-  const response=await fetch(endpoint.replace(/\\/$/,'')+'/auth/v1/user',{
+  const response=await fetch((endpoint.endsWith('/')?endpoint.slice(0,-1):endpoint)+'/auth/v1/user',{
    headers:{Authorization:bearer,apikey:key},cache:'no-store',redirect:'error',
    signal:AbortSignal.timeout(5000)
   });
