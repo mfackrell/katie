@@ -156,6 +156,54 @@ test('two-page 11pt compact layout preserves content when standard pagination ca
   } finally { await browser.close(); }
 });
 
+test('anonymous 850-word resume-shaped fixture completes genuine two-page production without dropping blocks', { timeout: 120000 }, async () => {
+  // Block shapes and sizes mirror a challenging two-page executive resume.
+  // Synthetic words only: no private resumes or user text in tests/artifacts.
+  const shape: Array<[number, number, number]> = [
+    [1,13,2],[0,65,8],[2,7,1],[0,557,76],[2,80,9],[0,75,8],[0,71,9],
+    [-1,231,32],[-1,181,21],[-1,100,14],[-1,180,27],[-1,283,38],
+    [0,75,8],[0,65,11],[-1,147,25],[-1,134,19],[-1,158,25],[-1,166,16],
+    [0,37,5],[0,34,5],[-1,121,17],[-1,108,14],[-1,198,21],
+    [0,84,10],[0,38,4],[-1,127,19],[-1,192,20],[2,30,3],
+    [0,83,13],[0,350,37],[-1,262,28],[-1,152,19],[-1,258,34],
+    [-1,144,14],[-1,177,21],[-1,190,22],[2,28,5],[0,54,10],
+    [-1,142,16],[0,89,14],[-1,199,24],[-1,101,16],
+    [0,44,8],[-1,194,25],[0,83,14],[-1,159,18],
+    [2,9,1],[0,22,3],[0,83,10],
+  ];
+  const syntheticWords = (chars: number, count: number) => {
+    const letters = chars - count + 1, perWord = Math.floor(letters / count), rest = letters % count;
+    return Array.from({ length: count }, (_, i) => {
+      const size = perWord + (i < rest ? 1 : 0);
+      const stem = ['management', 'forecasting', 'accounting', 'operations', 'financial'][i % 5];
+      return stem.repeat(Math.ceil(size / stem.length)).slice(0, size);
+    }).join(' ');
+  };
+  const spec = documentSchema.parse({
+    title: 'Synthetic executive resume', targetPages: 2,
+    blocks: shape.map(([kind, chars, words]) => ({
+      ...(kind > 0 ? { kind: 'heading' as const, level: kind as 1 | 2 } :
+        kind < 0 ? { kind: 'bullet' as const } : { kind: 'paragraph' as const }),
+      text: syntheticWords(chars, words),
+    })),
+  });
+  assert.equal(spec.blocks.length, 49);
+  assert.ok(contentText(spec).split(/\\s+/).length >= 800);
+  const browser = await launchWebsiteBrowser();
+  try {
+    const produced = await produceDocument({ spec, browser, deadlineMs: Date.now() + 110000,
+      inspect: async rendered => ({ pages: rendered.images.map((_, i) => ({
+        page: i + 1, verdict: 'pass' as const, repair: 'none' as const,
+        observations: 'Synthetic raster inspected by the deterministic acceptance fixture.' })) }),
+    });
+    assert.equal(produced.inspection.pageCount, 2);
+    assert.deepEqual(produced.inspection.findings, []);
+    assert.equal(produced.inspection.visual, 'passed');
+    assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(spec)));
+    assert.ok(produced.corrections <= 3);
+  } finally { await browser.close(); }
+});
+
 test('document capability disclaimers reroute before rendering and never become document text', async () => {
   const disclaimer = "I can't create, render, or download actual Word or PDF files. That's outside my technical capabilities.\n\nHere are manual options.";
   assert.equal(isDocumentCapabilityDenial(disclaimer), true);
