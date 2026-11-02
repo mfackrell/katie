@@ -3786,7 +3786,13 @@ ${chunkWorkflowSummary}`;
                     );
                   }
                 });
-                console.log("[Chat API] Memory persistence complete", { actorId, chatId, requestId });
+                const summaryResult = memoryResults[1];
+                const degraded = memoryResults.some(result => result.status === "rejected") ||
+                  (summaryResult.status === "fulfilled" && summaryResult.value === "blocked");
+                console.log(degraded ? "[Chat API] Memory persistence degraded" : "[Chat API] Memory persistence complete", {
+                  actorId, chatId, requestId,
+                  intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
+                });
               } catch (error) {
                 if (isStandaloneAccountingError(error)) throw error;
                 console.error("[Chat API] Background memory persistence error", {

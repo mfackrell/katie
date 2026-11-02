@@ -3,7 +3,7 @@ import { loadTaskHandoffKnowledgeContext } from "@/lib/agents/task-handoff-knowl
 import { currentAgentTask } from "@/lib/agents/policy";
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
 import { getAdaptiveResponseCompositionInstruction } from "@/lib/chat/adaptive-response-composition";
-import { getChatContextState, listActorMemoryDocuments } from "@/lib/data/persistence-store";
+import { getChatContextState, getPendingIntermediateContext, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory } from "@/lib/memory/short-term";
 import type { ActorRoutingProfile, Message } from "@/lib/types/chat";
@@ -39,12 +39,29 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     })
     .map((doc) => `DOCUMENT ${doc.id} (${doc.title}; ${doc.createdAt}):\n${doc.content}`)
     .join("\n\n");
-  const history =
+  const stmHistory =
     messagesFromShortTermMemory(shortTermMemory, chatId) ??
     filterConversationalMessages(recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
-  const summary =
-    (typeof intermediateMemory.summary === "string" && intermediateMemory.summary.trim()) ||
+  const cutoff = typeof intermediateMemory.summarizedThroughCreatedAt === "string"
+    ? intermediateMemory.summarizedThroughCreatedAt : null;
+  // Pending older exchanges remain available even when a batch is not yet due
+  // or a prior batch failed. Do not create an unacknowledged ITM-to-STM gap.
+  const pending = stmHistory.length === SHORT_TERM_MESSAGE_LIMIT && stmHistory[0]?.createdAt &&
+    (!cutoff || Date.parse(cutoff) < Date.parse(stmHistory[0].createdAt))
+    ? await getPendingIntermediateContext(chatId, cutoff, stmHistory[0].createdAt, 120)
+    : { messages: [] as Message[], truncated: false };
+  const pendingHistory = filterConversationalMessages(pending.messages);
+  const history = [...pendingHistory, ...stmHistory];
+  if (pendingHistory.length || pending.truncated) {
+    console.info("[ITM Context] Pending source coverage", {
+      chatId, pendingMessages: pendingHistory.length, truncated: pending.truncated,
+    });
+  }
+  const summaryBase = (typeof intermediateMemory.summary === "string" && intermediateMemory.summary.trim()) ||
     "No older summarized conversation context is available yet.";
+  const summary = pending.truncated
+    ? summaryBase + "\n[INTERMEDIATE MEMORY COVERAGE DEGRADED: Older unsummarized messages are durably stored but exceed live context capacity; retrieve original messages when needed.]"
+    : summaryBase;
 
   // Authoritative corrections are an explicit memory overlay, not merely an
   // old conversation transcript or another low-priority reference document.
