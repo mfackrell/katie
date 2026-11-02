@@ -38,8 +38,7 @@ test('semantic document hierarchy stays distinct without reducing readable body 
     {kind:'bullet',text:'First finding preserved verbatim.'},
   ]});
   const bytes = await generateDocx(spec,{pages:[[0,1,2,3,4]],spacing:4});
-  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const extracted = await mammoth.extractRawText({arrayBuffer});
+  const extracted = await mammoth.extractRawText({buffer: bytes} as unknown as Parameters<typeof mammoth.extractRawText>[0]);
   for (const block of spec.blocks) if ('text' in block)
     assert.ok(extracted.value.includes(block.text), 'DOCX must retain source wording');
 });
