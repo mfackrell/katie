@@ -5,6 +5,9 @@ import {verifiedProjectOwnerSession} from '@/lib/projects/owner-authorization';
 
 export const runtime='nodejs';
 const original='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+type ProjectRow={id:string;status:string;phase:string;actor_id:string;chat_id:string;active_mission_id:string|null};
+type ProposalRow={ready?:boolean;digest?:string;proposal?:Record<string,unknown>;reason?:string};
+type RecoveryRow={authorized:boolean;oldMissionId:string;newMissionId:string;authorizationId:string;originalTokens:number;originalCalls:number;additionalTokens:number;additionalCalls:number;additionalMicrousd:number};
 const approval=z.object({
  approve:z.literal(true),
  proposalDigest:z.string().regex(/^[a-f0-9]{64}$/)
@@ -20,9 +23,9 @@ export async function GET(request:NextRequest){
   const db=getSupabaseAdminClient();
   const {data:project,error:projectError}=await db.from('work_projects')
    .select('id,status,phase,actor_id,chat_id,active_mission_id')
-   .eq('id',original).maybeSingle();
+   .eq('id',original).maybeSingle<ProjectRow>();
   if(projectError||!project)return reply({error:'Original project unavailable.'},404);
-  const {data:proposal,error}=await db.rpc('task4a_continuation_proposal',{p_id:original});
+  const {data:proposal,error}=await db.rpc<ProposalRow|null>('task4a_continuation_proposal',{p_id:original});
   if(error)return reply({error:'Task 4A financial qualification is not deployed or cannot be verified.'},503);
   return reply({projectId:original,chatId:project.chat_id,status:project.status,
    phase:project.phase,originalMissionId:project.active_mission_id,
@@ -48,7 +51,7 @@ export async function POST(request:NextRequest){
   const {data:current,error:proposalError}=await db.rpc('task4a_continuation_proposal',{p_id:original});
   if(proposalError||!current||current.ready!==true||current.digest!==input.proposalDigest)
    return reply({error:'The financial proposal or verified model prices changed. Refresh before authorizing.'},409);
-  const {data:committed,error}=await db.rpc('authorize_task4a_expired_research',{
+  const {data:committed,error}=await db.rpc<RecoveryRow>('authorize_task4a_expired_research',{
    p_id:original,p_actor:project.actor_id,p_chat:project.chat_id,
    p_digest:input.proposalDigest
   });
