@@ -368,7 +368,8 @@ const actualAccountingFetch = createAccountingFetch;
 function googleFixture(t: TestContext) {
   const fake = fakeLedger(true), sent: string[] = [];
   t.mock.method(accountingDispatch, 'createAccountingFetch', (provider: Parameters<typeof createAccountingFetch>[0]) =>
-    actualAccountingFetch(provider, async (_url, init) => {
+    actualAccountingFetch(provider, async (url, init) => {
+      if (String(url).endsWith(':countTokens')) return Response.json({ totalTokens: 100 });
       sent.push(String(init?.body));
       return new Response(JSON.stringify({ responseId: 'google-fixture', modelVersion: 'gemini-2.5-flash',
         candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [{ text: JSON.stringify({
@@ -395,7 +396,7 @@ test('saved attachment selector approves normalized Google REST bytes and sends 
   }) }] }]);
   assert.ok(quoted.payload.systemInstruction);
   assert.equal(a.preflight_estimate.requestHash, quoted.hash);
-  assert.equal(estimatePreparedRequest(quoted).reservationMicrousd, a.reserved_microusd);
+  assert.equal(estimatePreparedRequest(quoted, PRICING_SNAPSHOT, { requestHash: quoted.hash, inputTokens: 100 }).reservationMicrousd, a.reserved_microusd);
   // The approval RPC itself is exercised against PostgreSQL in the ledger suite.
   const approvedHash = a.prepared_hash; a.state = 'reserved';
   const decision = await runWithStandaloneAccounting(context, select);
@@ -607,7 +608,8 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
 test('legacy explicit Google observation replays accepted block without observing twice',async t=>{
  const f=fakeLedger();let sends=0;const oldKey=process.env.GOOGLE_API_KEY;process.env.GOOGLE_API_KEY='offline-fixture';
  t.after(()=>{if(oldKey===undefined)delete process.env.GOOGLE_API_KEY;else process.env.GOOGLE_API_KEY=oldKey;});
- t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async()=>{
+ t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async(url)=>{
+  if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});
   sends++;return Response.json({responseId:'saved-blocked-observation',modelVersion:'gemini-2.5-flash',promptFeedback:{blockReason:'OTHER'},usageMetadata:{promptTokenCount:10}});
  },f.factory));
  const image={fileId:'file',fileName:'photo.png',mimeType:'image/png',preview:'Stored photo metadata',imageDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII='};
@@ -625,7 +627,7 @@ test('legacy explicit Google observation replays accepted block without observin
 
 test('auto-authorized incomplete usage replays genuine Gemini selector output without approval or retransmission',async()=>{
  const f=fakeLedger();f.service.uncertainExposureAccepted=async()=>true;let sends=0;
- const send=createAccountingFetch('google',async()=>{sends++;return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"selections":[]}'}]}}]});},f.factory);
+ const send=createAccountingFetch('google',async(url)=>{if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});sends++;return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"selections":[]}'}]}}]});},f.factory);
  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
  const init={method:'POST',body:JSON.stringify({contents:[{role:'user',parts:[{text:'Select relevant saved attachments'}]}],generationConfig:{maxOutputTokens:1000}})};
  for(let i=0;i<3;i++){const response=await runWithStandaloneAccounting({...context,resumed:i>0},()=>send(url,init));assert.equal(response.status,200);assert.match(await response.text(),/selections/);}
