@@ -88,7 +88,7 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
       const expected=normalizedText(contentText(spec)), actual=normalizedText(raster.text);
       console.warn('[DocumentFidelity] source/PDF difference class', {
         expectedChars: expected.length, extractedChars: actual.length,
-        sameOrderedGlyphs: expected.replace(/\\s/gu, '') === actual.replace(/\\s/gu, ''),
+        sameOrderedGlyphs: expected.replace(/\s/gu, '') === actual.replace(/\s/gu, ''),
         fragmentCount: raster.fragments.length,
         endOfLineCount: raster.fragments.filter(part => part.hasEOL).length,
       });
