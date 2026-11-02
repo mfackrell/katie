@@ -53,7 +53,7 @@ export async function verifyDeployedPreview(preview:{url:string;headSha:string;d
  const origin=target.origin;
  const cookies=await previewCookies(origin,request);
  const check=await request(new URL(contract.path,origin),{headers:cookies.length?{cookie:'_vercel_jwt='+cookies[0].value}:{},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(10000)});await check.body?.cancel();
- if([401,403].includes(check.status)||check.status>=300&&check.status<400&&(!check.headers.get('location')||!samePreviewOrigin(check.headers.get('location')!,origin)))throw new PreviewAccessUnavailable();
+ if(check.status<200||check.status>=400||check.status>=300&&check.status<400&&(!check.headers.get('location')||!samePreviewOrigin(check.headers.get('location')!,origin)))throw new PreviewAccessUnavailable();
  const checks=await run(contract,origin,{deployed:true,cookies,timeout:75000});
  return{version:1,projectId,contractHash:digest(contract),headSha:preview.headSha,deploymentId:preview.deploymentId,statusId:preview.statusId,url:new URL(contract.path,origin).href,checkedAt:new Date().toISOString(),passed:checks.length===contract.scenarios.length&&checks.every((c,i)=>c.passed&&c.name===contract.scenarios[i].name),checks};
 }
