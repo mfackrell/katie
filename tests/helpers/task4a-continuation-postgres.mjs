@@ -157,6 +157,25 @@ export async function verifyTask4aContinuationPostgres(db,connect){
  await query(db,'begin');
  await query(db,'set role service_role');
  assert.equal((await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization.a.authorizationId])).n,2);
+ // Test each remaining independent failure dimension without letting the
+ // exhausted call limit mask a missing dollar, token or deadline check.
+ await query(db,'reset role');
+ await query(db,'update project_continuation_authorizations set incremental_calls=53,incremental_microusd=1 where id=$1',[authorization.a.authorizationId]);
+ await query(db,'set role service_role');
+ assert.equal(await reserve('openai:gpt-5.6-sol',1000),false,'Dollar ceiling must reject before another provider request');
+ await query(db,'reset role');
+ await query(db,'update project_continuation_authorizations set incremental_microusd=15000000,incremental_tokens=120001 where id=$1',[authorization.a.authorizationId]);
+ await query(db,'set role service_role');
+ assert.equal(await reserve('openai:gpt-5.6-sol',1000),false,'Protected token reserve must reject early exhaustion');
+ await query(db,'reset role');
+ await query(db,"update project_continuation_authorizations set incremental_tokens=440326,deadline=authorized_at+interval '1 millisecond' where id=$1",[authorization.a.authorizationId]);
+ await query(db,'set role service_role');
+ assert.equal(await reserve('openai:gpt-5.6-sol',1000),false,'Expired owner authorization must reject all provider admission');
+ await query(db,'reset role');
+ await query(db,"update project_continuation_authorizations set deadline=authorized_at+interval '4 hours' where id=$1",[authorization.a.authorizationId]);
+ await query(db,'set role service_role');
+ assert.equal(await reserve('openai:gpt-5.6-sol',1000,firstCall.id),false,'Duplicate call ID must never reserve twice');
+ assert.equal((await one(db,'select count(*)::int n from mission_calls where project_continuation_id=$1',[authorization.a.authorizationId])).n,2);
  // Unlike a finished provider call, an unconfirmed receipt remains reserved
  // and must refuse every future admission.
  await query(db,'reset role');
