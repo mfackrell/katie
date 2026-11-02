@@ -7,7 +7,7 @@ import mammoth from 'mammoth';
 import sharp from 'sharp';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import { qualifyDocument, QUALIFIED_PAGES } from '../lib/documents/qualification';
-import { contentText, documentSchema, normalizedText, parseDocument } from '../lib/documents/model';
+import { contentText, documentSchema, normalizedText, parseDocument, pdfTextMatchesSource } from '../lib/documents/model';
 import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial } from '../lib/documents/intent';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
@@ -38,6 +38,16 @@ function storageFixture() {
     } as unknown as Parameters<typeof createDocumentStore>[0],
   };
 }
+
+test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', () => {
+  const source = 'Led a family-owned business with e-commerce and multi-entity reporting.';
+  const pdfExtract = 'Led a family-\\nowned business with e-\\ncommerce and multi-entity reporting.';
+  assert.equal(pdfTextMatchesSource(pdfExtract, source), true);
+  assert.equal(pdfTextMatchesSource(source, source), true);
+  assert.equal(pdfTextMatchesSource('Led a family-owned business with e-commerce.', source), false, 'missing words remain fatal');
+  assert.equal(pdfTextMatchesSource('Led a family-owned company with e-commerce and multi-entity reporting.', source), false, 'changed content remains fatal');
+  assert.equal(pdfTextMatchesSource('Led an e-commerce business with family-owned and multi-entity reporting.', source), false, 'reordering remains fatal');
+});
 
 test('document routing is explicit and ordinary text requests remain inert', () => {
   assert.deepEqual(documentRequest('Produce a professionally formatted two-page Word document and PDF'), { pages: 2 });
