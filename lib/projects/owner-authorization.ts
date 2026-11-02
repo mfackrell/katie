@@ -2,7 +2,7 @@
 // identifier, an unauthenticated cookie, or an unverified browser hint.
 export async function verifiedProjectOwnerSession(request:Request):Promise<boolean>{
  if(process.env.VERCEL_ENV!=='production'||
-    request.headers.get('origin')!==new URL(request.url).origin)return false;
+    (request.method!=='GET'&&request.headers.get('origin')!==new URL(request.url).origin))return false;
  const bearer=request.headers.get('authorization');
  const endpoint=process.env.NEXT_PUBLIC_SUPABASE_URL;
  const key=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
