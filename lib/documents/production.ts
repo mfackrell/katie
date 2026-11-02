@@ -11,6 +11,14 @@ export const visualReportSchema = z.object({ pages: z.array(z.object({
 }).strict()).min(1).max(PAGE.maxPages) }).strict();
 export type VisualReport = z.infer<typeof visualReportSchema>;
 export type VisualInspector = (rendered: RenderedDocument, attempt: number) => Promise<VisualReport>;
+
+/** Repeating a page-specific spacing request after it was applied is a
+ * non-converging correction, not permission to spend on indefinite retries. */
+export function repeatedVisualSpacingPages(previous: VisualReport | null, current: VisualReport): number[] {
+  if (!previous) return [];
+  const prior = new Set(previous.pages.filter(page => page.verdict === 'repair' && page.repair === 'increase_spacing').map(page => page.page));
+  return current.pages.filter(page => page.verdict === 'repair' && page.repair === 'increase_spacing' && prior.has(page.page)).map(page => page.page);
+}
 export type ProductionResult = { docx: Buffer; pdf: Buffer; images: Buffer[]; inspection: Inspection; corrections: number; attempts: Array<{ findings: Inspection['findings']; visual?: VisualReport }> };
 
 /** The first overfull layout is only a measuring pass, not an acceptable PDF.
@@ -37,13 +45,21 @@ export async function produceDocument(input: {
   const indices = layout.pages.flat();
   if (JSON.stringify(indices) !== JSON.stringify(spec.blocks.map((_, i) => i)) || !Number.isFinite(layout.spacing) || layout.spacing < 2 || layout.spacing > 12) throw new Error('Invalid document layout.');
   const attempts: ProductionResult['attempts'] = [];
-  for (let attempt = 0; attempt < 4; attempt++) {
+  let previousVisualRepair: VisualReport | null = null;
+  let visualCorrections = 0;
+  // Two measuring passes (standard and compact) plus a bounded visual repair
+  // need a final inspection of the corrected bytes. Never deliver uninspected.
+  for (let attempt = 0; attempt < 5; attempt++) {
     if (Date.now() >= input.deadlineMs) throw new Error('Document production deadline reached. No delivery claimed.');
     const docx = await generateDocx(spec, layout);
     const rendered = await renderDocument(input.browser, docx, spec, layout);
     const record: ProductionResult['attempts'][number] = { findings: rendered.inspection.findings }; attempts.push(record);
     if (!record.findings.length) {
       const visual = visualReportSchema.parse(await input.inspect(rendered, attempt)); record.visual = visual;
+      console.info('[DocumentVision] rendered-page inspection', {
+        attempt, compact: Boolean(layout.compact), spacing: layout.spacing,
+        pages: visual.pages.map(page => ({ page: page.page, verdict: page.verdict, repair: page.repair })),
+      });
       if (visual.pages.length !== rendered.images.length || new Set(visual.pages.map(p => p.page)).size !== rendered.images.length || visual.pages.some(p => p.page > rendered.images.length))
         throw new Error('Visual inspection did not evaluate every rendered page.');
       if (visual.pages.every(p => p.verdict === 'pass' && p.repair === 'none')) {
@@ -53,8 +69,20 @@ export async function produceDocument(input: {
       for (const p of visual.pages.filter(p => p.verdict !== 'pass')) record.findings.push({ rule: 'visual', page: p.page, detail: p.observations });
       if (visual.pages.some(p => p.verdict === 'blocked' || p.verdict === 'repair' && p.repair === 'none'))
         throw new Error('Visual inspection found a defect outside safe automatic formatting repair. No files delivered.');
-      if (visual.pages.some(p => p.repair === 'increase_spacing')) {
-        layout = { ...layout, spacing: Math.min(10, layout.spacing + 2) }; continue;
+      if (visual.pages.some(p => p.verdict === 'repair' && p.repair === 'increase_spacing')) {
+        const repeated = repeatedVisualSpacingPages(previousVisualRepair, visual);
+        if (repeated.length) {
+          console.warn('[DocumentVision] spacing correction did not converge', {
+            pages: repeated, attemptedSpacing: layout.spacing, visualCorrections,
+          });
+          throw new Error('Visual inspection still requires spacing changes after an attempted correction. No files delivered.');
+        }
+        if (visualCorrections >= 2 || layout.spacing >= 10)
+          throw new Error('Visual inspection requires a formatting change beyond the safe correction limit. No files delivered.');
+        previousVisualRepair = visual;
+        visualCorrections += 1;
+        layout = { ...layout, spacing: Math.min(10, layout.spacing + 2) };
+        continue;
       }
     }
     // An intentionally overfull initial page can produce a truncated or reordered
@@ -76,6 +104,7 @@ export async function produceDocument(input: {
     const pages = spec.targetPages ?? Math.min(PAGE.maxPages, minimum);
     try {
       layout = paginate(spec, rendered.heights, pages, layout.spacing, layout.compact);
+      previousVisualRepair = null;
     } catch (error) {
       if (!shouldTryCompactLayout(error, attempt, spec, layout)) throw error;
       console.info('[DocumentLayout] trying compact 11-point layout after standard fit failed', {
@@ -86,5 +115,5 @@ export async function produceDocument(input: {
       layout = { pages: [spec.blocks.map((_, i) => i)], spacing: 2, compact: true };
     }
   }
-  throw new Error('Document failed acceptance after three formatting corrections. No files delivered.');
+  throw new Error('Document failed acceptance after bounded layout and visual corrections. No files delivered.');
 }
