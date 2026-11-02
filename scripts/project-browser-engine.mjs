@@ -31,8 +31,14 @@ export function protectedPreviewHeaders(url, origin, original, cookies) {
     !cookie.secure||!cookie.httpOnly)
    throw Error('Protected Preview request must stay bound to the exact deployment origin');
  const headers={...original};
+ const appCookies=Object.entries(headers).filter(([key])=>key.toLowerCase()==='cookie')
+  .flatMap(([,value])=>String(value).split(';').map(v=>v.trim()))
+  .filter(value=>value&&!/^_vercel_jwt\s*=/i.test(value));
  for(const key of Object.keys(headers))if(key.toLowerCase()==='cookie')delete headers[key];
- return {...headers,cookie:'_vercel_jwt='+cookie.value,'x-vercel-skip-toolbar':'1'};
+ // Preserve unrelated first-party application cookies; replace, never duplicate
+ // an existing _vercel_jwt. Off-origin requests never reach this function.
+ return {...headers,cookie:[...appCookies,'_vercel_jwt='+cookie.value].join('; '),
+  'x-vercel-skip-toolbar':'1'};
 }
 export async function runScenarios(contract, origin, { executablePath, timeout = TOTAL_MS - 15_000, deployed = false, cookies = [], proxy } = {}) {
   validateContract(contract);
