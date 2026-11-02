@@ -373,6 +373,41 @@ test('actual rendered PDF is reinspected after one spacing correction and blocks
   } finally { await browser.close(); }
 });
 
+test('real compact two-page résumé format re-inspects page 2 after bounded spacing repair', { timeout: 120000 }, async () => {
+  const spec = documentSchema.parse({
+    title: 'Synthetic two-page executive briefing',
+    targetPages: 2,
+    blocks: Array.from({ length: 40 }, (_, i) => i === 0 || i === 20
+      ? { kind: 'heading' as const, level: 2 as const, text: i === 0 ? 'Executive experience' : 'Operational achievements' }
+      : { kind: 'bullet' as const,
+        text: `Prepared financial and operational reports across departments and improved accounting controls, planning, cash visibility, and reliable close process ${i}.` }),
+  });
+  const layout = { pages: [Array.from({length: 20}, (_, i) => i), Array.from({length: 20}, (_, i) => i + 20)], spacing: 2, compact: true as const };
+  const browser = await launchWebsiteBrowser();
+  try {
+    let visualCalls = 0;
+    const completed = await produceDocument({ spec, browser, initialLayout: layout, deadlineMs: Date.now() + 100000,
+      inspect: async rendered => {
+        const first = visualCalls++ === 0;
+        assert.equal(rendered.images.length, 2);
+        return { pages: rendered.images.map((_, i) => ({
+          page: i + 1, verdict: first && i === 1 ? 'repair' as const : 'pass' as const,
+          repair: first && i === 1 ? 'increase_spacing' as const : 'none' as const,
+          observations: 'Visible compact eleven-point paragraphs and bullet spacing independently reviewed.',
+        })) };
+      },
+    });
+    assert.equal(visualCalls, 2);
+    assert.equal(completed.corrections, 1);
+    assert.equal(completed.inspection.pageCount, 2);
+    assert.equal(completed.inspection.visual, 'passed');
+    assert.deepEqual(completed.inspection.findings, []);
+    assert.equal(normalizedText(completed.inspection.extractedText), normalizedText(contentText(spec)));
+    assert.deepEqual(completed.attempts[0].visual?.pages.map(page => page.verdict), ['pass', 'repair']);
+    assert.deepEqual(completed.attempts[1].visual?.pages.map(page => page.verdict), ['pass', 'pass']);
+  } finally { await browser.close(); }
+});
+
 test('two-page 11pt compact layout preserves content when standard pagination cannot fit', async () => {
   // 50 blocks whose measured heights exceed standard two-page capacity,
   // but fit within two 0.5-inch-margin compact pages without changing type size.
