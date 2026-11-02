@@ -23,6 +23,10 @@ create trigger task4a_authority_immutable_update before update
  execute function public.task4a_authority_immutable();
 revoke all on function public.task4a_authority_immutable()
  from public,anon,authenticated;
+-- FOR UPDATE row locking on this private authority requires a column UPDATE
+-- privilege. The trigger makes every other change fail closed; revocation
+-- alone is an allowed, irreversible restriction.
+grant update(revoked_at) on public.project_continuation_authorizations to service_role;
 
 -- Read-only, exact-project principal resolution. The generic service role has
 -- no direct SELECT on standalone_owner_bindings and must not gain it.
