@@ -86,7 +86,15 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
       findings.push({ rule: 'page-count', page: 0, detail: `Expected ${spec.targetPages} pages; rendered ${raster.images.length}.` });
     if (!pdfTextMatchesSource(raster.text, contentText(spec), raster.fragments)) {
       const expected=normalizedText(contentText(spec)), actual=normalizedText(raster.text);
+      // Diagnostics contain positions and character classes only; never source
+      // words, rendered PDF text, or personally identifying document content.
+      let firstDifferenceAt = 0;
+      while (firstDifferenceAt < Math.min(expected.length, actual.length) &&
+        expected[firstDifferenceAt] === actual[firstDifferenceAt]) firstDifferenceAt++;
+      const firstDifferenceClass = expected[firstDifferenceAt] === ' ' ? 'source-gap' :
+        actual[firstDifferenceAt] === ' ' ? 'pdf-gap' : 'other-or-length';
       console.warn('[DocumentFidelity] source/PDF difference class', {
+        firstDifferenceAt, firstDifferenceClass,
         expectedChars: expected.length, extractedChars: actual.length,
         sameOrderedGlyphs: expected.replace(/\s/gu, '') === actual.replace(/\s/gu, ''),
         fragmentCount: raster.fragments.length,
