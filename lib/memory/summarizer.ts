@@ -20,9 +20,12 @@ const ITM_HARD_MAX_CHARACTERS = 15000;
 // Anthropic requires max_tokens. This generous completion allowance is not the
 // ITM character budget: a complete response may exceed the target.
 const SUMMARY_MAX_TOKENS = 2300; // First prompt: new source batch only.
-const RECONCILE_MAX_TOKENS = 3000; // Second prompt: complete curated ITM.
+const RECONCILE_MAX_TOKENS = 10000; // Second prompt: full curated ITM; character ceiling remains enforced.
 const BATCH_SUMMARY_MAX_CHARACTERS = 7500;
-const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v1";
+// This version change intentionally permits one new attempt for a v1 batch
+// blocked by the former 3,000-token reconciliation ceiling. All other
+// failed-batch circuit breaker, source-cursor and spending guards remain.
+const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v2-reconcile-10000";
 export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "deferred";
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
