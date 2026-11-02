@@ -28,7 +28,7 @@ export function pdfTextMatchesSource(extracted: string, source: string): boolean
   const expected = normalizedText(source);
   const actual = normalizedText(extracted);
   return actual === expected ||
-    actual.replace(/([\\p{L}\\p{N}])-\\s+([\\p{L}\\p{N}])/gu, '$1-$2') === expected;
+    actual.replace(/([\p{L}\p{N}])-\s+([\p{L}\p{N}])/gu, '$1-$2') === expected;
 }
 
 
