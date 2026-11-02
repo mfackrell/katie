@@ -7,6 +7,7 @@ on:
       - 'lib/projects/preview.ts'
       - 'tests/task4a-preview-security.test.mjs'
       - 'tests/helpers/lifecycle-preview-transport.mjs'
+      - 'tests/helpers/project-lifecycle-postgres.mjs'
       - 'docs/qualifications/task4a-readiness-2026-11-02.json'
       - '.github/workflows/task4a-qualification.yml'
 
@@ -16,7 +17,7 @@ permissions:
 jobs:
   task4a-fixtures:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       QUALIFICATION_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
@@ -48,6 +49,33 @@ jobs:
             paidProviderInference:0};
           writeFileSync('task4a-qualification/receipt.json',JSON.stringify(receipt,null,2)+'\n');
           console.log('Task 4A deterministic source-validator qualification: PASS; live requirement: BLOCKED');
+          NODE
+      - name: Install isolated PostgreSQL and filesystem containment
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Verify actual PostgreSQL lifecycle against fake Vercel edge
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-lifecycle-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-lifecycle-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.skipped||r.counts.cancelled||r.counts.todo||r.completed!==1)
+            throw new Error('Isolated project lifecycle regression did not complete');
+          const path='task4a-qualification/receipt.json',receipt=JSON.parse(readFileSync(path,'utf8'));
+          receipt.postgresLifecycle={passed:true,evidenceClass:'ACTUAL_ISOLATED_POSTGRES_AND_CHROMIUM_WITH_SYNTHETIC_EDGE',testFile:'tests/projects-sql.test.mjs'};
+          writeFileSync(path,JSON.stringify(receipt,null,2)+'\n');
+          console.log('Isolated PostgreSQL project lifecycle: PASS; real hosted Task 4A still blocked');
           NODE
       - name: Retain independently inspectable machine evidence
         if: always()
