@@ -8,9 +8,22 @@ export function documentRequest(message: string): { pages?: number } | null {
       /\b(?:do not|don't|never)\s+(?:create|produce|generate|make|export|save|convert)\b/i.test(message)) return null;
   // Format references used as INPUT must not turn PDF analysis into file production.
   const output = message.replace(/\b(?:attached|uploaded|source|existing|this|that)\s+(?:pdf|docx|word (?:document|file))\b/gi, 'source attachment');
-  const production = /\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/i.exec(output);
   const explicitOutput = /\b(?:as|in|into|to)\s+(?:a\s+)?(?:docx|word (?:document|file|version|copy)|pdf)\b/i.test(output);
-  if (!production || !explicitOutput && /\b(?:recommendations|advice|risks|explain|how to|about|source attachment)\b/i.test(production[1])) return null;
+  // Only an affirmative CURRENT instruction may start the document pipeline.
+  // A discussion like "we are trying to get you to generate pdf's" contains
+  // the same action words, but is a status report, not a generation request.
+  // Inspect each candidate: an actual instruction may follow a status report.
+  const requestLead = /^(?:(?:hey\s+)?katie[,:]?\s+)?(?:(?:please|now|also|just|then|kindly|go\s+ahead\s+and)\s+|(?:can|could|would|will)\s+you(?:\s+please)?(?:\s+help\s+me(?:\s+to)?)?\s+|(?:i|we)\s+(?:want|need|would\s+like|would\s+appreciate)\s+(?:you\s+)?to\s+|(?:i['’]d|we['’]d)\s+like\s+(?:you\s+)?to\s+|let['’]s\s+|let\s+us\s+|help\s+me(?:\s+to)?\s+)*$/i;
+  const requested = [...output.matchAll(/\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/gi)]
+    .some(production => {
+      const preceding = output.slice(0, production.index);
+      const boundary = Math.max(preceding.lastIndexOf('\n'), preceding.lastIndexOf('.'),
+        preceding.lastIndexOf('!'), preceding.lastIndexOf('?'), preceding.lastIndexOf(';'));
+      const lead = preceding.slice(boundary + 1).trimStart();
+      return requestLead.test(lead) &&
+        (explicitOutput || !/\b(?:recommendations|advice|risks|explain|how to|about|source attachment)\b/i.test(production[1]));
+    });
+  if (!requested) return null;
   const count = /\b(one|two|three|four|five|six|\d+)\s*[- ]pages?\b/i.exec(message);
   const words: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
   return count ? { pages: words[count[1].toLowerCase()] ?? Number(count[1]) } : {};
