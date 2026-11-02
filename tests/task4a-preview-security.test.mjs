@@ -53,7 +53,9 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
   const {previewCookies,PreviewAccessUnavailable}=modules()('@/lib/projects/preview');
   const cookies=await previewCookies(origin,cookieRequest);
   assert.equal(cookies.length,1);
-  assert.equal(cookies[0].domain,host);
+  assert.equal(cookies[0].url,origin+'/');
+  assert.equal(Object.hasOwn(cookies[0],'domain'),false,'Browser cookie must be set with URL, not Domain');
+  assert.equal(Object.hasOwn(cookies[0],'path'),false,'Browser cookie uses URL-origin scope');
   assert.equal(cookies[0].name,'_vercel_jwt');
   assert.equal(cookies[0].httpOnly,true);
   assert.equal(cookies[0].secure,true);
@@ -69,6 +71,9 @@ test('Task 4A: protected access fails closed with exact-host cookies and no cred
    ['unusable short max-age',edgeResponse('_vercel_jwt=old; Secure; HttpOnly; Max-Age=1')],
    ['expired expires',edgeResponse('_vercel_jwt=old; Secure; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT')],
    ['parent-domain cookie',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly; Domain=.vercel.app')],
+   ['explicit exact-host Domain is not host-only',edgeResponse('_vercel_jwt=bad; Path=/; Secure; HttpOnly; Domain='+host)],
+   ['explicit dotted exact-host Domain is not host-only',edgeResponse('_vercel_jwt=bad; Path=/; Secure; HttpOnly; Domain=.'+host)],
+   ['empty Domain attribute must not be accepted',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly; Domain=')],
    ['wrong host cookie',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly; Domain=other.vercel.app')],
    ['non-root path cookie',edgeResponse('_vercel_jwt=bad; Secure; HttpOnly; Path=/other')],
    ['not HttpOnly',edgeResponse('_vercel_jwt=bad; Secure')],
