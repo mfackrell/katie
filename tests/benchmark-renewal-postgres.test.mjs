@@ -54,7 +54,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
     await db.query(readFileSync('supabase/migrations/'+name+'.sql','utf8'));
 
   for(const file of ['20261027233957_benchmark_production_owner_qualification.sql','20261028134500_benchmark_dashboard_task_approval.sql',
-   '20261026120000_project_completion_control.sql','20261027172000_specification_lifecycle_recovery.sql','20261028135500_benchmark_bounded_assessment.sql',
+   '20261026120000_project_completion_control.sql','20261102130000_project_assessment_source_binding.sql','20261027172000_specification_lifecycle_recovery.sql','20261028135500_benchmark_bounded_assessment.sql',
    '20261028180638_specification_draft_history.sql','20261028180911_benchmark_owner_continuation.sql','20261028181030_continuation_specification_scheduler.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   await db.query(`create table provider_health(provider_name text primary key,status text,reason text,failure_count int,blocked_until timestamptz,updated_at timestamptz);grant all on provider_health to service_role`);

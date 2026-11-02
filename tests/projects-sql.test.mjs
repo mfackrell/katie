@@ -119,6 +119,9 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query(readFileSync('supabase/migrations/20261027201000_development_dispatch_recovery.sql','utf8'));
   await db.query('set role service_role');
   await verifyDevelopmentDispatchRecoverySql(db);
+  await db.query('reset role');
+  await db.query(readFileSync('supabase/migrations/20261102130000_project_assessment_source_binding.sql','utf8'));
+  await db.query('set role service_role');
   await verifyProjectLifecyclePostgres(db);
   await assert.rejects(db.query("set role anon;select recover_project_development_dispatch('44444444-4444-4444-8444-444444444444');"),/permission denied/);
   await db.query('reset role');await db.query('set role service_role');

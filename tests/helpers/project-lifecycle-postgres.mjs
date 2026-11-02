@@ -59,6 +59,26 @@ export async function verifyProjectLifecyclePostgres(db){
   let fault=null,assessmentRejected=false,latestHead='a'.repeat(40),browserCalls=0,parallelObserved=false;
   const api=transport(db,async(when,name,args)=>{
    events.push({when,name,args});
+   if(when==='before'&&name==='finish_work_project'&&args.p_action==='complete'&&!fired.has('assessment-binding-negatives')){
+    const current=await state();
+    for(const [path,value] of [
+     ['approvedScopeHash','f'.repeat(64)],
+     ['finalIntegratedEvidence,head','e'.repeat(40)],
+     ['finalIntegratedEvidence,taskId',randomUUID()],
+     ['finalIntegratedEvidence,verification,testedHeadSha','e'.repeat(40)],
+     ['finalIntegratedEvidence,verification,reviewedHeadSha','e'.repeat(40)],
+     ['preview,browserAcceptance,headSha','e'.repeat(40)],
+     ['approvedFinalContract',null]
+    ]){
+     await db.query('savepoint assessment_negative');
+     await db.query('update agent_missions set project_evidence=jsonb_set(project_evidence,$2::text[],$3::jsonb) where id=$1',[current.active_mission_id,path.split(','),JSON.stringify(value)]);
+     await assert.rejects(db.query('select finish_work_project($1,$2,$3,$4)',[args.p_id,args.p_lease,args.p_action,args.p_data]),/Final assessment is not bound/);
+     await db.query('rollback to savepoint assessment_negative');await db.query('release savepoint assessment_negative');
+     assert.notEqual((await state()).status,'completed');
+    }
+    fired.add('assessment-binding-negatives');
+   }
+
    if(when==='after'&&name==='save_project_development_dispatch'&&args.p_status==='ready'&&!fired.has('specialist-receipt')){fired.add('specialist-receipt');throw Error('503 controlled interruption after specialist receipt persisted');}
    if(when==='after'&&name==='commit_mission_work'&&args.p_status==='completed'){
     const row=(await db.query('select role from mission_assignments where id=$1',[args.p_id])).rows[0];
