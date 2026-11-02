@@ -151,21 +151,27 @@ try {
   const composer = page.getByPlaceholder("Ask Acceptance…");
   await composer.fill("Exercise the gated stream.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  const preview = page.getByLabel("Streaming assistant response", { exact: true });
+  const centralProgress = page.getByLabel("Katie response progress", { exact: true });
+  await centralProgress.waitFor();
+  const preview = centralProgress.getByLabel("Streaming assistant response", { exact: true });
   await preview.waitFor();
-  if (!(await preview.innerText()).includes("Streaming first part.")) throw new Error("Answer deltas are not rendered before completion");
-  const thinkingPreview = page.getByLabel("Live response preview", { exact: true });
-  await thinkingPreview.waitFor();
-  if (!(await thinkingPreview.innerText()).includes("Streaming first part.")) {
-    throw new Error("Right-side Thinking panel did not display the user-visible stream before completion");
+  if (!(await preview.innerText()).includes("Streaming first part.")) {
+    throw new Error("Streamed answer is missing from the central conversation progress bubble");
+  }
+  if (!(await centralProgress.innerText()).includes("Katie is responding")) {
+    throw new Error("Central progress stage was not updated when answer streaming began");
+  }
+  const rightRail = page.getByTestId("thinking-status-rail");
+  if ((await rightRail.innerText()).includes("Streaming first part.")) {
+    throw new Error("The small right-side Thinking rail duplicated the answer");
   }
   if (await page.getByText("Stream complete", { exact: true }).count()) throw new Error("Uncommitted visual rendered during stream");
   if (!(await page.getByRole("button", { name: "Cancel", exact: true }).isVisible())) throw new Error("Stream completed before preview assertion");
   await page.evaluate(() => window.__finishPresentationStream());
-  await preview.waitFor({ state: "hidden" });
+  await centralProgress.waitFor({ state: "hidden" });
   await page.getByText("Stream complete", { exact: true }).waitFor();
   if ((await page.locator('[data-testid="stream-chat"]').innerText()).includes("<katie-presentation-v1>")) throw new Error("Internal presentation markup leaked");
-  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, thinkingRailStream: true }));
+  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, centralProgressStream: true, noRightRailDuplication: true }));
 } finally {
   await cleanup();
 }
