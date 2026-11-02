@@ -983,7 +983,7 @@ test('GPT-5.5 with both unreviewed cache errors prepares exact same-model uncach
  assert.equal(quote.preflight_estimate.ownerApprovalRequired,'selected_model_uncached');
  assert.equal(quote.preflight_estimate.inputCountSource,'provider');
  assert.notEqual(quote.prepared_hash,original.hash);
- assert.deepEqual(quote.prepared_payload.payload.input,body.input);
+ assert.deepEqual(JSON.parse(String(quote.prepared_payload.serializedBody)).input,body.input);
  quote.state='reserved'; // Simulates a separate owner approve_once decision.
  await run(true);
  assert.equal(paid,1);assert.equal(counts,1,'resume must reuse exact count');
