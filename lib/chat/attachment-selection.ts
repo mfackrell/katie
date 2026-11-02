@@ -278,8 +278,12 @@ export async function selectStoredAttachments(
       const localImageReference = kind === "image" &&
         /\b(?:just\s+(?:sent|uploaded|shared)|(?:this|these|those)\s+(?:photos?|pictures?|images?))\b/i.test(message);
       const currentChatId = taskContext?.currentChatId ?? history.at(-1)?.chatId;
+      const recentUploadIds = new Set(history.filter(item => item.role === "user" && item.chatId === currentChatId)
+        .slice(-8).flatMap(item => (item.attachments ?? []).filter(file =>
+          file.mimeType.startsWith("image/") && file.conversationUsage === "uploaded")
+          .map(file => file.id)));
       const typed = catalog.filter(file => matchesAttachmentKind(file, kind) &&
-        (!localImageReference || file.chatId === currentChatId));
+        (!localImageReference || (file.chatId === currentChatId && recentUploadIds.has(file.id))));
       const lastUser = history.filter(item => item.role === "user" && (!currentChatId || item.chatId === currentChatId)).at(-1);
       const active = (lastUser?.attachments ?? []).filter(file => matchesAttachmentKind(file, kind));
       if (typed.length === 1) fallback = typed;
