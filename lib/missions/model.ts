@@ -66,7 +66,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(continuation&&tools==='research')
   throw Error('Task 4A continuation does not authorize paid live web tools; reuse the completed source research');
  const continuationModel=continuation?'openai:gpt-5.6-sol':null;
- if(continuationModel&&!continuation.allowed_models.includes(continuationModel))
+ if(continuationModel&&continuation&&!continuation.allowed_models.includes(continuationModel))
   throw Error('Continuation model is not on the owner-approved list');
  const ordinaryAuthority=claim.mission.project_id?await rpc<{bound:boolean;live:boolean;model:string}|null>('developer_bound_mission_authority',{p_mission:claim.mission.id}):null;
  const ordinary=Boolean(ordinaryAuthority?.bound);
