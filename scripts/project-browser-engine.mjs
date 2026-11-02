@@ -19,6 +19,21 @@ export function localRequestAllowed(raw, origin, method = 'GET') {
   } catch { return false; }
 }
 export function platformToolbar(raw,type,deployed){try{const u=new URL(raw);return deployed&&type==='script'&&u.origin==='https://vercel.live'&&u.pathname==='/_next-live/feedback/feedback.js';}catch{return false;}}
+/** Never install Preview bypass auth in Chromium's cookie jar. Playwright's
+ * addCookies(url=...) can make it visible to child domains; inject only into
+ * a single exact-origin request after the network-confinement check.
+ */
+export function protectedPreviewHeaders(url, origin, original, cookies) {
+ const expected=origin+'/';
+ const cookie=cookies.length===1?cookies[0]:null;
+ if(new URL(url).origin!==origin||!cookie||cookie.url!==expected||
+    cookie.name!=='_vercel_jwt'||typeof cookie.value!=='string'||!cookie.value||
+    !cookie.secure||!cookie.httpOnly)
+   throw Error('Protected Preview request must stay bound to the exact deployment origin');
+ const headers={...original};
+ for(const key of Object.keys(headers))if(key.toLowerCase()==='cookie')delete headers[key];
+ return {...headers,cookie:'_vercel_jwt='+cookie.value,'x-vercel-skip-toolbar':'1'};
+}
 export async function runScenarios(contract, origin, { executablePath, timeout = TOTAL_MS - 15_000, deployed = false, cookies = [], proxy } = {}) {
   validateContract(contract);
   const parsed = new URL(origin);
@@ -44,7 +59,7 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
     // Scenarios are independent test cases. Navigation within a scenario keeps
     // its storage, so reload persistence is tested without contaminating peers.
     const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: false,...(deployed?{extraHTTPHeaders:{'x-vercel-skip-toolbar':'1'}}:{}) });
-    if(cookies.length)await context.addCookies(cookies);
+    if(deployed && (cookies.length!==1||cookies[0]?.url!==origin+'/'))throw Error('Exact-origin Preview authorization required');
     let denied = [];
     await context.route('**/*', async route => {
       const request = route.request();
@@ -59,7 +74,7 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
         // Fetch one hop in Playwright, then fulfill it so the browser's next
         // request is independently checked before any bytes leave the process.
         try {
-          const response = await route.fetch({ ...(deployed?{headers:{...request.headers(),'x-vercel-skip-toolbar':'1'}}:{}),maxRedirects: 0, timeout: Math.max(1, Math.min(deployed?20_000:10_000, deadline - Date.now())) });
+          const response = await route.fetch({ ...(deployed?{headers:protectedPreviewHeaders(request.url(),origin,request.headers(),cookies)}:{}),maxRedirects: 0, timeout: Math.max(1, Math.min(deployed?20_000:10_000, deadline - Date.now())) });
           const location = response.headers().location;
           if (location && response.status() >= 300 && response.status() < 400 &&
               !localRequestAllowed(new URL(location, request.url()).href, origin, request.method())) {
