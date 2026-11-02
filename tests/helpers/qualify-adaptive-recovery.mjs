@@ -17,6 +17,8 @@ const correct=[
 ];
 const broken=[correct[0].replace('cents,0','cents,1'),correct[1].replace('rows.filter(r=>!r.void)','rows'),correct[2].replace('rows.filter(r=>!r.void)','rows')];
 const page='import {total,count,largest} from "./state"; export default function Page(){const rows=[{cents:120},{cents:80},{cents:999,void:true}];return <div id="state">{total(rows)===200&&count(rows)===2&&largest(rows)===120?"Recovered":"Broken"}</div>}\n';
+const added='export const renderState=(total=0,count=0,largest=0)=>total===200&&count===2&&largest===120?"Recovered":"Broken";\n';
+const repairedPage='import {total,count,largest} from "./state"; import {renderState} from "./added"; export default function Page(){const rows=[{cents:120},{cents:80},{cents:999,void:true}];return <div id="state">{renderState(total(rows),count(rows),largest(rows))}</div>}\n';
 const checks=`const f=require('node:fs'),a=require('node:assert/strict');(async()=>{const api=await import('data:text/javascript;base64,'+f.readFileSync('app/pilot/state.ts').toString('base64'));const rows=[{cents:120},{cents:80},{cents:999,void:true}],fail=[];for(const [key,want,empty] of [['total',200,0],['count',2,0],['largest',120,0]]){try{a.equal(api[key](rows),want);a.equal(api[key]([]),empty);}catch{fail.push(key);}}console.log('CHECKS:'+(fail.join(',')||'none'));})();`;
 export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
  const fixture=await createLifecycleCheckpoint(db,ids,{initial:true}),{root,remote,context,baseline,one,repo}=fixture;
@@ -39,11 +41,11 @@ export async function qualifyAdaptiveRecovery(db,rival,ids,authority){
    }else if(phase==='repair'){
     if(run===132&&repair===2&&!resumedRepair2){
      resumedRepair2=true;
-     cmd=`const f=require('node:fs'),a=require('node:assert/strict');a.equal(f.readFileSync('app/pilot/state.ts','utf8'),${JSON.stringify(source())});a.equal(f.readFileSync('app/pilot/page.tsx','utf8'),${JSON.stringify('// Repair 2 retained WIP\n'+page)});a.equal(f.readFileSync('app/pilot/added.ts','utf8'),'export const repairEvidence = "second repair";\\n');a.match(f.readFileSync('/trusted/review-findings.txt','utf8'),/count/);console.log('EXACT_REPAIR_2_RESTORED');`;
+     cmd=`const f=require('node:fs'),a=require('node:assert/strict');a.equal(f.readFileSync('app/pilot/state.ts','utf8'),${JSON.stringify(source())});a.equal(f.readFileSync('app/pilot/page.tsx','utf8'),${JSON.stringify(repairedPage)});a.equal(f.readFileSync('app/pilot/added.ts','utf8'),${JSON.stringify(added)});a.match(f.readFileSync('/trusted/review-findings.txt','utf8'),/count/);console.log('EXACT_REPAIR_2_RESTORED');`;
     }else{
      repair++;assert.ok(repair<=3);lines[repair-1]=correct[repair-1];
      cmd=`const f=require('node:fs');f.writeFileSync('app/pilot/state.ts',${JSON.stringify(source())});`;
-     if(repair===2)cmd+=`f.writeFileSync('app/pilot/page.tsx',${JSON.stringify('// Repair 2 retained WIP\n'+page)});f.writeFileSync('app/pilot/added.ts','export const repairEvidence = "second repair";\\n');`;
+     if(repair===2)cmd+=`f.writeFileSync('app/pilot/page.tsx',${JSON.stringify(repairedPage)});f.writeFileSync('app/pilot/added.ts',${JSON.stringify(added)});`;
     }
    }else cmd=checks;
    pending={phase,run,repair};report.trace.push({...pending,event:'started'});
