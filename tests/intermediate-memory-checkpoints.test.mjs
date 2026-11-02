@@ -58,9 +58,21 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 test("reconciliation has an explicit 10,000-token bound and versioned fail-closed recovery",()=>{
   assert.match(summary,/RECONCILE_MAX_TOKENS = 10000/);
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v2-reconcile-10000"/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v3-priority-recovery"/);
   assert.match(summary,/max_tokens: RECONCILE_MAX_TOKENS/);
   assert.match(summary,/return completedText\(response, "reconciliation", ITM_HARD_MAX_CHARACTERS\)/);
   assert.match(summary,/if \(response\.stop_reason !== "end_turn" \|\| !text \|\| text\.length > maxCharacters\)/);
   assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
+});
+
+
+test("oversized reconciliation has exactly one bounded priority recovery and unchanged hard storage ceiling",()=>{
+  assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
+  assert.match(summary,/ITM_HARD_MAX_CHARACTERS = 15000/);
+  assert.match(summary,/ITM_ACCEPT_MAX_CHARACTERS = 7500/);
+  assert.match(summary,/RECOVERY_MAX_TOKENS = 4000/);
+  assert.equal((summary.match(/max_tokens: RECOVERY_MAX_TOKENS/g)??[]).length,1);
+  assert.match(summary,/completedText\(response, "reconciliation draft", ITM_RECOVERY_DRAFT_MAX_CHARACTERS\)/);
+  assert.match(summary,/completedText\(recovered, "priority recovery", ITM_ACCEPT_MAX_CHARACTERS\)/);
+  assert.match(summary,/p_expected_cursor: expectedCursor, p_content: payload/);
 });
