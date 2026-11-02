@@ -115,7 +115,7 @@ test('Task 4A: production deployment discovery validates real receipt, draft SHA
   const status={id:202,state:'success',creator:{login:'vercel[bot]'},environment:'Preview',environment_url:origin};
   let settings={pr:basePr,afterPr:null,deployment:deploy,status,prReads:0,dbRepo:'mfackrell/katie',ghReads:0};
   class Octokit {
-   pulls={get:async()=>({data:settings.afterPr&&++settings.prReads===2?settings.afterPr:(settings.prReads++,settings.pr)})};
+   pulls={get:async()=>{settings.prReads++;return {data:settings.afterPr&&settings.prReads===2?settings.afterPr:settings.pr};}};
    repos={
     listDeployments:async()=>{settings.ghReads++;return {data:settings.deployment?[settings.deployment]:[]};},
     listDeploymentStatuses:async()=>({data:settings.status?[settings.status]:[]})
