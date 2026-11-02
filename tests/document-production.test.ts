@@ -188,7 +188,7 @@ test('anonymous 850-word resume-shaped fixture completes genuine two-page produc
     })),
   });
   assert.equal(spec.blocks.length, 49);
-  assert.ok(contentText(spec).split(/\\s+/).length >= 800);
+  assert.ok(contentText(spec).split(/\s+/).length >= 800);
   const browser = await launchWebsiteBrowser();
   try {
     const produced = await produceDocument({ spec, browser, deadlineMs: Date.now() + 110000,
