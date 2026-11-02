@@ -24,7 +24,7 @@ export const contentText = (spec: DocumentSpec) => spec.blocks.map(blockText).jo
 /** PDF.js distinguishes glyphs from its synthetic end-of-line separators.
  * Never accept missing, changed, duplicated, or reordered non-whitespace
  * glyphs. Only allow spacing changes caused by explicit PDF.js EOL markers. */
-export type PdfTextFragment = { str: string; hasEOL: boolean };
+export type PdfTextFragment = { str: string; hasEOL: boolean; lineBreakAfter?: boolean };
 
 function foldPdfGlyphs(input: string): string {
   return input.normalize('NFKC')
@@ -48,11 +48,14 @@ export function pdfTextMatchesSource(extracted: string, source: string, fragment
   let offset = 0;
   let previousEndOfLine = false;
   for (const fragment of fragments) {
+    // PDF.js can omit hasEOL at a geometrically verified physical line wrap.
+    // Only the rasterizer may supply this supplementary evidence; never infer
+    // a boundary from a free-standing space inside a normal text run.
+    const endOfLine = fragment.hasEOL || fragment.lineBreakAfter === true;
     const normalizedFragment = foldPdfGlyphs(fragment.str).replace(/\s+/gu, ' ');
-    // A trailing separator on an end-of-line item is the same synthetic
-    // boundary as hasEOL; match only against the source's actual word break.
-    const text = fragment.hasEOL ? normalizedFragment.replace(/ $/, '') : normalizedFragment;
+    const text = endOfLine ? normalizedFragment.replace(/ $/, '') : normalizedFragment;
     let atStart = true;
+    let sawGlyph = false;
     for (const glyph of text) {
       if (glyph === ' ') {
         if (expected[offset] === ' ') {
@@ -65,10 +68,13 @@ export function pdfTextMatchesSource(extracted: string, source: string, fragment
         if (expected[offset] !== glyph) return false;
         offset++;
         atStart = false;
+        sawGlyph = true;
       }
     }
-    if (fragment.hasEOL && expected[offset] === ' ') offset++;
-    previousEndOfLine = fragment.hasEOL;
+    if (endOfLine && expected[offset] === ' ') offset++;
+    // Empty style runs and bullet-marker-only fragments have no surviving
+    // glyphs. They must not erase an immediately preceding PDF line break.
+    if (sawGlyph || endOfLine) previousEndOfLine = endOfLine;
   }
   return offset === expected.length;
 }
