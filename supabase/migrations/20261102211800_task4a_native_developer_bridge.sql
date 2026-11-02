@@ -27,7 +27,7 @@ revoke all on function public.task4a_authority_immutable()
 -- Read-only, exact-project principal resolution. The generic service role has
 -- no direct SELECT on standalone_owner_bindings and must not gain it.
 create or replace function public.task4a_original_owner_id(p_actor uuid,p_chat uuid)
-returns uuid language plpgsql stable security definer set search_path=public as $
+returns uuid language plpgsql stable security definer set search_path=public as $$
 declare p public.work_projects;found_owner uuid;
 begin
  select * into p from public.work_projects
@@ -40,7 +40,7 @@ begin
   or public.standalone_verify_scope(found_owner,p.actor_id,p.chat_id) is distinct from true
  then return null;end if;
  return found_owner;
-end $;
+end $$;
 revoke all on function public.task4a_original_owner_id(uuid,uuid)
  from public,anon,authenticated;
 grant execute on function public.task4a_original_owner_id(uuid,uuid)
