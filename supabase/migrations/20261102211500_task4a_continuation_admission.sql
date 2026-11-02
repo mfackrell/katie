@@ -85,7 +85,7 @@ begin
    from agent_missions where project_id=m.project_id;
   if project_used+p_tokens>project_limit then return false;end if;
   select * into authority from project_continuation_authorizations
-   where project_id=m.project_id for update;
+   where project_id=m.project_id;
   if found then
    if authority.deadline<=clock_timestamp() or authority.authorized_at>clock_timestamp()
     or p_model<>all(authority.allowed_models) then return false;end if;
