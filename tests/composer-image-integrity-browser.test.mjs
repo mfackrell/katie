@@ -73,7 +73,7 @@ test('composer images preserve selection identity through picker, paste, restore
   if(url.pathname==='/api/work')return reply({items:[],warnings:[]});
   if(url.pathname==='/api/admin/repos')return reply({repos:[]});
   if(url.pathname==='/api/version')return reply({version:'fixture'});
-  return reply({error:'Unexpected fixture API'},404);
+  return reply({error:`Unexpected fixture API: ${url.pathname}`},404);
  });
  const open=async()=>{await page.goto(`${origin}/conversations/${chatId}`,{waitUntil:'domcontentloaded',timeout:65000});await page.locator('main textarea').last().waitFor();};
  const preview=()=>page.getByAltText(/^Selected image /);
@@ -88,7 +88,14 @@ test('composer images preserve selection identity through picker, paste, restore
  // A fresh visible image while that read is pending must never become text-only.
  await page.locator('input[type=file]').setInputFiles(file('pending-read.png'));await preview().waitFor();await page.locator('main textarea').last().fill('Keep this visible image attached');await page.locator('main textarea').last().press('Enter');
  assert.equal(chats.length,1);assert.equal(events.join(','),'chat');assert.equal(await preview().count(),1);
- await page.evaluate(()=>window.__releaseComposerDatabase());await send();await waitChats(2);verify(chats[1],1);assert.equal(chats[1].fileReferences[0].fileName,'pending-read.png');await preview().waitFor({state:'detached'});
+ await page.evaluate(()=>window.__releaseComposerDatabase());
+ // Database hydration is async: an image visibly selected before the read
+ // finishes must not be sent until its saved-attachment state is ready.
+ await page.waitForFunction(() => {
+   const sendButton=document.querySelector('main form button[type="submit"]');
+   return sendButton instanceof HTMLButtonElement && !sendButton.disabled;
+ },null,{timeout:15000});
+ await send();await waitChats(2);verify(chats[1],1);assert.equal(chats[1].fileReferences[0].fileName,'pending-read.png');await preview().waitFor({state:'detached'});
  chats.length=0;events.length=0;
  // File picker creates a visible selection; private storage receipt precedes chat.
  await page.locator('input[type=file]').setInputFiles(file('picker.png'));await preview().waitFor();await send();await waitChats(1);verify(chats[0],1);assert.deepEqual(events.slice(0,4),['prepare','storage','complete','chat']);await preview().waitFor({state:'detached'});

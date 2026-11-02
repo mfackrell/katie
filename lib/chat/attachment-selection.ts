@@ -33,6 +33,40 @@ export function rankAttachmentCandidates(message: string, catalog: ConversationA
 }
 
 /**
+ * A direct reference to recently uploaded pictures is already grounded in this
+ * chat's saved attachment identities. Reuse their observations without asking
+ * a second provider to approve an attachment lookup.
+ *
+ * Only genuine uploads in this chat can anchor this path. Contextual reuses,
+ * other chats, ambiguous comparisons, and new unrelated uploads cannot.
+ */
+function recentExplicitImages(
+  message: string, catalog: ConversationAttachment[], history: Message[],
+  currentChatId: string | undefined,
+): ConversationAttachment[] {
+  const imageReference = /\b(?:this|that|these|those|the|my|our|last|latest|recent|saved|uploaded)\s+(?:(?:recent|latest|saved|uploaded|new)\s+){0,2}(?:photos?|pictures?|images?)\b/i.test(message) ||
+    /\b(?:photos?|pictures?|images?)\b.{0,100}\b(?:i|we)\s+(?:just\s+)?(?:sent|uploaded|shared)\b/i.test(message);
+  if (!currentChatId || requestedAttachmentKind(message) !== "image" || !imageReference ||
+      /\b(?:compare|comparison|contrast|versus|difference|between|first|second|other|older|earlier|previous|each|both|all)\b/i.test(message) ||
+      /\b(?:forget|ignore|without|(?:do not|don't) use)\b.{0,45}\b(?:photos?|pictures?|images?)\b/i.test(message) ||
+      catalog.some(file => file.fileName && message.toLowerCase().includes(file.fileName.toLowerCase()))) return [];
+
+  // Cap recency to genuine current-chat uploads, not later automatic reuses.
+  const recentUserTurns = history.filter(item => item.role === "user" && item.chatId === currentChatId).slice(-8);
+  for (const turn of recentUserTurns.reverse()) {
+    const uploaded = (turn.attachments ?? []).filter(file => file.mimeType.startsWith("image/") &&
+      file.conversationUsage === "uploaded" && (!file.chatId || file.chatId === currentChatId));
+    if (!uploaded.length) continue;
+    const matched = uploaded.map(file => catalog.find(saved => saved.id === file.id &&
+      saved.mimeType.startsWith("image/") && saved.chatId === currentChatId &&
+      (!file.actorId || !saved.actorId || file.actorId === saved.actorId)));
+    // Never silently substitute an older image for a missing or ambiguous upload.
+    return matched.every((file): file is ConversationAttachment => Boolean(file)) ? matched : [];
+  }
+  return [];
+}
+
+/**
  * A selector can omit the video when the user responds to Katie's last
  * assessment rather than naming the recording ("Nineteen is an adult!").
  * Preserve current-chat visual context for a short, relevant continuation,
@@ -192,6 +226,18 @@ export async function selectStoredAttachments(
 ): Promise<AttachmentDecision> {
   if (!catalog.length) return { selections: [], method: "none" };
   if (newFileNames.length && !/\b(?:compare|versus|previous|earlier|saved|last video|other clip)\b/i.test(message)) return { selections: [], method: "none" };
+  const recentImages = !newFileNames.length
+    ? recentExplicitImages(message, catalog, history, taskContext?.currentChatId ?? history.at(-1)?.chatId)
+    : [];
+  if (recentImages.length) return {
+    method: "fallback",
+    selections: recentImages.map(attachment => ({
+      attachment,
+      mode: attachment.observedSummary && attachment.summaryCoverage !== "metadata" &&
+        (SUMMARY_ONLY.test(message) || (!PRECISION_REQUEST.test(message) &&
+          !/\b(?:look (?:at|closer)|zoom|re-?examine)\b/i.test(message))) ? "summary" as const : "source" as const,
+    })),
+  };
   const candidates = rankAttachmentCandidates([message, taskContext?.activeProject?.text].filter(Boolean).join("\n"), catalog, history);
   const prompt = JSON.stringify({
     request: message,
@@ -227,8 +273,18 @@ export async function selectStoredAttachments(
     if (!named.length && kind && !refersToSavedFile) return { method: "fallback", selections: [] };
     let fallback = named;
     if (!fallback.length && !newFileNames.length && kind) {
-      const typed = catalog.filter(file => matchesAttachmentKind(file, kind));
-      const lastUser = history.filter(item => item.role === "user").at(-1);
+      // "Just sent" and "these pictures" are local references, not permission
+      // to silently retrieve a lone image belonging to another chat.
+      const localImageReference = kind === "image" &&
+        /\b(?:just\s+(?:sent|uploaded|shared)|(?:this|these|those)\s+(?:photos?|pictures?|images?))\b/i.test(message);
+      const currentChatId = taskContext?.currentChatId ?? history.at(-1)?.chatId;
+      const recentUploadIds = new Set(history.filter(item => item.role === "user" && item.chatId === currentChatId)
+        .slice(-8).flatMap(item => (item.attachments ?? []).filter(file =>
+          file.mimeType.startsWith("image/") && file.conversationUsage === "uploaded")
+          .map(file => file.id)));
+      const typed = catalog.filter(file => matchesAttachmentKind(file, kind) &&
+        (!localImageReference || (file.chatId === currentChatId && recentUploadIds.has(file.id))));
+      const lastUser = history.filter(item => item.role === "user" && (!currentChatId || item.chatId === currentChatId)).at(-1);
       const active = (lastUser?.attachments ?? []).filter(file => matchesAttachmentKind(file, kind));
       if (typed.length === 1) fallback = typed;
       else if (active.length === 1 && /\b(this|that|it)\b/i.test(message)) fallback = active;

@@ -363,3 +363,148 @@ test("malformed optional rationale never causes a valid selector choice to fall 
   assert.equal(selected.selections.length, 1);
   assert.equal(selected.rationale, undefined);
 });
+
+
+test("explicit recent pictures use the saved observation without invoking the blocked selector", async () => {
+  const older: ConversationAttachment = {
+    id: "11111111-1111-4111-8111-000000000021", fileName: "older-beach.jpg",
+    mimeType: "image/jpeg", chatId: "chat-images", actorId: "actor-a",
+    createdAt: "2026-11-01T13:00:00Z", conversationUsage: "uploaded",
+    observedSummary: "Older photograph of a mountain.", summaryCoverage: "full",
+  };
+  const latest: ConversationAttachment = {
+    ...older, id: "11111111-1111-4111-8111-000000000022", fileName: "latest-beach.jpg",
+    createdAt: "2026-11-02T16:05:00Z",
+    observedSummary: "The latest photograph shows a blue boat by a beach.",
+    summaryModel: "Qwen3-VL",
+  };
+  const crossChat = { ...older, id: "11111111-1111-4111-8111-000000000023",
+    fileName: "foreign.jpg", chatId: "different-chat" };
+  const history: Message[] = [
+    { id: "u1", chatId: "chat-images", role: "user", content: "[image]",
+      createdAt: "2026-11-01T13:00:00Z", attachments: [older] },
+    { id: "a1", chatId: "chat-images", role: "assistant", content: "I saw it.",
+      createdAt: "2026-11-01T13:01:00Z" },
+    { id: "u2", chatId: "chat-images", role: "user", content: "[image]",
+      createdAt: "2026-11-02T16:05:00Z", attachments: [latest] },
+    { id: "a2", chatId: "chat-images", role: "assistant", content: "I reviewed your photograph.",
+      createdAt: "2026-11-02T16:06:00Z" },
+    { id: "u3", chatId: "chat-images", role: "user", content: "Yes, that image.",
+      createdAt: "2026-11-02T16:09:00Z",
+      attachments: [{ ...latest, conversationUsage: "explicit-reference" }] },
+    { id: "a3", chatId: "chat-images", role: "assistant", content: "We discussed that.",
+      createdAt: "2026-11-02T16:10:00Z" },
+    { id: "u4", chatId: "chat-images", role: "user", content: "Continue our conversation.",
+      createdAt: "2026-11-02T16:19:00Z" },
+    { id: "a4", chatId: "chat-images", role: "assistant", content: "Sure.",
+      createdAt: "2026-11-02T16:20:00Z" },
+  ];
+  let calls = 0;
+  const blockedSelector = async () => {
+    calls++;
+    return parseAttachmentSelectorResponse({
+      promptFeedback: { blockReason: "PROHIBITED_CONTENT" },
+    });
+  };
+  const decision = await selectStoredAttachments(
+    "you can do better than that. tell me the story based on the pictures of us that i just sent you",
+    [crossChat, older, latest], history, blockedSelector, [],
+    { currentChatId: "chat-images", activeProject: null },
+  );
+  assert.equal(calls, 0, "explicit recent evidence must not require Gemini approval");
+  assert.equal(decision.method, "fallback");
+  assert.deepEqual(decision.selections.map(item => [item.attachment.id, item.mode]), [[latest.id, "summary"]]);
+  let sourceReads = 0;
+  const restored = await loadSelectedAttachmentSources(decision, async () => {
+    sourceReads++;
+    throw new Error("The original must not be reopened for a summary-level reference");
+  });
+  assert.equal(sourceReads, 0);
+  assert.equal(restored.references.length, 0);
+  const context = attachmentAccessContext([], decision.selections.map(item => item.attachment), [], restored.sourceIds);
+  assert.match(context, /latest photograph shows a blue boat/);
+  assert.doesNotMatch(context, /Older photograph of a mountain/);
+  assert.doesNotMatch(context, /foreign.jpg/);
+});
+
+test("plural image words, batches, precise inspections, and fresh uploads preserve scope", async () => {
+  const first: ConversationAttachment = {
+    id: "11111111-1111-4111-8111-000000000031", fileName: "sunrise.png",
+    mimeType: "image/png", chatId: "images-chat", actorId: "actor-a",
+    createdAt: "2026-11-02T16:00:00Z", conversationUsage: "uploaded",
+    observedSummary: "A sunrise over water.", summaryCoverage: "full",
+  };
+  const second = { ...first, id: "11111111-1111-4111-8111-000000000032",
+    fileName: "seagulls.png", observedSummary: "Three seagulls on a pier." };
+  const older = { ...first, id: "11111111-1111-4111-8111-000000000033",
+    fileName: "old-photo.png", createdAt: "2026-10-01T00:00:00Z" };
+  const history: Message[] = [
+    { id: "u-old", chatId: "images-chat", role: "user", content: "[image]",
+      createdAt: "2026-10-01T00:00:00Z", attachments: [older] },
+    { id: "a-old", chatId: "images-chat", role: "assistant", content: "Old picture.",
+      createdAt: "2026-10-01T00:01:00Z" },
+    { id: "u-new", chatId: "images-chat", role: "user", content: "[image] [image]",
+      createdAt: "2026-11-02T16:00:00Z", attachments: [first, second] },
+    { id: "a-new", chatId: "images-chat", role: "assistant", content: "New pictures.",
+      createdAt: "2026-11-02T16:01:00Z" },
+  ];
+  let calls = 0;
+  const selector = async () => { calls++; return { selections: [] }; };
+  for (const noun of ["pictures", "photos", "images", "picture", "photo", "image"]) {
+    const decision = await selectStoredAttachments(
+      "Tell me about the " + noun + " I just sent you",
+      [older, first, second], history, selector, [],
+      { currentChatId: "images-chat", activeProject: null },
+    );
+    assert.deepEqual(decision.selections.map(item => item.attachment.id), [first.id, second.id], noun);
+    assert.ok(decision.selections.every(item => item.mode === "summary"), noun);
+  }
+  assert.equal(calls, 0);
+  const precise = await selectStoredAttachments("Inspect the photos I just sent you",
+    [first, second], history, selector, [], { currentChatId: "images-chat", activeProject: null });
+  assert.deepEqual(precise.selections.map(item => item.mode), ["source", "source"]);
+  assert.equal(calls, 0);
+  const newlyAttached = await selectStoredAttachments("Describe the pictures",
+    [first, second], history, selector, ["new-upload.png"],
+    { currentChatId: "images-chat", activeProject: null });
+  assert.deepEqual(newlyAttached.selections, [], "new uploads take priority over saved pictures");
+  assert.equal(calls, 0);
+  const compare = await selectStoredAttachments("Compare the first and second pictures",
+    [first, second], history, selector, [], { currentChatId: "images-chat", activeProject: null });
+  assert.equal(compare.selections.length, 0, "ambiguous comparisons stay with the selector");
+  assert.equal(calls, 1);
+});
+
+test("blocked selector never treats cross-chat or automatically reused images as recently sent", async () => {
+  const foreign: ConversationAttachment = {
+    id: "11111111-1111-4111-8111-000000000041", fileName: "elsewhere.png",
+    mimeType: "image/png", chatId: "other-chat", actorId: "actor-a",
+    observedSummary: "An image from another conversation.", summaryCoverage: "full",
+    conversationUsage: "uploaded",
+  };
+  const history: Message[] = [
+    { id: "m", chatId: "current-chat", role: "user", content: "Let's discuss a new subject.",
+      createdAt: "2026-11-02T16:00:00Z" },
+  ];
+  const blocked = async () => {
+    throw new Error("SelectorProviderBlocked");
+  };
+  const query = "What do the pictures I just sent you show?";
+  const crossChat = await selectStoredAttachments(query, [foreign], history, blocked, [],
+    { currentChatId: "current-chat", activeProject: null });
+  assert.deepEqual(crossChat.selections, []);
+  assert.match(crossChat.clarification ?? "", /couldn't identify a saved image/i);
+  const auto = { ...foreign, chatId: "current-chat",
+    conversationUsage: "contextual" as const };
+  const autoHistory: Message[] = [
+    { id: "m2", chatId: "current-chat", role: "user", content: "Continue.",
+      createdAt: "2026-11-02T16:00:00Z", attachments: [auto] },
+  ];
+  const noAnchor = await selectStoredAttachments(query, [auto], autoHistory, blocked, [],
+    { currentChatId: "current-chat", activeProject: null });
+  assert.deepEqual(noAnchor.selections, [], "automatic reuse cannot become a fresh upload");
+  const newTopic = await selectStoredAttachments("Forget the pictures; let's discuss budgets",
+    [auto], autoHistory, async () => ({ selections: [] }), [],
+    { currentChatId: "current-chat", activeProject: null });
+  assert.equal(newTopic.selections.length, 0, "a topic change cannot inject an image");
+});
