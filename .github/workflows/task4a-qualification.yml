@@ -37,7 +37,7 @@ jobs:
           node --input-type=module <<'NODE'
           import {readFileSync,writeFileSync} from 'node:fs';
           const report=JSON.parse(readFileSync('task4a-qualification/test-report.json','utf8'));
-          if(!report.success||report.counts.tests!==7||report.counts.passed!==7||report.counts.failed||report.counts.skipped||report.counts.todo||report.completed!==7)
+          if(!report.success||report.counts.tests!==8||report.counts.passed!==8||report.counts.failed||report.counts.skipped||report.counts.todo||report.completed!==8)
             throw new Error('Task 4A negative-case matrix missing or failed');
           const caseReport=JSON.parse(readFileSync('task4a-qualification/cases.json','utf8'));
           if(caseReport.cases.length<35||caseReport.cases.some(c=>c.verdict!=='PASS')||!caseReport.cases.some(c=>c.kind==='positive')||!caseReport.cases.some(c=>c.kind==='negative'))
