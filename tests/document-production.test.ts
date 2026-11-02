@@ -101,8 +101,46 @@ test('PDF.js EOL fragment alignment preserves exact ordered glyphs', () => {
 
   const renderCode = readFileSync('lib/documents/render.ts','utf8');
   assert.match(renderCode,/pdfTextMatchesSource\(raster\.text, contentText\(spec\), raster\.fragments\)/);
-  assert.match(renderCode,/hasEOL:Boolean\(item\.hasEOL\)/);
+  assert.match(renderCode,/hasEOL:\s*Boolean\(item\.hasEOL\)/);
+  assert.match(renderCode,/y - nextY > Math\.max\(3,/);
+  assert.match(renderCode,/nextX \+ 1 < x \+ Math\.max\(2,/);
   assert.match(renderCode,/sameOrderedGlyphs/);
+});
+
+test('PDF.js blank style and marker fragments cannot erase verified end-of-line provenance', () => {
+  const source = 'Cross-functional leadership';
+  const fragments = [
+    { str: 'Cross-func', hasEOL: true },
+    { str: '', hasEOL: false }, // PDF.js zero-length style item
+    { str: '•', hasEOL: false }, // decorative text item removed by glyph folding
+    { str: ' tional leadership', hasEOL: false },
+  ];
+  const extracted = fragments.map(part => part.str + (part.hasEOL ? '\n' : '')).join('');
+  assert.equal(pdfTextMatchesSource(extracted, source), false,
+    'Without provenance-bearing fragments the inserted space is ambiguous.');
+  assert.equal(pdfTextMatchesSource(extracted, source, fragments), true);
+  assert.equal(pdfTextMatchesSource(extracted, 'Cross-functional management', fragments), false,
+    'Preserving EOL metadata must not conceal changed words.');
+});
+
+test('PDF.js geometric line-break evidence repairs only boundary whitespace, not in-run changes', () => {
+  const source = 'Led financial forecasting across teams.';
+  const valid = [
+    { str: 'Led finan ', hasEOL: false, lineBreakAfter: true },
+    { str: ' cial forecasting across teams.', hasEOL: false },
+  ];
+  const extracted = valid.map(part => part.str).join('');
+  assert.equal(pdfTextMatchesSource(extracted, source), false);
+  assert.equal(pdfTextMatchesSource(extracted, source, valid), true,
+    'Physical line-wrap padding is not an extra source word boundary.');
+  const sameLine = valid.map(({ str, hasEOL }) => ({ str, hasEOL }));
+  assert.equal(pdfTextMatchesSource(extracted, source, sameLine), false,
+    'An unsupported same-line inserted space remains fatal.');
+  assert.equal(pdfTextMatchesSource('Led finan cial forecasting across teams.', source,
+    [{ str: 'Led finan cial forecasting across teams.', hasEOL: false, lineBreakAfter: true }]), false,
+    'A space inside one continuous PDF text run remains fatal.');
+  assert.equal(pdfTextMatchesSource('Led finan  cial forecastig across teams.', source, valid), false,
+    'No missing glyph can pass, regardless of line-break evidence.');
 });
 
 test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', () => {
