@@ -18,20 +18,20 @@ export async function previewCookies(origin:string,request:typeof fetch=fetch):P
  // Validate attributes on the _vercel_jwt cookie itself, not on another
  // Set-Cookie header. Only a usable host-scoped, Secure HttpOnly cookie passes.
  const lines=response.headers.getSetCookie?.()??[];
- const headers=lines.length?lines:(response.headers.get('set-cookie')??'').split(/,(?=\\s*[^\\s,;=]+=)/);
- const raw=headers.find(value=>/^\\s*_vercel_jwt=/.test(value));
+ const headers=lines.length?lines:(response.headers.get('set-cookie')??'').split(/,(?=\s*[^\s,;=]+=)/);
+ const raw=headers.find(value=>/^\s*_vercel_jwt=/.test(value));
  if(!raw)throw new PreviewAccessUnavailable();
  const parts=raw.split(';'),jwt=parts.shift()!.trim().slice('_vercel_jwt='.length);
- if(!jwt||jwt.length>4096||/[\\s,;]/.test(jwt))throw new PreviewAccessUnavailable();
+ if(!jwt||jwt.length>4096||/[\s,;]/.test(jwt))throw new PreviewAccessUnavailable();
  const attributes=new Map(parts.map(part=>{const i=part.indexOf('=');return [part.slice(0,i<0?undefined:i).trim().toLowerCase(),i<0?'':part.slice(i+1).trim()] as const;}));
  const hostname=new URL(origin).hostname;
  const cookieDomain=attributes.get('domain');
  const maxAge=attributes.get('max-age');
  const expires=attributes.get('expires');
  if(!attributes.has('httponly')||!attributes.has('secure')||
-    (cookieDomain&&cookieDomain.replace(/^\\./,'').toLowerCase()!==hostname)||
+    (cookieDomain&&cookieDomain.replace(/^\./,'').toLowerCase()!==hostname)||
     (attributes.has('path')&&attributes.get('path')!=='/')||
-    (maxAge!==undefined&&(!/^\\d+$/.test(maxAge)||Number(maxAge)<=0))||
+    (maxAge!==undefined&&(!/^\d+$/.test(maxAge)||Number(maxAge)<=0))||
     (maxAge===undefined&&expires!==undefined&&(!Number.isFinite(Date.parse(expires))||Date.parse(expires)<=Date.now())))throw new PreviewAccessUnavailable();
  return[{name:'_vercel_jwt',value:jwt,domain:new URL(origin).hostname,path:'/',httpOnly:true,secure:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+300}];
 }
