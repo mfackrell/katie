@@ -11,6 +11,7 @@ import { contentText, documentSchema, normalizedText, parseDocument, pdfTextMatc
 import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial } from '../lib/documents/intent';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
+import { resolveDocumentDownload } from '../lib/documents/client-download';
 import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
 import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
 import { renderDocument } from '../lib/documents/render';
@@ -47,6 +48,40 @@ test('PDF line-wrap hyphen extraction does not falsely fail ATS text fidelity', 
   assert.equal(pdfTextMatchesSource('Led a family-owned business with e-commerce.', source), false, 'missing words remain fatal');
   assert.equal(pdfTextMatchesSource('Led a family-owned company with e-commerce and multi-entity reporting.', source), false, 'changed content remains fatal');
   assert.equal(pdfTextMatchesSource('Led an e-commerce business with family-owned and multi-entity reporting.', source), false, 'reordering remains fatal');
+});
+
+test('authenticated document links are same-origin, strictly scoped and format-checked', () => {
+  const actor='22222222-2222-4222-8222-222222222222';
+  const chat='33333333-3333-4333-8333-333333333333';
+  const receipt='a'.repeat(64);
+  const origin='https://katie.example.test';
+  const url='/api/documents/download?actorId='+actor+'&chatId='+chat+'&id='+receipt+'&format=pdf';
+  const pdf=resolveDocumentDownload(url,origin);
+  assert.equal(pdf?.filename,'document.pdf');
+  assert.equal(pdf?.mime,'application/pdf');
+  assert.equal(pdf?.path,url);
+  const docx=resolveDocumentDownload(url.replace('format=pdf','format=docx'),origin);
+  assert.equal(docx?.filename,'document.docx');
+  assert.equal(docx?.mime,'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  for(const href of [
+    'https://attacker.example/api/documents/download?'+url.split('?')[1],
+    '//attacker.example/api/documents/download?'+url.split('?')[1],
+    url.replace('format=pdf','format=zip'),
+    url+'&format=pdf',
+    url+'&ownerId=attacker',
+    url+'#fragment',
+    url.replace(receipt,'abc'),
+    url.replace(actor,'not-a-uuid'),
+    '/api/documents/qualification?'+url.split('?')[1],
+  ]) assert.equal(resolveDocumentDownload(href,origin),null,href);
+  // A plain browser navigation cannot attach the owner's bearer header.
+  // The Markdown link must use the explicit authenticated client download.
+  const renderer=readFileSync('components/assistant-markdown.tsx','utf8');
+  assert.match(renderer,/ownerSessionBearer/);
+  assert.match(renderer,/credentials:"same-origin"/);
+  assert.match(renderer,/redirect:"error"/);
+  assert.match(renderer,/resolveDocumentDownload\(href,window\.location\.origin\)/);
+  assert.doesNotMatch(renderer,/location\.href\s*=\s*.*token/);
 });
 
 test('document routing is explicit and ordinary text requests remain inert', () => {
