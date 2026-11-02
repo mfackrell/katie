@@ -180,16 +180,17 @@ test("incomplete first prompt preserves cursor and blocks repeat across requests
   assert.equal(h.calls.length,1,"zero repeated provider calls on failed source range");
 });
 
-test("over-ceiling second prompt fails closed and is not retried on later turns",async()=>{
+test("an oversized draft and failed bounded recovery preserve cursor without repeated charges",async()=>{
   const prior={version:2,summary:"Critical past context.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
   const h=harness({history:messageHistory(92),prior,
-    responses:n=>n===1?reply("One batch summary."):reply("Y".repeat(15001))});
+    responses:n=>n===1?reply("Source changes."):n===2?reply("Y".repeat(15276)):reply("Z".repeat(7501))});
   assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,2);
+  assert.equal(h.calls.length,3,"one extra call after an oversized completed draft");
+  assert.equal(h.calls[2].body.max_tokens,4000);
   assert.deepEqual(h.memory(),prior);
+  assert.equal(h.writes.length,0);
   assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,2);
-  assert.ok(h.logs.some(e=>e.args.some(x=>String(x).includes("Batch blocked"))));
+  assert.equal(h.calls.length,3,"blocked source range never spends again");
 });
 
 test("a nonterminal provider failure records a durable blocking outcome",async()=>{
@@ -261,18 +262,20 @@ test("a stale checkpoint claim and a concurrent moved checkpoint never write ove
 });
 
 
-test("v2 explicitly reauthorizes a v1 blocked batch once, without resetting the cursor or deleting v1 evidence",async()=>{
+test("v3 permits one attempt for an earlier blocked v2 batch and retains old failure evidence",async()=>{
   const prior={version:2,summary:"P".repeat(14774),summarizedThroughMessageId:"m1",sourceMessageCount:2};
   const h=harness({history:messageHistory(92),prior,
     responses:n=>reply(n===1?"Only the 30 new source messages.":"A concise fully reconciled ITM.")});
   // Simulates the production v1 circuit breaker preserved in Postgres.
   const batchEnd="m31";
   h.claims.set("two-stage-30-messages-v1:"+batchEnd,"blocked");
+  h.claims.set("two-stage-30-messages-v2-reconcile-10000:"+batchEnd,"blocked");
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2,"one two-stage paid attempt under the corrected processor");
   assert.equal(h.calls[1].body.max_tokens,10000);
   const claim=h.events.find(e=>e.name==="claim_intermediate_memory_batch");
-  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v2-reconcile-10000");
+  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v3-priority-recovery");
+  assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-10000:"+batchEnd),"blocked");
   assert.equal(h.claims.get("two-stage-30-messages-v1:"+batchEnd),"blocked",
     "old failure evidence must remain untouched");
   assert.equal(h.memory().summarizedThroughMessageId,batchEnd);
@@ -306,4 +309,73 @@ test("even with 10,000 output tokens an incomplete reconciliation fails closed a
   assert.deepEqual(h.memory(),prior);
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,2,"no identical paid retries after the failure");
+});
+
+
+test("15,276-character completed reconciliation gets one priority recovery and a compact committed checkpoint",async()=>{
+  const prior={version:2,
+    summary:("User correction: never invent event dates; keep ongoing commitments. "+
+      "Personally meaningful established history. ".repeat(420)).slice(0,14774),
+    summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const newFacts="New source fact: user corrected an assumption and has one open commitment.";
+  const verbose="An exhaustive historical recap that fails to prioritize anything. ".repeat(300)
+    .slice(0,15276).trim();
+  assert.ok(verbose.length>15000);
+  const compact="User correction: never invent event dates. Open commitment: complete memory fix. "+
+    "Keep meaningful established history; omit repeated status chatter.";
+  const h=harness({history:messageHistory(92),prior,
+    responses:n=>reply(n===1?newFacts:n===2?verbose:compact)});
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.calls.length,3);
+  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,10000,4000]);
+  assert.ok(h.calls[1].body.system.includes("selective memory"));
+  assert.ok(h.calls[2].body.system.includes("FIRST retain explicit user corrections"));
+  assert.ok(h.calls[2].body.system.includes("OMIT repeated status reports"));
+  assert.ok(h.calls[2].body.messages[0].content.includes(prior.summary));
+  assert.ok(h.calls[2].body.messages[0].content.includes(newFacts));
+  assert.ok(h.calls[2].body.messages[0].content.includes(verbose));
+  assert.equal(h.memory().summary,compact);
+  assert.ok(h.memory().summary.length<=7500);
+  assert.equal(h.memory().summarizedThroughMessageId,"m31");
+  assert.equal(h.memory().sourceMessageCount,32);
+  assert.equal(h.writes.length,1);
+  assert.equal(h.writes[0].p_expected_cursor,"m1");
+  assert.equal(await h.run(),"skipped");
+  assert.equal(h.calls.length,3,"no duplicate paid work after commit");
+  assert.ok(h.logs.some(x=>x.args.some(z=>String(z).includes("Priority recovery accepted"))));
+});
+
+test("a complete 7,501-character draft triggers recovery but a 7,500-character draft does not",async()=>{
+  for(const [size,expectedCalls] of [[7500,2],[7501,3]]){
+    const h=harness({responses:n=>reply(n===1?"New source detail.":n===2?"D".repeat(size):"Compact correction.")});
+    assert.equal(await h.run(),"committed");
+    assert.equal(h.calls.length,expectedCalls);
+    assert.equal(h.memory().summary,expectedCalls===2?"D".repeat(size):"Compact correction.");
+  }
+});
+
+test("priority recovery with max_tokens is rejected, checkpoint retained, no fourth paid call",async()=>{
+  const prior={version:2,summary:"Keep critical history.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,
+    responses:n=>n===1?reply("New correction."):n===2?reply("Z".repeat(15276)):reply("Partial","max_tokens")});
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,3);
+  assert.equal(h.writes.length,0);
+  assert.deepEqual(h.memory(),prior);
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,3);
+  assert.equal(h.claims.get("two-stage-30-messages-v3-priority-recovery:m31"),"blocked");
+});
+
+test("recovery payment or approval denial does not trigger further calls or replace ITM",async()=>{
+  const prior={version:2,summary:"Important original.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const denial=Object.assign(new Error("Owner approval required"),{code:"standalone_approval_required",terminal:true});
+  const h=harness({history:messageHistory(92),prior,
+    responses:n=>n===1?reply("New item."):n===2?reply("Z".repeat(15276)):(()=>{throw denial;})()});
+  await assert.rejects(h.run(),error=>error===denial);
+  assert.equal(h.calls.length,3);
+  assert.equal(h.writes.length,0);
+  assert.deepEqual(h.memory(),prior);
+  assert.equal(await h.run(),"deferred");
+  assert.equal(h.calls.length,3);
 });
