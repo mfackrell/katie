@@ -48,7 +48,10 @@ export function pdfTextMatchesSource(extracted: string, source: string, fragment
   let offset = 0;
   let previousEndOfLine = false;
   for (const fragment of fragments) {
-    const text = foldPdfGlyphs(fragment.str).replace(/\s+/gu, ' ');
+    const normalizedFragment = foldPdfGlyphs(fragment.str).replace(/\s+/gu, ' ');
+    // A trailing separator on an end-of-line item is the same synthetic
+    // boundary as hasEOL; match only against the source's actual word break.
+    const text = fragment.hasEOL ? normalizedFragment.replace(/ $/, '') : normalizedFragment;
     let atStart = true;
     for (const glyph of text) {
       if (glyph === ' ') {
