@@ -920,7 +920,7 @@ export function verifiedPreviewUrl(raw: unknown, approvedOrigins: readonly strin
 // project and custom aliases are not delivery evidence even if they are HTTPS.
 export function immutablePreviewUrl(raw:unknown,approvedOrigins:readonly string[]=[]):string|null{
  const safe=verifiedPreviewUrl(raw,approvedOrigins),rule=process.env.PROJECT_PREVIEW_HOST_PATTERN;if(!safe||!rule||!rule.startsWith('^')||!rule.endsWith('$'))return null;
- try{const u=new URL(safe),nonce=new RegExp(rule).exec(u.hostname)?.[1];return u.hostname.endsWith('.vercel.app')&&!u.hostname.includes('-git-')&&typeof nonce==='string'&&/^[a-z0-9]{9}$/.test(nonce)?safe:null;}catch{return null;}
+ try{const u=new URL(safe),nonce=new RegExp(rule).exec(u.hostname)?.[1];return u.href===u.origin+'/'&&u.hostname.endsWith('.vercel.app')&&!u.hostname.includes('-git-')&&typeof nonce==='string'&&/^[a-z0-9]{9}$/.test(nonce)?safe:null;}catch{return null;}
 }
 export async function developmentPreview(task: AgentTask, project: ProjectAcceptanceBinding, approvedOrigins: readonly string[] = []) {
   const receipt = parseCompletionReceipt(task.external.receipt, task.repository_full_name ?? '', Number(task.external.issueNumber), Number((task.external.receipt as Record<string, unknown>)?.run_id), 'success', project);
