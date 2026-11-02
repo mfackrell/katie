@@ -71,3 +71,17 @@ test('revoked continuation preserves known authority denial when monetary RPC re
  const r=capacityProgress({binding:{},recovery:{phase:'final-review',checkpointSha:'a'.repeat(40),lastCompleted:{repairPerformed:true}},phase:'repair',completedStages:['implementation','initial_review','repair','verification','final_review'],notRequiredStages:['repair']});
  assert.deepEqual(r.completedStages,['implementation','initial_review']);assert.deepEqual(r.notRequiredStages,[]);
  });
+
+test('adaptive recovery forecasts only unfinished candidate work',()=>{
+ const binding={};
+ for(const [action,repairPerformed,passed,want] of [
+  ['verification',true,false,['implementation','initial_review','repair']],
+  ['final-review',true,true,['implementation','initial_review','repair','verification']],
+  ['complete',true,true,['implementation','initial_review','repair','verification','final_review']],
+  ['repair',true,false,['implementation','initial_review']]
+ ]){
+  const recovery={phase:action==='verification'?'review':'final-review',lastCompleted:{repairPerformed,verification:{passed,pending:action==='verification'},adaptiveRepair:{version:2,nextAction:action}}};
+  const result=capacityProgress({binding,recovery,phase:action==='complete'?'do_completion':action});
+  assert.deepEqual(result.completedStages,want);
+ }
+});

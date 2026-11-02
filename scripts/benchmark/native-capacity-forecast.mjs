@@ -13,6 +13,15 @@ export function capacityProgress({binding,recovery,phase='implementation',comple
   recovery?.phase==='final-review'?['implementation','initial_review','repair','verification']:
   recovery?.phase==='do_completion'?['implementation','initial_review','repair','verification','final_review']:[];
  if(['final-review','do_completion'].includes(recovery?.phase)&&recovery.lastCompleted?.repairPerformed!==true&&recovery.lastCompleted?.lifecycle?.repairPerformed!==true){restored=restored.filter(s=>s!=='repair');notRequiredStages=[...new Set([...notRequiredStages,'repair'])];}
+ const saved=recovery?.lastCompleted,action=saved?.adaptiveRepair?.version===2?saved.adaptiveRepair.nextAction:null;
+ if(action){
+  restored=action==='implementation'?[]:['implementation'];
+  if(['repair','final-review','complete'].includes(action)||action==='verification'&&saved.repairPerformed)restored.push('initial_review');
+  if(['verification','final-review','complete'].includes(action)&&saved.repairPerformed)restored.push('repair');
+  if(['review','final-review','complete'].includes(action)&&saved.verification?.passed&&!saved.verification.pending)restored.push('verification');
+  if(action==='complete')restored.push('final_review');
+  if(['final-review','complete'].includes(action)&&!saved.repairPerformed)notRequiredStages=[...new Set([...notRequiredStages,'repair'])];
+ }
  // A new repair reopens candidate-dependent work, including restored stages.
  if(key==='repair'){restored=restored.filter(s=>!['repair','verification','final_review'].includes(s));completedStages=completedStages.filter(s=>!['repair','verification','final_review'].includes(s));notRequiredStages=notRequiredStages.filter(s=>s!=='repair');}
  return {source:recovery?'authenticated_recovery':'trusted_host',binding,phase:key,completedStages:[...new Set([...restored,...completedStages])],notRequiredStages,checkpointSha:recovery?.checkpointSha??null};

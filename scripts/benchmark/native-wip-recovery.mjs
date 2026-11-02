@@ -1,5 +1,6 @@
 // Trusted host only. Recovery reads historical evidence; it never grants authority,
 // reconciles charges, replays a request, or treats WIP as reviewed source.
+import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {mkdtempSync,rmSync,openSync,closeSync,mkdirSync,lstatSync,fstatSync,ftruncateSync,fchmodSync,writeSync,unlinkSync,rmdirSync,constants} from 'node:fs';
 import {join} from 'node:path';
@@ -113,6 +114,20 @@ export async function loadRecoveryDiagnostics({task,repository,github,emptyBasel
 
 export function recoveryCompletedEvidence(record,diagnostics){
  const last=structuredClone(record.lastCompleted);
+ if(last?.adaptiveRepair?.version===2){
+  const full=diagnostics?.lifecycleEvidence;
+  const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  for(const key of ['verification','review','initialReview']){
+   const saved=last[key];if(!saved)continue;
+   const value=full?.[key],field=key==='verification'?'detail':'findings',hashKey=field+'Digest';
+   if(!value||typeof (value[field]??'')!=='string'||(value[field]??'').length>12000||
+      digest(value[field]??'')!==saved[hashKey])fail('full lifecycle evidence missing or altered');
+   const omit=o=>Object.fromEntries(Object.entries(o).filter(([k])=>k!==field&&k!==hashKey));
+   same(omit(value),omit(saved),'full lifecycle candidate or verdict mismatch');
+   last[key]={...saved,[field]:value[field]??''};
+  }
+  return last;
+ }
  if(record.phase!=='repair'||last?.review&&last?.verification)return last;
  // Original PR #902 checkpoints retain this evidence in diagnostics rather than
  // lastCompleted. Authenticate that artifact first; never rewrite Git metadata.
@@ -167,6 +182,27 @@ export async function validateRecoveryRecords({record,task,context,project,trial
    if(!callGrant.developer_approval_id||callApproval.developer_authority?.version!=='ordinary-developer-v1'||callApproval.account_id!==accountId||callApproval.task_id!==task.id||callApproval.project_id!==project.id||callApproval.owner_id!==approval.owner_id)fail('ordinary historical call authority mismatch');
   }
  }else if(record.phase==='repair')fail('repair call evidence missing');
+ const adaptive=last.adaptiveRepair;
+ if(adaptive?.version===2){
+  const action=adaptive.nextAction;
+  if(!['implementation','verification','review','final-review','repair','complete'].includes(action)||
+     adaptive.candidateHead!==record.completedCheckpointSha||!Number.isSafeInteger(adaptive.iteration)||adaptive.iteration<0||
+     !Number.isSafeInteger(adaptive.stagnant)||adaptive.stagnant<0||!Array.isArray(adaptive.seen)||adaptive.seen.length>16||
+     adaptive.seen.some(value=>typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value)))fail('invalid adaptive continuation state');
+  if(!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('adaptive verification binding missing');
+  const pending=adaptive.pendingRepair;
+  if(pending&&(!Number.isSafeInteger(pending.iteration)||![adaptive.iteration,adaptive.iteration+1].includes(pending.iteration)||
+     !sha(pending.source)||!sha(pending.before?.head)||typeof pending.before?.passed!=='boolean'||
+     !Array.isArray(pending.priorFindings)||pending.priorFindings.length>32||pending.priorFindings.some(f=>typeof f!=='string'||f.length>240)||
+     pending.iteration===adaptive.iteration+1&&(action!=='repair'||pending.before.head!==record.completedCheckpointSha)))fail('invalid pending repair evidence');
+  if(action==='verification'&&last.verification.pending!==true)fail('pending verification evidence missing');
+  if(['review','final-review','repair','complete'].includes(action)&&last.verification.pending)fail('unfinished verification cannot be accepted');
+  if(['repair','complete'].includes(action)&&(!last.review||last.review.reviewedHeadSha!==record.completedCheckpointSha||
+     !['review','final-review'].includes(last.review.phase)||!['pass','changes_requested'].includes(last.review.verdict)||
+     typeof last.review.findings!=='string'||!last.review.findings.trim()))fail('completed adaptive review binding missing');
+  if(action==='complete'&&(last.review.phase!=='final-review'||last.review.verdict!=='pass'||!last.verification.passed))fail('adaptive completion evidence missing');
+  if(action==='repair'&&last.review.verdict==='pass'&&last.verification.passed)fail('adaptive repair evidence inconsistent');
+ }
  if(record.version===2&&['review','final-review','do_completion'].includes(record.phase)){
   if(!last.modelCall||!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('completed boundary verification evidence missing');
   if(record.phase!=='review'&&(!last.review||!['pass','changes_requested'].includes(last.review.verdict)))fail('completed boundary review evidence missing');
@@ -212,6 +248,13 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
  const {checkpointSha:_,ref:__,...metadata}=record;
  same(JSON.parse(raw),metadata,'checkpoint metadata was forged or altered');
  same(git('rev-parse',record.checkpointSha+'^{tree}'),record.sourceTreeSha,'checkpoint tree mismatch');
+ if(completedEvidence.adaptiveRepair?.version===2&&['verification','review','final-review','complete'].includes(completedEvidence.adaptiveRepair.nextAction)&&
+    record.sourceTreeSha!==git('rev-parse',record.completedCheckpointSha+'^{tree}'))fail('completed candidate contains unverified source modifications');
+ const pendingRepair=completedEvidence.adaptiveRepair?.pendingRepair;
+ if(pendingRepair){
+  same(git('rev-parse',pendingRepair.before.head+'^{tree}'),pendingRepair.source,'pending repair source mismatch');
+  git('merge-base','--is-ancestor',pendingRepair.before.head,record.completedCheckpointSha);
+ }
  const parents=git('show','-s','--format=%P',record.checkpointSha).split(' ');
  if(parents.length>2||parents[0]!==record.completedCheckpointSha)fail('completed checkpoint ancestry mismatch');
  git('merge-base','--is-ancestor',context.baseSha,record.completedCheckpointSha);
@@ -269,6 +312,6 @@ export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,contex
   git('read-tree',record.completedCheckpointSha);
   git('update-ref','HEAD',record.completedCheckpointSha,context.baseSha);
   return {verification:'unverified',phase:record.phase,checkpointSha:record.checkpointSha,completedCheckpointSha:record.completedCheckpointSha,
-   reviewFindings:record.reviewFindings,lastCompleted:structuredClone(completedEvidence)};
+   reviewFindings:record.reviewFindings,checkpointEvidence:structuredClone(record.lastCompleted),lastCompleted:structuredClone(completedEvidence)};
  }});
 }

@@ -292,3 +292,29 @@ test('authenticated clean no-work failure permits initial implementation only wi
  ]){const saved=structuredClone(f.diagnostics);Object.assign(f.diagnostics,change);await assert.rejects(load,/unfinished same-task WIP/);for(const key of Object.keys(f.diagnostics))delete f.diagnostics[key];Object.assign(f.diagnostics,saved);}
  await assert.rejects(loadRecoveryDiagnostics({task:f.task,repository:'mfackrell/katie',github:f.github}),/unfinished same-task WIP/);
 });
+
+test('adaptive next-action validation rejects missing, mismatched and ambiguous completed evidence',async t=>{
+ const f=fixture(t);const last=f.record.lastCompleted;
+ last.review.reviewedHeadSha=f.completed;
+ last.adaptiveRepair={version:2,nextAction:'repair',candidateHead:f.completed,iteration:2,stagnant:1,seen:['a'.repeat(64)]};
+ await f.validate();
+ for(const mutate of [
+  x=>{x.adaptiveRepair.nextAction='unknown';},x=>{x.adaptiveRepair.candidateHead='f'.repeat(40);},
+  x=>{x.adaptiveRepair.iteration=-1;},x=>{x.adaptiveRepair.stagnant=-1;},x=>{x.adaptiveRepair.seen=['not-a-fingerprint'];},
+  x=>{x.verification.head='f'.repeat(40);},x=>{x.verification.pending=true;},
+  x=>{x.review.reviewedHeadSha='f'.repeat(40);},x=>{x.adaptiveRepair.nextAction='complete';},
+  x=>{x.adaptiveRepair.nextAction='verification';delete x.verification.pending;}
+ ]){const changed=structuredClone(last);mutate(changed);await assert.rejects(f.validate(changed),/RECOVERY_DENIED/);}
+});
+test('restoration can be retried in another fresh environment without authority or history mutation',async t=>{
+ const f=fixture(t),history=JSON.stringify(f.rows);f.fresh();await f.validate();const first=f.prepare().restore();
+ // Simulate loss of the new runner after restoration, before a provider call.
+ f.fresh();await f.validate();const second=f.prepare().restore();
+ assert.deepEqual(second,first);assert.equal(JSON.stringify(f.rows),history);
+ assert.equal(readFileSync(join(f.workspace,'app/pilot/new/nested.mjs'),'utf8'),'third new file');
+});
+test('abrupt termination cannot recover source that never reached the immutable checkpoint',async t=>{
+ const f=fixture(t);f.file('app/pilot/a.mjs','later change never durably checkpointed');f.fresh();await f.validate();f.prepare().restore();
+ assert.equal(readFileSync(join(f.workspace,'app/pilot/a.mjs'),'utf8'),'unfinished repair a');
+ assert.notEqual(readFileSync(join(f.workspace,'app/pilot/a.mjs'),'utf8'),'later change never durably checkpointed');
+});

@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {createHash} from 'node:crypto';
+import {recoveryCompletedEvidence} from '../scripts/benchmark/native-wip-recovery.mjs';
 import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -179,4 +181,76 @@ test('interrupted repaired candidate verification reruns tests before source re-
  const boundary=events.length;
  const result=await executeNativeDevelopmentLifecycle({...options,recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:structuredClone(saved)}});
  assert.equal(result.finalReview.verdict,'pass');assert.deepEqual(events.slice(boundary),['verify:'+'b'.repeat(40),'final-review']);assert.equal(result.repairIterations,1);
+});
+
+test('completed candidate-bound final review is reused after interruption without any paid phase',async()=>{
+ const head='a'.repeat(40),events=[];
+ const result=await executeNativeDevelopmentLifecycle({recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:{
+  verification:{head,passed:true},review:{phase:'final-review',reviewedHeadSha:head,verdict:'pass',findings:'All frozen assertions passed'},
+  initialReview:{phase:'review',reviewedHeadSha:'b'.repeat(40),verdict:'changes_requested',findings:'Original retained defect'},
+  repairPerformed:true,adaptiveRepair:{version:2,nextAction:'complete',candidateHead:head,iteration:3,seen:[],stagnant:0}
+ }},runPhase:async p=>{events.push(p);throw Error('Completed phase replayed');},verifyCandidate:async()=>{throw Error('Completed verification replayed');}});
+ assert.equal(result.candidateHead,head);assert.equal(result.repairIterations,3);assert.deepEqual(events,[]);
+ assert.equal(result.review.findings,'Original retained defect');
+});
+test('retained no-progress terminal decision cannot be cleared by runner restart',async()=>{
+ await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'repair',lastCompleted:{stopReason:'no_meaningful_progress'}},runPhase:()=>{throw Error('must not dispatch');}}),/NO_PROGRESS/);
+});
+test('pending verification preserves repair proof, iteration evidence and findings after interruption',async()=>{
+ const head='b'.repeat(40),old='a'.repeat(40),iterations=[],events=[];
+ const result=await executeNativeDevelopmentLifecycle({recovery:{phase:'review',completedCheckpointSha:head,lastCompleted:{
+  repairPerformed:true,verification:{head,passed:false,pending:true},review:{phase:'final-review',reviewedHeadSha:old,verdict:'changes_requested',findings:'largest'},
+  adaptiveRepair:{version:2,nextAction:'verification',candidateHead:head,iteration:3,seen:[],stagnant:1,failureSignature:'prior',pendingRepair:{iteration:3,before:{head:old,passed:false},source:'old-tree',priorFindings:['largest']}}
+ }},candidateIdentity:()=> 'new-tree',verifyCandidate:async()=>{events.push('verify');return {passed:true,head};},runPhase:async phase=>{events.push(phase);return {phase,reviewedHeadSha:head,verdict:'pass',findings:'Frozen assertions passed'};},onIteration:e=>iterations.push(e)});
+ assert.deepEqual(events,['verify','final-review']);assert.equal(iterations.length,1);assert.deepEqual(iterations[0].resolvedFindings,['largest']);assert.equal(result.repairVerification.before.head,old);assert.equal(result.repairVerification.after.head,head);
+});
+test('changed candidate cannot reuse a completed review',async()=>{
+ await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'final-review',completedCheckpointSha:'b'.repeat(40),lastCompleted:{verification:{passed:true},review:{reviewedHeadSha:'a'.repeat(40)},adaptiveRepair:{version:2,candidateHead:'b'.repeat(40),nextAction:'complete'}}}}),/CANDIDATE_MISMATCH/);
+});
+test('interrupted iteration bookkeeping reuses durable review without another model request',async()=>{
+ let saved={},head='a'.repeat(40),interrupted=false;const events=[];
+ const options={candidateIdentity:()=>head,commitCandidate:()=>head,onCompleted:e=>{saved=structuredClone(e);},
+  verifyCandidate:async()=>({passed:head==='b'.repeat(40),detail:'frozen check'}),
+  runPhase:async(phase)=>{events.push(phase);if(phase==='implementation')return;if(phase==='repair'){head='b'.repeat(40);return;}return {phase,reviewedHeadSha:head,verdict:head==='b'.repeat(40)?'pass':'changes_requested',findings:'Frozen check'};},
+  onIteration:async()=>{if(!interrupted){interrupted=true;throw Error('bookkeeping interruption');}}
+ };
+ await assert.rejects(executeNativeDevelopmentLifecycle(options),/bookkeeping interruption/);
+ assert.equal(saved.adaptiveRepair.nextAction,'complete');const before=events.length;
+ const result=await executeNativeDevelopmentLifecycle({...options,recovery:{phase:'final-review',completedCheckpointSha:head,lastCompleted:saved}});
+ assert.equal(result.finalReview.verdict,'pass');assert.equal(events.length,before);
+});
+test('completed stagnation threshold survives repair-phase recovery',async()=>{
+ const head='a'.repeat(40);let requests=0;
+ await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'repair',completedCheckpointSha:head,lastCompleted:{verification:{head,passed:false},review:{phase:'final-review',reviewedHeadSha:head,verdict:'changes_requested',findings:'same failure'},adaptiveRepair:{version:2,nextAction:'repair',candidateHead:head,iteration:3,stagnant:3,seen:[]}}},runPhase:()=>{requests++;}}),/NO_PROGRESS/);
+ assert.equal(requests,0);
+});
+test('interruption at each durable transition resumes only pending engineering',async()=>{
+ for(let stop=1;stop<=12;stop++){
+  let head='a'.repeat(40),saved,publications=0,stopped=false;const events=[];
+  const options={candidateIdentity:()=>head,commitCandidate:()=>head,verifyCandidate:async()=>({passed:head==='b'.repeat(40),detail:'frozen assertion'}),
+   runPhase:async phase=>{events.push(phase);if(phase==='implementation')return;if(phase==='repair'){head='b'.repeat(40);return;}return {phase,reviewedHeadSha:head,verdict:head==='a'.repeat(40)?'changes_requested':'pass',findings:'frozen assertion'};},
+   onCompleted:e=>{saved=structuredClone(e);if(++publications===stop){stopped=true;throw Error('durable transition interruption');}}
+  };
+  let result;try{result=await executeNativeDevelopmentLifecycle(options);}catch(error){assert.match(error.message,/durable transition interruption/);}
+  if(stopped){const action=saved.adaptiveRepair.nextAction;result=await executeNativeDevelopmentLifecycle({...options,onCompleted:()=>{},recovery:{phase:action==='repair'?'repair':action==='verification'?'review':'final-review',completedCheckpointSha:head,lastCompleted:saved,reviewFindings:saved.review?.findings}});}
+  assert.equal(result.finalReview.verdict,'pass');assert.equal(events.filter(p=>p==='implementation').length,1);assert.equal(events.filter(p=>p==='repair').length,1);assert.equal(events.filter(p=>p==='review').length,1);assert.equal(events.filter(p=>p==='final-review').length,1);
+ }
+});
+test('full authenticated long findings preserve repair instructions and stagnation across recovery',async()=>{
+ for(const changedTail of [false,true]){
+  const old='a'.repeat(40),head='b'.repeat(40),detail='deterministic context '.repeat(150)+'LAST FAILED ASSERTION',findings='review context '.repeat(180)+'ACTIONABLE TAIL';
+  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
+  const full={verification:{head:old,passed:false,detail},review:{phase:'final-review',reviewedHeadSha:old,verdict:'changes_requested',findings}};
+  const last={repairPerformed:true,verification:{...full.verification,detail:detail.slice(0,1600),detailDigest:digest(detail)},review:{...full.review,findings:findings.slice(0,1600),findingsDigest:digest(findings)},adaptiveRepair:{version:2,nextAction:'repair',candidateHead:old,iteration:2,stagnant:2,seen:[],failureSignature:digest({findings,verification:detail}),pendingRepair:{iteration:3,before:{head:old,passed:false},source:old,priorFindings:['ACTIONABLE TAIL']}}};
+  const record={phase:'repair',lastCompleted:last};
+  const recovered=recoveryCompletedEvidence(record,{lifecycleEvidence:full});
+  assert.equal(recovered.review.findings,findings);assert.equal(recovered.verification.detail,detail);
+  for(const bad of [undefined,{...full,review:{...full.review,findings:findings+' altered'}},{...full,review:{...full.review,reviewedHeadSha:head}}])assert.throws(()=>recoveryCompletedEvidence(record,{lifecycleEvidence:bad}),/RECOVERY_DENIED/);
+  let repairs=0,lastSaved;const events=[];
+  await assert.rejects(executeNativeDevelopmentLifecycle({recovery:{phase:'repair',completedCheckpointSha:old,lastCompleted:recovered,reviewFindings:'summary only'},candidateIdentity:h=>h,commitCandidate:()=>head,verifyCandidate:async()=>({passed:false,detail}),onCompleted:e=>{lastSaved=e;},runPhase:async(phase,instructions)=>{
+   events.push(phase);if(phase==='repair'){repairs++;assert.match(instructions,/ACTIONABLE TAIL/);assert.match(instructions,/LAST FAILED ASSERTION/);if(repairs===2)throw Error('next legitimate repair');return;}
+   return {...full.review,reviewedHeadSha:head,findings:changedTail?findings+' distinct tail':findings};
+  }}),changedTail?/next legitimate repair/:/NO_PROGRESS/);
+  assert.equal(repairs,changedTail?2:1);assert.equal(lastSaved.adaptiveRepair.stagnant,changedTail?0:3);
+ }
 });
