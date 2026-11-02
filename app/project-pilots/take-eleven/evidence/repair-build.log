@@ -1,0 +1,105 @@
+
+> katie-monorepo@0.2.0 build
+> next build
+
+(node:14) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache
+Attention: Next.js now collects completely anonymous telemetry regarding usage.
+This information is used to shape Next.js' roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://nextjs.org/telemetry
+
+   ▲ Next.js 15.1.11
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/50) ...
+   Generating static pages (12/50) 
+   Generating static pages (24/50) 
+   Generating static pages (37/50) 
+ ✓ Generating static pages (50/50)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                     Size     First Load JS
+┌ ○ /                                           200 B           295 kB
+├ ○ /_not-found                                 983 B           106 kB
+├ ƒ /agents                                     259 B           106 kB
+├ ƒ /api/actors                                 259 B           106 kB
+├ ƒ /api/admin/repos                            259 B           106 kB
+├ ƒ /api/admin/repos/connect                    259 B           106 kB
+├ ƒ /api/agent-tasks                            259 B           106 kB
+├ ƒ /api/agents                                 259 B           106 kB
+├ ƒ /api/chat                                   259 B           106 kB
+├ ƒ /api/chat/status                            259 B           106 kB
+├ ƒ /api/chats                                  259 B           106 kB
+├ ƒ /api/executive                              259 B           106 kB
+├ ƒ /api/health/collaboration                   259 B           106 kB
+├ ƒ /api/health/resilience                      259 B           106 kB
+├ ƒ /api/health/website                         259 B           106 kB
+├ ƒ /api/internal/missions/run                  259 B           106 kB
+├ ƒ /api/internal/model-registry/refresh        259 B           106 kB
+├ ƒ /api/internal/repo-sync/worker              259 B           106 kB
+├ ƒ /api/internal/runpod-results/grok-fallback  259 B           106 kB
+├ ƒ /api/internal/runpod-results/reconcile      259 B           106 kB
+├ ƒ /api/internal/runpod-results/result         259 B           106 kB
+├ ƒ /api/internal/runpod-results/submit         259 B           106 kB
+├ ƒ /api/internal/runpod-results/synthetic      259 B           106 kB
+├ ƒ /api/internal/video-handoffs/reconcile      259 B           106 kB
+├ ƒ /api/long-term-memory                       259 B           106 kB
+├ ƒ /api/messages                               259 B           106 kB
+├ ƒ /api/missions                               259 B           106 kB
+├ ƒ /api/missions/pending                       259 B           106 kB
+├ ƒ /api/models                                 259 B           106 kB
+├ ƒ /api/projects                               259 B           106 kB
+├ ƒ /api/projects/overview                      259 B           106 kB
+├ ƒ /api/projects/pending                       259 B           106 kB
+├ ƒ /api/recovery                               259 B           106 kB
+├ ƒ /api/repo/inject                            259 B           106 kB
+├ ƒ /api/search                                 259 B           106 kB
+├ ƒ /api/specialists                            259 B           106 kB
+├ ƒ /api/ui-state                               259 B           106 kB
+├ ƒ /api/upload                                 259 B           106 kB
+├ ƒ /api/upload/chunk                           259 B           106 kB
+├ ƒ /api/upload/complete                        259 B           106 kB
+├ ƒ /api/upload/direct-url                      259 B           106 kB
+├ ƒ /api/upload/prepare                         259 B           106 kB
+├ ƒ /api/upload/result                          259 B           106 kB
+├ ƒ /api/upload/status                          259 B           106 kB
+├ ƒ /api/upload/telemetry                       259 B           106 kB
+├ ƒ /api/version                                259 B           106 kB
+├ ƒ /api/video-handoffs                         259 B           106 kB
+├ ƒ /api/visual-references                      259 B           106 kB
+├ ƒ /api/work                                   259 B           106 kB
+├ ○ /conversations                              174 B           124 kB
+├ ƒ /conversations/[id]                         5.35 kB         277 kB
+├ ○ /conversations/new                          176 B           124 kB
+├ ○ /legacy                                     2.33 kB         282 kB
+├ ○ /project-pilots/signal-sprint               2.72 kB         108 kB
+├ ○ /project-pilots/take-eleven                 1.89 kB         107 kB
+├ ○ /search                                     1.78 kB         111 kB
+├ ○ /settings                                   177 B           124 kB
+├ ○ /settings/advanced                          12.1 kB         164 kB
+├ ○ /settings/connections                       1.73 kB         111 kB
+├ ○ /specialists                                180 B           124 kB
+├ ƒ /specialists/[id]                           180 B           124 kB
+├ ƒ /webhooks/github                            259 B           106 kB
+├ ○ /work                                       175 B           124 kB
+└ ƒ /work/[id]                                  175 B           124 kB
++ First Load JS shared by all                   105 kB
+  ├ chunks/1517-bcce4d2eb3779292.js             50.5 kB
+  ├ chunks/4bd1b696-787de48c7e24b1f6.js         52.9 kB
+  └ other shared chunks (total)                 1.92 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+
+> katie-monorepo@0.2.0 postbuild
+> node scripts/video-upload-production-smoke.mjs
+
+[Video Smoke] Skipping real Storage verification outside production build.

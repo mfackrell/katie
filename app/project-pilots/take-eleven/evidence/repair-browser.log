@@ -1,0 +1,23 @@
+(node:3) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ exact initial state and registered model acceptance [90m(2.365755ms)[39m[39m
+[32m✔ all reachable states: pure legal moves, alternation, both winners and full-state no-ops [90m(0.830484ms)[39m[39m
+[32m✔ real persistence functions restore progress, both wins and reset using isolated storage [90m(0.475799ms)[39m[39m
+[31m✖ real Chromium: registered gameplay, progress reload, A/B victory reload and reset reload [90m(508.125365ms)[39m[39m
+[34mℹ tests 4[39m
+[34mℹ suites 0[39m
+[34mℹ pass 3[39m
+[34mℹ fail 1[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 515.57355[39m
+
+[31m✖ failing tests:[39m
+
+test at tests/game-development/take-eleven.test.mjs:91:3
+[31m✖ real Chromium: registered gameplay, progress reload, A/B victory reload and reset reload [90m(508.125365ms)[39m[39m
+  Error: Next server exited (1): 
+      at TestContext.<anonymous> [90m(file:///home/runner/work/katie/katie/[39mtests/game-development/take-eleven.test.mjs:103:27[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1409:7)[39m
+  [90m    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)[39m

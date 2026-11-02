@@ -1,0 +1,13 @@
+(node:3) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ exact initial state and registered model acceptance [90m(3.056518ms)[39m[39m
+[32m✔ all reachable states: pure legal moves, alternation, both winners and full-state no-ops [90m(1.071575ms)[39m[39m
+[32m✔ real persistence functions restore progress, both wins and reset using isolated storage [90m(0.63931ms)[39m[39m
+[34mℹ tests 3[39m
+[34mℹ suites 0[39m
+[34mℹ pass 3[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 10.509539[39m

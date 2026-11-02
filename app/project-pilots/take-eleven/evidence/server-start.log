@@ -1,0 +1,11 @@
+(node:5) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ⨯ Failed to start server
+Error: listen EPERM: operation not permitted 127.0.0.1:31948
+    at <unknown> (Error: listen EPERM: operation not permitted 127.0.0.1:31948) {
+  code: [32m'EPERM'[39m,
+  errno: [33m-1[39m,
+  syscall: [32m'listen'[39m,
+  address: [32m'127.0.0.1'[39m,
+  port: [33m31948[39m
+}
