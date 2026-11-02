@@ -114,7 +114,7 @@ test("exactly 30 displaced messages invoke separate summarize and curate prompts
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2);
   assert.equal(h.calls[0].body.max_tokens,2300);
-  assert.equal(h.calls[1].body.max_tokens,3000);
+  assert.equal(h.calls[1].body.max_tokens,10000);
   assert.equal(h.calls[0].body.messages[0].content.includes("source"),false);
   assert.match(h.calls[0].body.messages[0].content,/USER.*Historical detail from turn 0/);
   assert.match(h.calls[0].body.messages[0].content,/ASSISTANT.*Historical detail from turn 29/);
@@ -258,4 +258,52 @@ test("a stale checkpoint claim and a concurrent moved checkpoint never write ove
   assert.equal(await h.run(),"deferred");
   assert.equal(h.calls.length,2);
   assert.equal(h.writes.length,0);
+});
+
+
+test("v2 explicitly reauthorizes a v1 blocked batch once, without resetting the cursor or deleting v1 evidence",async()=>{
+  const prior={version:2,summary:"P".repeat(14774),summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,
+    responses:n=>reply(n===1?"Only the 30 new source messages.":"A concise fully reconciled ITM.")});
+  // Simulates the production v1 circuit breaker preserved in Postgres.
+  const batchEnd="m31";
+  h.claims.set("two-stage-30-messages-v1:"+batchEnd,"blocked");
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.calls.length,2,"one two-stage paid attempt under the corrected processor");
+  assert.equal(h.calls[1].body.max_tokens,10000);
+  const claim=h.events.find(e=>e.name==="claim_intermediate_memory_batch");
+  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v2-reconcile-10000");
+  assert.equal(h.claims.get("two-stage-30-messages-v1:"+batchEnd),"blocked",
+    "old failure evidence must remain untouched");
+  assert.equal(h.memory().summarizedThroughMessageId,batchEnd);
+  assert.equal(h.memory().summary,"A concise fully reconciled ITM.");
+  assert.equal(await h.run(),"skipped");
+  assert.equal(h.calls.length,2,"do not repeat the successful batch");
+});
+
+test("10,000 reconciliation tokens support a near-ceiling prior ITM with a concise complete result",async()=>{
+  const prior={version:2,summary:"Important prior context. ".repeat(670).slice(0,14774),
+    summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const concise="Curated continuity. ".repeat(340).slice(0,6500);
+  const h=harness({history:messageHistory(92),prior,
+    responses:n=>reply(n===1?"New batch corrections and decisions.":concise)});
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.calls[1].body.max_tokens,10000);
+  assert.ok(h.calls[1].body.messages[0].content.includes(prior.summary));
+  assert.equal(h.memory().summary,concise);
+  assert.ok(h.memory().summary.length<=15000,"hard character ceiling must still be enforced");
+  assert.equal(h.memory().summarizedThroughMessageId,"m31");
+});
+
+test("even with 10,000 output tokens an incomplete reconciliation fails closed and is not retried",async()=>{
+  const prior={version:2,summary:"Keep all existing context.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,
+    responses:n=>n===1?reply("Relevant new changes."):reply("Partial output","max_tokens")});
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,2);
+  assert.equal(h.calls[1].body.max_tokens,10000);
+  assert.equal(h.writes.length,0);
+  assert.deepEqual(h.memory(),prior);
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,2,"no identical paid retries after the failure");
 });

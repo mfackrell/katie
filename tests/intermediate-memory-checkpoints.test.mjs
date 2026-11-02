@@ -54,3 +54,13 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
   assert.match(storage,/query\.gt\("created_at", afterCreatedAt\)/);
   assert.match(admin,/gt\(field: string, value: unknown\)/);
 });
+
+
+test("reconciliation has an explicit 10,000-token bound and versioned fail-closed recovery",()=>{
+  assert.match(summary,/RECONCILE_MAX_TOKENS = 10000/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v2-reconcile-10000"/);
+  assert.match(summary,/max_tokens: RECONCILE_MAX_TOKENS/);
+  assert.match(summary,/return completedText\(response, "reconciliation", ITM_HARD_MAX_CHARACTERS\)/);
+  assert.match(summary,/if \(response\.stop_reason !== "end_turn" \|\| !text \|\| text\.length > maxCharacters\)/);
+  assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
+});
