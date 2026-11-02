@@ -43,7 +43,13 @@ export async function verifyDeployedPreview(preview:{url:string;headSha:string;d
  // Validate the contract before any credential minting or network request.
  // An absolute contract.path would otherwise redirect cookie-bearing fetch off-origin.
  browserContract.parse(contract);
- const safe=immutablePreviewUrl(preview.url);if(!safe)throw Error('Verified immutable Vercel Preview origin required');const origin=new URL(safe).origin;
+ // Project delivery persists an app-path URL, not a bare deployment root.
+ // Demand that the persisted URL is exactly the approved browser contract path
+ // on an immutable deployment, with no arbitrary path, query, hash or alias.
+ const target=new URL(preview.url);
+ const safe=immutablePreviewUrl(target.origin);
+ if(!safe||target.href!==new URL(contract.path,safe).href)throw Error('Verified immutable Vercel Preview origin and approved path required');
+ const origin=target.origin;
  const cookies=await previewCookies(origin,request);
  const check=await request(new URL(contract.path,origin),{headers:cookies.length?{cookie:'_vercel_jwt='+cookies[0].value}:{},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(10000)});await check.body?.cancel();
  if([401,403].includes(check.status)||check.status>=300&&check.status<400&&(!check.headers.get('location')||!samePreviewOrigin(check.headers.get('location')!,origin)))throw new PreviewAccessUnavailable();
