@@ -460,6 +460,39 @@ export async function getRecentMessages(chatId: string, limit = 20): Promise<Mes
     });
 }
 
+
+/**
+ * Restore messages between the persisted ITM cursor and the current STM
+ * window. This bounded on-demand query avoids re-reading the whole history
+ * during every ordinary chat turn. Source data remains unchanged in messages.
+ */
+export async function getPendingIntermediateContext(
+  chatId: string, afterCreatedAt: string | null, beforeCreatedAt: string, maxMessages = 120,
+): Promise<{ messages: Message[]; truncated: boolean }> {
+  const client = getSupabaseAdminClient();
+  let query = client.from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId).lt("created_at", beforeCreatedAt)
+    .order("created_at", { ascending: false }).limit(maxMessages + 1);
+  if (afterCreatedAt) query = query.gt("created_at", afterCreatedAt);
+  const { data, error } = await query.returns<MessageRow>();
+  if (error) throw new Error("Failed to load pending intermediate context: " + error.message);
+  const rows = data ?? [];
+  const selected = rows.slice(0, maxMessages).reverse();
+  return {
+    truncated: rows.length > maxMessages,
+    messages: selected.map(row => {
+      const parsed = parseMessageContent(row.content);
+      return {
+        ...toMessage(row), content: parsed.text,
+        ...(parsed.model ? { model: parsed.model } : {}),
+        ...(parsed.assets ? { assets: parsed.assets } : {}),
+        ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+      };
+    }),
+  };
+}
+
 export async function saveMessage(
   chatId: string,
   message: Omit<Message, "chatId" | "createdAt"> & Partial<Pick<Message, "chatId" | "createdAt">>
