@@ -5,6 +5,7 @@ on:
       - 'lib/projects/**'
       - 'lib/missions/**'
       - 'tests/helpers/qualify-task3c.mjs'
+      - 'tests/helpers/preflight-task3c-provider.mjs'
       - 'tests/helpers/qualify-adaptive-recovery.mjs'
       - 'tests/helpers/assert-capacity-renewal.mjs'
       - 'tests/helpers/lifecycle-qualification-adapters.mjs'
@@ -64,6 +65,8 @@ jobs:
           node --check tests/helpers/qualify-task3c.mjs
           node --check tests/helpers/qualify-adaptive-recovery.mjs
           node --check tests/helpers/lifecycle-qualification-adapters.mjs
+      - name: Preflight isolated provider discovery with no external network
+        run: node tests/helpers/preflight-task3c-provider.mjs
       - name: Prove three repairs, two fresh recoveries, mission workers, independent assessment, browser and SQL project closure
         timeout-minutes: 55
         run: node --test tests/benchmark-renewal-postgres.test.mjs
