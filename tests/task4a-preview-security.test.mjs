@@ -53,7 +53,7 @@ Second research line","composerNotes":"Retained internal notes"}`;
   record('reject invalid saved research composition');
  }
  const {measureDeliverable}=modules()('@/lib/missions/review-length');
- const bound=measureDeliverable('Produce a research report in at most 700 words.','w '.repeat(705));
+ const bound=measureDeliverable('Produce a concise source-supported report in at most 700 words.','w '.repeat(705));
  assert.equal(bound.wordCount,705);
  assert.equal(bound.wordLimit,700);
  record('saved JSON normalization does not waive the independent word-count gate');
