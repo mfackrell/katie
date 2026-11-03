@@ -565,7 +565,30 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
   const assistantCursor = history.findIndex(item => item.id === previous.lastAssistantMessageId);
   const cursor = Math.max(userCursor, assistantCursor);
   if (cursor < 0) {
-    const recent = rebuildTaskProgress(history);
+    let recent = rebuildTaskProgress(history);
+    // A trimmed window may contain a new, narrow deliverable followed by
+    // reviewer questions, without the original professional brief. Replay
+    // from the latest standalone deliverable against the verified parent;
+    // otherwise its questions are lost because no synthetic parent is allowed.
+    const scopedTaskStart = history.findLastIndex(entry =>
+      entry.role === "user" && classifyUserTurn(entry.content) === "new_task" &&
+      !isUserWorkAssignment(entry.content));
+    if (!recent.projectContext &&
+        hasProjectAuthority(previous.projectContext, previous.projectAuthority) &&
+        scopedTaskStart >= 0) {
+      let scoped = { ...emptyTaskProgress(),
+        projectContext: previous.projectContext,
+        projectAuthority: previous.projectAuthority,
+        objective: previous.objective,
+        projects: previous.projects,
+      };
+      for (const entry of history.slice(scopedTaskStart)) {
+        scoped = entry.role === "user"
+          ? applyUserToTaskProgress(scoped, { messageId: entry.id, text: entry.content })
+          : applyAssistantToTaskProgress(scoped, { messageId: entry.id, text: entry.content });
+      }
+      recent = scoped;
+    }
     // A recent role brief supersedes an old cached project. A window that
     // starts at a screening subquestion must retain the established project.
     const recentProjectIsExplicit = hasProjectAuthority(recent.projectContext, recent.projectAuthority);
