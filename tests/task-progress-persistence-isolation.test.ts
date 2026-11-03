@@ -161,7 +161,7 @@ test("ordinary conversation cannot recreate a project after restoration, retry, 
     for(const [i,utterance] of ["The work is never done.","Do you want to pick a topic?","I kept the other alpaca."].entries()){
       current=applyUserToTaskProgress(current,{messageId:"u-"+i,text:utterance});
       current=applyAssistantToTaskProgress(current,{messageId:"a-"+i,text:"And what happened after that?",responsePurpose:"conversation"});
-      assert.equal(current.projectContext,null);
+      assert.ok(current.projectContext == null,"ordinary chat has no active parent");
       assert.equal(current.objective,null);
       assert.deepEqual(current.pending,[]);
       assert.equal(current.workProduct,undefined);
@@ -207,7 +207,7 @@ test("personal replies cannot create pending project questions or work products"
     state=applyAssistantToTaskProgress(state,{messageId:"chat-"+index,
       text:"That is interesting. What happened next?",responsePurpose:"conversation"});
   }
-  assert.equal(state.projectContext,null);
+  assert.ok(state.projectContext == null,"personal replies have no active parent");
   assert.equal(state.objective,null);
   assert.deepEqual(state.pending,[]);
   assert.deepEqual(state.answered,[]);
@@ -271,7 +271,7 @@ test("cached workflow checkpoint cannot bypass the actor-owned source gate", asy
       {id:"chat-assistant",role:"assistant",content:"What happened to Al?"},
       {id:"chat-user-two",role:"user",content:"He got stuck under a fence."},
     ]);
-    assert.equal(replay.projectContext,null);
+    assert.ok(replay.projectContext == null,"cached replay has no active parent");
     assert.equal(replay.objective,null);
     assert.deepEqual(replay.pending,[]);
     assert.deepEqual(replay.answered,[]);
