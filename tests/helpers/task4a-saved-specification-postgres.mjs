@@ -96,7 +96,9 @@ export async function verifyTask4aSavedSpecificationPostgres(db){
   await rejects({correctedHash:'f'.repeat(64)},/canonical hash/);
   await rejects({base:'untrusted-baseline'},/verified baseline/);
   await query('savepoint revoked_authority');
+  await query('reset role');
   await query("update project_continuation_authorizations set revoked_at=now() where project_id=$1",[pid]);
+  await query('set role service_role');
   await assert.rejects(attempt(),/financial authority expired or changed/);
   await query('rollback to savepoint revoked_authority');
   await query('release savepoint revoked_authority');
