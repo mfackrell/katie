@@ -717,6 +717,10 @@ async function dispatchOrdinaryNativeDevelopment(){
   const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
   if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
   const task4aId=typeof a.developer_authority?.task4aContinuationId==='string'?a.developer_authority.task4aContinuationId:null;
+  // The original Task 4A can NEVER inherit ordinary Developer dispatch.
+  // The database gate independently authenticates the bound continuation.
+  if(c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&!task4aId)continue;
+  if(task4aId&&c.projectId!=='6d1c29f1-b31e-47a5-aabb-cbcf1326f388')continue;
   const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
