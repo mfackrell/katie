@@ -221,6 +221,14 @@ function isWorkOrigin(text: string): boolean {
     /^(?:new\\s+(?:task|project|engagement)|(?:interim|fractional)\\s+(?:cfo|controller)|(?:cfo|controller)\\s+(?:role|position|opportunity))\\b/i.test(trimmed);
 }
 
+/** Social banter is not an implicit project brief, even in legacy ledgers. */
+function isCompanionOrigin(text: string): boolean {
+  const trimmed = text.trim();
+  if (isWorkOrigin(trimmed)) return false;
+  return /\\b(?:katie|pissy|lol|haha|hehe|joking|kidding|flirting|chatting|bored|how are you|what'?s up|good morning|good evening|good night)\\b/i.test(trimmed) ||
+    /^(?:a little|yeah|yep|nope|nah|hmm|maybe|sort of|kind of|not really|just saying|i guess|because you|what about you)\\b/i.test(trimmed);
+}
+
 export function emptyTaskProgress(): TaskProgressState {
   return { version: 1, objective: null, stage: "working", nextAction: "continue_original_goal", pending: [], answered: [], lastAssistantMessageId: null, lastUserMessageId: null };
 }
@@ -278,9 +286,7 @@ export function isProfessionalProfileMaterial(message: string): boolean {
 
 /** Normalize legacy companion state before any consumer can treat it as project authority. */
 export function isolateCompanionProgress(previous: TaskProgressState): TaskProgressState {
-  const legacyCasualProject = previous.projectContext && !isWorkOrigin(previous.projectContext.text) &&
-    !previous.projects?.some(project => project.projectContext.userMessageId === previous.projectContext?.userMessageId &&
-      isWorkOrigin(project.projectContext.text));
+  const legacyCasualProject = previous.projectContext && isCompanionOrigin(previous.projectContext.text);
   // Legacy conversational ledgers may have persisted a synthetic parent and questions.
   // Strip only that active binding; retain genuine saved project checkpoints.
   return legacyCasualProject ? {
@@ -310,8 +316,7 @@ export function applyUserToTaskProgress(
   }
   // A greeting must not become a synthetic project that legitimizes a later
   // otherwise ambiguous application question.
-  if (!state.projectContext && !transition && !isWorkOrigin(input.text) &&
-      !isProjectBrief(input.text)) {
+  if (!state.projectContext && !transition && isCompanionOrigin(input.text)) {
     return { ...state, objective: null, pending: [], answered: [],
       lastUserMessageId: input.messageId, lastUserIntent: "conversation",
       stage: "working", nextAction: "continue_original_goal" };
@@ -471,7 +476,7 @@ export function applyAssistantToTaskProgress(
   input: { messageId: string; text: string; responsePurpose?: "conversation" | "deliverable"; retainWorkProduct?:boolean },
 ): TaskProgressState {
   if (previous.lastAssistantMessageId === input.messageId) return previous;
-  const questions = (previous.projectContext && isWorkOrigin(previous.projectContext.text)
+  const questions = (previous.projectContext && !isCompanionOrigin(previous.projectContext.text)
     ? extractAssistantQuestions(input.text, input.messageId) : []).map(question => ({
     ...question,
     ...(previous.objective ? {
