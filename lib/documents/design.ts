@@ -49,7 +49,8 @@ const CEILINGS: DesignControls = {
  * profile rather than letting a model choose arbitrary font sizes or margins. */
 export function validDesign(layout: Layout): boolean {
   if (!layout.design) return true;
-  return (Object.keys(layout.design) as Array<keyof DesignControls>).every(key =>
+  return Object.keys(layout.design).length === Object.keys(DEFAULT_DESIGN).length &&
+    (Object.keys(layout.design) as Array<keyof DesignControls>).every(key =>
     Object.hasOwn(DEFAULT_DESIGN, key) &&
     typeof layout.design![key] === 'number' &&
     Number.isFinite(layout.design![key]) &&
@@ -71,11 +72,14 @@ export function proposeDesignLayout(
       heights.length !== spec.blocks.length) return null;
 
   const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 12) * 96 / 72;
-  const pageCount = spec.targetPages ?? layout.pages.length;
-  const remaining = Math.max(0, capacity * pageCount - heights.reduce((a,b)=>a+b,0));
+  // A global style change must fit the most crowded page; sum-of-pages slack
+  // would incorrectly spend empty space on page 2 to overflow page 1.
+  const pageSlack = layout.pages.map(indices =>
+    capacity - indices.reduce((sum,i)=>sum + (heights[i] ?? 0),0));
+  const remaining = Math.max(0,Math.min(...pageSlack));
   // Guard room for line wrapping and height-estimation error. Improvements
-  // consume at most 60% of genuine current slack, not an arbitrary page fill.
-  let budget = Math.max(0, remaining * 0.6 - pageCount * 12);
+  // consume at most 60% of the tightest page's genuine spare space.
+  let budget = Math.max(0, remaining * 0.6 - 12);
   const headings = spec.blocks.filter(b => b.kind === 'heading').length;
   const bullets = spec.blocks.filter(b => b.kind === 'bullet').length;
   const profile: DesignControls = { ...DEFAULT_DESIGN, ...layout.design };
