@@ -47,6 +47,11 @@ async function preflight(){
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return reply({error:'Katie owner sign-in required'},401);
  try{
+  const {data:prior,error:priorError}=await getSupabaseAdminClient().from('project_events')
+   .select('id').eq('project_id',TASK4A_ORIGINAL_PROJECT)
+   .eq('event','task4a_saved_specification_recovered').limit(1);
+  if(priorError)return reply({error:'Saved recovery receipt cannot be verified'},503);
+  if(prior?.length)return reply({recovered:true,scopeApprovalStillRequired:true});
   const {p,authority,corrected}=await preflight();
   return reply({ready:true,projectId:p.id,chatId:p.chat_id,
    sourceHash:corrected.sourceHash,correctedHash:corrected.correctedHash,
