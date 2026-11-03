@@ -37,3 +37,17 @@ export function readDeveloperHandoff(source,secret,now=Date.now()){
  if(p.authorityKind!==kind)deny();
  return Object.freeze(p);
 }
+
+
+export const TASK4A_ORIGINAL_PROJECT='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+// An ordinary approval cannot be silently upgraded by the dispatcher. This
+// selects a kind only from an immutable, originally bound owner approval.
+export function classifyDeveloperDispatchAuthority(projectId,developerAuthority){
+ const bound=developerAuthority?.task4aContinuationId;
+ if(projectId===TASK4A_ORIGINAL_PROJECT){
+  if(!uuid.test(bound??''))throw Error('TASK4A_BOUND_OWNER_AUTHORITY_REQUIRED');
+  return {authorityKind:'task4a-developer',task4aContinuationId:bound};
+ }
+ if(bound!==undefined)throw Error('FOREIGN_TASK4A_AUTHORITY_DENIED');
+ return {authorityKind:'ordinary-developer'};
+}
