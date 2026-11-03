@@ -921,6 +921,7 @@ export function ChatPanel({
   const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
   const [showLiveReasoningExplainer, setShowLiveReasoningExplainer] = useState(true);
   const [reasoningState, setReasoningState] = useState<ReasoningUiState>(createReasoningUiState);
+  const [processingActivity, setProcessingActivity] = useState<Array<{stage:string;message:string}>>([]);
   const [reasoningPopupVisible, setReasoningPopupVisible] = useState(false);
   const [reasoningPopupDismissed, setReasoningPopupDismissed] = useState(false);
   const [explainerOpen, setExplainerOpen] = useState(false);
@@ -1154,6 +1155,7 @@ export function ChatPanel({
       setCollaborationActive(false);
       setCollaborationSummary(null);
       setReasoningState(createReasoningUiState());
+      setProcessingActivity([]);
       setReasoningPopupVisible(false);
       setCopiedMessageId(null);
 
@@ -1672,6 +1674,7 @@ export function ChatPanel({
     setStatusMessage("Routing request and selecting the lead model…");
     setFailoverNotice("");
     setReasoningState(createReasoningUiState());
+    setProcessingActivity([]);
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
       setReasoningPopupVisible(true);
@@ -1920,44 +1923,42 @@ export function ChatPanel({
       let sawInitialMetadata = false;
       let sawReasoningStart = false;
       let sawFinalReasoningAnswer = false;
-      let fallbackReasoningDeltaCount = 0;
-      let fallbackProgress = 0;
+      let savedAssistantMessageId: string | null = null;
+      let answerCommitted = false;
 
-      const applyFallbackReasoningFromDelta = (delta: string) => {
-        if (!delta.trim() || sawReasoningStart) {
-          return;
-        }
-        const now = new Date().toISOString();
-        setReasoningState((current) =>
-          applyReasoningEvent(current, {
-            type: "reasoning_start",
-            requestId: `fallback-${chatId}`,
-            categories: FALLBACK_REASONING_CATEGORIES,
-            startedAt: now
-          }),
-        );
-        sawReasoningStart = true;
+      // The server's content event follows the durable assistant-message write.
+      // Do not wait for memory processing or workflow settlement to visually
+      // finalize a reply that has already been saved. Pending workflow
+      // recovery/accounting remains active until the stream actually ends.
+      const commitSavedAnswer = () => {
+        if (answerCommitted || !savedAssistantMessageId || !sawFinalReasoningAnswer) return;
+        answerCommitted = true;
+        const assistantMessage: Message = {
+          id: savedAssistantMessageId,
+          chatId,
+          role: "assistant",
+          model,
+          content: textContent,
+          ...(presentation ? { presentation } : {}),
+          assets,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((current) => {
+          const nextMessages = [...current.filter(entry => entry.id !== assistantMessage.id), assistantMessage];
+          setMessagesByChatId(cache => ({...cache,[chatId]:nextMessages}));
+          return nextMessages;
+        });
+        setStreamingAnswer("");
+        setMeta({ provider, model });
+        setStatusMessage("Answer saved. Finalizing memory and request accounting…");
       };
 
-      const applyFallbackReasoningUpdate = (delta: string) => {
-        if (!delta.trim() || !sawReasoningStart) {
-          return;
-        }
-        const category = FALLBACK_REASONING_CATEGORIES[fallbackReasoningDeltaCount % FALLBACK_REASONING_CATEGORIES.length];
-        fallbackReasoningDeltaCount += 1;
-        fallbackProgress = Math.min(95, fallbackProgress + 4);
-        setReasoningState((current) =>
-          applyReasoningEvent(current, {
-            type: "reasoning_update",
-            requestId: current.requestId ?? `fallback-${chatId}`,
-            category,
-            explanationDelta: delta,
-            score: null,
-            confidence: null,
-            progress: fallbackProgress,
-            updatedAt: new Date().toISOString()
-          }),
-        );
+      const recordProcessingUpdate = (stage: string, message: string) => {
+        setStatusMessage(message);
+        setProcessingActivity(current => {
+          if (current.at(-1)?.stage === stage && current.at(-1)?.message === message) return current;
+          return [...current, {stage,message}].slice(-8);
+        });
       };
 
       while (true) {
@@ -1978,10 +1979,12 @@ export function ChatPanel({
           const chunk = JSON.parse(line) as
             | ChatMetadataChunk
             | { type: "delta"; text: string }
+            | { type: "processing_update"; stage: string; message: string }
             | {type:"accounting_pause";code:string;requestId:string;message:string}
             | ReasoningStreamEvent
             | {
                 type: "content";
+                messageId?: string;
                 text: string;
                 presentation?: StructuredResponse;
                 assets?: Array<{ type: string; url: string }>;
@@ -2005,6 +2008,10 @@ export function ChatPanel({
             return;
           }
           if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
+          if (chunk.type === "processing_update") {
+            recordProcessingUpdate(chunk.stage,chunk.message);
+            continue;
+          }
 
           // Required review emits metadata without modelId/provider. Render its
           // progress instead of accidentally clearing the active model state.
@@ -2065,8 +2072,7 @@ export function ChatPanel({
           if (chunk.type === "delta") {
             textContent += chunk.text;
             setStreamingAnswer(textContent);
-            applyFallbackReasoningFromDelta(chunk.text);
-            applyFallbackReasoningUpdate(chunk.text);
+            // Output text belongs only to the answer, never to Thinking.
           }
 
           if (
@@ -2082,9 +2088,11 @@ export function ChatPanel({
               sawFinalReasoningAnswer = true;
             }
             setReasoningState((current) => applyReasoningEvent(current, chunk));
+            if (chunk.type === "final_answer") commitSavedAnswer();
           }
 
           if (chunk.type === "content") {
+            savedAssistantMessageId = chunk.messageId ?? null;
             textContent = chunk.text;
             setStreamingAnswer(textContent);
             if (chunk.presentation) {
@@ -2105,9 +2113,11 @@ export function ChatPanel({
           | ChatMetadataChunk
           | { type: "delta"; text: string }
             | {type:"accounting_pause";code:string;requestId:string;message:string}
+          | { type: "processing_update"; stage: string; message: string }
           | ReasoningStreamEvent
           | {
               type: "content";
+              messageId?: string;
               text: string;
               presentation?: StructuredResponse;
               assets?: Array<{ type: string; url: string }>;
@@ -2116,6 +2126,7 @@ export function ChatPanel({
             };
 
         if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message, trailingChunk.messageId);
+        if (trailingChunk.type === "processing_update") recordProcessingUpdate(trailingChunk.stage,trailingChunk.message);
 
         if (trailingChunk.type === "metadata" && trailingChunk.review) {
           setStatusMessage(reviewStatusMessage(trailingChunk.review));
@@ -2163,8 +2174,7 @@ export function ChatPanel({
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
           setStreamingAnswer(textContent);
-          applyFallbackReasoningFromDelta(trailingChunk.text);
-          applyFallbackReasoningUpdate(trailingChunk.text);
+          // Output text belongs only to the answer, never to Thinking.
         }
 
         if (
@@ -2180,9 +2190,11 @@ export function ChatPanel({
             sawFinalReasoningAnswer = true;
           }
           setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
+          if (trailingChunk.type === "final_answer") commitSavedAnswer();
         }
 
         if (trailingChunk.type === "content") {
+          savedAssistantMessageId = trailingChunk.messageId ?? null;
           textContent = trailingChunk.text;
           setStreamingAnswer(textContent);
           if (trailingChunk.presentation) {
@@ -2199,22 +2211,26 @@ export function ChatPanel({
 
       abortControllerRef.current = null;
       setMeta({ provider, model });
+      if (!answerCommitted) {
+        // Legacy/fallback stream lacking a saved message ID: preserve behavior,
+        // but never append a second message after early finalization.
+        const assistantMessage: Message = {
+          id: savedAssistantMessageId ?? crypto.randomUUID(),
+          chatId,
+          role: "assistant",
+          model,
+          content: textContent,
+          ...(presentation ? { presentation } : {}),
+          assets,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((current) => {
+          const nextMessages = [...current.filter(entry => entry.id !== assistantMessage.id), assistantMessage];
+          setMessagesByChatId(cache => ({...cache,[chatId]:nextMessages}));
+          return nextMessages;
+        });
+      }
       setStreamingAnswer("");
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        chatId,
-        role: "assistant",
-        model,
-        content: textContent,
-        ...(presentation ? { presentation } : {}),
-        assets,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages((current) => {
-        const nextMessages = [...current, assistantMessage];
-        setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
-        return nextMessages;
-      });
       if (!sawFinalReasoningAnswer) {
         setReasoningState((current) =>
           applyReasoningEvent(current, {
@@ -2242,6 +2258,13 @@ export function ChatPanel({
         setStatusMessage(error.message);
         setAccountingResumeFailure(error.message);
         window.dispatchEvent(new Event("standalone-accounting-updated"));
+        return;
+      }
+
+      if (answerCommitted) {
+        // Answer was saved and already displayed; post-answer errors must not
+        // manufacture another assistant response or replace the good answer.
+        setStatusMessage(`Answer saved; later workflow processing needs attention: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
 
@@ -2972,7 +2995,7 @@ export function ChatPanel({
         <div className="space-y-2 text-xs" aria-live="polite">
           <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
           {imageObservationStages.length > 0 && <ul aria-label="Image analysis stages" className="space-y-1 text-zinc-400">{imageObservationStages.map((stage,index)=><li key={`${index}:${stage}`}>{stage}</li>)}</ul>}
-          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
+          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} processingActivity={processingActivity} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
         </div>, statusMount
       ) : null}
       {!statusRailOpen && showLiveReasoningExplainer && reasoningPopupVisible ? (
@@ -2982,6 +3005,7 @@ export function ChatPanel({
               loading={loading}
               state={reasoningState}
               statusMessage={statusMessage}
+              processingActivity={processingActivity}
               collaborationActive={collaborationActive}
               collaborationActivity={collaborationActivity}
               collaborationSummary={collaborationSummary}
