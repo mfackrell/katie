@@ -46,7 +46,7 @@ test('saved content provides durable ID, followed by final answer event before f
  assert.match(panel,/id: savedAssistantMessageId,/);
  assert.match(panel,/upsertSavedAssistant\(current, assistantMessage\)/);
  assert.match(panel,/upsertSavedAssistant\(cache\[chatId\] \?\? \[\], assistantMessage\)/);
- assert.doesNotMatch(panel,/setMessages\(\(current\) => \{[\s\S]{0,170}setMessagesByChatId/);
+ assert.match(panel,/const commitSavedAnswer =/);
  assert.match(panel,/if \(!answerCommitted\) \{/);
 });
 
