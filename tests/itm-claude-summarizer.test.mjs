@@ -114,7 +114,7 @@ test("one summary call and deterministic rollover advance an atomic checkpoint",
   assert.equal(h.calls.length,1);
   assert.equal(h.calls[0].body.max_tokens,2300);
   assert.match(h.calls[0].body.messages[0].content,/Historical detail from turn 29/);
-  assert.doesNotMatch(h.calls[0].body.messages[0].content,/Historical detail from turn 30\\b/);
+  assert.doesNotMatch(h.calls[0].body.messages[0].content,/Historical detail from turn 30\b/);
   assert.match(h.memory().summary,/Rolling recent conversations/);
   assert.match(h.memory().summary,/Recent user clarification and unresolved work/);
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
@@ -126,8 +126,8 @@ test("one summary call and deterministic rollover advance an atomic checkpoint",
 test("legacy 14,774-character memory is compacted without asking a model to rewrite it",async()=>{
   const prior={
     version:2,
-    summary:"Opening biographical details. ".repeat(18)+"\\n\\n**Latest engineering discussion**\\n- Unfinished repair awaiting verification.\\n"+
-      "**Older thread**\\n- Previously discussed details. ".repeat(500),
+    summary:"Opening biographical details. ".repeat(18)+"\n\n**Latest engineering discussion**\n- Unfinished repair awaiting verification.\n"+
+      "**Older thread**\n- Previously discussed details. ".repeat(500),
     summarizedThroughMessageId:"m1",sourceMessageCount:2,
   };
   assert.ok(prior.summary.length>14000);
