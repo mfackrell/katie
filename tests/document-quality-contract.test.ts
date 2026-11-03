@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { documentRequest, inheritDocumentPageConstraint } from '../lib/documents/intent';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { generateDocx } from '../lib/documents/generate';
+import { renderDocument } from '../lib/documents/render';
+import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import { contentText, parseDocument } from '../lib/documents/model';
 
 const user = (content: string) => ({ role: 'user', content });
@@ -52,4 +56,25 @@ test('generalized subsection parsing also supports reports and contracts while r
   const agreement = parseDocument('# Consulting agreement\n\n__Payment terms__\n\nInvoices are payable according to the signed agreement.');
   assert.deepEqual(agreement.blocks.map(b => b.kind), ['heading','heading','paragraph']);
   assert.equal(contentText(agreement).includes('Payment terms'), true);
+});
+
+test('real Word/PDF rendering preserves quality across financial, legal and narrative structures', { timeout: 120000 }, async () => {
+  const samples = [
+    { name: 'operating-report', markdown: '# Quarterly operations review\n\n## Findings\n\n**Cash and collections**\n\nCollections improved while expenses remained stable.\n\n## Next actions\n\n- Review working capital.\n\n- Confirm reporting cadence.' },
+    { name: 'financial-table', markdown: '# Financial summary\n\n## Cash flow\n\n| Category | Actual | Budget |\n| --- | --- | --- |\n| Collections | 250 | 240 |\n| Expenses | 190 | 200 |\n\n**Management conclusion**\n\nNet operating cash was positive.' },
+    { name: 'service-agreement', markdown: '# Consulting agreement\n\n## Services\n\nThe contractor provides financial reporting and management support.\n\n**Payment terms**\n\nInvoices are payable according to the signed statement of work.\n\n## Term\n\nServices continue until terminated under the agreement.' },
+  ] as const;
+  const browser = await launchWebsiteBrowser();
+  try {
+    mkdirSync('test-artifacts/documents', { recursive: true });
+    for (const sample of samples) {
+      const spec = parseDocument(sample.markdown, 1);
+      const docx = await generateDocx(spec, { pages: [spec.blocks.map((_, i) => i)], spacing: 4 });
+      const rendered = await renderDocument(browser, docx, spec);
+      assert.equal(rendered.inspection.pageCount, 1, sample.name);
+      assert.deepEqual(rendered.inspection.findings, [], sample.name);
+      assert.ok(rendered.images[0].length > 3000, sample.name);
+      writeFileSync(`test-artifacts/documents/quality-${sample.name}.png`, rendered.images[0]);
+    }
+  } finally { await browser.close(); }
 });
