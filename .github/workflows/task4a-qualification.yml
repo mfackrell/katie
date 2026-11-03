@@ -10,6 +10,12 @@ on:
       - 'tests/helpers/project-lifecycle-postgres.mjs'
       - 'tests/projects-sql.test.mjs'
       - 'tests/helpers/task4a-continuation-postgres.mjs'
+      - 'tests/helpers/task4a-pregrant-recovery-postgres.mjs'
+      - 'supabase/migrations/20261103180500_task4a_ordinary_authority_guard.sql'
+      - 'supabase/migrations/20261103181500_task4a_pregrant_recovery.sql'
+      - 'app/api/projects/task4a-native-recovery/route.ts'
+      - 'components/task4a-native-recovery-approval.tsx'
+      - 'tests/task4a-native-owner-recovery.test.mjs'
       - 'tests/helpers/task4a-saved-specification-postgres.mjs'
       - 'tests/fixtures/task4a-saved-specification.mjs'
       - 'tests/task4a-saved-specification-recovery.test.mjs'
@@ -84,6 +90,8 @@ jobs:
         run: node --experimental-test-isolation=none --test tests/task4a-saved-specification-recovery.test.mjs
       - name: Verify Task 4A signed native gateway and unchanged legacy routes
         run: node --test tests/task4a-native-bridge.test.mjs
+      - name: Verify original Task 4A owner-consented pregrant endpoint
+        run: node --experimental-test-isolation=none --test tests/task4a-native-owner-recovery.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
