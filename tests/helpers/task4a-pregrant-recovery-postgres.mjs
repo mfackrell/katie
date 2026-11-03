@@ -91,6 +91,8 @@ export async function verifyTask4aPregrantRecoveryPostgres(db){
   // without invalidating the auditable pre-inference recovery receipt.
   await db.query("update agent_tasks set external=external||jsonb_build_object('developerApprovalId',$2::text) where id=$1",[task,child.id]);
   assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,child.id])).ok,true);
+  await db.query("update agent_tasks set status='submitted' where id=$1",[task]);
+  assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,child.id])).ok,true,'Submitted original workflow remains eligible for canonical native admission');
   await db.query('savepoint negative_post_admission');
   await db.query("insert into benchmark_execution_grants(id,developer_approval_id,project_id,mission_assignment_id,execution_epoch,deadline) values($1,$2,$3,$4,1,now()+interval '1 hour')",[randomUUID(),child.id,project,task]);
   assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,child.id])).ok,false,'Existing native execution must prevent another pregrant claim');
