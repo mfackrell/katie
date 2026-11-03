@@ -6,7 +6,7 @@ import {
   hasProjectAuthority, isUserWorkAssignment, mergeTaskProjects, syncTaskProgress,
   taskProjectCatalog, type TaskProgressState,
 } from "../lib/chat/task-progress";
-import { loadTaskProgress, loadActorTaskProjects, saveTaskProgress } from "../lib/chat/task-progress-store";
+import { loadTaskProgress, loadActorTaskProjects, saveTaskProgress, verifyTaskProgressForUse } from "../lib/chat/task-progress-store";
 import { selectTaskProgressPrompt } from "../lib/chat/task-progress-prompt";
 import { decideResponsePolicy } from "../lib/chat/response-policy";
 import { ClaudeProvider } from "../lib/providers/claude-provider";
@@ -256,4 +256,28 @@ test("final policy and mocked Anthropic outbound system exclude any synthetic pr
   const route=readFileSync("app/api/chat/route.ts","utf8");
   assert.match(route,/messageId: taskProgressUserMessageId, text: message,/);
   assert.match(route,/hasPendingDeliverable: sourceLinkedPendingWork \|\| Boolean\(pendingReviewClarification\)/);
+});
+
+
+test("cached workflow checkpoint cannot bypass the actor-owned source gate", async () => {
+  const db=mockDatabase([currentRow()],[goodSource()]);
+  await withDb(db,async()=>{
+    const cached=legacyState(); // Historical workflow checkpoint bypassed the DB loader.
+    const qualified=(await verifyTaskProgressForUse(actor,chat,cached))!;
+    assert.equal(qualified.projectContext,null);
+    assert.equal(qualified.objective,null);
+    const replay=syncTaskProgress(qualified,[
+      {id:"chat-user",role:"user",content:"I had an alpaca named Al."},
+      {id:"chat-assistant",role:"assistant",content:"What happened to Al?"},
+      {id:"chat-user-two",role:"user",content:"He got stuck under a fence."},
+    ]);
+    assert.equal(replay.projectContext,null);
+    assert.equal(replay.objective,null);
+    assert.deepEqual(replay.pending,[]);
+    assert.deepEqual(replay.answered,[]);
+    assert.equal(db.writes.length,0,"verification and replay do not change production");
+    const route=readFileSync("app/api/chat/route.ts","utf8");
+    assert.match(route,/verifyTaskProgressForUse\(actorId, chatId, cachedTaskProgress\)/);
+    assert.match(route,/syncTaskProgress\(verifiedTaskProgress, attachmentHistory\)/);
+  });
 });
