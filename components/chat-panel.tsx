@@ -2202,11 +2202,10 @@ export function ChatPanel({
         }
       }
 
-      // A stream containing only provisional deltas is never a confirmed save.
-      // Use the existing durable-request recovery path rather than fabricating
-      // an assistant reply that may not exist in the database.
-      if (!sawContentEvent && !answerCommitted) {
-        throw new Error("Stream ended without a persisted assistant content event.");
+      // Deltas or content without a canonical saved ID are not proof of
+      // persistence. Recover the durable request rather than fabricate a reply.
+      if ((!sawContentEvent || !savedAssistantMessageId) && !answerCommitted) {
+        throw new Error("Stream ended without a confirmed persisted assistant message ID.");
       }
 
       abortControllerRef.current = null;

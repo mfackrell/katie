@@ -64,7 +64,7 @@ test('content event completes the UI before final_answer, while truncated delta-
  assert.match(panel,/sawContentEvent = true/);
  assert.match(panel,/model = chunk\.model \?\? model;\s*\/\/ "content" is already persisted;[\s\S]*?commitSavedAnswer\(\)/);
  assert.match(panel,/model = trailingChunk\.model \?\? model;\s*commitSavedAnswer\(\)/);
- assert.match(panel,/if \(!sawContentEvent && !answerCommitted\) \{\s*throw new Error\("Stream ended without a persisted assistant content event\."\)/);
+ assert.match(panel,/if \(\(!sawContentEvent \|\| !savedAssistantMessageId\) && !answerCommitted\) \{\s*throw new Error\("Stream ended without a confirmed persisted assistant message ID\."\)/);
  assert.match(panel,/pollForPersistedAssistant\(/);
 });
 test('composer isolation remains intact through saved-answer handoff',()=>{
