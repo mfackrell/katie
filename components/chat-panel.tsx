@@ -1696,6 +1696,7 @@ export function ChatPanel({
     });
 
     let requestStage = "preparing attachments";
+    let answerCommitted = false;
     let uploadedReferencesForRetry: FileReference[] | null = null;
     const clientRequestId = crypto.randomUUID();
 
@@ -1924,7 +1925,6 @@ export function ChatPanel({
       let sawReasoningStart = false;
       let sawFinalReasoningAnswer = false;
       let savedAssistantMessageId: string | null = null;
-      let answerCommitted = false;
 
       // The server's content event follows the durable assistant-message write.
       // Do not wait for memory processing or workflow settlement to visually
