@@ -1816,6 +1816,7 @@ export function ChatPanel({
       // request ID, not a new model generation, only when stream progress
       // stalls. The workflow ledger must be complete before closing the
       // original stream; memory/accounting are never skipped.
+      lastStreamProgressAt = Date.now();
       recoveryWatchdogTimer = window.setInterval(() => {
         if (recoveryWatchdogClosed || recoveryWatchdogBusy ||
             abortControllerRef.current !== abortController ||
@@ -1824,7 +1825,8 @@ export function ChatPanel({
         recoveryWatchdogBusy = true;
         void (async () => {
           try {
-            const headers = ownerBearer ? { Authorization: `Bearer ${ownerBearer}` } : {};
+            const headers = new Headers();
+            if (ownerBearer) headers.set("Authorization", `Bearer ${ownerBearer}`);
             const statusResponse = await fetch(
               `/api/chat/status?chatId=${encodeURIComponent(chatId)}&requestId=${encodeURIComponent(clientRequestId)}`,
               {headers,cache:"no-store"},
