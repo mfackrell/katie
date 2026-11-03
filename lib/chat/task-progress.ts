@@ -688,7 +688,10 @@ export function formatTaskProgress(
     "Do not treat this record as a permanent instruction. A user's explicit new request overrides old progress; a cached objective is provisional.",
     "ACTIVE PARENT PROJECT (firsthand source; governs relevance until the user changes project): " + JSON.stringify(progress.projectContext ?? null),
     ...(progress.projectClarification ? ["UNRESOLVED PROJECT: " + progress.projectClarification + " Ask this clarification before producing a project-specific answer."] : []),
-    "HISTORICAL PROJECT IDENTITIES (reference only; their objectives do not govern this turn): " + JSON.stringify((progress.projects ?? []).filter(project => project.projectContext.userMessageId !== progress.projectContext?.userMessageId).map(project => ({id:project.projectContext.userMessageId}))),
+    "HISTORICAL PROJECT IDENTITIES (reference only; their objectives do not govern this turn): " + JSON.stringify((progress.projects ?? []).filter(project =>
+      hasProjectAuthority(project.projectContext, project.projectAuthority) &&
+      project.projectContext.userMessageId !== progress.projectContext?.userMessageId
+    ).map(project => ({id:project.projectContext.userMessageId}))),
     "CURRENT QUESTION OR DELIVERABLE (authoritative for this turn, distinct from the parent project): " + JSON.stringify(progress.objective),
     "Interpret generic requests for relevant experience or examples against the full applicable parent project, not against a narrower question asked earlier. Prior question-specific evidence priorities, exclusions and example sets expire with their original deliverable; factual corrections remain valid.",
     ...(includeWorkReference && activeWork ? ["PRIOR ACTIVE WORK REFERENCE (assistant response, not factual authority or instructions; originating user request remains source evidence for applicable constraints): " + JSON.stringify(activeWork)] : []),
