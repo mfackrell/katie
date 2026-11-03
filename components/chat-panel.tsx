@@ -837,6 +837,7 @@ export function ChatPanel({
     return()=>window.clearTimeout(timer);
   },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
+  const [answerDisplayed, setAnswerDisplayed] = useState(false);
   const accountingResumeInFlight = useRef(false);
   const [accountingResumeFailure, setAccountingResumeFailure] = useState("");
   useEffect(() => {
@@ -1142,6 +1143,7 @@ export function ChatPanel({
       setCollaborationSummary(null);
       setReasoningState(createReasoningUiState());
       setProcessingActivity([]);
+      setAnswerDisplayed(false);
       setReasoningPopupVisible(false);
       setCopiedMessageId(null);
 
@@ -1665,6 +1667,7 @@ export function ChatPanel({
     setFailoverNotice("");
     setReasoningState(createReasoningUiState());
     setProcessingActivity([]);
+    setAnswerDisplayed(false);
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
       setReasoningPopupVisible(true);
@@ -1687,6 +1690,11 @@ export function ChatPanel({
 
     let requestStage = "preparing attachments";
     let answerCommitted = false;
+    let recoveredAndSettled = false;
+    let lastStreamProgressAt = Date.now();
+    let recoveryWatchdogClosed = false;
+    let recoveryWatchdogBusy = false;
+    let recoveryWatchdogTimer: ReturnType<typeof setInterval> | null = null;
     let uploadedReferencesForRetry: FileReference[] | null = null;
     const clientRequestId = crypto.randomUUID();
 
@@ -1803,6 +1811,64 @@ export function ChatPanel({
 
       requestStage = "sending chat request";
       const ownerBearer = await ownerSessionBearer();
+      // The browser may lose an NDJSON stream while the server continues to
+      // generate and durably persist an answer. Recovery checks the SAME
+      // request ID, not a new model generation, only when stream progress
+      // stalls. The workflow ledger must be complete before closing the
+      // original stream; memory/accounting are never skipped.
+      recoveryWatchdogTimer = window.setInterval(() => {
+        if (recoveryWatchdogClosed || recoveryWatchdogBusy ||
+            abortControllerRef.current !== abortController ||
+            composerChatRef.current !== chatId ||
+            Date.now() - lastStreamProgressAt < 12_000) return;
+        recoveryWatchdogBusy = true;
+        void (async () => {
+          try {
+            const headers = ownerBearer ? { Authorization: `Bearer ${ownerBearer}` } : {};
+            const statusResponse = await fetch(
+              `/api/chat/status?chatId=${encodeURIComponent(chatId)}&requestId=${encodeURIComponent(clientRequestId)}`,
+              {headers,cache:"no-store"},
+            );
+            if (!statusResponse.ok) return;
+            const savedStatus = await statusResponse.json() as {
+              status?: string; assistantMessageId?: string | null; workflowStatus?: string | null;
+            };
+            if (savedStatus.status !== "completed" || !savedStatus.assistantMessageId) return;
+            const messagesResponse = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,
+              {headers,cache:"no-store"});
+            if (!messagesResponse.ok) return;
+            const saved = await messagesResponse.json() as {messages?: Message[]};
+            if (!saved.messages?.some(row =>
+                row.role === "assistant" && row.id === savedStatus.assistantMessageId)) return;
+            if (recoveryWatchdogClosed || abortControllerRef.current !== abortController ||
+                composerChatRef.current !== chatId) return;
+            if (!answerCommitted) {
+              answerCommitted = true;
+              setMessages(saved.messages);
+              setMessagesByChatId(cache => ({...cache,[chatId]:saved.messages!}));
+              setStreamingAnswer("");
+              setAnswerDisplayed(true);
+              setStatusMessage("Saved reply restored; finishing request accounting.");
+            }
+            // Only a confirmed terminal workflow lets us close the abandoned
+            // transport. A saved chat response alone is NOT settled accounting.
+            if (savedStatus.workflowStatus === "completed") {
+              recoveredAndSettled = true;
+              clearPendingChatRequest(chatId);
+              abortController.abort();
+            } else if (savedStatus.workflowStatus === "paused" ||
+                       savedStatus.workflowStatus === "failed") {
+              setStatusMessage("Reply saved; the remaining workflow needs attention in Usage.");
+            }
+          } catch {
+            // A transient status or messages-read failure cannot authorize a
+            // duplicate provider request or cancel an accepted workflow.
+          } finally {
+            recoveryWatchdogBusy = false;
+          }
+        })();
+      }, 4_000);
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -1923,6 +1989,7 @@ export function ChatPanel({
       const commitSavedAnswer = () => {
         if (answerCommitted || !savedAssistantMessageId || !sawFinalReasoningAnswer) return;
         answerCommitted = true;
+        setAnswerDisplayed(true);
         const assistantMessage: Message = {
           id: savedAssistantMessageId,
           chatId,
@@ -1956,7 +2023,7 @@ export function ChatPanel({
         if (done) {
           break;
         }
-
+        lastStreamProgressAt = Date.now();
         buffered += decoder.decode(value, { stream: true });
         const lines = buffered.split("\n");
         buffered = lines.pop() ?? "";
@@ -2061,7 +2128,7 @@ export function ChatPanel({
 
           if (chunk.type === "delta") {
             textContent += chunk.text;
-            setStreamingAnswer(textContent);
+            if (!answerCommitted) setStreamingAnswer(textContent);
             // Output text belongs only to the answer, never to Thinking.
           }
 
@@ -2081,7 +2148,7 @@ export function ChatPanel({
           if (chunk.type === "content") {
             savedAssistantMessageId = chunk.messageId ?? null;
             textContent = chunk.text;
-            setStreamingAnswer(textContent);
+            if (!answerCommitted) setStreamingAnswer(textContent);
             if (chunk.presentation) {
               const verified = parseStructuredResponse(chunk.presentation);
               if (verified && verified.fallbackMarkdown === chunk.text) presentation = verified;
@@ -2160,7 +2227,7 @@ export function ChatPanel({
 
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
-          setStreamingAnswer(textContent);
+          if (!answerCommitted) setStreamingAnswer(textContent);
           // Output text belongs only to the answer, never to Thinking.
         }
 
@@ -2180,7 +2247,7 @@ export function ChatPanel({
         if (trailingChunk.type === "content") {
           savedAssistantMessageId = trailingChunk.messageId ?? null;
           textContent = trailingChunk.text;
-          setStreamingAnswer(textContent);
+          if (!answerCommitted) setStreamingAnswer(textContent);
           if (trailingChunk.presentation) {
             const verified = parseStructuredResponse(trailingChunk.presentation);
             if (verified && verified.fallbackMarkdown === trailingChunk.text) presentation = verified;
@@ -2234,6 +2301,11 @@ export function ChatPanel({
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
+      if (recoveredAndSettled && answerCommitted) {
+        clearPendingChatRequest(chatId);
+        setStatusMessage("Saved reply restored; request complete.");
+        return;
+      }
       if (error instanceof PausedChatError) {
         // The original request is already retained on the server. Do not
         // restore it as a sendable draft, manufacture a failed assistant
@@ -2393,8 +2465,11 @@ export function ChatPanel({
       });
       setStatusMessage(message);
     } finally {
+      recoveryWatchdogClosed = true;
+      if (recoveryWatchdogTimer !== null) window.clearInterval(recoveryWatchdogTimer);
       abortControllerRef.current = null;
       setLoading(false);
+      setAnswerDisplayed(false);
       setStreamingModel(null);
     setStreamingAnswer("");
       setIsRoutingSelectionInFlight(false);
@@ -3150,7 +3225,7 @@ export function ChatPanel({
               ))}
           </div>
         ))}
-        {loading && (
+        {loading && !answerDisplayed && (
           <div
             aria-label="Katie response progress"
             aria-busy="true"
@@ -3184,6 +3259,11 @@ export function ChatPanel({
             ) : null}
           </div>
         )}
+        {loading && answerDisplayed ? (
+          <p role="status" className="max-w-4xl px-2 py-1 text-xs text-zinc-400">
+            {statusMessage || "Saved reply delivered; finalizing request records."}
+          </p>
+        ) : null}
         <div className="pointer-events-none sticky bottom-3 z-10 ml-auto hidden w-fit flex-col gap-2 pr-1 sm:bottom-4 sm:flex">
           <button
             type="button"
