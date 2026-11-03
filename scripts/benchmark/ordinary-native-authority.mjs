@@ -3,6 +3,9 @@ import {freshNativePhaseWork} from './native-phase-profile.mjs';
 // is synthesized; the service snapshot authenticates the original project owner.
 export async function readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha}){
  const deny=()=>{throw Error('ORDINARY_NATIVE_AUTHORITY_DENIED');};
+ // The native host independently rejects a legacy ordinary proof for the
+ // original Task 4A project, even if the GitHub workflow gate were bypassed.
+ if(project?.id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&proof?.authorityKind!=='task4a-developer')deny();
  if(!['ordinary-developer','task4a-developer'].includes(proof.authorityKind)||
   (proof.authorityKind==='task4a-developer'?(approval.developer_authority?.task4aContinuationId!==proof.task4aContinuationId||project.id!=='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'):approval.developer_authority?.task4aContinuationId!==undefined)||
   approval.developer_authority?.version!=='ordinary-developer-v1'

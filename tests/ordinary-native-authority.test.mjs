@@ -18,6 +18,36 @@ test('ordinary host authenticates explicit original authority without benchmark 
   const bad=fixture();change(bad);await assert.rejects(readOrdinaryNativeAuthority(bad),/DENIED/);
  }
 });
+test('original Task 4A host rejects the historical ordinary handoff before database grant admission',async()=>{
+ const f=fixture(),project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+ f.project.id=project;f.proof.projectId=project;f.approval.project_id=project;
+ f.account.developer_project_id=project;f.snapshot.binding.projectId=project;
+ f.db.rpc=async()=>{throw Error('The old ordinary proof must be rejected before database lookup');};
+ await assert.rejects(readOrdinaryNativeAuthority(f),/ORDINARY_NATIVE_AUTHORITY_DENIED/);
+});
+
+test('original Task 4A native host admits only a correctly bound and live continuation',async()=>{
+ const f=fixture(),project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+ const authority='405ea82c-6f52-49e5-babf-891ecac64d14';
+ f.project.id=project;f.proof.projectId=project;f.approval.project_id=project;
+ f.account.developer_project_id=project;f.snapshot.binding.projectId=project;
+ f.proof.authorityKind='task4a-developer';f.proof.task4aContinuationId=authority;
+ f.approval.developer_authority.task4aContinuationId=authority;
+ let ready=false,calls=[];
+ f.db.rpc=async(name,args)=>{
+  calls.push(name);
+  if(name==='benchmark_lifecycle_snapshot')return{data:f.snapshot,error:null};
+  assert.equal(name,'task4a_native_authority_ready');
+  assert.deepEqual(args,{p_project:project,p_task:f.task.id,p_authority:authority});
+  return{data:ready,error:null};
+ };
+ await assert.rejects(readOrdinaryNativeAuthority(f),/ORDINARY_NATIVE_AUTHORITY_DENIED/);
+ assert.deepEqual(calls,['benchmark_lifecycle_snapshot','task4a_native_authority_ready']);
+ ready=true;calls=[];
+ assert.equal(await readOrdinaryNativeAuthority(f),f.snapshot);
+ assert.deepEqual(calls,['benchmark_lifecycle_snapshot','task4a_native_authority_ready']);
+});
+
 test('ordinary host forecasts eleven exhausted native calls without treating other capacity as a substitute',async()=>{
  const result=await readOrdinaryLifecycleCapacity(fixture());
  assert.equal(result.status,'insufficient');assert.ok(result.shortages.includes('nativeCalls'));
