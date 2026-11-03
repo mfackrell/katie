@@ -1,5 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
@@ -1814,6 +1814,7 @@ async function executeChat(request: NextRequest) {
       ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
     documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
     documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
+    documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
