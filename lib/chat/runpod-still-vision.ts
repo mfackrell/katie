@@ -164,7 +164,12 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
       const status=await fetchFn('https://api.runpod.ai/v2/'+policy.endpointId+'/status/'+jobId,{
         method:'GET',headers:{Authorization:'Bearer '+apiKey,Accept:'application/json'},cache:'no-store',redirect:'error',signal:AbortSignal.timeout(18_000),
       });
-      if(status.status===404)throw annotate(failure('runpod_result_unavailable','The saved Qwen result is expired or unavailable. Its exposure is retained and the job will not be resubmitted.'));
+      if(status.status===404) {
+        // The job identity is real but its terminal result is unavailable.
+        // Retain the existing exposure, record uncertainty, never resubmit.
+        await ledger.markUncertain(context.userId,attempt.id,'RunPod returned 404 for the saved job; terminal result unavailable. The existing infrastructure exposure remains held.');
+        throw annotate(failure('runpod_result_unavailable','The saved Qwen result is expired or unavailable. Its exposure is retained and the job will not be resubmitted.'));
+      }
       if(!status.ok)throw annotate(failure('runpod_in_progress','Qwen status is temporarily unavailable. Resume polls the saved job without resubmitting.'));
       const next=await status.json() as Job;
       if(next.id!==jobId)throw annotate(failure('runpod_job_mismatch','RunPod still-image job identity changed.'));
