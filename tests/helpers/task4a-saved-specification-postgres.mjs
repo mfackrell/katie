@@ -49,8 +49,8 @@ export async function verifyTask4aSavedSpecificationPostgres(db){
    [reviewId,'review_again','review',review]
   ];
   for(const [id,key,role,result] of roles)
-   await query("insert into mission_assignments(id,mission_id,job_key,role,agent_id,instruction,status,attempts,result) values($1,$2,$3,$4,$5,'Synthetic retained artifact','completed',1,$6::jsonb)",[
-    id,specMid,key,role,team[1],JSON.stringify(result)
+   await query("insert into mission_assignments(id,mission_id,job_key,role,agent_id,instruction,dependencies,status,attempts,result) values($1,$2,$3,$4,$5,'Synthetic retained artifact',$7,'completed',1,$6::jsonb)",[
+    id,specMid,key,role,team[1],JSON.stringify(result),key==='revision'?['review']:key==='review_again'?['revision']:key==='review'?['compose']:[]
    ]);
   // Historical completed call records predate the continuation authority.
   // No original provider usage is rebilled by the recovery operation.
