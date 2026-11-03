@@ -2278,8 +2278,8 @@ ${savedProjectSourceWarning.retainedObjective}`;
       start(controller) {
         void (async () => {
           const requestStartedAtMs = Date.now();
-          let firstReasoningUpdateAtMs: number | null = null;
-          let reasoningUpdateCount = 0;
+          let firstAnswerDeltaAtMs: number | null = null;
+          let answerDeltaCount = 0;
           const reasoningState = new ReasoningStateAccumulator(requestId, []);
           
           const emitChunk = (chunk: Record<string, unknown>) => {
@@ -2396,7 +2396,8 @@ ${savedProjectSourceWarning.retainedObjective}`;
               const visibleDelta = presentationFilter ? presentationFilter.write(screenedDelta) : screenedDelta;
               if (!visibleDelta) return;
               emitChunk({ type: "delta", text: visibleDelta });
-              if (firstReasoningUpdateAtMs === null) firstReasoningUpdateAtMs = Date.now();
+              answerDeltaCount += 1;
+              if (firstAnswerDeltaAtMs === null) firstAnswerDeltaAtMs = Date.now();
               // Answer tokens are NEVER republished as reasoning or progress.
             };
 
@@ -3783,10 +3784,10 @@ ${chunkWorkflowSummary}`;
 
             // Keep standalone memory charges within the durable parent workflow.
             // Managed-agent responses retain their existing deferred memory work.
-            console.log("[Chat API] reasoning stream metrics", {
+            console.log("[Chat API] answer stream metrics", {
               requestId,
-              reasoningUpdateCount,
-              timeToFirstReasoningUpdateMs: firstReasoningUpdateAtMs === null ? null : firstReasoningUpdateAtMs - requestStartedAtMs,
+              answerDeltaCount,
+              timeToFirstAnswerDeltaMs: firstAnswerDeltaAtMs === null ? null : firstAnswerDeltaAtMs - requestStartedAtMs,
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
