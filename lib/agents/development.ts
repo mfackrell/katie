@@ -721,6 +721,12 @@ async function dispatchOrdinaryNativeDevelopment(){
   // The database gate independently authenticates the bound continuation.
   if(c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&!task4aId)continue;
   if(task4aId&&c.projectId!=='6d1c29f1-b31e-47a5-aabb-cbcf1326f388')continue;
+  if(task4aId){
+   const live=await db.rpc<boolean>('task4a_native_authority_ready',{
+    p_project:c.projectId,p_task:task.id,p_authority:task4aId
+   });
+   if(live.error||live.data!==true)continue;
+  }
   const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
