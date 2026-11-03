@@ -78,6 +78,20 @@ function isProgress(value: unknown): value is TaskProgressState {
     ["working", "awaiting_user_answer", "answers_received"].includes(String(state.stage));
 }
 
+/** Also validates cached standalone workflow checkpoints before any task replay. */
+export async function verifyTaskProgressForUse(
+  actorId: string, chatId: string, state: TaskProgressState | null,
+): Promise<TaskProgressState | null> {
+  if (!isProgress(state)) return null;
+  try { return await qualifyActiveState(actorId, chatId, state); }
+  catch (error) {
+    console.warn("[TaskProgress] Source verification unavailable; withholding active binding", {
+      actorId, chatId, reason: error instanceof Error ? error.message : String(error),
+    });
+    return retireUnverifiedActive(state);
+  }
+}
+
 /** Service-role only. The caller has already verified chat ownership. */
 export async function loadTaskProgress(actorId: string, chatId: string): Promise<TaskProgressState | null> {
   const { data, error } = await getSupabaseAdminClient().from("chat_task_progress")
@@ -87,14 +101,7 @@ export async function loadTaskProgress(actorId: string, chatId: string): Promise
     console.warn("[TaskProgress] Failed to load task progress", { actorId, chatId, reason: error.message });
     return null;
   }
-  if (!isProgress(data?.state)) return null;
-  try { return await qualifyActiveState(actorId, chatId, data.state); }
-  catch (error) {
-    console.warn("[TaskProgress] Source verification unavailable; withholding active binding", {
-      actorId, chatId, reason: error instanceof Error ? error.message : String(error),
-    });
-    return retireUnverifiedActive(data.state);
-  }
+  return verifyTaskProgressForUse(actorId, chatId, data?.state ?? null);
 }
 
 /** Upsert the source-linked ledger only after the corresponding message is saved. */
