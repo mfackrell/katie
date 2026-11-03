@@ -35,7 +35,7 @@ test('reaction internal chat path is server-only and preserves metered workflow'
  assert.match(workflow,/standalone_verified_reaction_reply_owner/);
  assert.match(workflow,/executeScopedStandaloneWorkflow\(request,payload,execute,ownerId\)/);
  assert.match(workflow,/runWithStandaloneAccounting/);
- assert.match(workflow,/standalone_claim_workflow|\x60claim_workflow\x60/);
+ assert.match(workflow,/rpc<Workflow>\('claim_workflow'/);
  assert.match(workflow,/verifiedReactionOwner\s*\? verifiedReactionOwner/);
  assert.doesNotMatch(worker,/headers:\s*\{[^}]*authorization:/);
 });
