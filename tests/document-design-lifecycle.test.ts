@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDocument, contentText, normalizedText } from '../lib/documents/model';
+import { parseDocument, contentText, normalizedText, pdfTextMatchesSource } from '../lib/documents/model';
 import { generateDocx, documentPageStyle, PAGE, type Layout } from '../lib/documents/generate';
 import { designAssessmentSchema, proposeDesignLayout, validDesign, DEFAULT_DESIGN } from '../lib/documents/design';
 import { produceDocument, type VisualReport } from '../lib/documents/production';
@@ -81,7 +81,7 @@ test('qualifying visual evidence produces a re-render, comparison and genuine PD
     const raw = await (mammoth.extractRawText as unknown as (args:{buffer:Buffer})=>Promise<{value:string}>)({buffer:result.docx});
     assert.equal(normalizedText(raw.value),normalizedText(contentText(spec)));
     const parsed = await rasterizePdf(browser,result.pdf);
-    assert.equal(normalizedText(parsed.text),normalizedText(contentText(spec)));
+    assert.equal(pdfTextMatchesSource(parsed.text,contentText(spec),parsed.fragments),true);
   } finally {await browser.close();}
 });
 
