@@ -1,7 +1,7 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
-import {TASK4A_ORIGINAL_CHAT} from '@/lib/projects/task4a-saved-specification-recovery';
+const TASK4A_ORIGINAL_CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
 
 type Status={ready?:boolean;sourceHash?:string;correction?:{before:string;after:string};
  existingAuthorityExpiresAt?:string;error?:string};
