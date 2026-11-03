@@ -13,6 +13,8 @@ const nextConfig: NextConfig = {
       "./node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
       "./node_modules/@fontsource/arimo/files/arimo-latin-400-normal.woff2",
       "./node_modules/@fontsource/arimo/files/arimo-latin-700-normal.woff2",
+      "./node_modules/pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf",
+      "./node_modules/pdfjs-dist/standard_fonts/LiberationSans-Bold.ttf",
     ],
     // Background Grok fallback runs independently of /api/chat.
     // Next.js traces each route into a separate serverless function.
@@ -30,6 +32,8 @@ const nextConfig: NextConfig = {
       "./node_modules/pdfjs-dist/build/pdf.min.mjs", "./node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
       "./node_modules/@fontsource/arimo/files/arimo-latin-400-normal.woff2",
       "./node_modules/@fontsource/arimo/files/arimo-latin-700-normal.woff2",
+      "./node_modules/pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf",
+      "./node_modules/pdfjs-dist/standard_fonts/LiberationSans-Bold.ttf",
     ],
   },
 };

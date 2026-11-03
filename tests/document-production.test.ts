@@ -25,18 +25,43 @@ import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalo
 import type { LlmProvider } from '../lib/providers/types';
 
 
-test('pagination prefers semantic section starts when both pages can fit unchanged content', () => {
+test('post-949 appearance retains pre-949 balanced pagination decisions', () => {
   const spec = documentSchema.parse({title:'General report',targetPages:2,blocks:[
     {kind:'heading',level:1,text:'Opening'},
     {kind:'paragraph',text:'First section body'},
+    {kind:'paragraph',text:'Continuation of first section'},
     {kind:'heading',level:2,text:'Analysis'},
     {kind:'paragraph',text:'Second section body'},
-    {kind:'heading',level:2,text:'Conclusions'},
-    {kind:'paragraph',text:'Third section body'},
+    {kind:'paragraph',text:'Evidence continued'},
+    {kind:'paragraph',text:'Conclusions and next actions'},
   ]});
-  const layout = paginate(spec,[100,260,80,260,80,260],2,2,true);
-  assert.deepEqual(layout.pages,[ [0,1], [2,3,4,5] ]);
-  assert.deepEqual(layout.pages.flat(),[0,1,2,3,4,5]);
+  const heights = [100,120,120,80,200,200,200];
+  const layout = paginate(spec,heights,2,4,true);
+  assert.deepEqual(layout.pages,[[0,1,2,3,4],[5,6]],
+    'The former balanced pagination algorithm must not be replaced by cosmetic heading preferences.');
+  assert.deepEqual(layout.pages.flat(),[0,1,2,3,4,5,6]);
+});
+
+test('document export retains Unicode arrows in DOCX and PDF text', {timeout:120000}, async () => {
+  const spec = documentSchema.parse({title:'Role progression',targetPages:1,blocks:[
+    {kind:'heading',level:1,text:'Role progression'},
+    {kind:'paragraph',text:'Finance Analyst → Finance Manager → Interim CFO'},
+    {kind:'paragraph',text:'Operations — accounting · technology'},
+    {kind:'paragraph',text:'International services organization with five operating divisions, multi-entity accounting requirements, and regional finance teams: Fractional CFO → Full-Time CFO → Interim CFO (after acquisition).'},
+  ]});
+  const browser = await launchWebsiteBrowser();
+  try {
+    const docx = await generateDocx(spec,{pages:[[0,1,2,3]],spacing:4});
+    const raw = await (mammoth.extractRawText as unknown as (input:{buffer:Buffer}) => Promise<{value:string}>)({buffer:docx});
+    assert.equal(normalizedText(raw.value), normalizedText(contentText(spec)));
+    const rendered = await renderDocument(browser,docx,spec);
+    assert.equal(rendered.inspection.pageCount,1);
+    assert.deepEqual(rendered.inspection.findings,[],
+      'Unicode glyphs must survive PDF generation and reading-order extraction without silent substitution.');
+    const extractedPdf = await rasterizePdf(browser,rendered.pdf);
+    assert.equal(pdfTextMatchesSource(extractedPdf.text,contentText(spec),extractedPdf.fragments),true,
+      'Retain exact glyph identity and reading order while permitting verified physical line wraps.');
+  } finally {await browser.close();}
 });
 
 test('semantic document hierarchy stays distinct without reducing readable body text', async () => {
