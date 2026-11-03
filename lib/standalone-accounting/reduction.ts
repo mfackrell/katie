@@ -1,15 +1,55 @@
 import { canonicalJson, estimatePreparedRequest, freezePreparedRequest, type FrozenPreparedRequest, type JsonObject, type JsonValue, type StandaloneEstimate } from "./estimate";
 import { deepFreeze, getModelPrice, PRICING_SNAPSHOT, type PricingSnapshot } from "./pricing";
-export type ReductionOptions = {maxContextMessages?:number;maxImages?:number;maxOutputTokens?:number;lowerImageDetail?:boolean};
+export type ReductionOptions = {maxContextMessages?:number;maxImages?:number;maxOutputTokens?:number;lowerImageDetail?:boolean;strategy?:'auto'|'truncate_tokens'|'switch_model'};
 export type ReductionChange={kind:"duplicate"|"context"|"image"|"detail"|"output"|"model";path:string;before:number|string;after:number|string};
 export type ReducedPreparedRequest={available:boolean;originalHash:string;revised:FrozenPreparedRequest;estimate:StandaloneEstimate;changes:ReductionChange[];tradeoffs:string[]};
 const asObject=(x:JsonValue|undefined):JsonObject=>x&&typeof x==="object"&&!Array.isArray(x)?x as JsonObject:{};
 /** New candidate only. The approved request and approval identity are never edited. */
 export function reducePreparedRequest(original:FrozenPreparedRequest,options:ReductionOptions={},snapshot:PricingSnapshot=PRICING_SNAPSHOT):ReducedPreparedRequest {
   if(freezePreparedRequest(original.provider,original.model,original.endpoint,original.payload).hash!==original.hash)throw new Error("Prepared request hash mismatch");
+
+  // Model-only proposals never prune context, lower output limits or silently change providers.
+  if(options.strategy==='switch_model') {
+    const baseline=estimatePreparedRequest(original,snapshot);
+    const candidates:Record<string,string>={
+      'gpt-4o':'gpt-4o-mini','gpt-4.1':'gpt-4o-mini',
+      'gpt-5.4-mini':'gpt-5-mini',
+      'gpt-5.4-pro':'gpt-5.4','gpt-5.4-pro-2026-03-05':'gpt-5.4',
+      'gpt-5.5-pro':'gpt-5.4','gpt-5.5-pro-2026-04-23':'gpt-5.4',
+      'claude-opus-4-6':'claude-sonnet-4-6','claude-opus-5-5':'claude-sonnet-5-5',
+      'grok-4.7':'grok-4.3','grok-4.6':'grok-4.3',
+    };
+    const target=candidates[original.model];
+    const body=JSON.parse(canonicalJson(original.payload)) as JsonObject;
+    const opaque=(value:JsonValue):boolean=>Array.isArray(value)?value.some(opaque):!!value&&typeof value==='object'?(
+      ['reasoning','thinking','redacted_thinking','function_call','function_call_output','tool_use','tool_result'].includes(String(value.type)) ||
+      value.thoughtSignature!==undefined || value.tool_calls!==undefined || value.tool_call_id!==undefined ||
+      value.functionCall!==undefined || value.functionResponse!==undefined || Object.values(value).some(opaque)
+    ):false;
+    const effort=asObject(body.reasoning).effort,thinking=asObject(body.thinking),outputEffort=asObject(body.output_config).effort;
+    const incompatible=!!(target&&(
+      (target==='claude-sonnet-4-6'&&outputEffort==='xhigh') ||
+      (target==='claude-sonnet-5-5'&&thinking.type==='disabled') ||
+      (target==='gpt-5-mini'&&effort==='xhigh')
+    ));
+    const unchanged=()=>{
+      const same=freezePreparedRequest(original.provider,original.model,original.endpoint,original.payload);
+      return deepFreeze({available:false,originalHash:original.hash,revised:same,estimate:baseline,changes:[],tradeoffs:['No cheaper compatible model with a reviewed price is available. The original payload remains unchanged.']});
+    };
+    if(!target||!getModelPrice(original.provider,target,snapshot)||opaque(body.messages??body.input??body.contents??[])||incompatible)return unchanged();
+    if(body.model!==undefined)body.model=target;
+    const candidate=freezePreparedRequest(original.provider,target,original.endpoint,body);
+    const estimate=estimatePreparedRequest(candidate,snapshot);
+    if(baseline.status!=='estimated'||baseline.reservationMicrousd===null||estimate.status!=='estimated'||estimate.reservationMicrousd===null||BigInt(estimate.reservationMicrousd)>=BigInt(baseline.reservationMicrousd))return unchanged();
+    return deepFreeze({
+      available:true,originalHash:original.hash,revised:candidate,estimate,
+      changes:[{kind:'model' as const,path:'model',before:original.model,after:target}],
+      tradeoffs:['Only the selected model changes; system instructions, current request, history, tools and output allowance are preserved.','Use '+target+' instead of '+original.model+'. The less expensive model may produce less accurate reasoning or weaker instruction following. Review its identity and estimate before approving.'],
+    });
+  }
   const body=JSON.parse(canonicalJson(original.payload)) as JsonObject;
   const changes:ReductionChange[]=[];const tradeoffs=new Set<string>();
-  const maxContext=options.maxContextMessages??4,maxImages=options.maxImages??2,maxOutput=options.maxOutputTokens??2048;
+  const maxContext=options.maxContextMessages??(options.strategy==='truncate_tokens'?2:4),maxImages=options.maxImages??2,maxOutput=options.maxOutputTokens??2048;
   if(![maxContext,maxImages,maxOutput].every(Number.isSafeInteger)||maxContext<1||maxImages<0||maxOutput<1)throw new Error("Invalid reduction options");
   const hasContinuation=(value:JsonValue):boolean=> {
     if(Array.isArray(value))return value.some(hasContinuation);
@@ -90,9 +130,9 @@ export function reducePreparedRequest(original:FrozenPreparedRequest,options:Red
   if(original.provider==="google") {const key=original.payload.config?"config":"generationConfig";const config=asObject(listedOnly[key]);const prior=asObject(original.payload[key]);if(prior.maxOutputTokens!==undefined)config.maxOutputTokens=prior.maxOutputTokens;}
   if(original.payload.thinking!==undefined)listedOnly.thinking=original.payload.thinking;
   const listedEffect=changes.some(change=>change.kind!=="output")&&smaller(estimatePreparedRequest(freezePreparedRequest(original.provider,original.model,original.endpoint,listedOnly),snapshot),baseline);
-  if(!listedEffect) {
+  if(!listedEffect && options.strategy!=='truncate_tokens') {
     const candidates:Record<string,string>={
-      "gpt-4o":"gpt-4o-mini","gpt-4.1":"gpt-4o-mini",
+      "gpt-4o":"gpt-4o-mini","gpt-4.1":"gpt-4o-mini","gpt-5.4-mini":"gpt-5-mini",
       "gpt-5.4-pro":"gpt-5.4","gpt-5.4-pro-2026-03-05":"gpt-5.4",
       "gpt-5.5-pro":"gpt-5.4","gpt-5.5-pro-2026-04-23":"gpt-5.4",
       "claude-opus-4-6":"claude-sonnet-4-6","claude-opus-5-5":"claude-sonnet-5-5",
@@ -115,7 +155,8 @@ export function reducePreparedRequest(original:FrozenPreparedRequest,options:Red
       }
     }
   }
-  if(!smaller(estimate,baseline)||(!listedEffect&&!changes.some(change=>change.kind==="model"))) {
+  const explicitTokenReduction=options.strategy==='truncate_tokens'&&changes.some(change=>change.kind==='output')&&smaller(estimate,baseline);
+  if(!smaller(estimate,baseline)||(!listedEffect&&!changes.some(change=>change.kind==='model')&&!explicitTokenReduction)) {
     const unchanged=freezePreparedRequest(original.provider,original.model,original.endpoint,original.payload);
     return deepFreeze({available:false,originalHash:original.hash,revised:unchanged,estimate:baseline,changes:[],tradeoffs:["No smaller supported proposal using context, images, image detail or a reviewed compatible model is available. The original request and approval are unchanged."]});
   }
