@@ -39,9 +39,9 @@ test('issue 966: Grok receipts are corrected atomically, audited once, and never
    'insert into standalone_provider_attempts (owner_id,actor_id,chat_id,request_id,attempt_key,prepared_hash,prepared_payload,',
    'source_prepared_hash,base_attempt_key,pricing_version,provider,model,category,preflight_estimate,estimator_version,reason,',
    'resolved_model,state,reserved_microusd,actual_microusd,budget_revision,usage,evidence,provider_receipt_id,response_checkpoint,',
-   'dispatched_at,settled_at) values ($1,$2,$3,$4,$5,$6,$7,$6,$5,',
+   'created_at,dispatched_at,settled_at) values ($1,$2,$3,$4,$5,$6,$7,$6,$5,',
    "'grok-fixture-pricing','grok','grok-4.7','chat','{}'::jsonb,'fixture','test','grok-4.7','settled',$8,$9,1,$10,$11,$12,$13,",
-   "'2026-11-01T12:00:00Z','2026-11-01T12:01:00Z')"
+   "'2026-11-01T11:59:00Z','2026-11-01T12:00:00Z','2026-11-01T12:01:00Z')"
   ].join(' ');
   const receipts=[];
   for(let i=1;i<=48;i++){
