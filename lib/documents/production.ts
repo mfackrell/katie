@@ -51,6 +51,8 @@ export async function produceDocument(input: {
       const visual = visualReportSchema.parse(await input.inspect(rendered, attempt, { previous: previousDesign, layout })); record.visual = visual;
       if (visual.pages.length !== rendered.images.length || new Set(visual.pages.map(p => p.page)).size !== rendered.images.length || visual.pages.some(p => p.page > rendered.images.length))
         throw new Error('Visual inspection did not evaluate every rendered page.');
+      if (visual.design?.issues.some(issue => issue.page > rendered.images.length))
+        throw new Error('Document design review referenced an unrendered page. No files delivered.');
       if (input.requireDesignAssessment && !visual.design)
         throw new Error('Professional document-design assessment was omitted. No files delivered.');
       if (previousDesign) {
@@ -110,7 +112,10 @@ export async function produceDocument(input: {
     const minimum = Math.max(1, Math.ceil(rendered.heights.reduce((a, b) => a + b, 0) / capacity));
     const pages = spec.targetPages ?? Math.min(PAGE.maxPages, minimum);
     try {
-      layout = paginate(spec, rendered.heights, pages, layout.spacing, layout.compact, layout.design);
+      const next = paginate(spec, rendered.heights, pages, layout.spacing, layout.compact, layout.design);
+      if (!record.findings.length && JSON.stringify(next) === JSON.stringify(layout))
+        throw new Error('Document repagination made no measurable progress. No files delivered.');
+      layout = next;
     } catch (error) {
       if (!shouldTryCompactLayout(error, attempt, spec, layout)) throw error;
       console.info('[DocumentLayout] trying compact 11-point layout after standard fit failed', {
