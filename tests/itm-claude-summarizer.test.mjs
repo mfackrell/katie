@@ -187,6 +187,16 @@ test("incomplete provider output is rejected with no write or unauthorized retry
   assert.equal(h.calls.length,1);
 });
 
+test("a no-material batch advances cursor but preserves existing conversational notes",async()=>{
+  const existing="Rolling recent conversations\n\nConversation through 2026-10-31:\nOpen issue awaiting resolution.";
+  const prior={version:2,summary:existing,summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:()=>reply("(nothing material)")});
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.calls.length,1);
+  assert.equal(h.memory().summary,existing);
+  assert.equal(h.memory().summarizedThroughMessageId,"m31");
+});
+
 test("unknown provider failures remain blocked and cannot spend twice",async()=>{
   const h=harness({responses:()=>{throw Error("Previous provider outcome unavailable");}});
   assert.equal(await h.run(),"blocked");
