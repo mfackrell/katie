@@ -312,7 +312,6 @@ type SelectionExplainer = {
 
 const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
 const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
-const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
 const MAX_DIRECT_IMAGE_BYTES = 1_750_000;
 const MAX_IMAGE_DIMENSION = 1600;
 const MIN_IMAGE_DIMENSION = 640;
@@ -1922,7 +1921,6 @@ export function ChatPanel({
       let provider = "unknown";
       let model = "unknown";
       let sawInitialMetadata = false;
-      let sawReasoningStart = false;
       let sawFinalReasoningAnswer = false;
       let savedAssistantMessageId: string | null = null;
 
@@ -2081,9 +2079,6 @@ export function ChatPanel({
             chunk.type === "reasoning_snapshot" ||
             chunk.type === "final_answer"
           ) {
-            if (chunk.type === "reasoning_start") {
-              sawReasoningStart = true;
-            }
             if (chunk.type === "final_answer") {
               sawFinalReasoningAnswer = true;
             }
@@ -2183,9 +2178,6 @@ export function ChatPanel({
           trailingChunk.type === "reasoning_snapshot" ||
           trailingChunk.type === "final_answer"
         ) {
-          if (trailingChunk.type === "reasoning_start") {
-            sawReasoningStart = true;
-          }
           if (trailingChunk.type === "final_answer") {
             sawFinalReasoningAnswer = true;
           }
