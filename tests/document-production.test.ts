@@ -102,6 +102,28 @@ function storageFixture() {
   };
 }
 
+test('technical-only DOCX/PDF can be privately delivered while mechanical errors still fail closed', {timeout:90000}, async()=>{
+  const spec=parseDocument('# Executive summary\n\n## Performance\n\n- Reconciled cash forecasts and reporting.',1);
+  const browser=await launchWebsiteBrowser();
+  try {
+    const docx=await generateDocx(spec,{pages:[spec.blocks.map((_,i)=>i)],spacing:4});
+    const rendered=await renderDocument(browser,docx,spec);
+    assert.deepEqual(rendered.inspection.findings,[]);
+    const storage=storageFixture();
+    const store=createDocumentStore(storage.storage);
+    const mechanicallyAccepted={...rendered.inspection,visual:'technical-only' as const};
+    const receipt=await store.save(scope,{docx,pdf:rendered.pdf},mechanicallyAccepted,0);
+    assert.equal(receipt.pages,1);
+    assert.equal(hash((await store.read(scope,receipt.id,'docx')).bytes),hash(docx));
+    assert.equal(hash((await store.read(scope,receipt.id,'pdf')).bytes),hash(rendered.pdf));
+    await assert.rejects(store.read({...scope,ownerId:other},receipt.id,'pdf'),/access denied/);
+    await assert.rejects(store.save(scope,{docx,pdf:rendered.pdf},
+      {...mechanicallyAccepted,visual:'pending'},0),/Unvalidated documents/);
+    await assert.rejects(store.save(scope,{docx,pdf:rendered.pdf},
+      {...mechanicallyAccepted,findings:[{rule:'reading-order' as const,page:1,detail:'Text differs'}]},0),/Unvalidated documents/);
+  } finally {await browser.close();}
+});
+
 test('PDF.js EOL fragment alignment preserves exact ordered glyphs', () => {
   const joined = (parts: Array<{str:string;hasEOL:boolean}>) =>
     parts.map(part=>part.str+(part.hasEOL ? '\n' : '')).join('');
