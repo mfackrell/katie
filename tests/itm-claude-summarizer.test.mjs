@@ -269,7 +269,7 @@ test("v5 permits one explicitly versioned attempt for a v4-blocked batch and ret
   // Simulates the production v1 circuit breaker preserved in Postgres.
   const batchEnd="m31";
   h.claims.set("two-stage-30-messages-v1:"+batchEnd,"blocked");
-  h.claims.set("two-stage-30-messages-v2-reconcile-4000:"+batchEnd,"blocked");
+  h.claims.set("two-stage-30-messages-v2-reconcile-10000:"+batchEnd,"blocked");
   h.claims.set("two-stage-30-messages-v3-priority-recovery:"+batchEnd,"blocked");
   h.claims.set("two-stage-30-messages-v4-episodic-continuity:"+batchEnd,"blocked");
   assert.equal(await h.run(),"committed");
@@ -279,7 +279,7 @@ test("v5 permits one explicitly versioned attempt for a v4-blocked batch and ret
   assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v5-selective-recovery");
   assert.equal(h.claims.get("two-stage-30-messages-v3-priority-recovery:"+batchEnd),"blocked");
   assert.equal(h.claims.get("two-stage-30-messages-v4-episodic-continuity:"+batchEnd),"blocked");
-  assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-4000:"+batchEnd),"blocked");
+  assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-10000:"+batchEnd),"blocked");
   assert.equal(h.claims.get("two-stage-30-messages-v1:"+batchEnd),"blocked",
     "old failure evidence must remain untouched");
   assert.equal(h.memory().summarizedThroughMessageId,batchEnd);
