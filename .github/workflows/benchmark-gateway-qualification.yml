@@ -5,6 +5,7 @@ on:
       - 'scripts/benchmark/**'
       - 'supabase/migrations/*benchmark*'
       - 'supabase/migrations/20261103173000_task4a_native_origin_guard.sql'
+      - 'supabase/migrations/20261103225000_task4a_successor_continuation.sql'
       - 'tests/helpers/assert-ordinary-authority.mjs'
       - '.github/workflows/benchmark-gateway-qualification.yml'
   workflow_dispatch:
