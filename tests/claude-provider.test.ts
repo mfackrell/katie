@@ -389,3 +389,48 @@ test("actual Anthropic system payload changes only the style for personal conver
     globalThis.fetch = previousFetch;
   }
 });
+
+test("outbound provider system payload follows final personal response purpose, not router label", async () => {
+  const priorFetch = globalThis.fetch;
+  const sentSystems: string[] = [];
+  const auditedSystems: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    const payload = JSON.parse(String(init?.body)) as { system: string | Array<{ text: string }> };
+    sentSystems.push(typeof payload.system === "string" ? payload.system : payload.system.map(part => part.text).join(""));
+    return jsonResponse({ content: [{ type: "text", text: "A direct response." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const base = [ "Actor instructions stay unchanged.", getDeliverableStandardInstruction(), getAdaptiveResponseCompositionInstruction() ].join("\n\n");
+    const cases = [
+      { message: "Hi Katie", intent: "general-text", responsePurpose: "conversation" },
+      { message: "Why did you respond that way?", intent: "assistant-reflection", responsePurpose: "deliverable" },
+      { message: "I don't like being alone.", intent: "social-emotional", responsePurpose: "deliverable" },
+      { message: "What does sponsor reporting mean?", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
+      { message: "Analyze the cash flow.", intent: "social-emotional", responsePurpose: "conversation" },
+    ] as const;
+    for (const fixture of cases) {
+      const decision = decideResponsePolicy(fixture);
+      await new ClaudeProvider("offline-test-key").generate({
+        ...baseParams,
+        cacheablePersona: base,
+        persona: [base, decision.generationInstruction].filter(Boolean).join("\n\n"),
+        user: fixture.message,
+        onProviderSystemPrepared: async audit => { auditedSystems.push(audit.systemMessages.join("\n")); },
+      });
+    }
+    assert.equal(sentSystems.length, cases.length);
+    assert.deepEqual(auditedSystems, sentSystems, "Captured provider audit must match outgoing system messages");
+    for (const i of [0, 1, 2]) {
+      assert.match(sentSystems[i], /Engage naturally rather than simply acknowledging/);
+      assert.doesNotMatch(sentSystems[i], /normally under 150 words/);
+    }
+    assert.match(sentSystems[3], /NEXT RESPONSE: a brief conversational answer or clarification/);
+    assert.doesNotMatch(sentSystems[4], /NEXT RESPONSE: a natural personal conversation/);
+    assert.ok(sentSystems.every(system => system.includes("Actor instructions stay unchanged.")));
+    const route = readFileSync("app/api/chat/route.ts", "utf8");
+    assert.match(route, /responsePurpose: responsePurposeHint, intent: resolvedRequestIntent/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});

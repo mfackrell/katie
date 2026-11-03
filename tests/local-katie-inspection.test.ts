@@ -154,3 +154,27 @@ test("a website reinspection compares saved evidence without rewriting memory", 
   assert.equal(isExplicitMemoryMutation(message), false);
   assert.equal(isExplicitMemoryCorrection("Please correct the saved website address in your memory."), true);
 });
+
+test("prompt diagnostics are not intercepted as local prompt disclosures", () => {
+  for (const message of [
+    "What is wrong in your system prompt that made it so that you did not respond that way and what do we need to change to fix it?",
+    "What is wrong with your system prompt?",
+    "Why did your instructions make you behave that way?",
+    "Review your system prompt and tell me what needs to change",
+    "What is wrong with your current system prompt this message?",
+    "Why are your system instructions causing this problem?",
+  ]) assert.equal(isSystemPromptRequest(message), false, message);
+});
+
+test("explicit prompt inspection remains available, including provider audit and typo commands", () => {
+  for (const message of [
+    "Show me your system prompt",
+    "Display the actual provider system messages",
+    "What is your system message?",
+    "What's your current system prompt?",
+    "Show your current system instructions",
+    "Show me what you sent to the model",
+    "Review your system prompt and show me your system prompt",
+    "Show me your system propmt",
+  ]) assert.equal(isSystemPromptRequest(message), true, message);
+});

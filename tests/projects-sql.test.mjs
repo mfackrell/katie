@@ -2,6 +2,7 @@ import {verifyProjectLifecyclePostgres} from './helpers/project-lifecycle-postgr
 import {verifyTask4aContinuationPostgres} from './helpers/task4a-continuation-postgres.mjs';
 import {verifyTask4aNativePostgres} from './helpers/task4a-native-postgres.mjs';
 import {verifyPostMigrationResearchAdmission} from './helpers/task4a-post-migration-research-admission.mjs';
+import {verifyTask4aSavedSpecificationPostgres} from './helpers/task4a-saved-specification-postgres.mjs';
 import {verifyDevelopmentDispatchRecoverySql} from './helpers/development-dispatch-recovery-sql.mjs';
 import {verifySpecificationLifecycleSql} from './helpers/specification-lifecycle-sql.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync,mkdtempSync,rmSync,readdirSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';import pg from 'pg';import {randomUUID} from 'node:crypto';
@@ -142,7 +143,9 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query('reset role');
   await db.query(readFileSync('tests/fixtures/task4a-native-bridge-sql.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261102211800_task4a_native_developer_bridge.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261103162000_task4a_reviewed_specification_recovery.sql','utf8'));
   await db.query('set role service_role');
+  await verifyTask4aSavedSpecificationPostgres(db);
   await verifyTask4aNativePostgres(db,connect);
   await verifyPostMigrationResearchAdmission(db);
   await verifyProjectLifecyclePostgres(db);

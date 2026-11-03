@@ -828,3 +828,27 @@ test('actual POST delegates a minimal resume to the saved server workflow before
   assert.equal(ordinary.status, 400, 'Ordinary requests still require their message schema');
   assert.deepEqual(calls, ['saved-workflow', 'ordinary-schema']);
 });
+
+test('actual route response-policy inputs ignore legacy companion pending obligations', async () => {
+  const f = fixture();
+  const legacy = {
+    ...f.helpers.emptyTaskProgress(),
+    projectContext: { userMessageId: 'casual-origin', text: 'a little pissy there eh katie' },
+    objective: { userMessageId: 'casual-origin', text: 'a little pissy there eh katie' },
+    pending: [{ id: 'casual-question:1', assistantMessageId: 'casual-question', index: 1,
+      text: 'What is bothering you?' }],
+    lastUserIntent: 'answer',
+  };
+  const selected = await select(f, {
+    message: 'yeah a little', messageId: 'casual-reply',
+    priorTaskProgress: legacy, history: [],
+    projectRelation: undefined, responsePurpose: 'conversation',
+  });
+  assert.equal(selected.taskProgress.projectContext, null);
+  assert.equal(selected.taskProgress.objective, null);
+  assert.deepEqual(plain(selected.taskProgress.pending), []);
+  assert.equal(selected.responsePolicy.purpose, 'conversation');
+  assert.equal(selected.responsePolicy.requiresSubstantiveProcessing, false);
+  assert.equal(selected.taskProgressContext, '');
+  assert.equal(selected.requiredReviewForRequest, false);
+});
