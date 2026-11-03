@@ -817,7 +817,7 @@ export function ChatPanel({
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
   const [draftReady,setDraftReady]=useState(false);
-  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
+  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);resetComposerInput(version=>version+1);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
   const draftInitialized=useRef(false);
   useEffect(()=>{
     if(draftInitialized.current||!draft.state)return;
@@ -1265,6 +1265,7 @@ export function ChatPanel({
 
   function requestProjectChanges() {
     setInput("Change this project's scope: ");
+    resetComposerInput(version=>version+1);
     requestAnimationFrame(()=>textareaRef.current?.focus());
   }
 
@@ -1395,7 +1396,7 @@ export function ChatPanel({
           }
         } else if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
-          if (!cancelled) setInput(pending.content);
+          if (!cancelled) {setInput(pending.content);resetComposerInput(version=>version+1);}
           if (!cancelled) {
             const failure: Message = { id: error.messageId ?? pending.requestId ?? crypto.randomUUID(), chatId,
               role: "assistant", content: chatFailureContent(error.message), createdAt: new Date().toISOString() };
@@ -1890,6 +1891,7 @@ export function ChatPanel({
         // for the next send rather than uploading the file a second time.
         if (uploadedReferencesForRetry && composerChatRef.current===chatId) setFileReferences(cleanPendingAttachments({images:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
         setInput(content);
+        resetComposerInput(version=>version+1);
         setStatusMessage(httpCause);
         return;
       }
@@ -2242,6 +2244,7 @@ export function ChatPanel({
         if (!reactionContent && composerChatRef.current===chatId) {
           setAttachmentError(error instanceof Error?error.message:"The selected attachments could not be prepared.");
           setInput(replySnapshot ? composerValueRef.current : content);
+          resetComposerInput(version=>version+1);
           setReplyTo(replySnapshot);
           setSelectedFiles(filesToUpload);
           setSelectedVideos(videosToUpload);
@@ -2337,7 +2340,7 @@ export function ChatPanel({
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
-            if (!reactionContent) { setInput(replySnapshot ? composerValueRef.current : content); setReplyTo(replySnapshot); }
+            if (!reactionContent) { setInput(replySnapshot ? composerValueRef.current : content); resetComposerInput(version=>version+1); setReplyTo(replySnapshot); }
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
@@ -2466,6 +2469,7 @@ export function ChatPanel({
 
     composerValueRef.current = nextValue;
     setInput(nextValue);
+    resetComposerInput(version=>version+1);
     setEmojiPickerOpen(false);
 
     requestAnimationFrame(() => {
@@ -3030,6 +3034,7 @@ export function ChatPanel({
                   onClick={() => {
                     setReplyTo({id:message.id,role:message.role,content:message.content});
                     setInput(SAVED_DOCUMENT_EXPORT_PROMPT);
+                    resetComposerInput(version=>version+1);
                     requestAnimationFrame(()=>textareaRef.current?.focus());
                   }}
                   className="shrink-0 rounded-lg border border-sky-400/25 px-2 py-1 text-[11px] text-sky-300 hover:bg-sky-400/10 disabled:opacity-40">Word/PDF</button>
