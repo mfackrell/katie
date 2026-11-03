@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {encodeDeveloperHandoff,readDeveloperHandoff} from '../scripts/benchmark/developer-dispatch-contract.mjs';
+import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority} from '../scripts/benchmark/developer-dispatch-contract.mjs';
 import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract.mjs';
 import {projectMarker,contractHash} from '../scripts/project-context.mjs';
 import {forwardAuthorizedModelRequest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
@@ -22,6 +22,20 @@ const proof={
  baselineSha:'c'.repeat(40),releaseSha:'d'.repeat(40),
  expiresAt:Date.now()+180000
 };
+test('Task4A can never classify an unbound grant as ordinary development',()=>{
+ const original='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+ assert.throws(()=>classifyDeveloperDispatchAuthority(original,{version:'ordinary-developer-v1'}),/TASK4A_BOUND_OWNER_AUTHORITY_REQUIRED/);
+ assert.throws(()=>classifyDeveloperDispatchAuthority(original,{task4aContinuationId:'bad'}),/TASK4A_BOUND_OWNER_AUTHORITY_REQUIRED/);
+ assert.deepEqual(classifyDeveloperDispatchAuthority(original,{task4aContinuationId:authority}),
+   {authorityKind:'task4a-developer',task4aContinuationId:authority});
+ assert.deepEqual(classifyDeveloperDispatchAuthority(randomUUID(),{version:'ordinary-developer-v1'}),
+   {authorityKind:'ordinary-developer'});
+ assert.throws(()=>classifyDeveloperDispatchAuthority(randomUUID(),{task4aContinuationId:authority}),/FOREIGN_TASK4A_AUTHORITY_DENIED/);
+ const code=readFileSync('lib/agents/development.ts','utf8');
+ assert.match(code,/classifyDeveloperDispatchAuthority\(c\.projectId,a\.developer_authority\)/);
+ assert.match(code,/task4a_native_authority_ready/);
+ assert.match(code,/if\(verified\.error\|\|verified\.data!==true\)continue/);
+});
 test('Task4A handoff is signed separately and bound to original project and continuation',()=>{
  const signed=encodeDeveloperHandoff(proof,key);
  assert.match(signed,/<!-- katie-native-task4a:/);
@@ -49,6 +63,9 @@ test('trusted workflow recognizes Task4A signed host; no plain Codex fallback',(
  assert.match(cli,/task4a-developer/);
  assert.match(host,/task4a_native_reconcile_provider_usage/);
  assert.match(host,/task4a_native_live/);
+ assert.match(host,/task4a_pregrant_redispatch_ready/);
+ assert.match(host,/!proof\.startupRecoveryId&&!task4aPregrant/);
+ assert.match(host,/wipContext\.baseSha!==wipContext\.baselineSha/);
  assert.match(host,/task4a,executionEpoch/);
  assert.match(workflow,/if: steps\.task\.outputs\.native != 'true'\n        uses: openai\/codex-action@v1/);
 });
@@ -206,15 +223,4 @@ test('trusted workflow fails closed for an original Task4A project without an au
   assert.equal(ordinaryPlain.manifest.native,false);
   assert.equal(ordinaryPlain.guard.status,0,ordinaryPlain.guard.stderr);
  }finally{rmSync(dir,{recursive:true,force:true});}
-});
-
-test('original-project dispatcher rejects unbound ordinary approval and verifies live Task4A continuation before signing',()=>{
- const source=readFileSync('lib/agents/development.ts','utf8');
- const missing=source.indexOf("if(c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&!task4aId)continue;");
- const validate=source.indexOf("db.rpc<boolean>('task4a_native_authority_ready'",missing);
- const sign=source.indexOf('encodeDeveloperHandoff(',validate);
- assert.ok(missing>=0&&validate>missing&&sign>validate,
-  'Missing continuation must fail closed before signing, and live binding must be validated before signing');
- assert.ok(source.slice(validate,sign).includes('if(live.error||live.data!==true)continue;'),
-  'Expired, revoked, mismatched or unverified Task4A authority must never reach native handoff creation');
 });
