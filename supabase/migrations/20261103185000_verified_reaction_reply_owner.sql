@@ -26,7 +26,7 @@ begin
   ) then
     raise exception 'No active verified reaction reply job';
   end if;
-  select min(b.owner_id), count(*) into v_owner,v_count
+  select min(b.owner_id::text)::uuid, count(*) into v_owner,v_count
   from public.standalone_owner_bindings b
   where b.actor_id=p_actor and b.chat_id=p_chat and b.revoked_at is null;
   if v_count <> 1 or v_owner is null then
