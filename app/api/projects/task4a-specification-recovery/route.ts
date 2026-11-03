@@ -23,7 +23,7 @@ async function preflight(){
   db.from('agent_missions').select('id,status,project_kind,result')
    .eq('id',TASK4A_SPECIFICATION_MISSION).maybeSingle<Mission>(),
   db.from('mission_assignments').select('id,job_key,role,status,result')
-   .eq('mission_id',TASK4A_SPECIFICATION_MISSION).in('job_key',['revision','review_again']).returns<Job[]>(),
+   .eq('mission_id',TASK4A_SPECIFICATION_MISSION).in('job_key',['revision','review_again']).returns<Job>(),
   db.from('project_continuation_authorizations').select('id,deadline,revoked_at')
    .eq('project_id',TASK4A_ORIGINAL_PROJECT).maybeSingle<Authority>()
  ]);
