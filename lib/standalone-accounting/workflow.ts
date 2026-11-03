@@ -50,13 +50,47 @@ async function verifiedCronQwenOwner(actorId:string,chatId:string,requestId:stri
 /** Persist original user input before any paid preparation. Each resume runs under
  * a fenced lease; completed provider responses replay from the attempt ledger. */
 export async function executeStandaloneWorkflow(request:NextRequest,payload:Record<string,unknown>,execute:(request:NextRequest)=>Promise<Response>):Promise<Response> {
+  return executeScopedStandaloneWorkflow(request,payload,execute);
+}
+
+/**
+ * Private server-only entry for an already claimed reaction job. The owner
+ * derives from the durable job and active actor/chat binding, not a request
+ * header or a synthetic browser credential. All normal workflow admission,
+ * ledger and spending limits below remain mandatory.
+ */
+export async function executeVerifiedReactionReplyWorkflow(
+  request:NextRequest,payload:Record<string,unknown>,
+  execute:(request:NextRequest)=>Promise<Response>,jobId:number,
+):Promise<Response> {
+  const actorId=String(payload.actorId??''),chatId=String(payload.chatId??'');
+  const requestId=request.headers.get('x-request-id')?.trim()??'';
+  if(!Number.isSafeInteger(jobId)||jobId<=0||
+      !/^[0-9a-f-]{36}$/i.test(actorId)||!/^[0-9a-f-]{36}$/i.test(chatId)||
+      !/^[0-9a-f-]{36}$/i.test(requestId))
+    throw new StandaloneAccountingError('reaction_authorization_denied','Invalid internal reaction request identity.');
+  const {data:ownerId,error}=await getSupabaseAdminClient().rpc<string>(
+    'standalone_verified_reaction_reply_owner',
+    {p_job:jobId,p_actor:actorId,p_chat:chatId,p_request:requestId},
+  );
+  if(error||!ownerId)
+    throw new StandaloneAccountingError('reaction_authorization_denied','No verified owner-bound reaction reply is eligible.');
+  return executeScopedStandaloneWorkflow(request,payload,execute,ownerId);
+}
+
+async function executeScopedStandaloneWorkflow(
+  request:NextRequest,payload:Record<string,unknown>,
+  execute:(request:NextRequest)=>Promise<Response>,verifiedReactionOwner?:string,
+):Promise<Response> {
   const actorId=String(payload.actorId??''),chatId=String(payload.chatId??'');
   const requestId=request.headers.get('x-request-id')?.trim();
   if(!requestId||!/^[A-Za-z0-9._:-]{1,128}$/.test(requestId))throw new StandaloneAccountingError('request_id_required','A stable original request ID is required before paid processing.');
   const resumed=payload.standaloneResume===true;
-  const ownerId=resumed&&assertCronAuth(request)
-    ? await verifiedCronQwenOwner(actorId,chatId,requestId)
-    : await authorizeStandaloneCaller(request,actorId,chatId);
+  const ownerId=verifiedReactionOwner
+    ? verifiedReactionOwner
+    : resumed&&assertCronAuth(request)
+      ? await verifiedCronQwenOwner(actorId,chatId,requestId)
+      : await authorizeStandaloneCaller(request,actorId,chatId);
   if(resumed) {
     const saved=await rpc<Workflow|null>('load_workflow',{p_owner:ownerId,p_request:requestId});
     if(!saved||saved.actor_id!==actorId||saved.chat_id!==chatId)throw new StandaloneAccountingError('resume_denied','Saved request not found for this owner and conversation.');
