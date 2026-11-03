@@ -219,15 +219,13 @@ test("social-emotional exchanges receive reciprocal guidance without dropping ta
   }
 });
 
-test("CFO work, engineering, greetings, and professional clarifications retain exact old instruction", () => {
+test("CFO work and engineering clarifications retain exact work-conversation instruction", () => {
   const fixtures = [
     { message: "What do you mean by sponsor reporting?", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
     { message: "Can you explain the difference between EAC and ETC?", intent: "technical-debugging", responsePurpose: "conversation" },
     { message: "What was the monthly close issue?", intent: "financial-analysis", responsePurpose: "conversation" },
     { message: "We are debugging the code. Why did it fail?", intent: "technical-debugging", responsePurpose: "conversation" },
     { message: "I feel discouraged by this client. What does that mean for our approach?", intent: "social-emotional", responsePurpose: "conversation", hasPendingDeliverable: true },
-    { message: "Thank you.", intent: "social-emotional", responsePurpose: "conversation" },
-    { message: "Hi Katie", intent: "social-emotional", responsePurpose: "conversation" },
   ] as const;
   for (const fixture of fixtures) {
     const result = decideResponsePolicy(fixture);
@@ -250,5 +248,51 @@ test("personal classification never overrides delivery, tools, or approvals", ()
     assert.equal(result.purpose, "deliverable", fixture.message);
     assert.equal(result.requiresSubstantiveProcessing, true, fixture.message);
     assert.equal(result.generationInstruction, null, fixture.message);
+  }
+});
+
+test("personal turns select reciprocal conversation even with inconsistent classifier purposes", () => {
+  const fixtures = [
+    { message: "Hi Katie", intent: "general-text", responsePurpose: "conversation" },
+    { message: "Thank you.", intent: "social-emotional", responsePurpose: "conversation" },
+    { message: "a little pissy there eh katie", intent: "general-text", responsePurpose: "deliverable" },
+    { message: "You're a bit grumpy today.", intent: "general-text", responsePurpose: "deliverable" },
+    { message: "I don't like being alone.", intent: "social-emotional", responsePurpose: "deliverable" },
+    { message: "Why did you respond that way?", intent: "assistant-reflection", responsePurpose: "deliverable" },
+    { message: "How did your tone come across in your last answer?", intent: "assistant-reflection", responsePurpose: "deliverable" },
+  ] as const;
+  for (const fixture of fixtures) {
+    const result = decideResponsePolicy(fixture);
+    assert.equal(result.purpose, "conversation", fixture.message);
+    assert.equal(result.requiresSubstantiveProcessing, false, fixture.message);
+    assert.match(result.generationInstruction ?? "", /Engage naturally rather than simply acknowledging/);
+    assert.doesNotMatch(result.generationInstruction ?? "", /normally under 150 words|ask at most one necessary follow-up/);
+  }
+});
+
+test("explicit analysis and work cannot be demoted by personal routing", () => {
+  for (const fixture of [
+    { message: "Analyze Katie's recent behavior and write a formal report.", intent: "assistant-reflection", responsePurpose: "conversation" },
+    { message: "Review the system prompt and tell me exactly what code needs changing.", intent: "assistant-reflection", responsePurpose: "deliverable" },
+    { message: "Analyze my cash-flow forecast.", intent: "social-emotional", responsePurpose: "conversation" },
+    { message: "Investigate why your provider routing selected the wrong model.", intent: "assistant-reflection", responsePurpose: "deliverable" },
+    { message: "Why did you respond that way?", intent: "assistant-reflection", responsePurpose: "deliverable", requiresTools: true },
+    { message: "Why did you respond that way?", intent: "assistant-reflection", responsePurpose: "deliverable", hasPendingDeliverable: true },
+  ] as const) {
+    const result = decideResponsePolicy(fixture);
+    assert.equal(result.purpose, "deliverable", fixture.message);
+    assert.equal(result.generationInstruction, null, fixture.message);
+  }
+});
+
+test("professional conversational detours retain existing restrictive task boundary", () => {
+  for (const fixture of [
+    { message: "What does WIP mean?", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
+    { message: "Hi Katie", intent: "social-emotional", responsePurpose: "conversation", hasPendingDeliverable: true },
+    { message: "Why did you respond that way?", intent: "assistant-reflection", responsePurpose: "conversation", hasPendingDeliverable: true },
+  ] as const) {
+    const result = decideResponsePolicy(fixture);
+    assert.equal(result.purpose, "conversation", fixture.message);
+    assert.equal(result.generationInstruction, originalWorkConversationInstruction, fixture.message);
   }
 });
