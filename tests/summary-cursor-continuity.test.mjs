@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 
 const code=readFileSync("lib/memory/summarizer.ts","utf8");
-test("intermediate source cursor advances only after complete two-prompt reconciliation",()=>{
-  assert.ok(code.indexOf("summarizeNewBatch(batch)") < code.indexOf("reconcileIntermediateMemory(summary, newSummary)"));
-  assert.ok(code.indexOf("reconcileIntermediateMemory(summary, newSummary)") <
+test("intermediate source cursor advances only after source summarization and deterministic compaction",()=>{
+  assert.ok(code.indexOf("summarizeNewBatch(batch)") < code.indexOf("composeRollingEpisodes(summary, newSummary, checkpoint.createdAt ?? null)"));
+  assert.ok(code.indexOf("composeRollingEpisodes(summary, newSummary, checkpoint.createdAt ?? null)") <
             code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
   assert.match(code,/if \(response\.stop_reason !== "end_turn" \|\| !text \|\| text\.length > maxCharacters\)/);
   assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);
