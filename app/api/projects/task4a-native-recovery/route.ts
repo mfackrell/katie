@@ -15,7 +15,7 @@ type RecoveryProposal={ready:boolean;digest:string;proposal:{
 const reply=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'private, no-store'}});
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return reply({error:'Owner sign-in required'},401);
- const {data,error}=await getSupabaseAdminClient().rpc<RecoveryProposal|null>('task4a_native_recovery_proposal');
+ const {data,error}=await getSupabaseAdminClient().rpc<RecoveryProposal|null>('task4a_native_recovery_proposal',{});
  if(error)return reply({error:'Recovery proposal unavailable'},503);
  if(!data||data.ready!==true)return reply({ready:false,
   error:'Existing authorization, original failed workflow, or continuation deadline is no longer eligible'},409);
@@ -30,7 +30,7 @@ export async function POST(request:NextRequest){
  try{input=approval.parse(await request.json());}
  catch{return reply({error:'Exact displayed digest and explicit consent required'},400);}
  const db=getSupabaseAdminClient();
- const {data:proposal,error:proposalError}=await db.rpc<RecoveryProposal|null>('task4a_native_recovery_proposal');
+ const {data:proposal,error:proposalError}=await db.rpc<RecoveryProposal|null>('task4a_native_recovery_proposal',{});
  if(proposalError||!proposal||proposal.digest!==input.proposalDigest)
   return reply({error:'Saved proposal changed or expired. Refresh before approving.'},409);
  const {data:recovered,error}=await db.rpc<{recovered:boolean;receiptId:string;newApprovalId:string;nativeDeadline:string}>(
