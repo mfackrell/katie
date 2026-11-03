@@ -51,7 +51,7 @@ revoke all on function public.developer_claim_dispatch_without_task4a_guard(uuid
 create function public.developer_claim_dispatch(p_approval uuid,p_release text)
 returns boolean language plpgsql security definer set search_path=public as $$
 declare a public.benchmark_native_spending_approvals;
- auth public.project_continuation_authorizations;
+ auth record;
 begin
  select * into a from public.benchmark_native_spending_approvals where id=p_approval;
  if a.project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid then
