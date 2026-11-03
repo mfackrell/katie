@@ -25,6 +25,23 @@ function failure(code: string, message: string): StandaloneAccountingError { ret
 function unavailableUncertainResponse(): Response {
   return Response.json({error:{type:'uncertain_exposure_retained',message:'The previous provider outcome is unavailable. Its full exposure is authorized and retained. This operation was not retransmitted; use the next safe fallback.'}},{status:400,headers:{'x-katie-uncertain-exposure':'retained'}});
 }
+/** Anthropic documents definitive rejected API requests as nonbillable.
+ * Only this exact provider error with its own request ID establishes that
+ * no model inference was performed; timeouts and other errors remain held. */
+function nonbillableAnthropicCreditRejection(checkpoint: ResponseCheckpoint, provider: AccountingProvider): string | null {
+  if (provider !== 'anthropic' || checkpoint.status !== 400) return null;
+  try {
+    const body = JSON.parse(checkpoint.body);
+    const id: unknown = body?.request_id;
+    const headerId = new Headers(checkpoint.headers).get('request-id') ?? new Headers(checkpoint.headers).get('x-request-id');
+    if (body?.type !== 'error' || body?.error?.type !== 'invalid_request_error'
+      || body?.error?.message !== 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'
+      || typeof id !== 'string' || !/^req_[A-Za-z0-9]+$/.test(id)
+      || (headerId !== null && headerId !== id)
+      || body.usage !== undefined || body.content !== undefined || body.output !== undefined) return null;
+    return id;
+  } catch { return null; }
+}
 function restore(checkpoint: ResponseCheckpoint): Response {
   const headers = new Headers(checkpoint.headers);
   // fetch has already decompressed the captured body.
@@ -358,6 +375,21 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     if (estimate.status !== 'estimated' || estimate.reservationMicrousd === null) throw Object.assign(failure('unsupported_billing', 'This provider request cannot be priced: '+estimate.issues.join('; ')), { issues: estimate.issues });
     if (attempt && attempt.state !== 'settled' && BigInt(attempt.reserved_microusd) !== BigInt(estimate.reservationMicrousd)) throw failure('estimate_changed', 'The saved reservation differs from the verified prepared request estimate. A fresh quote is required.');
     const reconcile = async (checkpoint: ResponseCheckpoint, attemptId: string) => {
+      const rejectedId = nonbillableAnthropicCreditRejection(checkpoint,provider);
+      if (rejectedId) {
+        // An HTTP 400 error remains a real provider error for the caller.
+        // Its saved, exact request identifier proves the nonbillable rejection,
+        // not a generated completion. Do not invent output or retry.
+        await ledger.recordProviderIdentifiers(context.userId,attemptId,rejectedId,null);
+        await ledger.settle({ownerId:context.userId,attemptId,provider,providerReceiptId:rejectedId,
+          actualMicrousd:'0',
+          usage:{inputTokens:0,outputTokens:0,cachedInputTokens:0,nonbillableRejected:true},
+          evidence:{kind:'provider_rejection',requestHash:prepared.hash,httpStatus:400,
+            pricingVersion:pricing.version,requestedModel:prepared.model,
+            resolvedModel:null,pricedModel:null,pricingUnknown:false,
+            providerRequestId:rejectedId,rejectionReason:'insufficient_prepaid_balance'}});
+        return;
+      }
       const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload);
       if (!receipt) {
         await ledger.markUncertain(context.userId, attemptId, 'Response received without supported complete provider usage and receipt; reservation remains held.');
