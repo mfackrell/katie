@@ -35,7 +35,9 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query("update agent_missions set project_id=$2,project_kind='development' where id=$1",[guardMission,guardProject]);
  const guardJob=(await db.query("select id from mission_assignments where mission_id=$1 and job_key='plan'",[guardMission])).rows[0].id;
  await db.query('set role service_role');
+ await db.query('savepoint task4a_rejected_initial');
  await assert.rejects(db.query('select developer_initial_snapshot($1,$2)',[randomUUID(),guardJob]),/TASK4A_REQUIRES_CONTINUATION_BOUND_NATIVE_AUTHORITY/);
+ await db.query('rollback to savepoint task4a_rejected_initial');
  await db.query('reset role');
  await db.query('rollback');
  const contract={path:'/pilot',scenarios:[{name:'Recovered',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]},scope='a'.repeat(64),baseline=(process.env.KATIE_TEST_ORDINARY_HOST==='1'||options.initialLifecycle)?'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319':'b'.repeat(40),contractHash='c'.repeat(64);
