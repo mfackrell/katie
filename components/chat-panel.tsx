@@ -36,6 +36,7 @@ import {
   type ReasoningUiState
 } from "@/lib/chat/reasoning-stream";
 import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
+import { upsertSavedAssistant } from "@/lib/chat/saved-answer-publication";
 import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
@@ -1915,13 +1916,14 @@ export function ChatPanel({
       let sawInitialMetadata = false;
       let sawFinalReasoningAnswer = false;
       let savedAssistantMessageId: string | null = null;
+      let sawContentEvent = false;
 
       // The server's content event follows the durable assistant-message write.
       // Do not wait for memory processing or workflow settlement to visually
       // finalize a reply that has already been saved. Pending workflow
       // recovery/accounting remains active until the stream actually ends.
       const commitSavedAnswer = () => {
-        if (answerCommitted || !savedAssistantMessageId || !sawFinalReasoningAnswer) return;
+        if (answerCommitted || !savedAssistantMessageId || !sawContentEvent) return;
         answerCommitted = true;
         const assistantMessage: Message = {
           id: savedAssistantMessageId,
@@ -1933,11 +1935,13 @@ export function ChatPanel({
           assets,
           createdAt: new Date().toISOString(),
         };
-        setMessages((current) => {
-          const nextMessages = [...current.filter(entry => entry.id !== assistantMessage.id), assistantMessage];
-          setMessagesByChatId(cache => ({...cache,[chatId]:nextMessages}));
-          return nextMessages;
-        });
+        // Independent, idempotent state upserts: no cross-state mutation
+        // inside a React functional updater during concurrent rendering.
+        setMessages(current => upsertSavedAssistant(current, assistantMessage));
+        setMessagesByChatId(cache => ({
+          ...cache,
+          [chatId]: upsertSavedAssistant(cache[chatId] ?? [], assistantMessage),
+        }));
         setStreamingAnswer("");
         setMeta({ provider, model });
         setStatusMessage("Answer saved. Finalizing memory and request accounting…");
@@ -2080,6 +2084,7 @@ export function ChatPanel({
 
           if (chunk.type === "content") {
             savedAssistantMessageId = chunk.messageId ?? null;
+            sawContentEvent = true;
             textContent = chunk.text;
             setStreamingAnswer(textContent);
             if (chunk.presentation) {
@@ -2091,6 +2096,8 @@ export function ChatPanel({
             }
             provider = chunk.provider ?? provider;
             model = chunk.model ?? model;
+            // "content" is already persisted; do not wait for stream closure.
+            commitSavedAnswer();
           }
         }
       }
@@ -2179,6 +2186,7 @@ export function ChatPanel({
 
         if (trailingChunk.type === "content") {
           savedAssistantMessageId = trailingChunk.messageId ?? null;
+          sawContentEvent = true;
           textContent = trailingChunk.text;
           setStreamingAnswer(textContent);
           if (trailingChunk.presentation) {
@@ -2190,7 +2198,15 @@ export function ChatPanel({
           }
           provider = trailingChunk.provider ?? provider;
           model = trailingChunk.model ?? model;
+          commitSavedAnswer();
         }
+      }
+
+      // A stream containing only provisional deltas is never a confirmed save.
+      // Use the existing durable-request recovery path rather than fabricating
+      // an assistant reply that may not exist in the database.
+      if (!sawContentEvent && !answerCommitted) {
+        throw new Error("Stream ended without a persisted assistant content event.");
       }
 
       abortControllerRef.current = null;
@@ -2208,11 +2224,13 @@ export function ChatPanel({
           assets,
           createdAt: new Date().toISOString(),
         };
-        setMessages((current) => {
-          const nextMessages = [...current.filter(entry => entry.id !== assistantMessage.id), assistantMessage];
-          setMessagesByChatId(cache => ({...cache,[chatId]:nextMessages}));
-          return nextMessages;
-        });
+        // Independent, idempotent state upserts: no cross-state mutation
+        // inside a React functional updater during concurrent rendering.
+        setMessages(current => upsertSavedAssistant(current, assistantMessage));
+        setMessagesByChatId(cache => ({
+          ...cache,
+          [chatId]: upsertSavedAssistant(cache[chatId] ?? [], assistantMessage),
+        }));
       }
       setStreamingAnswer("");
       if (!sawFinalReasoningAnswer) {
