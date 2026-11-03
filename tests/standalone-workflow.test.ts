@@ -42,7 +42,7 @@ test('durable pause and fresh resume replay immutable inputs and execution conte
   if(!firstId)firstId=workflowMessageId('user');else assert.equal(workflowMessageId('user'),firstId);
   return new Response(executions===1?'{"type":"accounting_pause","code":"standalone_approval_required"}\n':'{"type":"content","text":"completed"}\n',{headers:{'content-type':'application/x-ndjson'}});
  };
- await executeStandaloneWorkflow(request(),payload,execute);assert.equal(stored.status,'paused');assert.equal(executions,1);
+ await (await executeStandaloneWorkflow(request(),payload,execute)).text();assert.equal(stored.status,'paused');assert.equal(executions,1);
  const resumed=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);assert.match(await resumed.text(),/completed/);assert.equal(stored.status,'completed');assert.equal(loads,1);assert.equal(checkpoints,1);
  const replay=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);assert.match(await replay.text(),/completed/);assert.equal(executions,2,'completed request does not reexecute');
 });
@@ -55,7 +55,7 @@ test('cached token count absence is durable across approved workflow resume',asy
    return new Response(run===1?'{"type":"accounting_pause","code":"standalone_approval_required"}\n':'{"type":"content","text":"confirmed"}\n',
      {headers:{'content-type':'application/x-ndjson'}});
  };
- await executeStandaloneWorkflow(request(),payload,execute);
+ await (await executeStandaloneWorkflow(request(),payload,execute)).text();
  assert.equal(stored.status,'paused');assert.equal(countCalls,1);
  const resumed=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);
  assert.match(await resumed.text(),/confirmed/);
@@ -67,7 +67,7 @@ test('simultaneous reconnect returns existing fenced workflow without running tw
  const execute=async()=>{executions++;await gate;return new Response('done');};
  const first=executeStandaloneWorkflow(request(),payload,execute);
  while(executions===0)await new Promise(resolve=>setTimeout(resolve,1));
- const duplicate=await executeStandaloneWorkflow(request(),payload,execute);assert.equal(duplicate.status,202);assert.equal(executions,1);unblock();await first;
+ const duplicate=await executeStandaloneWorkflow(request(),payload,execute);assert.equal(duplicate.status,202);assert.equal(executions,1);unblock();await (await first).text();
 });
 test('changed original body is rejected and never becomes resumed spending authority',async()=>{
  await executeStandaloneWorkflow(request(),payload,async()=>new Response('completed'));
@@ -77,7 +77,7 @@ test('changed original body is rejected and never becomes resumed spending autho
 test('a hidden pending attempt remains visible even when its optional caller returned success',async()=>{
  pending=true;
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"content","text":"answer already saved"}\n',{headers:{'content-type':'application/x-ndjson'}}));
- assert.equal(stored.status,'paused');assert.match(await response.text(),/standalone_pending_attempt/);
+ assert.match(await response.text(),/standalone_pending_attempt/);assert.equal(stored.status,'paused');
 });
 
 test('a transient HTTP failure cannot strand already reserved supporting work',async()=>{
@@ -98,26 +98,26 @@ test('SDK-wrapped accounting denial preserves its pause across execution boundar
 
 test('stream execution failure is never persisted as successful completion',async()=>{
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"reasoning_error","message":"Saved preparation failed"}\n',{headers:{'content-type':'application/x-ndjson'}}));
- assert.equal(stored.status,'failed');assert.match(await response.text(),/Saved preparation failed/);
+ assert.match(await response.text(),/Saved preparation failed/);assert.equal(stored.status,'failed');
 });
 
 test('deterministic image limitations are saved as terminal failures rather than approval loops',async()=>{
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"accounting_pause","code":"standalone_no_priceable_vision","message":"No supported image escalation"}\n',{headers:{'content-type':'application/x-ndjson'}}));
- assert.equal(stored.status,'failed');assert.match(await response.text(),/standalone_no_priceable_vision/);
+ assert.match(await response.text(),/standalone_no_priceable_vision/);assert.equal(stored.status,'failed');
 });
 
 test('a non-approvable model context blocker is terminal and does not strand a workflow paused',async()=>{
   const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(
     JSON.stringify({type:'reasoning_error',code:'standalone_context_capacity_unverified',message:'No newer context-capable model is available.'})+'\n',
     {headers:{'content-type':'application/x-ndjson'}}));
-  assert.equal(stored.status,'failed');
   assert.match(await response.text(),/standalone_context_capacity_unverified/);
+  assert.equal(stored.status,'failed');
   assert.equal(executions,0,'no paid provider generation is required for technical failure');
 });
 
 test('assistant text mentioning an image limitation code is not execution authority',async()=>{
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(JSON.stringify({type:'content',text:'The error standalone_no_priceable_vision means there is no supported escalation.'})+'\n',{headers:{'content-type':'application/x-ndjson'}}));
- assert.equal(stored.status,'completed');assert.match(await response.text(),/standalone_no_priceable_vision/);
+ assert.match(await response.text(),/standalone_no_priceable_vision/);assert.equal(stored.status,'completed');
 });
 
 test('authenticated cron can resume only a paused accepted Qwen job, never create or change spending authority',async()=>{
@@ -128,7 +128,7 @@ test('authenticated cron can resume only a paused accepted Qwen job, never creat
    ? '{"type":"accounting_pause","code":"standalone_runpod_in_progress"}\n'
    : '{"type":"content","text":"image observed"}\n',
    {headers:{'content-type':'application/x-ndjson'}});};
-  await executeStandaloneWorkflow(request(),payload,execute);
+  await (await executeStandaloneWorkflow(request(),payload,execute)).text();
   assert.equal(stored.status,'paused');stored.error='StandaloneAccountingError: standalone_runpod_in_progress: Qwen still processing';
   let hasJob=true;
   const admin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ as unknown as Record<string,unknown>;
@@ -160,4 +160,57 @@ test('authenticated cron can resume only a paused accepted Qwen job, never creat
   if(savedSecret===undefined)delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET=savedSecret;
  }
+});
+
+
+test('standalone NDJSON forwards the first chunk while the workflow is still running',async()=>{
+ let source!:ReadableStreamDefaultController<Uint8Array>;
+ const encoder=new TextEncoder();
+ const initial='{"type":"metadata","modelId":"test-model"}\n';
+ const final='{"type":"content","text":"Hello from the saved assistant."}\n';
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(
+   new ReadableStream<Uint8Array>({start(controller){source=controller;controller.enqueue(encoder.encode(initial));}}),
+   {headers:{'content-type':'application/x-ndjson'}}
+ ));
+ assert.equal(response.headers.get('x-accel-buffering'),'no');
+ assert.equal(response.headers.get('cache-control'),'no-cache, no-transform');
+ const reader=response.body!.getReader();
+ const first=await reader.read();
+ assert.equal(new TextDecoder().decode(first.value),initial);
+ assert.equal(stored.status,'running','Do not block first response bytes on workflow settlement');
+ source.enqueue(encoder.encode(final));source.close();
+ const second=await reader.read();
+ assert.equal(new TextDecoder().decode(second.value),final);
+ assert.equal((await reader.read()).done,true);
+ assert.equal(stored.status,'completed');
+ const replay=await executeStandaloneWorkflow(request(),payload,async()=>{executions++;throw Error('Completed request must replay, not redispatch')});
+ assert.equal(await replay.text(),initial+final);
+ assert.equal(executions,0);
+});
+
+test('browser disconnect cannot abandon standalone settlement or durable replay',async()=>{
+ let source!:ReadableStreamDefaultController<Uint8Array>;
+ let confirmSettlement!:()=>void;
+ const settled=new Promise<void>(resolve=>{confirmSettlement=resolve;});
+ const admin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ as unknown as Record<string,unknown>;
+ const previousRpc=admin.rpc as (name:string,args:any)=>Promise<{data:any;error:unknown}>;
+ admin.rpc=async(name:string,args:any)=>{
+   const result=await previousRpc(name,args);
+   if(name==='standalone_finish_workflow')confirmSettlement();
+   return result;
+ };
+ const encoder=new TextEncoder();
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(
+   new ReadableStream<Uint8Array>({start(controller){source=controller;controller.enqueue(encoder.encode('{"type":"metadata"}\n'));}}),
+   {headers:{'content-type':'application/x-ndjson'}}
+ ));
+ const reader=response.body!.getReader();
+ assert.equal((await reader.read()).done,false);
+ await reader.cancel('Simulated browser navigation');
+ source.enqueue(encoder.encode('{"type":"content","text":"persisted after disconnect"}\n'));
+ source.close();
+ await settled;
+ assert.equal(stored.status,'completed');
+ const replay=await executeStandaloneWorkflow(request(),payload,async()=>{throw Error('No duplicate paid call')});
+ assert.match(await replay.text(),/persisted after disconnect/);
 });
