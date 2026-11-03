@@ -145,7 +145,7 @@ export function reducePreparedRequest(original:FrozenPreparedRequest,options:Red
       const candidateBody=JSON.parse(canonicalJson(body)) as JsonObject;
       if(candidateBody.model!==undefined)candidateBody.model=target;
       const sourceThinking=asObject(candidateBody.thinking),effort=asObject(candidateBody.output_config).effort;
-      const compatible=!(target==="claude-sonnet-4-6"&&effort==="xhigh")&&!(target==="claude-sonnet-5-5"&&sourceThinking.type==="disabled");
+      const compatible=!(target==="claude-sonnet-4-6"&&effort==="xhigh")&&!(target==="claude-sonnet-5-5"&&sourceThinking.type==="disabled")&&!(target==="gpt-5-mini"&&asObject(candidateBody.reasoning).effort==="xhigh");
       if(compatible) {
         const candidate=freezePreparedRequest(original.provider,target,original.endpoint,candidateBody),quote=estimatePreparedRequest(candidate,snapshot);
         if(smaller(quote,baseline)) {
