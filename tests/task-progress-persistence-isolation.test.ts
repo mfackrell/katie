@@ -173,7 +173,7 @@ test("ordinary conversation cannot recreate a project after restoration, retry, 
     assert.equal(afterRetry?.projects?.length,2);
     assert.equal(db.originals.length,1,"the source ledger was not rewritten");
     assert.equal(await saveTaskProgress(actor,chat,current),true);
-    assert.equal((await loadTaskProgress(actor,chat))?.projectContext,null);
+    assert.ok((await loadTaskProgress(actor,chat))?.projectContext == null,"saved conversation remains unbound");
     assert.equal(db.writes.length,2);
   });
 });
