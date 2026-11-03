@@ -105,13 +105,17 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
       responseTerminal = typeof finalUsage?.input_tokens === 'number' && typeof finalUsage?.output_tokens === 'number';
     }
     if (Array.isArray(item.choices) && item.choices.some(choice => choice && typeof choice === 'object' && typeof choice.finish_reason === 'string')) chatFinish = true;
-    // Gemini acknowledges a blocked request without candidate tokens. Only OTHER with
-    // explicit zero output (total equals prompt, no thoughts) is reconcilable.
+    // A blocked Gemini prompt has no generated candidates. Settle only when
+    // provider usage proves zero output; otherwise retain uncertain exposure.
     const feedback = item.promptFeedback as Record<string, unknown> | undefined;
     const blockUsage = item.usageMetadata as Record<string, unknown> | undefined;
-    if (provider === 'google' && feedback?.blockReason === 'OTHER' && !Array.isArray(item.candidates)
+    if (provider === 'google' && (feedback?.blockReason === 'OTHER' || feedback?.blockReason === 'PROHIBITED_CONTENT')
+      && !Array.isArray(item.candidates)
       && typeof blockUsage?.promptTokenCount === 'number'
+      && Number.isSafeInteger(blockUsage.promptTokenCount) && blockUsage.promptTokenCount >= 0
       && blockUsage?.totalTokenCount === blockUsage.promptTokenCount
+      && (blockUsage.candidatesTokenCount === undefined || blockUsage.candidatesTokenCount === 0)
+      && (blockUsage.toolUsePromptTokenCount === undefined || blockUsage.toolUsePromptTokenCount === 0)
       && (blockUsage.thoughtsTokenCount === undefined || blockUsage.thoughtsTokenCount === 0)) {
       googleTerminal = true;
       googleFinalUsage = true;
