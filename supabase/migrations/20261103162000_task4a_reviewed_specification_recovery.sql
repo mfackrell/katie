@@ -72,7 +72,11 @@ begin
   where id='dd46bc5a-50cf-49fe-a8dd-ab36e52d6d73'::uuid
    and mission_id=m.id and job_key='review_again' and role='review'
    and status='completed' and attempts=1 for update;
- if revision.id is null or reviewer.id is null or reviewer.result->>'verdict'<>'pass'
+ if revision.id is null or reviewer.id is null
+  or revision.dependencies is distinct from array['review']::text[]
+  or reviewer.dependencies is distinct from array['revision']::text[]
+  or reviewer.updated_at<revision.updated_at
+  or reviewer.result->>'verdict'<>'pass'
   or jsonb_typeof(reviewer.result->'checks')<>'array'
   or jsonb_array_length(reviewer.result->'checks')<>6
   or exists(select 1 from jsonb_array_elements(reviewer.result->'checks') c
