@@ -6,7 +6,7 @@ const chat = readFileSync("components/chat-panel.tsx", "utf8");
 const view = readFileSync("components/structured-response-view.tsx", "utf8");
 
 test("canonical assistant Markdown remains visible when rich blocks are present", () => {
-  assert.match(chat, /<AssistantMarkdown>\{message\.content\}<\/AssistantMarkdown>/);
+  assert.match(chat, /<MemoizedAssistantMarkdown>\{message\.content\}<\/MemoizedAssistantMarkdown>/);
   assert.match(chat, /message\.presentation && <StructuredResponseView/);
   assert.doesNotMatch(chat, /message\.presentation \? <StructuredResponseView/);
 });
