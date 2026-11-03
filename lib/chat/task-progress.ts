@@ -31,7 +31,10 @@ export type ProjectTransition = {
   clarification?: string;
 };
 export type TaskWorkProduct = {projectId:string;assistantMessageId:string;text:string;request:{userMessageId:string;text:string};requestSources?:Array<{userMessageId:string;text:string}>};
+export type ProjectAuthority = { kind: "user-work"; sourceMessageId: string };
 export type ProjectSnapshot = {
+  /** Server-derived from a firsthand user-owned assignment; never from attachment observations. */
+  projectAuthority?: ProjectAuthority;
   workProduct?: TaskWorkProduct;
   sourceChatId?: string;
   updatedAt?: string;
@@ -46,6 +49,7 @@ export type TaskProgressState = {
   /** Per-active-project criteria version; ordinary revisions do not increment it. */
   requirementsRevision?: number;
   projects?: ProjectSnapshot[];
+  projectAuthority?: ProjectAuthority;
   workProduct?: TaskWorkProduct;
   projectClarification?: string;
   objective: { text: string; userMessageId: string } | null;
@@ -222,6 +226,21 @@ function isWorkOrigin(text: string): boolean {
 }
 
 /** Social banter is not an implicit project brief, even in legacy ledgers. */
+/** An actual user-authored work request, not conversational or attachment-derived text. */
+export function isUserWorkAssignment(text: string): boolean {
+  if (isWorkOrigin(text)) return true;
+  // Structured briefs may begin with a title instead of an imperative. Require
+  // task sections AND an action in their body, not a particular title/phrase.
+  const sections = [...text.matchAll(/(?:^|\n)\s*#{1,4}\s+[^\n]+/g)];
+  return sections.length >= 2 &&
+    /(?:^|\n)\s*#{1,4}\s*(?:mission|scope|deliverables|requirements|objectives?)\b/im.test(text) &&
+    /(?:^|\n)\s*(?:[-*]\s*)?(?:conduct|perform|analy[sz]e|review|investigate|evaluate|prepare|create|implement|deliver|produce|build|design)\b/im.test(text);
+}
+
+export function hasProjectAuthority(source: {userMessageId:string} | null | undefined, authority?: ProjectAuthority): boolean {
+  return Boolean(source && authority?.kind === "user-work" && authority.sourceMessageId === source.userMessageId);
+}
+
 function isCompanionOrigin(text: string): boolean {
   const trimmed = text.trim();
   if (isWorkOrigin(trimmed)) return false;
@@ -244,6 +263,7 @@ function checkpointProject(state: TaskProgressState, changed = false): TaskProgr
     ...(sourceChatId ? {sourceChatId} : {}),
     ...(updatedAt ? {updatedAt} : {}),
     projectContext: state.projectContext, objective: state.objective,
+    projectAuthority: state.projectAuthority,
     pending: state.pending, answered: state.answered,
     workProduct: state.workProduct,
     requirementsRevision: state.requirementsRevision ?? 1,
@@ -259,20 +279,28 @@ export function mergeTaskProjects(state: TaskProgressState, projects: ProjectSna
   for (const project of [...projects, ...(checkpointProject(state).projects ?? [])]) {
     const id = project.projectContext.userMessageId;
     const prior = byId.get(id);
-    if (!prior || (project.updatedAt ?? "") >= (prior.updatedAt ?? "")) byId.set(id, project);
+    if (!prior ||
+        (hasProjectAuthority(project.projectContext, project.projectAuthority) &&
+          !hasProjectAuthority(prior.projectContext, prior.projectAuthority)) ||
+        (hasProjectAuthority(project.projectContext, project.projectAuthority) ===
+          hasProjectAuthority(prior.projectContext, prior.projectAuthority) &&
+          (project.updatedAt ?? "") >= (prior.updatedAt ?? ""))) byId.set(id, project);
   }
   const current = state.projectContext ? byId.get(state.projectContext.userMessageId) : undefined;
   return { ...state, ...(current ? {projectContext: current.projectContext,
     objective: current.objective, pending: current.pending, answered: current.answered,
     workProduct: current.workProduct,
+    projectAuthority: current.projectAuthority,
     requirementsRevision: current.requirementsRevision ?? 1} : {}),
     projects: [...byId.values()] };
 }
 
 export function taskProjectCatalog(state: TaskProgressState): Array<{ id: string; text: string; sourceChatId?: string }> {
-  return (checkpointProject(state).projects ?? []).map(project => ({
-    id: project.projectContext.userMessageId, text: project.projectContext.text, sourceChatId: project.sourceChatId,
-  }));
+  return (checkpointProject(state).projects ?? [])
+    .filter(project => hasProjectAuthority(project.projectContext, project.projectAuthority))
+    .map(project => ({
+      id: project.projectContext.userMessageId, text: project.projectContext.text, sourceChatId: project.sourceChatId,
+    }));
 }
 
 /** Firsthand user biography/profile is durable personal context, not project scope. */
@@ -292,7 +320,9 @@ export function isolateCompanionProgress(previous: TaskProgressState): TaskProgr
   return legacyCasualProject ? {
     ...previous, projectContext: null, objective: null, pending: [], answered: [],
     workProduct: undefined, projectClarification: undefined,
-    projects: previous.projects?.filter(project => isWorkOrigin(project.projectContext.text)),
+    // Preserve inactive legacy snapshots for audit/recovery, but do not
+    // advertise them as resumable without source authority.
+    projects: previous.projects, projectAuthority: undefined,
     stage: "working" as const, nextAction: "continue_original_goal" as const,
   } : previous;
 }
@@ -301,8 +331,8 @@ export function applyUserToTaskProgress(
   previous: TaskProgressState,
   input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
 ): TaskProgressState {
-  if (previous.lastUserMessageId === input.messageId) return previous;
   const cleanPrevious = isolateCompanionProgress(previous);
+  if (cleanPrevious.lastUserMessageId === input.messageId) return cleanPrevious;
   const state = checkpointProject({...cleanPrevious,lastUserSource:{userMessageId:input.messageId,text:input.text}});
   const transition = input.projectTransition;
   const turnIntent = classifyUserTurn(input.text);
@@ -314,15 +344,14 @@ export function applyUserToTaskProgress(
       stage: "working", nextAction: "continue_original_goal",
       lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
   }
-  // A greeting must not become a synthetic project that legitimizes a later
-  // otherwise ambiguous application question.
-  if (!state.projectContext && !transition && isCompanionOrigin(input.text)) {
-    return { ...state, objective: null, pending: [], answered: [],
-      lastUserMessageId: input.messageId, lastUserIntent: "conversation",
-      stage: "working", nextAction: "continue_original_goal" };
-  }
-  if (!state.projectContext && !transition && turnIntent === "conversation") {
-    return { ...state, lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
+  // An unbound exchange has no project authority. Only a firsthand work
+  // assignment or a source-verified transition may start a durable project.
+  // Classification of an ordinary reply as "continuation" is not permission.
+  if (!state.projectContext && !transition && !isUserWorkAssignment(input.text) &&
+      !(state.projects?.length && /^(?:continue|resume|return|go back|back to)\b/i.test(input.text.trim()))) {
+    return { ...state, objective: null, pending: [], answered: [], workProduct: undefined,
+      projectClarification: undefined, lastUserMessageId: input.messageId,
+      lastUserIntent: "conversation", stage: "working", nextAction: "continue_original_goal" };
   }
   if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
       turnIntent !== "conversation" && !isProjectBrief(input.text) &&
@@ -350,7 +379,8 @@ export function applyUserToTaskProgress(
   }
   if (transition?.action === "resume") {
     const target = state.projects?.find(project => project.projectContext.userMessageId === transition.projectId);
-    if (!target) return { ...state, lastUserMessageId: input.messageId,
+    if (!target || !hasProjectAuthority(target.projectContext, target.projectAuthority))
+      return { ...state, lastUserMessageId: input.messageId,
       projectClarification: "Which saved project do you want to resume? The proposed project could not be found." };
     // A pure resume preserves the original deliverable and its contract.
     // A resume that also specifies substantial additional work starts a new
@@ -360,7 +390,7 @@ export function applyUserToTaskProgress(
       ? { text: input.text, userMessageId: input.messageId }
       : (target.objective ?? { text: input.text, userMessageId: input.messageId });
     return checkpointProject({ ...state, ...target, projectClarification: undefined,
-      objective: resumeObjective,
+      projectAuthority: target.projectAuthority, objective: resumeObjective,
       workProduct: target.workProduct,
       lastUserMessageId: input.messageId, lastAssistantMessageId: null,
       lastUserIntent: "continuation", stage: target.pending.length ? "awaiting_user_answer" : "working",
@@ -382,7 +412,12 @@ export function applyUserToTaskProgress(
   const relation = transition?.action === "new" ? "new_project"
     : transition?.action === "resume" ? "same_project"
     : input.projectRelation === "new_project" ? undefined : input.projectRelation;
-  const next = applyUserTurn({ ...state, projectClarification: undefined }, { ...input, projectRelation: relation });
+  const startsWork = transition?.action === "new" ||
+    (!state.projectContext && isUserWorkAssignment(input.text)) ||
+    (relation !== "same_project" && isProjectBrief(input.text) &&
+      input.text !== state.projectContext?.text);
+  const next = applyUserTurn({ ...state, projectClarification: undefined },
+    { ...input, projectRelation: startsWork ? "new_project" : relation });
   return checkpointProject(next, true);
 }
 
@@ -402,7 +437,7 @@ function applyUserTurn(
       currentQuestion !== (previous.projectContext ?? previous.objective)?.text);
   const projectContext = startsNewProject
     ? {text: currentQuestion, userMessageId: input.messageId}
-    : (previous.projectContext ?? previous.objective ?? {text: currentQuestion, userMessageId: input.messageId});
+    : (previous.projectContext ?? null);
   const pending = previous.pending;
   const numbered = splitNumberedAnswers(text);
   const intent = startsNewProject ? "new_task" : classifyUserTurn(text);
@@ -433,7 +468,8 @@ function applyUserTurn(
     return {
       ...previous,
       projectContext,
-      ...(startsNewProject ? { requirementsRevision: 1 } : {}),
+      ...(startsNewProject ? { requirementsRevision: 1,
+        projectAuthority: {kind: "user-work" as const, sourceMessageId: input.messageId} } : {}),
       workProduct: startsNewProject ? undefined : previous.workProduct,
       ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion, userMessageId: input.messageId } } : {}),
       pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
@@ -476,7 +512,13 @@ export function applyAssistantToTaskProgress(
   input: { messageId: string; text: string; responsePurpose?: "conversation" | "deliverable"; retainWorkProduct?:boolean },
 ): TaskProgressState {
   if (previous.lastAssistantMessageId === input.messageId) return previous;
-  const questions = (previous.projectContext && !isCompanionOrigin(previous.projectContext.text)
+  const workBound = previous.projectContext &&
+    (hasProjectAuthority(previous.projectContext, previous.projectAuthority) ||
+      isUserWorkAssignment(previous.projectContext.text));
+  // A conversational answer is never a work-specification questionnaire.
+  // Preserve existing professional questions without adding social follow-ups.
+  const questions = (workBound && input.responsePurpose !== "conversation" &&
+    (input.responsePurpose === "deliverable" || previous.lastUserIntent !== "conversation")
     ? extractAssistantQuestions(input.text, input.messageId) : []).map(question => ({
     ...question,
     ...(previous.objective ? {
@@ -493,7 +535,7 @@ export function applyAssistantToTaskProgress(
       .slice(0, MAX_QUESTIONS)
     : questions;
   return checkpointProject({ ...previous,
-    ...(input.responsePurpose === "deliverable" && input.retainWorkProduct !== false && previous.projectContext && previous.objective ? {workProduct:{projectId:previous.projectContext.userMessageId,assistantMessageId:input.messageId,text:input.text,request:previous.lastUserSource ?? previous.objective,requestSources:previous.lastUserIntent === "new_task" ? [] : [...(previous.workProduct?.requestSources ?? []),...(previous.workProduct ? [previous.workProduct.request] : [])].filter((item,index,all)=>all.findIndex(other=>other.userMessageId===item.userMessageId)===index)}} : {}),
+    ...(input.responsePurpose === "deliverable" && input.retainWorkProduct !== false && workBound && previous.objective ? {workProduct:{projectId:previous.projectContext.userMessageId,assistantMessageId:input.messageId,text:input.text,request:previous.lastUserSource ?? previous.objective,requestSources:previous.lastUserIntent === "new_task" ? [] : [...(previous.workProduct?.requestSources ?? []),...(previous.workProduct ? [previous.workProduct.request] : [])].filter((item,index,all)=>all.findIndex(other=>other.userMessageId===item.userMessageId)===index)}} : {}),
     pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId }, true);
 }
 
@@ -520,9 +562,9 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
     const recent = rebuildTaskProgress(history);
     // A recent role brief supersedes an old cached project. A window that
     // starts at a screening subquestion must retain the established project.
-    const recentProjectIsExplicit = recent.projectContext && isProjectBrief(recent.projectContext.text);
+    const recentProjectIsExplicit = hasProjectAuthority(recent.projectContext, recent.projectAuthority);
     const changedProject = recentProjectIsExplicit && recent.projectContext?.userMessageId !== previous.projectContext?.userMessageId;
-    const projectContext = recentProjectIsExplicit ? recent.projectContext : previous.projectContext ?? previous.objective ?? recent.projectContext;
+    const projectContext = recentProjectIsExplicit ? recent.projectContext : previous.projectContext ?? recent.projectContext;
     const recoverProjectBinding = <T extends TaskQuestion>(question: T): T =>
       projectContext && (!question.projectId || question.projectId === recent.projectContext?.userMessageId)
         ? { ...question, projectId: projectContext.userMessageId }
@@ -534,6 +576,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
       objective: recent.objective ?? previous.objective,
       workProduct: changedProject ? recent.workProduct : previous.workProduct,
       projectContext,
+      projectAuthority: changedProject ? recent.projectAuthority : previous.projectAuthority,
       requirementsRevision: changedProject ? (recent.requirementsRevision ?? 1) : (previous.requirementsRevision ?? 1),
       pending: recent.pending.map(recoverProjectBinding),
       answered: [...(changedProject ? [] : previous.answered), ...recent.answered.map(recoverProjectBinding)]
