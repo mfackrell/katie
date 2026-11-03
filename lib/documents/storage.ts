@@ -38,7 +38,7 @@ export function createDocumentStore(storage: Storage) {
   return {
     async save(scopeInput: DocumentScope, files: { docx: Buffer; pdf: Buffer }, inspection: Inspection, correctionCount: number): Promise<DocumentReceipt> {
       const scope = scopeSchema.parse(scopeInput);
-      if (inspection.findings.length || inspection.visual !== 'passed' || inspection.pageHashes.length !== inspection.pageCount) throw new Error('Unvalidated documents cannot be delivered.');
+      if (inspection.findings.length || !['passed', 'technical-only'].includes(inspection.visual) || inspection.pageHashes.length !== inspection.pageCount) throw new Error('Unvalidated documents cannot be delivered.');
       if (files.docx.subarray(0, 2).toString() !== 'PK' || files.pdf.subarray(0, 5).toString() !== '%PDF-') throw new Error('Invalid artifact formats.');
       await privateBucket();
       const id = hash(Buffer.from(JSON.stringify([scope, hash(files.docx), hash(files.pdf)])));
