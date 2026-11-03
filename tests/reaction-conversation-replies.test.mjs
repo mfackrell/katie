@@ -14,6 +14,8 @@ test('saved reaction creates durable obligation and server owns generation',()=>
  assert.match(migration,/create trigger reaction_reply_enqueue after insert on public.actor_reaction_events/);
  assert.match(migration,/for update skip locked/);
  assert.match(route,/processReactionReply\(job.id,req.nextUrl.origin\)/);
+ assert.equal((route.match(/await authorizeStandaloneCaller\(req,actorId,chatId\)/g)||[]).length,2);
+ assert.match(route,/status:403/);
  assert.match(worker,/executeVerifiedReactionReplyChat/);
  assert.match(worker,/executeVerifiedReactionReplyChat\(request,job.id\)/);
  assert.doesNotMatch(worker,/POST as executeNormalChat/);
