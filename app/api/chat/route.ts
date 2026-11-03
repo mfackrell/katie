@@ -2280,8 +2280,8 @@ ${savedProjectSourceWarning.retainedObjective}`;
           const requestStartedAtMs = Date.now();
           let firstReasoningUpdateAtMs: number | null = null;
           let reasoningUpdateCount = 0;
-          const reasoningState = new ReasoningStateAccumulator(requestId, [...DEFAULT_REASONING_CATEGORIES]);
-          let lastSnapshotEmitAt = Date.now();
+          const reasoningState = new ReasoningStateAccumulator(requestId, []);
+          
           const emitChunk = (chunk: Record<string, unknown>) => {
             if (streamCancelled) {
               return;
@@ -2324,6 +2324,11 @@ ${savedProjectSourceWarning.retainedObjective}`;
 
             const startEvent = reasoningState.start();
             emitChunk(startEvent);
+            // This is observable workflow activity, never answer text or a
+            // fabricated account of the model's hidden internal reasoning.
+            const progress = (stage: string, message: string) =>
+              emitChunk({ type: "processing_update", stage, message });
+            progress("context", "Context prepared; saving the conversation turn.");
             for(const stage of [...new Set(imageObservationStages)])emitChunk({type:'metadata',imageObservation:stage,detail:stage});
             console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
@@ -2373,6 +2378,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             });
 
             await saveTaskProgress(actorId, chatId, taskProgress);
+            progress("generation", "Conversation saved. Generating the response with the selected model.");
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask() && !documentProduction;
             if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
@@ -2390,19 +2396,8 @@ ${savedProjectSourceWarning.retainedObjective}`;
               const visibleDelta = presentationFilter ? presentationFilter.write(screenedDelta) : screenedDelta;
               if (!visibleDelta) return;
               emitChunk({ type: "delta", text: visibleDelta });
-              const reasoningUpdate = reasoningState.addDelta(visibleDelta);
-              if (reasoningUpdate) {
-                reasoningUpdateCount += 1;
-                if (firstReasoningUpdateAtMs === null) {
-                  firstReasoningUpdateAtMs = Date.now();
-                }
-                emitChunk(reasoningUpdate);
-
-                if (Date.now() - lastSnapshotEmitAt > 900 || reasoningUpdateCount % 6 === 0) {
-                  emitChunk(reasoningState.snapshot());
-                  lastSnapshotEmitAt = Date.now();
-                }
-              }
+              if (firstReasoningUpdateAtMs === null) firstReasoningUpdateAtMs = Date.now();
+              // Answer tokens are NEVER republished as reasoning or progress.
             };
 
             let pendingVideoAssistantMessageId: string | null = null;
@@ -3717,6 +3712,7 @@ ${chunkWorkflowSummary}`;
               const tail = presentationFilter.finish();
               if (tail) emitChunk({ type: "delta", text: tail });
             }
+            progress("save", "Response generated; saving the final answer.");
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
             if (!currentStandaloneWorkflow()?.resumed || !await getMessageById(chatId, assistantMessageId)) await saveMessage(chatId, {
@@ -3729,6 +3725,7 @@ ${chunkWorkflowSummary}`;
             });
             emitChunk({
               type: "content",
+              messageId: assistantMessageId,
               text: assistantText,
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
               assets: imageAssets,
@@ -3738,6 +3735,9 @@ ${chunkWorkflowSummary}`;
             const finalAnswerEvent = reasoningState.finalize(assistantText);
             emitChunk(reasoningState.snapshot());
             emitChunk(finalAnswerEvent);
+            // Final answer is durably saved and may be shown immediately, even
+            // while the rest of the request continues through accounting.
+            progress("post_answer", "Answer saved. Finalizing request records and memory.");
             if (visualContinuity && imageAssets.length) {
               // Group images never become identity anchors; an explicit portrait correction may replace one.
               try {
@@ -3793,6 +3793,7 @@ ${chunkWorkflowSummary}`;
             // Each standalone job checkpoints independently; a spending pause
             // remains resumable even when the answer is already saved.
             const persistAccountedMemory = async () => {
+              progress("memory", "Answer delivered; checking conversation memory.");
               console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
               try {
                 const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateRelevantLongTermMemory(actorId, chatId, message));
@@ -3821,12 +3822,14 @@ ${chunkWorkflowSummary}`;
                 const summaryResult = memoryResults[1];
                 const degraded = memoryResults.some(result => result.status === "rejected") ||
                   (summaryResult.status === "fulfilled" && summaryResult.value === "blocked");
+                progress("memory", degraded ? "Memory processing needs attention; the saved answer remains available." : "Memory processing completed.");
                 console.log(degraded ? "[Chat API] Memory persistence degraded" : "[Chat API] Memory persistence complete", {
                   actorId, chatId, requestId,
                   intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
                 });
               } catch (error) {
                 if (isStandaloneAccountingError(error)) throw error;
+                progress("memory", "Memory update failed; the saved answer remains available.");
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)
