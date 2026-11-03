@@ -16,5 +16,5 @@ test('central conversation progress owns live assistant text while the right rai
   assert.match(chat, /aria-label="Katie response progress"/);
   assert.match(chat, /aria-label="Streaming assistant response"/);
   assert.match(chat, /<AssistantMarkdown>\{streamingAnswer\}<\/AssistantMarkdown>/);
-  assert.match(chat, /if \(chunk\.type === "delta"\) \{\s*textContent \+= chunk\.text;\s*setStreamingAnswer\(textContent\)/);
+  assert.match(chat, /if \(chunk\.type === "delta"\) \{\s*textContent \+= chunk\.text;\s*if \(!answerCommitted\) setStreamingAnswer\(textContent\)/);
 });
