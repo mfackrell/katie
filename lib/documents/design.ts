@@ -21,7 +21,15 @@ export const designAssessmentSchema = z.object({
   }).strict()).max(8),
   actions: z.array(designActionSchema).max(2),
   comparison: z.enum(['not_applicable', 'improved', 'unchanged', 'regressed']),
-}).strict();
+}).strict().superRefine((report, ctx) => {
+  const hasMaterial = report.issues.some(issue => issue.severity === 'material');
+  if (report.verdict === 'pass' && (hasMaterial || report.actions.length))
+    ctx.addIssue({code:'custom', message:'A design PASS cannot carry material problems or repair actions.'});
+  if (report.verdict === 'repair' && (!hasMaterial || !report.actions.length))
+    ctx.addIssue({code:'custom', message:'A design REPAIR requires material evidence and a bounded action.'});
+  if (report.verdict === 'blocked' && report.actions.length)
+    ctx.addIssue({code:'custom', message:'Blocked designs cannot request automatic repair actions.'});
+});
 export type DesignAssessment = z.infer<typeof designAssessmentSchema>;
 
 export const DEFAULT_DESIGN: DesignControls = Object.freeze({
