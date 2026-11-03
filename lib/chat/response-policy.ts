@@ -104,7 +104,11 @@ export function decideResponsePolicy(input: {
 
   // A question about what was asked pauses production even when the same
   // message also answers a different part of a multi-part clarification.
-  if (isTerminologyClarification(input.message)) return policy("conversation", "terminology_clarification");
+  if (isTerminologyClarification(input.message)) return policy(
+    "conversation", "terminology_clarification",
+    !input.hasPendingDeliverable && input.responsePurpose === "conversation" &&
+      (input.intent == null || CONVERSATIONAL_INTENTS.has(input.intent)),
+  );
   const message = input.message.trim();
   if (ACKNOWLEDGMENT.test(message) || GREETING.test(message))
     return policy("conversation", "acknowledgment_or_greeting",
@@ -112,7 +116,10 @@ export function decideResponsePolicy(input: {
   if (BARE_CONFIRMATION.test(message)) {
     return input.hasPendingDeliverable
       ? policy("deliverable", "confirmation_of_pending_work")
-      : policy("conversation", "standalone_confirmation", personalConversationalTurn(message, input.intent));
+      : policy("conversation", "standalone_confirmation",
+        personalConversationalTurn(message, input.intent) ||
+          (input.responsePurpose === "conversation" &&
+            (input.intent == null || CONVERSATIONAL_INTENTS.has(input.intent))));
   }
 
   // Output purpose can be mislabeled by the classifier when interpersonal
