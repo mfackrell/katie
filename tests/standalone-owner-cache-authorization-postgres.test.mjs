@@ -27,6 +27,7 @@ test('unreviewed cache metadata requires one explicit owner authorization before
     '20261029190000_standalone_actor_authority.sql',
     '20261029200000_standalone_uncertain_exposure_continuation.sql',
     '20261031011500_standalone_owner_selected_uncached.sql',
+    '20261103144209_exclude_cancelled_cache_authorization_recovery.sql',
   ]) await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const one=await connect('service_role'),other=await connect('service_role');
   const owner=randomUUID(),outsider=randomUUID(),actor=randomUUID(),chat=randomUUID(),request='owner-selected-uncached';
@@ -67,7 +68,19 @@ test('unreviewed cache metadata requires one explicit owner authorization before
   const oldLease=await rpc(one,'claim_workflow',oldWf);
   await rpc(one,'finish_workflow',{p_owner:owner,p_request:oldRequest,p_lease:oldLease.lease_token,p_status:'paused',
     p_result:{body:'{"type":"accounting_pause","code":"standalone_unsupported_billing","message":"No reviewed no-fee cache metadata policy for this exact model"}\\n',status:200,headers:[]}});
-  assert.deepEqual(await rpc(one,'owner_cache_authorization_recovery',{p_owner:owner,p_actor:actor,p_chat:chat}),{requestId:oldRequest});
+  assert.deepEqual(await rpc(one,'owner_cache_authorization_recovery',{p_owner:owner,p_actor:actor,p_chat:chat}),{requestId:oldRequest},
+    'A legitimate uncancelled saved request must retain its authorization path');
+  await assert.rejects(rpc(other,'owner_cache_authorization_recovery',{p_owner:outsider,p_actor:actor,p_chat:chat}),/STANDALONE_SCOPE_DENIED/);
+
+  // Simulate the real reset: a cancelled original attempt has a retained
+  // billing pause in the workflow result. Cancellation fences the request,
+  // so the owner must not see a new authorization invitation for it.
+  // Rehome the existing synthetic attempt solely inside this isolated DB.
+  await admin.query('update standalone_provider_attempts set request_id=$1 where id=$2',[oldRequest,attempt.id]);
+  const cancelled=await rpc(one,'cancel',{p_owner:owner,p_attempt:attempt.id});
+  assert.ok(cancelled.cancelled_by_owner_at,'Cancellation receipt must be retained');
+  assert.equal(await rpc(one,'owner_cache_authorization_recovery',{p_owner:owner,p_actor:actor,p_chat:chat}),null,
+    'A cancelled request must not reappear as a recoverable cache approval');
   await assert.rejects(rpc(other,'owner_cache_authorization_recovery',{p_owner:outsider,p_actor:actor,p_chat:chat}),/STANDALONE_SCOPE_DENIED/);
 
  } finally {
