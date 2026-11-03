@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   applyAssistantToTaskProgress, applyUserToTaskProgress, emptyTaskProgress,
-  rebuildTaskProgress,
+  rebuildTaskProgress, taskProjectCatalog,
 } from "../lib/chat/task-progress";
 import { decideResponsePolicy } from "../lib/chat/response-policy";
 
@@ -41,8 +41,9 @@ test("legacy synthetic conversation state is retired without deleting legitimate
   assert.equal(next.projectContext, null);
   assert.equal(next.objective, null);
   assert.deepEqual(next.pending, []);
-  assert.equal(next.projects?.length, 1);
-  assert.equal(next.projects?.[0].projectContext.userMessageId, "work");
+  assert.equal(next.projects?.length, 2, "historical snapshots remain for audit");
+  assert.deepEqual(taskProjectCatalog(next).map(project => project.id), ["work"],
+    "only authenticated work can be offered as an active project");
 });
 
 test("professional finance and coding projects retain pending questions and answer linkage", () => {
