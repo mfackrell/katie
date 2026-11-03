@@ -296,3 +296,51 @@ test("professional conversational detours retain existing restrictive task bound
     assert.equal(result.generationInstruction, originalWorkConversationInstruction, fixture.message);
   }
 });
+
+
+test("contextual personal purpose survives short answers, corrections and topic changes", () => {
+  const fixtures = [
+    { message: "Yes", intent: "general-text", reason: "standalone_confirmation" },
+    { message: "What did you mean by that?", intent: "general-text", reason: "terminology_clarification" },
+    { message: "I disagree with that.", intent: "general-text", reason: "contextual_personal_conversation" },
+    { message: "It's another place to find projects, but I am not sure it is useful.", intent: "general-text", reason: "contextual_personal_conversation" },
+    { message: "What would you like to discuss next?", intent: "assistant-reflection", reason: "contextual_personal_conversation" },
+    { message: "The work is never really finished.", intent: "social-emotional", reason: "personal_conversation" },
+  ];
+  for (const fixture of fixtures) {
+    const result = decideResponsePolicy({
+      message: fixture.message, intent: fixture.intent, responsePurpose: "conversation",
+      hasPendingDeliverable: false,
+    });
+    assert.equal(result.purpose, "conversation", fixture.message);
+    assert.equal(result.reason, fixture.reason, fixture.message);
+    assert.match(result.generationInstruction ?? "", /NEXT RESPONSE: a natural personal conversation/);
+    assert.doesNotMatch(result.generationInstruction ?? "", /normally under 150 words|ask at most one necessary follow-up/);
+  }
+});
+
+test("real professional work and project confirmations retain the execution boundary", () => {
+  for (const fixture of [
+    { message: "Analyze the forecast.", intent: "general-text", responsePurpose: "conversation" },
+    { message: "Review the provider selection algorithm.", intent: "assistant-reflection", responsePurpose: "conversation" },
+    { message: "Write the professional application answer.", intent: "social-emotional", responsePurpose: "conversation" },
+    { message: "Yes", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
+    { message: "Proceed", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
+    { message: "Review this source", intent: "assistant-reflection", responsePurpose: "conversation", requiresTools: true },
+  ] as const) {
+    const result = decideResponsePolicy(fixture);
+    assert.equal(result.purpose, "deliverable", fixture.message);
+    assert.equal(result.generationInstruction, null, fixture.message);
+  }
+  for (const fixture of [
+    { message: "What does WIP mean?", intent: "general-text", hasPendingDeliverable: true },
+    { message: "What did you mean by sponsor reporting?", intent: "general-text", hasPendingDeliverable: true },
+    { message: "Explain the EAC versus ETC calculation.", intent: "technical-debugging", hasPendingDeliverable: false },
+    { message: "I feel uneasy about this client. What does that mean for our work?", intent: "social-emotional", hasPendingDeliverable: true },
+  ] as const) {
+    const result = decideResponsePolicy({ ...fixture, responsePurpose: "conversation" });
+    assert.equal(result.purpose, "conversation", fixture.message);
+    assert.match(result.generationInstruction ?? "", /NEXT RESPONSE: a brief conversational answer or clarification/);
+    assert.doesNotMatch(result.generationInstruction ?? "", /NEXT RESPONSE: a natural personal conversation/);
+  }
+});

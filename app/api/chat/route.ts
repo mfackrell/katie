@@ -1828,14 +1828,25 @@ async function executeChat(request: NextRequest) {
         verificationRetry: verifyingSavedDraft, actorId, chatId,
       });
     }
+    // A historical ledger is not evidence of pending work unless its source
+    // still binds to this user turn. The task prompt selector already excludes
+    // synthetic conversation projects and unrelated saved assignments.
+    const sourceLinkedPendingWork = Boolean(
+      taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer" &&
+      selectTaskProgressPrompt({
+        message, currentUserMessageId: taskProgressUserMessageId, history,
+        progress: reviewTaskProgress, responsePurpose: "deliverable",
+        managedTask: Boolean(currentAgentTask()),
+        explicitProjectControl, explicitSavedProjectReference,
+        pendingReviewContinuation: false,
+        projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+      }).text
+    );
     const responsePolicy = decideResponsePolicy({
       message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
       hasAttachments: attachments.length > 0 || images.length > 0,
       requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
-      hasPendingDeliverable: Boolean(
-        (taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer") ||
-        pendingReviewClarification
-      ),
+      hasPendingDeliverable: sourceLinkedPendingWork || Boolean(pendingReviewClarification),
       explicitReviewRetry: verifyingSavedDraft,
     });
     const taskProgressPrompt = selectTaskProgressPrompt({
