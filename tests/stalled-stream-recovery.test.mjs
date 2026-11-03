@@ -6,7 +6,7 @@ const ui=readFileSync('components/chat-panel.tsx','utf8');
 const status=readFileSync('app/api/chat/status/route.ts','utf8');
 const workflow=readFileSync('lib/standalone-accounting/workflow.ts','utf8');
 const server=readFileSync('app/api/chat/route.ts','utf8');
-const composer=readFileSync('components/chat-composer.tsx','utf8');
+const composer=readFileSync('components/chat-composer-input.tsx','utf8');
 
 test('in-flight stream watchdog checks only the original authorized saved request',()=>{
   const start=ui.indexOf('recoveryWatchdogTimer = window.setInterval(');
@@ -69,6 +69,7 @@ test('saved answer is rendered normally while post-answer work remains visible',
   assert.match(ui,/setMessagesByChatId\(cache => \(\{\.\.\.cache,\[chatId\]:saved\.messages!\}\)\)/);
 });
 test('PR 981 isolated composer remains in place and not reimplemented in chat panel',()=>{
-  assert.match(ui,/<ChatComposer/);
-  assert.match(composer,/useState/);
+  assert.match(ui,/<ChatComposerInput/);
+  assert.match(composer,/export const ChatComposerInput = memo/);
+  assert.match(composer,/const \[value, setValue\] = useState/);
 });
