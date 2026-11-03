@@ -114,7 +114,7 @@ test("exactly 30 displaced messages invoke separate summarize and curate prompts
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2);
   assert.equal(h.calls[0].body.max_tokens,2300);
-  assert.equal(h.calls[1].body.max_tokens,10000);
+  assert.equal(h.calls[1].body.max_tokens,4000);
   assert.equal(h.calls[0].body.messages[0].content.includes("source"),false);
   assert.match(h.calls[0].body.messages[0].content,/USER.*Historical detail from turn 0/);
   assert.match(h.calls[0].body.messages[0].content,/ASSISTANT.*Historical detail from turn 29/);
@@ -262,22 +262,24 @@ test("a stale checkpoint claim and a concurrent moved checkpoint never write ove
 });
 
 
-test("v4 permits one attempt for the v3-blocked batch and retains older failure evidence",async()=>{
+test("v5 permits one explicitly versioned attempt for a v4-blocked batch and retains older failure evidence",async()=>{
   const prior={version:2,summary:"P".repeat(14774),summarizedThroughMessageId:"m1",sourceMessageCount:2};
   const h=harness({history:messageHistory(92),prior,
     responses:n=>reply(n===1?"Only the 30 new source messages.":"A concise fully reconciled ITM.")});
   // Simulates the production v1 circuit breaker preserved in Postgres.
   const batchEnd="m31";
   h.claims.set("two-stage-30-messages-v1:"+batchEnd,"blocked");
-  h.claims.set("two-stage-30-messages-v2-reconcile-10000:"+batchEnd,"blocked");
+  h.claims.set("two-stage-30-messages-v2-reconcile-4000:"+batchEnd,"blocked");
   h.claims.set("two-stage-30-messages-v3-priority-recovery:"+batchEnd,"blocked");
+  h.claims.set("two-stage-30-messages-v4-episodic-continuity:"+batchEnd,"blocked");
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2,"one two-stage paid attempt under the corrected processor");
-  assert.equal(h.calls[1].body.max_tokens,10000);
+  assert.equal(h.calls[1].body.max_tokens,4000);
   const claim=h.events.find(e=>e.name==="claim_intermediate_memory_batch");
-  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v4-episodic-continuity");
+  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v5-selective-recovery");
   assert.equal(h.claims.get("two-stage-30-messages-v3-priority-recovery:"+batchEnd),"blocked");
-  assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-10000:"+batchEnd),"blocked");
+  assert.equal(h.claims.get("two-stage-30-messages-v4-episodic-continuity:"+batchEnd),"blocked");
+  assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-4000:"+batchEnd),"blocked");
   assert.equal(h.claims.get("two-stage-30-messages-v1:"+batchEnd),"blocked",
     "old failure evidence must remain untouched");
   assert.equal(h.memory().summarizedThroughMessageId,batchEnd);
@@ -286,27 +288,27 @@ test("v4 permits one attempt for the v3-blocked batch and retains older failure 
   assert.equal(h.calls.length,2,"do not repeat the successful batch");
 });
 
-test("10,000 reconciliation tokens support a near-ceiling prior ITM with a concise complete result",async()=>{
+test("4,000 reconciliation tokens support a near-ceiling prior ITM with a concise complete result",async()=>{
   const prior={version:2,summary:"Important prior context. ".repeat(670).slice(0,14774),
     summarizedThroughMessageId:"m1",sourceMessageCount:2};
   const concise="Curated continuity. ".repeat(340).slice(0,6500).trim();
   const h=harness({history:messageHistory(92),prior,
     responses:n=>reply(n===1?"New batch corrections and decisions.":concise)});
   assert.equal(await h.run(),"committed");
-  assert.equal(h.calls[1].body.max_tokens,10000);
+  assert.equal(h.calls[1].body.max_tokens,4000);
   assert.ok(h.calls[1].body.messages[0].content.includes(prior.summary));
   assert.equal(h.memory().summary,concise);
   assert.ok(h.memory().summary.length<=15000,"hard character ceiling must still be enforced");
   assert.equal(h.memory().summarizedThroughMessageId,"m31");
 });
 
-test("even with 10,000 output tokens an incomplete reconciliation fails closed and is not retried",async()=>{
+test("even with 4,000 output tokens an incomplete reconciliation fails closed and is not retried",async()=>{
   const prior={version:2,summary:"Keep all existing context.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
   const h=harness({history:messageHistory(92),prior,
     responses:n=>n===1?reply("Relevant new changes."):reply("Partial output","max_tokens")});
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,2);
-  assert.equal(h.calls[1].body.max_tokens,10000);
+  assert.equal(h.calls[1].body.max_tokens,4000);
   assert.equal(h.writes.length,0);
   assert.deepEqual(h.memory(),prior);
   assert.equal(await h.run(),"blocked");
@@ -329,7 +331,7 @@ test("15,276-character completed reconciliation gets one priority recovery and a
     responses:n=>reply(n===1?newFacts:n===2?verbose:compact)});
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,3);
-  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,10000,4000]);
+  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,4000,4000]);
   assert.ok(h.calls[1].body.system.includes("ITM is rolling memory, not an archive"));
   assert.ok(h.calls[2].body.system.includes("KEEP: recognizable recent topics"));
   assert.ok(h.calls[2].body.system.includes("DROP: permanent biography"));
@@ -366,7 +368,7 @@ test("priority recovery with max_tokens is rejected, checkpoint retained, no fou
   assert.deepEqual(h.memory(),prior);
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,3);
-  assert.equal(h.claims.get("two-stage-30-messages-v4-episodic-continuity:m31"),"blocked");
+  assert.equal(h.claims.get("two-stage-30-messages-v5-selective-recovery:m31"),"blocked");
 });
 
 test("recovery payment or approval denial does not trigger further calls or replace ITM",async()=>{
@@ -399,7 +401,7 @@ test("all three ITM prompts retain conversational episodes rather than LTM biogr
   assert.match(editor,/PRESERVE unfinished discussions/);
   assert.match(editor,/DO NOT preserve lasting biographical facts/);
   assert.match(editor,/Give reasonable priority to recent conversations/);
-  assert.match(editor,/MAXIMUM OUTPUT: 6,000 characters/);
+  assert.match(editor,/HARD OUTPUT TARGET: at most 6,000 characters/);
   assert.match(editor,/DROP the least useful episodes/);
   assert.doesNotMatch(editor,/Retention order:|enduring context and important qualifications|chronological inventory/i);
   assert.match(h.calls[1].body.messages[0].content,/6,000 characters/);
@@ -410,12 +412,12 @@ test("all three ITM prompts retain conversational episodes rather than LTM biogr
 test("single recovery applies the same episodic-only retention rules without raising budgets",async()=>{
   const h=harness({responses:n=>reply(n===1?"New open discussion.":n===2?"X".repeat(11386):"Recent unresolved topic.")});
   assert.equal(await h.run(),"committed");
-  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,10000,4000]);
+  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,4000,4000]);
   const editor=h.calls[2].body.system;
   assert.match(editor,/What were we talking about the other day/);
   assert.match(editor,/DROP: permanent biography/);
   assert.match(editor,/KEEP older discussions when they are still open/);
-  assert.match(editor,/MAXIMUM OUTPUT: 6,000 characters/);
+  assert.match(editor,/HARD OUTPUT TARGET: at most 6,000 characters/);
   assert.match(h.calls[2].body.messages[0].content,/6,000 characters/);
   assert.equal(h.memory().summary,"Recent unresolved topic.");
   assert.equal(h.writes.length,1);
