@@ -225,7 +225,6 @@ function isWorkOrigin(text: string): boolean {
     /^(?:new\s+(?:task|project|engagement)|(?:interim|fractional)\s+(?:cfo|controller)|(?:cfo|controller)\s+(?:role|position|opportunity))\b/i.test(trimmed);
 }
 
-/** Social banter is not an implicit project brief, even in legacy ledgers. */
 /** An actual user-authored work request, not conversational or attachment-derived text. */
 export function isUserWorkAssignment(text: string): boolean {
   if (isWorkOrigin(text)) return true;
@@ -241,6 +240,7 @@ export function hasProjectAuthority(source: {userMessageId:string} | null | unde
   return Boolean(source && authority?.kind === "user-work" && authority.sourceMessageId === source.userMessageId);
 }
 
+/** Legacy social text fallback; new authority comes from persisted user sources. */
 function isCompanionOrigin(text: string): boolean {
   const trimmed = text.trim();
   if (isWorkOrigin(trimmed)) return false;
@@ -535,7 +535,7 @@ export function applyAssistantToTaskProgress(
       .slice(0, MAX_QUESTIONS)
     : questions;
   return checkpointProject({ ...previous,
-    ...(input.responsePurpose === "deliverable" && input.retainWorkProduct !== false && workBound && previous.objective ? {workProduct:{projectId:previous.projectContext.userMessageId,assistantMessageId:input.messageId,text:input.text,request:previous.lastUserSource ?? previous.objective,requestSources:previous.lastUserIntent === "new_task" ? [] : [...(previous.workProduct?.requestSources ?? []),...(previous.workProduct ? [previous.workProduct.request] : [])].filter((item,index,all)=>all.findIndex(other=>other.userMessageId===item.userMessageId)===index)}} : {}),
+    ...(input.responsePurpose === "deliverable" && input.retainWorkProduct !== false && workBound && previous.projectContext && previous.objective ? {workProduct:{projectId:previous.projectContext.userMessageId,assistantMessageId:input.messageId,text:input.text,request:previous.lastUserSource ?? previous.objective,requestSources:previous.lastUserIntent === "new_task" ? [] : [...(previous.workProduct?.requestSources ?? []),...(previous.workProduct ? [previous.workProduct.request] : [])].filter((item,index,all)=>all.findIndex(other=>other.userMessageId===item.userMessageId)===index)}} : {}),
     pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId }, true);
 }
 
