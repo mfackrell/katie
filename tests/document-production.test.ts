@@ -58,7 +58,9 @@ test('document export retains Unicode arrows in DOCX and PDF text', {timeout:120
     assert.equal(rendered.inspection.pageCount,1);
     assert.deepEqual(rendered.inspection.findings,[],
       'Unicode glyphs must survive PDF generation and reading-order extraction without silent substitution.');
-    assert.equal(normalizedText(rendered.inspection.extractedText),normalizedText(contentText(spec)));
+    const extractedPdf = await rasterizePdf(browser,rendered.pdf);
+    assert.equal(pdfTextMatchesSource(extractedPdf.text,contentText(spec),extractedPdf.fragments),true,
+      'Retain exact glyph identity and reading order while permitting verified physical line wraps.');
   } finally {await browser.close();}
 });
 
