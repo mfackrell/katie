@@ -87,6 +87,15 @@ export async function verifyTask4aPregrantRecoveryPostgres(db){
   assert.equal((await one(db,'select status from agent_missions where id=$1',[mission])).status,'running');
   assert.equal((await one(db,'select status from mission_assignments where id=$1',[task])).status,'waiting_external');
   assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,child.id])).ok,true);
+  // The canonical dispatch claim replaces the task's active approval pointer,
+  // without invalidating the auditable pre-inference recovery receipt.
+  await db.query("update agent_tasks set external=external||jsonb_build_object('developerApprovalId',$2::text) where id=$1",[task,child.id]);
+  assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,child.id])).ok,true);
+  await db.query('savepoint negative_post_admission');
+  await db.query("insert into benchmark_execution_grants(id,developer_approval_id,project_id,mission_assignment_id,execution_epoch,deadline) values($1,$2,$3,$4,1,now()+interval '1 hour')",[randomUUID(),child.id,project,task]);
+  assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,child.id])).ok,false,'Existing native execution must prevent another pregrant claim');
+  await db.query('rollback to savepoint negative_post_admission');
+  await db.query('release savepoint negative_post_admission');
   assert.equal((await one(db,'select task4a_native_authority_ready($1,$2,$3) ok',[project,task,continuation])).ok,true);
   assert.equal((await one(db,'select count(*)::int n from benchmark_native_spending_approvals where project_id=$1',[project])).n,before.approvals+1);
   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
