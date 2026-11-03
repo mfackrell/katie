@@ -12,6 +12,10 @@ on:
       - 'tests/helpers/task4a-continuation-postgres.mjs'
       - 'tests/helpers/task4a-pregrant-recovery-postgres.mjs'
       - 'supabase/migrations/20261103181500_task4a_pregrant_recovery.sql'
+      - 'supabase/migrations/20261103225000_task4a_successor_continuation.sql'
+      - 'app/api/projects/task4a-successor/route.ts'
+      - 'components/task4a-successor-owner-approval.tsx'
+      - 'tests/task4a-successor-owner.test.mjs'
       - 'app/api/projects/task4a-native-recovery/route.ts'
       - 'components/task4a-native-recovery-approval.tsx'
       - 'tests/task4a-native-owner-recovery.test.mjs'
@@ -93,6 +97,8 @@ jobs:
         run: node --test tests/task4a-native-bridge.test.mjs
       - name: Verify original Task 4A owner-consented pregrant endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-native-owner-recovery.test.mjs
+      - name: Verify successor preview and affirmative owner consent endpoint
+        run: node --experimental-test-isolation=none --test tests/task4a-successor-owner.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
