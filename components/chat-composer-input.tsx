@@ -1,12 +1,12 @@
 "use client";
 
-import { memo, useEffect, useRef, useState, type ClipboardEventHandler, type KeyboardEventHandler, type ReactNode, type RefObject, type MutableRefObject } from "react";
+import { memo, useEffect, useRef, useState, type ClipboardEventHandler, type KeyboardEventHandler, type ReactNode, type MutableRefObject } from "react";
 
 type Props = {
   externalValue: string;
   resetVersion: number;
   currentValueRef: MutableRefObject<string>;
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  textareaRef: MutableRefObject<HTMLTextAreaElement | null>;
   onDraftChange: (value: string) => void;
   onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
   onPaste: ClipboardEventHandler<HTMLTextAreaElement>;
