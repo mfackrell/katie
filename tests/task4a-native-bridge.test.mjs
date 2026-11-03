@@ -8,6 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority} from '../scripts/benchmark/developer-dispatch-contract.mjs';
 import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract.mjs';
 import {projectMarker,contractHash} from '../scripts/project-context.mjs';
+import {requireTask4aNativeGrant} from '../scripts/benchmark/task4a-native-gate.mjs';
 import {forwardAuthorizedModelRequest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
 
 const id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
@@ -185,10 +186,11 @@ test('trusted workflow fails closed for an original Task4A project without an au
   assert.notEqual(copied.guard.status,0,'A signed Task 4A authority copied to another issue is invalid');
   assert.match(copied.guard.stderr,/TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
   const copiedWithoutProject=run(signed,970);
-  assert.equal(copiedWithoutProject.cli.status,0);
-  assert.equal(copiedWithoutProject.manifest.native,true);
-  assert.notEqual(copiedWithoutProject.guard.status,0,'Signed Task 4A proof remains bound when its project marker is erased');
-  assert.match(copiedWithoutProject.guard.stderr,/TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
+  assert.notEqual(copiedWithoutProject.cli.status,0,'Upstream native verifier must reject a signed handoff missing its project/task envelope');
+  // Even if that earlier verifier were bypassed, the independent workflow
+  // gate must reject valid signed Task 4A proof on an unrelated issue.
+  assert.throws(()=>requireTask4aNativeGrant(signed,null,approved.manifest,key,Date.now(),970),
+    /TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
 
   const stripped=run(originalHeader,969);
   assert.equal(stripped.cli.status,0);
