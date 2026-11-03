@@ -24,7 +24,7 @@ test("ordinary companion exchanges cannot create managed project obligations", (
   assert.equal(followup.objective, null);
   assert.deepEqual(followup.answered, []);
   assert.equal(decideResponsePolicy({ message: "yes", responsePurpose: "conversation",
-    hasPendingDeliverable: Boolean(followup.projectContext && followup.objective && followup.lastUserIntent === "answer") }).purpose, "conversation");
+    hasPendingDeliverable: Boolean(followup.projectContext && followup.objective && followup.answered.length) }).purpose, "conversation");
 });
 
 test("legacy synthetic conversation state is retired without deleting legitimate project snapshots", () => {
