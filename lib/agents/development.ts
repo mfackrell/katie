@@ -1,4 +1,4 @@
-import {encodeDeveloperHandoff,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
+import {encodeDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
@@ -716,8 +716,18 @@ async function dispatchOrdinaryNativeDevelopment(){
   const client=github(),binding=await repository(task);
   const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
   if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
-  const task4aId=typeof a.developer_authority?.task4aContinuationId==='string'?a.developer_authority.task4aContinuationId:null;
-  const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
+  // The original Task 4A is never eligible for an ordinary grant, even
+  // when an older owner decision mistakenly omitted its continuation binding.
+  let authority:ReturnType<typeof classifyDeveloperDispatchAuthority>;
+  try{authority=classifyDeveloperDispatchAuthority(c.projectId,a.developer_authority);}
+  catch{continue;}
+  if(authority.authorityKind==='task4a-developer'){
+    const verified=await db.rpc<boolean>('task4a_native_authority_ready',{
+      p_project:c.projectId,p_task:task.id,p_authority:authority.task4aContinuationId
+    });
+    if(verified.error||verified.data!==true)continue;
+  }
+  const proof:DeveloperDispatchPayload={...authority,taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
   const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
