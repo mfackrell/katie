@@ -127,7 +127,7 @@ test("legacy 14,774-character memory is compacted without asking a model to rewr
   const prior={
     version:2,
     summary:"Opening biographical details. ".repeat(18)+"\\n\\n**Latest engineering discussion**\\n- Unfinished repair awaiting verification.\\n"+
-      "**Older thread**\\n- Previously discussed details. ".repeat(320),
+      "**Older thread**\\n- Previously discussed details. ".repeat(500),
     summarizedThroughMessageId:"m1",sourceMessageCount:2,
   };
   assert.ok(prior.summary.length>14000);
