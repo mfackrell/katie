@@ -99,8 +99,8 @@ export function parseDocument(markdown: string, targetPages?: number): DocumentS
     else if (/^[-*+]\s/.test(line)) blocks.push({ kind: 'bullet', text: inline(line.slice(2)) });
     // A standalone bold line is an explicit structural label, not ordinary
     // body copy. Preserve that relationship so it stays with what follows.
-    else if (/^(?:\\*\\*(.+)\\*\\*|__(.+)__)$/u.test(line)) {
-      const label = line.replace(/^\\*\\*(.+)\\*\\*$/u, '$1').replace(/^__(.+)__$/u, '$1');
+    else if (/^(?:\*\*(.+)\*\*|__(.+)__)$/u.test(line)) {
+      const label = line.replace(/^\*\*(.+)\*\*$/u, '$1').replace(/^__(.+)__$/u, '$1');
       blocks.push({ kind: 'heading', level: 3, text: inline(label) });
     }
     else blocks.push({ kind: 'paragraph', text: inline(line) });
