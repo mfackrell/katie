@@ -1694,7 +1694,7 @@ export function ChatPanel({
     let lastStreamProgressAt = Date.now();
     let recoveryWatchdogClosed = false;
     let recoveryWatchdogBusy = false;
-    let recoveryWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+    let recoveryWatchdogTimer: number | null = null;
     let uploadedReferencesForRetry: FileReference[] | null = null;
     const clientRequestId = crypto.randomUUID();
 
