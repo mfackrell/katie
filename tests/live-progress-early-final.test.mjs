@@ -28,6 +28,8 @@ test('progress messages reflect observable actions rather than text-length score
  assert.match(panel,/if \(chunk\.type === "processing_update"\)/);
  assert.match(panel,/recordProcessingUpdate\(chunk\.stage,chunk\.message\)/);
  assert.match(activity,/processingActivity\.map/);
+ assert.match(panel,/aria-label="Katie live processing activity"/);
+ assert.match(panel,/processingActivity\.slice\(-3\)\.map/);
  assert.doesNotMatch(activity,/Live response preview|streamingAnswer\.slice/);
 });
 
