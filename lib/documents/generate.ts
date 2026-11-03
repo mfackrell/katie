@@ -2,7 +2,10 @@ import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, Width
 import type { Block, DocumentSpec } from './model';
 
 export const PAGE = { width: 612, height: 792, margin: 46.8, font: 11, maxPages: 8 } as const;
-export type Layout = { pages: number[][]; spacing: number; compact?: true };
+export type DesignControls = {
+  sectionGap: number; listGap: number; lineScale: number; hierarchy: number;
+};
+export type Layout = { pages: number[][]; spacing: number; compact?: true; design?: DesignControls };
 
 // Document hierarchy comes from explicit semantic blocks, not document-specific
 // keywords or model-invented presentation decisions. Body text remains 11pt.
@@ -29,21 +32,22 @@ export function documentPageStyle(layout?: Pick<Layout, 'compact'>) {
 /** Layout changes never alter text or shrink type. Explicit pages make pagination portable. */
 export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<Buffer> {
   const pageStyle = documentPageStyle(layout);
+  const design = layout.design ?? { sectionGap: 1, listGap: 1, lineScale: 1, hierarchy: 1 };
   const paragraph = (block: Exclude<Block, { kind: 'table' }>) => new Paragraph({
     heading: block.kind === 'heading' ? [HeadingLevel.TITLE, HeadingLevel.HEADING_1, HeadingLevel.HEADING_2][block.level - 1] : undefined,
     keepNext: block.kind === 'heading',
     keepLines: true,
     spacing: {
       before: block.kind === 'heading'
-        ? pageStyle.headingBeforeTwips * (block.level === 1 ? 2 : 1)
+        ? Math.round(pageStyle.headingBeforeTwips * (block.level === 1 ? 2 : 1) * design.sectionGap)
         : 0,
-      after: block.kind === 'heading' ? Math.max(layout.spacing, 4) * 20 : layout.spacing * 20,
-      line: pageStyle.lineTwips,
+      after: Math.round((block.kind === 'heading' ? Math.max(layout.spacing, 4) * design.sectionGap : layout.spacing * (block.kind === 'bullet' ? design.listGap : 1)) * 20),
+      line: Math.round(pageStyle.lineTwips * design.lineScale),
     },
     ...(block.kind === 'bullet' ? { numbering: { reference: 'document-bullets', level: 0 }, indent: { left: 240, hanging: 180 } } : {}),
     children: [new TextRun({
       text: block.text, font: 'Arial',
-      size: block.kind === 'heading' ? DOCUMENT_TYPE.headingHalfPoints[block.level - 1] : DOCUMENT_TYPE.bodyHalfPoints,
+      size: block.kind === 'heading' ? Math.round(DOCUMENT_TYPE.headingHalfPoints[block.level - 1] * design.hierarchy) : DOCUMENT_TYPE.bodyHalfPoints,
       bold: block.kind === 'heading',
       color: block.kind === 'heading' ? DOCUMENT_TYPE.headingColors[block.level - 1] : '20242A',
     })],
@@ -56,7 +60,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
         margins: { top: pageStyle.tableVerticalMarginTwips, bottom: pageStyle.tableVerticalMarginTwips, left: 80, right: 80 },
         shading: { fill: index === 0 ? 'E8E8E8' : 'FFFFFF' },
         borders: Object.fromEntries(['top', 'bottom', 'left', 'right'].map(side => [side, { style: BorderStyle.SINGLE, color: 'D9D9D9', size: 4 }])),
-        children: [new Paragraph({ spacing: { after: 0, line: pageStyle.lineTwips }, children: [new TextRun({ text: value, size: 22, font: 'Arial', bold: index === 0, color: '000000' })] })],
+        children: [new Paragraph({ spacing: { after: 0, line: Math.round(pageStyle.lineTwips * design.lineScale) }, children: [new TextRun({ text: value, size: 22, font: 'Arial', bold: index === 0, color: '000000' })] })],
       })),
     })),
   });
@@ -65,7 +69,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
     numbering: { config: [{ reference: 'document-bullets', levels: [{ level: 0, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT,
       style: { run: { font: 'Arial', size: 18 }, paragraph: { indent: { left: 240, hanging: 180 } } } }] }] },
     styles: { default: { document: { run: { font: 'Arial', size: 22, color: '000000' }, paragraph: { spacing: { line: pageStyle.lineTwips, after: layout.spacing * 20 } } } },
-      paragraphStyles: [{ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: DOCUMENT_TYPE.headingHalfPoints[0], color: DOCUMENT_TYPE.headingColors[0], bold: true } }] },
+      paragraphStyles: [{ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: Math.round(DOCUMENT_TYPE.headingHalfPoints[0] * design.hierarchy), color: DOCUMENT_TYPE.headingColors[0], bold: true } }] },
     sections: layout.pages.map(indices => ({
       properties: { page: { size: { width: PAGE.width * 20, height: PAGE.height * 20 }, margin: { top: pageStyle.margin * 20, bottom: pageStyle.margin * 20, left: pageStyle.margin * 20, right: pageStyle.margin * 20 } } },
       children: indices.map(index => spec.blocks[index].kind === 'table' ? table(spec.blocks[index] as Extract<Block, { kind: 'table' }>) : paragraph(spec.blocks[index] as Exclude<Block, { kind: 'table' }>)),
@@ -74,7 +78,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
 }
 
 /** Balanced contiguous partitions, respecting heading/next-block adjacency. Never drops content. */
-export function paginate(spec: DocumentSpec, heights: number[], pages: number, spacing = 4, compact?: true): Layout {
+export function paginate(spec: DocumentSpec, heights: number[], pages: number, spacing = 4, compact?: true, design?: DesignControls): Layout {
   if (heights.length !== spec.blocks.length || heights.some(h => !Number.isFinite(h) || h <= 0)) throw new Error('Incomplete document layout measurements.');
   const capacity = (PAGE.height - 2 * documentPageStyle({ compact }).margin - 12) * 96 / 72;
   const sums = [0]; for (const h of heights) sums.push(sums.at(-1)! + h);
@@ -101,5 +105,5 @@ export function paginate(spec: DocumentSpec, heights: number[], pages: number, s
   }
   const groups: number[][] = []; let end = heights.length;
   for (let p = pages; p > 0; p--) { const start = previous[p][end]; groups.unshift(Array.from({ length: end - start }, (_, i) => start + i)); end = start; }
-  return { pages: groups, spacing, ...(compact ? { compact } : {}) };
+  return { pages: groups, spacing, ...(compact ? { compact } : {}), ...(design ? { design } : {}) };
 }

@@ -17,7 +17,7 @@ import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } fr
 import { generateDocx, paginate, DocumentPageFitError, documentPageStyle, DOCUMENT_TYPE } from '../lib/documents/generate';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
-import { eligibleDocumentVisualCandidates, selectDocumentVisualInspector } from '../lib/documents/visual-routing';
+import { eligibleDocumentVisualCandidates, qualifiedDocumentDesignCandidates, selectDocumentVisualInspector } from '../lib/documents/visual-routing';
 import { PRICING_SNAPSHOT, type PricingSnapshot } from '../lib/standalone-accounting/pricing';
 import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
@@ -290,7 +290,10 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     assert.deepEqual(params.images?.map(image => hash(Buffer.from(image.split(',')[1], 'base64'))), QUALIFIED_PAGES);
     assert.equal(params.history.length, 0); assert.equal(params.summary, '');
     if (rejectInspection) throw blocked;
-    return { provider: 'anthropic', model: 'fixture-model', text: JSON.stringify({ pages: QUALIFIED_PAGES.map((_, i) => ({ page: i + 1, verdict: 'pass', repair: 'none', observations: 'Raster bytes exactly match the independently reviewed synthetic fixture baseline.' })) }) };
+    return { provider: 'anthropic', model: 'fixture-model', text: JSON.stringify({
+      pages: QUALIFIED_PAGES.map((_, i) => ({ page: i + 1, verdict: 'pass', repair: 'none', observations: 'Raster bytes exactly match the independently reviewed synthetic fixture baseline.' })),
+      design: { verdict:'pass',summary:'Verified professional document structure and readable hierarchy across all rendered pages.',issues:[],actions:[],comparison:'not_applicable' },
+    }) };
   } };
   const markdown = fixture.blocks.map(block => block.kind === 'heading' ? '#'.repeat(block.level) + ' ' + block.text : block.kind === 'bullet' ? '- ' + block.text : block.kind === 'paragraph' ? block.text : '').join('\n\n');
   const input = { result: { provider: 'anthropic' as const, model: 'fixture-model', text: markdown }, provider,
@@ -322,14 +325,16 @@ test('document page inspection selects a truly billable vision model before any 
   const unpriced = { provider: 'openai' as const, model: 'gpt-6.1-sol',
     inputNanoUsd: '150', outputNanoUsd: '600', maxContextTokens: 400000,
     maxOutputTokens: 16000, source: 'synthetic-only' };
-  const known = PRICING_SNAPSHOT.models.find(m => m.provider === 'openai' && m.model === 'gpt-4o-mini');
-  assert.ok(known?.vision);
+  const mini = PRICING_SNAPSHOT.models.find(m => m.provider === 'openai' && m.model === 'gpt-4o-mini');
+  const capable = PRICING_SNAPSHOT.models.find(m => m.provider === 'openai' && m.model === 'gpt-4o');
+  assert.ok(mini?.vision && capable?.vision);
   const pricing: PricingSnapshot = { ...PRICING_SNAPSHOT,version: 'document-vision-qualification-test',
-    models: [unpriced,known] };
+    models: [unpriced,mini,capable] };
   const provider = new OpenAiProvider('synthetic-test-key');
-  provider.listModels = async () => ['gpt-6.1-sol', 'gpt-4o-mini'];
+  provider.listModels = async () => ['gpt-6.1-sol', 'gpt-4o-mini', 'gpt-4o'];
   const eligible = eligibleDocumentVisualCandidates(pricing,[{provider,models:await provider.listModels()}]);
-  assert.deepEqual(eligible.map(item => item.modelId),['gpt-4o-mini']);
+  assert.deepEqual(eligible.map(item => item.modelId),['gpt-4o-mini','gpt-4o']);
+  assert.deepEqual(qualifiedDocumentDesignCandidates(eligible).map(item=>item.modelId),['gpt-4o']);
   const pixels = await sharp({create:{width:512,height:512,channels:3,background:{r:255,g:255,b:255}}}).png().toBuffer();
   const params = {name:'Document Inspector', persona:'Inspect the actual rendered page',
     summary:'', history:[], user:'Inspect the included PDF page image', requestIntent:'vision-analysis',
@@ -342,7 +347,7 @@ test('document page inspection selects a truly billable vision model before any 
       const selected=await selectDocumentVisualInspector({params,activity:'document-visual-0',
         providers:[provider],pricing});
       assert.equal(selected.provider.name,'openai');
-      assert.equal(selected.modelId,'gpt-4o-mini');
+      assert.equal(selected.modelId,'gpt-4o');
       assert.equal(getAccountingScope()?.kind,'standalone');
       const current=getAccountingScope();
       if (current?.kind === 'standalone') assert.equal(current.counter.size,0,
@@ -352,8 +357,14 @@ test('document page inspection selects a truly billable vision model before any 
     await assert.rejects(selectDocumentVisualInspector({
       params,activity:'document-visual-1',providers:[provider],
       pricing:{...pricing,models:[unpriced]},
-    }),/No currently available document-inspection model has verified image pricing/);
+    }),/No available priceable vision model meets the professional-design reasoning threshold/);
     assert.equal(networkCalls,0,'Unpriced-only models must fail closed without provider calls');
+    await assert.rejects(selectDocumentVisualInspector({
+      params,activity:'document-visual-2',providers:[provider],
+      pricing:{...pricing,models:[mini]},
+    }),/professional-design reasoning threshold/);
+    assert.equal(networkCalls,0,'Cheap vision-only candidates cannot certify professional design');
+
   } finally {globalThis.fetch=oldFetch;}
 });
 
