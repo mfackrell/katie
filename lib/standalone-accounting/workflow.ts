@@ -78,27 +78,68 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
       // result also makes reconnects independent of browser memory.
       const reader=response.body?.getReader();
       if(!reader) {await finish(response.ok?'completed':'failed');return response;}
+      const ndjson=response.headers.get('content-type')?.includes('ndjson')??false;
       const chunks:Uint8Array[]=[];let byteLength=0;
-      while(true){const {value,done}=await reader.read();if(done)break;chunks.push(value);byteLength+=value.byteLength;}
-      const bytes=new Uint8Array(byteLength);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
-      const body=new TextDecoder().decode(bytes);
-      const events = response.headers.get('content-type')?.includes('ndjson') ? body.split('\n').flatMap(line => {try {return [JSON.parse(line)];} catch {return [];} }) : [];
-      let jsonError:unknown;try{jsonError=JSON.parse(body);}catch{/* Streaming body is parsed above. */}
-      const technicalEvent=[...events,...(jsonError&&typeof jsonError==='object'?[jsonError]:[])].find(event=>
-        (['accounting_pause','error','reasoning_error'].includes(event.type)||event.error)&&standaloneTechnicalBlocker(event.code));
-      const technical=Boolean(technicalEvent);
-      const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
-      const executionFailure = events.find(event => event.type === 'error' || event.type === 'reasoning_error');
-      const failureMessage = technicalEvent ? String(technicalEvent.code)+': '+String(technicalEvent.message??technicalEvent.error??'Image inspection is unsupported.').slice(0,1800) : executionFailure ? String(executionFailure.message ?? executionFailure.error ?? 'Saved request execution failed.') : undefined;
-      const result={body,status:response.status,headers:Array.from(response.headers.entries())};
-      const finished = await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
-      if (finished.status === 'paused' && !paused && !executionFailure && !technical) {
-        // PostgreSQL also fences optional work whose caller caught a denial.
-        // Never complete a parent while a hidden paid approval remains pending.
-        const notice = {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
-        if (response.headers.get('content-type')?.includes('ndjson')) return new Response(body + (body.endsWith('\n') ? '' : '\n') + JSON.stringify(notice) + '\n',{status:response.status,headers:response.headers});
-        return NextResponse.json(notice,{status:402});
+      const record=(chunk:Uint8Array)=>{chunks.push(chunk);byteLength+=chunk.byteLength;};
+      const collected=()=>{const bytes=new Uint8Array(byteLength);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}return bytes;};
+      const settle=async(bytes:Uint8Array)=>{
+        const body=new TextDecoder().decode(bytes);
+        const events=ndjson ? body.split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}}) : [];
+        let jsonError:unknown;try{jsonError=JSON.parse(body);}catch{/* Streaming body is parsed above. */}
+        const technicalEvent=[...events,...(jsonError&&typeof jsonError==='object'?[jsonError]:[])].find(event=>
+          (['accounting_pause','error','reasoning_error'].includes(event.type)||event.error)&&standaloneTechnicalBlocker(event.code));
+        const technical=Boolean(technicalEvent);
+        const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
+        const executionFailure=events.find(event=>event.type==='error'||event.type==='reasoning_error');
+        const failureMessage=technicalEvent ? String(technicalEvent.code)+': '+String(technicalEvent.message??technicalEvent.error??'Image inspection is unsupported.').slice(0,1800) : executionFailure ? String(executionFailure.message??executionFailure.error??'Saved request execution failed.') : undefined;
+        const result={body,status:response.status,headers:Array.from(response.headers.entries())};
+        const finished=await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
+        if(finished.status==='paused'&&!paused&&!executionFailure&&!technical)
+          return {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
+        return null;
+      };
+
+      if(ndjson){
+        // Do not wait for the entire standalone workflow before returning HTTP.
+        // Forward bytes as generated while retaining an exact durable replay
+        // and completing the accounting lease before the stream is closed.
+        let disconnected=false;
+        const passthrough=new ReadableStream<Uint8Array>({
+          start(controller){
+            void (async()=>{
+              try{
+                while(true){
+                  const {value,done}=await reader.read();
+                  if(done)break;
+                  if(value){record(value);if(!disconnected)controller.enqueue(value);}
+                }
+                const notice=await settle(collected());
+                if(notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify(notice)+'\n'));
+                if(!disconnected)controller.close();
+              }catch(error){
+                // A stream read or settlement failure must not silently count
+                // as completed work or abandon an owner-fenced workflow.
+                try{await finish('failed',undefined,standaloneFailureDetails(error));}
+                catch(finishError){console.error('[Standalone Workflow] Failed to record stream failure',finishError);}
+                if(!disconnected)controller.error(error);
+              }
+            })();
+          },
+          // A browser disconnect never cancels the source: paid generation
+          // must reach its saved accounting/replay checkpoint.
+          cancel(){disconnected=true;}
+        });
+        const headers=new Headers(response.headers);
+        headers.set('Cache-Control','no-cache, no-transform');
+        headers.set('X-Accel-Buffering','no');
+        headers.delete('Content-Length');
+        return new Response(passthrough,{status:response.status,headers});
       }
+
+      while(true){const {value,done}=await reader.read();if(done)break;if(value)record(value);}
+      const bytes=collected();
+      const notice=await settle(bytes);
+      if(notice)return NextResponse.json(notice,{status:402});
       return new Response(bytes,{status:response.status,headers:response.headers});
     }));
   } catch(error) {
