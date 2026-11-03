@@ -142,7 +142,7 @@ function parseEpisodePlan(raw: string, priorCount: number): EpisodePlan {
   const obj = parsed as Record<string, unknown>;
   if (!Array.isArray(obj.keep) || !Array.isArray(obj.revise) || !Array.isArray(obj.add))
     throw new Error("Incomplete ITM episode plan");
-  const validIndex = (n: unknown): n is number => Number.isInteger(n) && typeof n === "number" && n >= 0 && n < priorCount;
+  const validIndex = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0 && n < priorCount;
   if (!obj.keep.every(validIndex) ||
       !obj.revise.every(x => !!x && typeof x === "object" && !Array.isArray(x) &&
         Array.isArray((x as EpisodeEdit).indexes) && (x as EpisodeEdit).indexes.length > 0 &&
