@@ -123,7 +123,7 @@ test('different document structures preserve technical integrity without a requi
     for (const spec of specs) {
       const layout={pages:[spec.blocks.map((_,i)=>i)],spacing:4};
       const bytes=await generateDocx(spec,layout);
-      const rendered=await renderDocument(browser,bytes,spec,layout);
+      const rendered=await renderDocument(browser,bytes,spec);
       assert.equal(rendered.inspection.pageCount,1);
       assert.deepEqual(rendered.inspection.findings,[]);
       assert.ok(rendered.images[0].length>2500);
