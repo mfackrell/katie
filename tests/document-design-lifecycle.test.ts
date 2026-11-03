@@ -142,7 +142,7 @@ test('unproven or regressed design revision returns the original validated bytes
           originalHash=rendered.inspection.pageHashes[0];
           return improvementReport();
         }
-        return {...acceptanceReport(),design:{...acceptanceReport().design!,comparison:'regressed'}};
+        return {...acceptanceReport(),design:{...acceptanceReport().design!,comparison:'regressed' as const}};
       },
     });
     assert.equal(calls,2);
