@@ -71,7 +71,7 @@ begin
     and a.evidence->>'kind'='provider_receipt'
     and a.evidence->>'pricedModel'=a.model
     and a.evidence->>'pricingVersion'=a.pricing_version
-    and a.evidence ? 'historicalCostCorrection' is false
+    and not (a.evidence ? 'historicalCostCorrection')
     and jsonb_typeof(a.usage->'cost_in_usd_ticks')='number'
     and (a.usage->>'cost_in_usd_ticks')::numeric/10000>a.actual_microusd
     and (a.usage#>>'{completion_tokens_details,reasoning_tokens}')::numeric>0
