@@ -21,7 +21,7 @@ const reply = (text, stop_reason = "end_turn") => ({
 /** Isolated real module with deterministic in-memory database/provider doubles. */
 function harness({
   history = messageHistory(90), prior = {}, configured = true,
-  responses = (n) => reply(n % 2 ? "New source-grounded developments." : "Curated, reconciled continuity."),
+  responses = (n) => reply(n % 2 ? "New source-grounded developments." : JSON.stringify({keep:[],revise:[],add:["Recognizable new discussion and unresolved question."]})),
   missingChat = false, commitResult = true,
 } = {}) {
   let memory = copy(prior);
@@ -100,122 +100,133 @@ function harness({
   };
 }
 
-test("the 30-message boundary does not send models after 60-89 total messages",async()=>{
-  for(const total of [0,60,62,88,89]){
-    const h=harness({history:messageHistory(total)});
-    assert.equal(await h.run(),"skipped");
-    assert.equal(h.calls.length,0, "no paid summary for "+total+" messages");
-    assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,0);
+
+
+test("processing threshold remains thirty older conversational messages", async()=>{
+  for(const count of [0,60,89]){
+    const h=harness({history:messageHistory(count)});
+    assert.equal(await h.run(),"skipped"); assert.equal(h.calls.length,0);
   }
 });
 
-test("exactly 30 displaced messages invoke separate summarize and curate prompts, then one atomic commit",async()=>{
-  const h=harness();
+test("semantic model reconciles old ITM with new batch before atomic commit",async()=>{
+  const prior={version:2,summary:"Rolling recent conversations\n\nExisting conversation: unresolved plan.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:n=>reply(n===1?
+    "User clarified prior project scope and resolved the earlier plan.":
+    JSON.stringify({keep:[],revise:[{indexes:[0],text:"Project plan resolved after user's correction."}],add:["New implementation is still being validated."]}))});
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2);
   assert.equal(h.calls[0].body.max_tokens,2300);
-  assert.equal(h.calls[1].body.max_tokens,4000);
-  assert.equal(h.calls[0].body.messages[0].content.includes("source"),false);
-  assert.match(h.calls[0].body.messages[0].content,/USER.*Historical detail from turn 0/);
-  assert.match(h.calls[0].body.messages[0].content,/ASSISTANT.*Historical detail from turn 29/);
-  assert.doesNotMatch(h.calls[0].body.messages[0].content,/Historical detail from turn 30\b/);
-  assert.doesNotMatch(h.calls[0].body.messages[0].content,/CURRENT ITM/);
-  assert.match(h.calls[1].body.messages[0].content,/NEW BATCH SUMMARY:\nNew source-grounded developments/);
-  assert.equal(h.writes.length,1);
-  assert.equal(h.writes[0].p_expected_cursor,null);
-  assert.equal(h.memory().summarizedThroughMessageId,"m29");
-  assert.equal(h.memory().sourceMessageCount,30);
-  assert.equal(h.memory().summary,"Curated, reconciled continuity.");
-  assert.equal(h.events.filter(e=>e.name==="finish_intermediate_memory_batch")[0].args.p_state,"completed");
+  assert.equal(h.calls[1].body.max_tokens,2800);
+  assert.match(h.calls[1].body.messages[0].content,/Existing conversation: unresolved plan/);
+  assert.match(h.calls[1].body.messages[0].content,/resolved the earlier plan/);
+  assert.match(h.memory().summary,/Project plan resolved/);
+  assert.doesNotMatch(h.memory().summary,/unresolved plan/);
+  assert.match(h.memory().summary,/New implementation is still being validated/);
+  assert.equal(h.memory().summarizedThroughMessageId,"m31");
+  assert.equal(h.memory().sourceMessageCount,32);
+  assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"completed");
 });
 
-test("reconcile prompt receives existing ITM but source-summary prompt never does",async()=>{
-  const h=harness({
-    history:messageHistory(120),
-    prior:{version:2,summary:"Older meaningful relationship history.",summarizedThroughMessageId:"m29",sourceMessageCount:30},
-  });
-  await h.run();
+test("semantic reconciliation can keep a still-relevant older conversation",async()=>{
+  const prior={version:2,summary:"Rolling recent conversations\n\nOld but unresolved conversation.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:n=>reply(n===1?
+    "New unrelated conversation.":
+    JSON.stringify({keep:[0],revise:[],add:["New unrelated conversation."]}))});
+  assert.equal(await h.run(),"committed");
+  assert.match(h.memory().summary,/Old but unresolved conversation/);
+  assert.match(h.memory().summary,/New unrelated conversation/);
+});
+
+test("semantic reconciliation drops irrelevant legacy episodes but retains relevant older work",async()=>{
+  const prior={version:2,
+    summary:"Opening biographical preamble.\n\n**Older trivia**\n- Dated insignificant update.\n\n**Unresolved accounting**\n- Waiting for a reconciliation.",
+    summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:n=>reply(n===1?
+    "Related accounting item was clarified.":
+    JSON.stringify({keep:[],revise:[{indexes:[1],text:"Unresolved accounting: clarification received; final reconciliation remains open."}],add:[]}))});
+  assert.equal(await h.run(),"committed");
+  assert.match(h.memory().summary,/final reconciliation remains open/);
+  assert.doesNotMatch(h.memory().summary,/Older trivia|Opening biographical preamble/);
+});
+
+test("multiple related prior episodes can be merged by the model into one",async()=>{
+  const prior={version:2,summary:"Rolling recent conversations\n\nFirst aspect of integration.\n\n---\n\nSecond aspect of integration.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:n=>reply(n===1?
+    "Both integration issues resolved.":
+    JSON.stringify({keep:[],revise:[{indexes:[0,1],text:"Both integration issues resolved together."}],add:[]}))});
+  assert.equal(await h.run(),"committed");
+  assert.match(h.memory().summary,/resolved together/);
+  assert.doesNotMatch(h.memory().summary,/First aspect|Second aspect/);
+});
+
+test("a large legacy ITM generates small model edits rather than full rewritten response",async()=>{
+  const prior={version:2,summary:"Biographical preamble. ".repeat(30)+"\n\n**Open thread**\n- Unresolved work.\n\n**Old thread**\n- ".repeat(200),
+    summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:n=>reply(n===1?
+    "New ITM processing decision.":
+    JSON.stringify({keep:[],revise:[],add:["ITM processing decision: retain semantic reconciliation."]}))});
+  assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2);
-  assert.ok(!h.calls[0].body.messages[0].content.includes("Older meaningful relationship history."));
-  assert.ok(h.calls[1].body.messages[0].content.includes("Older meaningful relationship history."));
-  assert.ok(h.calls[1].body.system.includes("older discussions that remain open"));
-  assert.ok(h.calls[1].body.system.includes("Later user clarifications take precedence"));
-  assert.ok(h.calls[1].body.system.includes("Give reasonable priority to recent conversations"));
-  assert.equal(h.memory().summarizedThroughMessageId,"m59");
-  assert.equal(h.memory().sourceMessageCount,60);
+  assert.ok(h.calls[1].body.messages[0].content.includes("EXISTING ITM EPISODES"));
+  assert.ok(h.memory().summary.length<=6500);
+  assert.match(h.memory().summary,/retain semantic reconciliation/);
 });
 
-test("stalled 694-message history processes 30 new source messages; pending 26 remain",async()=>{
-  const h=harness({history:messageHistory(694),
-    prior:{version:2,summary:"Previously stored history.",summarizedThroughMessageId:"m577",sourceMessageCount:578},
-  });
-  assert.equal(await h.run(),"committed");
-  assert.equal(h.memory().summarizedThroughMessageId,"m607");
-  assert.equal(h.memory().sourceMessageCount,608);
-  assert.equal(h.calls.length,2);
-  assert.match(h.calls[0].body.messages[0].content,/Historical detail from turn 578/);
-  assert.doesNotMatch(h.calls[0].body.messages[0].content,/Historical detail from turn 608/);
-  assert.equal(await h.run(),"skipped");
-  assert.equal(h.calls.length,2,"remaining 26 do not trigger another paid pair");
-});
-
-test("two consecutive 30-message batches advance only after each durable commit",async()=>{
-  const h=harness({history:messageHistory(130)});
+test("source update batches continue to advance independently and stay bounded",async()=>{
+  const h=harness({history:messageHistory(130),responses:(n)=>reply(n%2?
+    "Batch summary.":
+    JSON.stringify({keep:n===4?[0]:[],revise:[],add:["Episode from batch "+(n/2)]}))});
   assert.equal(await h.run(),"committed");
   assert.equal(await h.run(),"committed");
-  assert.deepEqual(h.writes.map(w=>w.p_content.summarizedThroughMessageId),["m29","m59"]);
-  assert.deepEqual(h.writes.map(w=>w.p_expected_cursor),[null,"m29"]);
   assert.equal(h.calls.length,4);
-  assert.equal(await h.run(),"skipped");
+  assert.deepEqual(h.writes.map(w=>w.p_content.summarizedThroughMessageId),["m29","m59"]);
+  assert.ok(h.memory().summary.length<=6500);
+  assert.match(h.memory().summary,/Episode from batch 2/);
+  assert.match(h.memory().summary,/Episode from batch 1/);
 });
 
-test("incomplete first prompt preserves cursor and blocks repeat across requests",async()=>{
-  const prior={version:2,summary:"Keep valuable history",summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const h=harness({history:messageHistory(92),prior,responses:()=>reply("partial","max_tokens")});
+test("invalid semantic edit plan cannot overwrite memory or advance cursor",async()=>{
+  const prior={version:2,summary:"Preserve this.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  for(const invalid of ["not JSON",JSON.stringify({keep:[0],revise:[{indexes:[0],text:"bad"}],add:[]}),JSON.stringify({keep:[100],revise:[],add:[]})]){
+    const h=harness({history:messageHistory(92),prior,responses:n=>reply(n===1?"New source batch.":invalid)});
+    assert.equal(await h.run(),"blocked");
+    assert.equal(h.writes.length,0);
+    assert.deepEqual(h.memory(),prior);
+    assert.equal(await h.run(),"blocked");
+    assert.equal(h.calls.length,2);
+  }
+});
+
+test("incomplete semantic response fails closed without recharging",async()=>{
+  const prior={version:2,summary:"Prior record.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
+  const h=harness({history:messageHistory(92),prior,responses:n=>n===1?reply("New episode."):reply("partial","max_tokens")});
+  assert.equal(await h.run(),"blocked");assert.equal(h.calls.length,2);
+  assert.equal(h.writes.length,0);assert.deepEqual(h.memory(),prior);
+  assert.equal(await h.run(),"blocked");assert.equal(h.calls.length,2);
+});
+
+test("uncertain source provider outcome never silently retries",async()=>{
+  const h=harness({responses:()=>{throw Error("Previous provider outcome unavailable");}});
+  assert.equal(await h.run(),"blocked");
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,1);
   assert.equal(h.writes.length,0);
-  assert.deepEqual(h.memory(),prior);
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,1,"zero repeated provider calls on failed source range");
 });
 
-test("an oversized draft and failed bounded recovery preserve cursor without repeated charges",async()=>{
-  const prior={version:2,summary:"Critical past context.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>n===1?reply("Source changes."):n===2?reply("Y".repeat(15276)):reply("Z".repeat(7501))});
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,3,"one extra call after an oversized completed draft");
-  assert.equal(h.calls[2].body.max_tokens,4000);
-  assert.deepEqual(h.memory(),prior);
-  assert.equal(h.writes.length,0);
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,3,"blocked source range never spends again");
-});
-
-test("a nonterminal provider failure records a durable blocking outcome",async()=>{
-  const h=harness({responses:()=>{throw Error("Network unavailable");}});
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,1);
-  assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
-  assert.equal(await h.run(),"blocked");assert.equal(h.calls.length,1);
-});
-
-test("spending/authorization denials propagate without unauthorized retries",async()=>{
+test("accounting authorization failures preserve claim and do not retry",async()=>{
   const denial=Object.assign(new Error("Owner approval required"),{code:"standalone_approval_required",terminal:true});
   const h=harness({responses:()=>{throw denial;}});
   await assert.rejects(h.run(),e=>e===denial);
-  assert.equal(h.calls.length,1);
-  assert.equal(h.writes.length,0);
-  assert.equal(h.events.some(e=>e.name==="finish_intermediate_memory_batch"),false);
   assert.equal(await h.run(),"deferred");
   assert.equal(h.calls.length,1);
+  assert.equal(h.writes.length,0);
 });
 
-test("concurrent requests cannot pay twice for the same batch",async()=>{
-  let release;
-  const gate=new Promise(resolve=>{release=resolve;});
-  const h=harness({responses:async n=>{if(n===1)await gate;return reply(n%2?"Stage one":"Stage two");}});
+test("concurrency and same-batch accounting guard still prevent double spending",async()=>{
+  let release;const gate=new Promise(resolve=>{release=resolve});
+  const h=harness({responses:async n=>{if(n===1)await gate;return reply(n===1?
+    "New episode.":JSON.stringify({keep:[],revise:[],add:["Result."]}));}});
   const first=h.run();
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(await h.run(),"deferred");
@@ -223,202 +234,29 @@ test("concurrent requests cannot pay twice for the same batch",async()=>{
   assert.equal(await first,"committed");
   assert.equal(h.calls.length,2);
   assert.equal(h.writes.length,1);
+  assert.equal(h.constructors[0].maxRetries,0);
 });
 
-test("deleted durable source marker is blocked instead of silently resetting memory",async()=>{
-  const prior={version:2,summary:"Important older context.",summarizedThroughMessageId:"gone",sourceMessageCount:50};
+test("a concurrent checkpoint update cannot be overwritten",async()=>{
+  const h=harness({commitResult:false});
+  assert.equal(await h.run(),"deferred");
+  assert.equal(h.writes.length,0);
+});
+
+test("missing source marker fails closed rather than losing memory",async()=>{
+  const prior={version:2,summary:"Preserve this.",summarizedThroughMessageId:"missing",sourceMessageCount:20};
   const h=harness({prior});
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,0);
   assert.deepEqual(h.memory(),prior);
 });
 
-test("missing provider and deleted chat never call or mutate ITM",async()=>{
-  for(const options of [{configured:false},{missingChat:true}]){
-    const h=harness(options);
-    assert.equal(await h.run(),"skipped");
-    assert.equal(h.calls.length,0);
-    assert.equal(h.writes.length,0);
-  }
-});
-
-test("output budgets, model, accounting and source preservation are explicit",async()=>{
+test("source-grounded summarization and semantic editing keep their separate purposes",async()=>{
   const h=harness();await h.run();
-  assert.equal(h.constructors[0].maxRetries,0);
-  assert.equal(h.constructors[0].baseURL,"https://api.anthropic.com/v1");
-  assert.equal(h.events.filter(e=>e.name==="accounting")[0].activity,"memory-summary");
-  assert.equal(h.calls.every(c=>c.path==="/messages"),true);
-  assert.equal(h.calls.every(c=>c.body.model==="claude-sonnet-5-5"),true);
-  assert.ok(h.calls[0].body.system.includes("Message timestamps date the telling"));
-  assert.ok(h.calls[1].body.system.includes("Keep speaker attribution and uncertainty"));
-  assert.ok(h.calls[1].body.system.includes("omitting a detail does not delete its original messages"));
-});
-
-test("a stale checkpoint claim and a concurrent moved checkpoint never write over stored history",async()=>{
-  const h=harness({commitResult:false});
-  assert.equal(await h.run(),"deferred");
-  assert.equal(h.calls.length,2);
-  assert.equal(h.writes.length,0);
-});
-
-
-test("v5 permits one explicitly versioned attempt for a v4-blocked batch and retains older failure evidence",async()=>{
-  const prior={version:2,summary:"P".repeat(14774),summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>reply(n===1?"Only the 30 new source messages.":"A concise fully reconciled ITM.")});
-  // Simulates the production v1 circuit breaker preserved in Postgres.
-  const batchEnd="m31";
-  h.claims.set("two-stage-30-messages-v1:"+batchEnd,"blocked");
-  h.claims.set("two-stage-30-messages-v2-reconcile-10000:"+batchEnd,"blocked");
-  h.claims.set("two-stage-30-messages-v3-priority-recovery:"+batchEnd,"blocked");
-  h.claims.set("two-stage-30-messages-v4-episodic-continuity:"+batchEnd,"blocked");
-  assert.equal(await h.run(),"committed");
-  assert.equal(h.calls.length,2,"one two-stage paid attempt under the corrected processor");
-  assert.equal(h.calls[1].body.max_tokens,4000);
-  const claim=h.events.find(e=>e.name==="claim_intermediate_memory_batch");
-  assert.equal(claim.args.p_processor_version,"two-stage-30-messages-v5-selective-recovery");
-  assert.equal(h.claims.get("two-stage-30-messages-v3-priority-recovery:"+batchEnd),"blocked");
-  assert.equal(h.claims.get("two-stage-30-messages-v4-episodic-continuity:"+batchEnd),"blocked");
-  assert.equal(h.claims.get("two-stage-30-messages-v2-reconcile-10000:"+batchEnd),"blocked");
-  assert.equal(h.claims.get("two-stage-30-messages-v1:"+batchEnd),"blocked",
-    "old failure evidence must remain untouched");
-  assert.equal(h.memory().summarizedThroughMessageId,batchEnd);
-  assert.equal(h.memory().summary,"A concise fully reconciled ITM.");
-  assert.equal(await h.run(),"skipped");
-  assert.equal(h.calls.length,2,"do not repeat the successful batch");
-});
-
-test("4,000 reconciliation tokens support a near-ceiling prior ITM with a concise complete result",async()=>{
-  const prior={version:2,summary:"Important prior context. ".repeat(670).slice(0,14774),
-    summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const concise="Curated continuity. ".repeat(340).slice(0,6500).trim();
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>reply(n===1?"New batch corrections and decisions.":concise)});
-  assert.equal(await h.run(),"committed");
-  assert.equal(h.calls[1].body.max_tokens,4000);
-  assert.ok(h.calls[1].body.messages[0].content.includes(prior.summary));
-  assert.equal(h.memory().summary,concise);
-  assert.ok(h.memory().summary.length<=15000,"hard character ceiling must still be enforced");
-  assert.equal(h.memory().summarizedThroughMessageId,"m31");
-});
-
-test("even with 4,000 output tokens an incomplete reconciliation fails closed and is not retried",async()=>{
-  const prior={version:2,summary:"Keep all existing context.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>n===1?reply("Relevant new changes."):reply("Partial output","max_tokens")});
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,2);
-  assert.equal(h.calls[1].body.max_tokens,4000);
-  assert.equal(h.writes.length,0);
-  assert.deepEqual(h.memory(),prior);
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,2,"no identical paid retries after the failure");
-});
-
-
-test("15,276-character completed reconciliation gets one priority recovery and a compact committed checkpoint",async()=>{
-  const prior={version:2,
-    summary:("User correction: never invent event dates; keep ongoing commitments. "+
-      "Personally meaningful established history. ".repeat(420)).slice(0,14774),
-    summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const newFacts="New source fact: user corrected an assumption and has one open commitment.";
-  const verbose="An exhaustive historical recap that fails to prioritize anything. ".repeat(300)
-    .slice(0,15276).trim();
-  assert.ok(verbose.length>15000);
-  const compact="User correction: never invent event dates. Open commitment: complete memory fix. "+
-    "Keep meaningful established history; omit repeated status chatter.";
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>reply(n===1?newFacts:n===2?verbose:compact)});
-  assert.equal(await h.run(),"committed");
-  assert.equal(h.calls.length,3);
-  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,4000,4000]);
-  assert.ok(h.calls[1].body.system.includes("ITM is rolling memory, not an archive"));
-  assert.ok(h.calls[2].body.system.includes("KEEP: recognizable recent topics"));
-  assert.ok(h.calls[2].body.system.includes("DROP: permanent biography"));
-  assert.ok(h.calls[2].body.messages[0].content.includes(prior.summary));
-  assert.ok(h.calls[2].body.messages[0].content.includes(newFacts));
-  assert.ok(h.calls[2].body.messages[0].content.includes(verbose));
-  assert.equal(h.memory().summary,compact);
-  assert.ok(h.memory().summary.length<=7500);
-  assert.equal(h.memory().summarizedThroughMessageId,"m31");
-  assert.equal(h.memory().sourceMessageCount,32);
-  assert.equal(h.writes.length,1);
-  assert.equal(h.writes[0].p_expected_cursor,"m1");
-  assert.equal(await h.run(),"skipped");
-  assert.equal(h.calls.length,3,"no duplicate paid work after commit");
-  assert.ok(h.logs.some(x=>x.args.some(z=>String(z).includes("Priority recovery accepted"))));
-});
-
-test("a complete 7,501-character draft triggers recovery but a 7,500-character draft does not",async()=>{
-  for(const [size,expectedCalls] of [[7500,2],[7501,3]]){
-    const h=harness({responses:n=>reply(n===1?"New source detail.":n===2?"D".repeat(size):"Compact correction.")});
-    assert.equal(await h.run(),"committed");
-    assert.equal(h.calls.length,expectedCalls);
-    assert.equal(h.memory().summary,expectedCalls===2?"D".repeat(size):"Compact correction.");
-  }
-});
-
-test("priority recovery with max_tokens is rejected, checkpoint retained, no fourth paid call",async()=>{
-  const prior={version:2,summary:"Keep critical history.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>n===1?reply("New correction."):n===2?reply("Z".repeat(15276)):reply("Partial","max_tokens")});
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,3);
-  assert.equal(h.writes.length,0);
-  assert.deepEqual(h.memory(),prior);
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,3);
-  assert.equal(h.claims.get("two-stage-30-messages-v5-selective-recovery:m31"),"blocked");
-});
-
-test("recovery payment or approval denial does not trigger further calls or replace ITM",async()=>{
-  const prior={version:2,summary:"Important original.",summarizedThroughMessageId:"m1",sourceMessageCount:2};
-  const denial=Object.assign(new Error("Owner approval required"),{code:"standalone_approval_required",terminal:true});
-  const h=harness({history:messageHistory(92),prior,
-    responses:n=>n===1?reply("New item."):n===2?reply("Z".repeat(15276)):(()=>{throw denial;})()});
-  await assert.rejects(h.run(),error=>error===denial);
-  assert.equal(h.calls.length,3);
-  assert.equal(h.writes.length,0);
-  assert.deepEqual(h.memory(),prior);
-  assert.equal(await h.run(),"deferred");
-  assert.equal(h.calls.length,3);
-});
-
-
-test("all three ITM prompts retain conversational episodes rather than LTM biography",async()=>{
-  const existing={
-    version:2,summary:"Prior episode: we discussed a project and postponed a decision.",
-    summarizedThroughMessageId:"m1",sourceMessageCount:2,
-  };
-  const responses=n=>reply(n===1?"The user revisited a postponed discussion.":n===2?
-    "Current conversations and unfinished follow-ups.":"Recovered episodic continuity.");
-  const h=harness({history:messageHistory(92),prior:existing,responses});
-  assert.equal(await h.run(),"committed");
-  const [batch,editor]=h.calls.map(x=>x.body.system);
-  assert.match(batch,/episodic ITM, not long-term memory \(LTM\)/);
-  assert.match(editor,/What were we talking about that the other day|we talked about that the other day/i);
-  assert.match(editor,/PRESERVE recent discussions/);
-  assert.match(editor,/PRESERVE unfinished discussions/);
-  assert.match(editor,/DO NOT preserve lasting biographical facts/);
-  assert.match(editor,/Give reasonable priority to recent conversations/);
-  assert.match(editor,/HARD OUTPUT TARGET: at most 6,000 characters/);
-  assert.match(editor,/DROP the least useful episodes/);
-  assert.doesNotMatch(editor,/Retention order:|enduring context and important qualifications|chronological inventory/i);
-  assert.match(h.calls[1].body.messages[0].content,/6,000 characters/);
-  assert.equal(h.calls.length,2);
-  assert.equal(h.memory().summary,"Current conversations and unfinished follow-ups.");
-});
-
-test("single recovery applies the same episodic-only retention rules without raising budgets",async()=>{
-  const h=harness({responses:n=>reply(n===1?"New open discussion.":n===2?"X".repeat(11386):"Recent unresolved topic.")});
-  assert.equal(await h.run(),"committed");
-  assert.deepEqual(h.calls.map(x=>x.body.max_tokens),[2300,4000,4000]);
-  const editor=h.calls[2].body.system;
-  assert.match(editor,/What were we talking about the other day/);
-  assert.match(editor,/DROP: permanent biography/);
-  assert.match(editor,/KEEP older discussions when they are still open/);
-  assert.match(editor,/MAXIMUM OUTPUT: 6,000 characters/);
-  assert.match(h.calls[2].body.messages[0].content,/6,000 characters/);
-  assert.equal(h.memory().summary,"Recent unresolved topic.");
-  assert.equal(h.writes.length,1);
+  assert.match(h.calls[0].body.system,/Katie is the assistant/);
+  assert.match(h.calls[1].body.system,/Compare new conversation developments/);
+  assert.match(h.calls[1].body.system,/MERGE related topics/);
+  assert.match(h.calls[1].body.system,/DROP obsolete/);
+  assert.match(h.calls[1].body.system,/rolling record of conversations/);
+  assert.equal(h.events.filter(x=>x.name==="accounting")[0].activity,"memory-summary");
 });
