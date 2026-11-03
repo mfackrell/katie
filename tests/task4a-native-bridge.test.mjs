@@ -147,10 +147,10 @@ test('trusted workflow fails closed for an original Task4A project without an au
   allowedPaths:['app/pilot/'],contractHash:contractHash(contract),contract,
   codingModel:'gpt-5.3-codex',reviewModel:'gpt-5.3-codex'
  });
- const run=(request)=>{
+ const run=(request,issueNumber=null)=>{
   rmSync(manifestFile,{force:true});rmSync(contextFile,{force:true});
   writeFileSync(requestFile,request);
-  const env={...process.env,KATIE_NATIVE_HANDOFF_HMAC_KEY:key};
+  const env={...process.env,KATIE_NATIVE_HANDOFF_HMAC_KEY:key,...(issueNumber===null?{}:{ISSUE:String(issueNumber)})};
   const cli=spawnSync(process.execPath,['scripts/benchmark/native-dispatch-cli.mjs','verify',requestFile,manifestFile],
    {encoding:'utf8',env,timeout:10000});
   if(cli.status!==0)return {cli};
@@ -167,29 +167,41 @@ test('trusted workflow fails closed for an original Task4A project without an au
  const permission={...proof,contractHash:original.contractHash,baselineSha:original.baselineSha,expiresAt:Date.now()+300000};
  const signed=encodeDeveloperHandoff(permission,key);
  try{
-  const approved=run(originalHeader+signed);
+  const approved=run(originalHeader+signed,969);
   assert.equal(approved.cli.status,0,approved.cli.stderr);
   assert.equal(approved.parser.status,0,approved.parser.stderr);
   assert.equal(approved.manifest.native,true);
   assert.equal(approved.guard.status,0,approved.guard.stderr);
 
-  const stripped=run(originalHeader);
+  // Erasing BOTH project metadata and the signed native marker cannot turn
+  // the trusted original issue #969 into unmetered ordinary Codex execution.
+  const erased=run('Owner-authored original issue with all metadata removed',969);
+  assert.equal(erased.cli.status,0);
+  assert.equal(erased.manifest.native,false);
+  assert.notEqual(erased.guard.status,0);
+  assert.match(erased.guard.stderr,/TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
+  const copied=run(originalHeader+signed,970);
+  assert.equal(copied.cli.status,0);
+  assert.notEqual(copied.guard.status,0,'A signed Task 4A authority copied to another issue is invalid');
+  assert.match(copied.guard.stderr,/TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
+
+  const stripped=run(originalHeader,969);
   assert.equal(stripped.cli.status,0);
   assert.equal(stripped.manifest.native,false);
   assert.notEqual(stripped.guard.status,0,'Stripped Task4A marker must never select the unmetered action');
   assert.match(stripped.guard.stderr,/TASK4A_NATIVE_AUTHORITY_REQUIRED/);
 
   const {task4aContinuationId:discarded,...ordinaryPermission}=permission;
-  const wrongKind=run(originalHeader+encodeDeveloperHandoff({...ordinaryPermission,authorityKind:'ordinary-developer'},key));
+  const wrongKind=run(originalHeader+encodeDeveloperHandoff({...ordinaryPermission,authorityKind:'ordinary-developer'},key),969);
   assert.equal(wrongKind.cli.status,0);
   assert.equal(wrongKind.manifest.native,true);
   assert.notEqual(wrongKind.guard.status,0);
   assert.match(wrongKind.guard.stderr,/TASK4A_NATIVE_AUTHORITY_REQUIRED/);
 
-  const tampered=run(originalHeader+signed.replace(/\.[A-Za-z0-9_-]+ -->$/,'.AAAA -->'));
+  const tampered=run(originalHeader+signed.replace(/\.[A-Za-z0-9_-]+ -->$/,'.AAAA -->'),969);
   assert.notEqual(tampered.cli.status,0,'Invalid HMAC must fail in native verifier');
   assert.match(tampered.cli.stderr,/UNAUTHENTICATED/);
-  const mismatched=run(originalHeader+encodeDeveloperHandoff({...permission,projectId:randomUUID()},key));
+  const mismatched=run(originalHeader+encodeDeveloperHandoff({...permission,projectId:randomUUID()},key),969);
   assert.notEqual(mismatched.cli.status,0,'An authentic grant for another project must not pass');
 
   // The second cryptographic check rejects a fabricated verified-manifest
