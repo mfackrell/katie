@@ -229,7 +229,13 @@ try {
   const recoveredDraft = await page.evaluate(() => sessionStorage.getItem("katie.draft.v1.22222222-2222-4222-8222-222222222222"));
   if (recoveredDraft !== shortTyping.text) throw new Error("Debounced composer draft not persisted");
   await page.reload();
-  if (await composer.inputValue() !== shortTyping.text) throw new Error("Composer draft did not recover after reload");
+  // Saved draft restoration is asynchronous; verify eventual recovery rather
+  // than inspecting the initial empty textarea before hydration finishes.
+  await page.waitForFunction(expected =>
+    document.querySelector('textarea[placeholder="Ask Acceptance…"]')?.value === expected,
+    shortTyping.text,
+    { timeout: 10_000 },
+  );
   historySize = 160;
   await page.reload();
   await page.getByText("Historical answer 159", { exact: false }).waitFor();
