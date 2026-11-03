@@ -576,7 +576,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
     if (!recent.projectContext &&
         hasProjectAuthority(previous.projectContext, previous.projectAuthority) &&
         scopedTaskStart >= 0) {
-      let scoped = { ...emptyTaskProgress(),
+      let scoped: TaskProgressState = { ...emptyTaskProgress(),
         projectContext: previous.projectContext,
         projectAuthority: previous.projectAuthority,
         objective: previous.objective,
