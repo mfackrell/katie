@@ -276,22 +276,27 @@ export function isProfessionalProfileMaterial(message: string): boolean {
     && /\b(?:experience|businesses|career|leadership|background|work)\b/i.test(text);
 }
 
-export function applyUserToTaskProgress(
-  previous: TaskProgressState,
-  input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
-): TaskProgressState {
-  if (previous.lastUserMessageId === input.messageId) return previous;
+/** Normalize legacy companion state before any consumer can treat it as project authority. */
+export function isolateCompanionProgress(previous: TaskProgressState): TaskProgressState {
   const legacyCasualProject = previous.projectContext && !isWorkOrigin(previous.projectContext.text) &&
     !previous.projects?.some(project => project.projectContext.userMessageId === previous.projectContext?.userMessageId &&
       isWorkOrigin(project.projectContext.text));
   // Legacy conversational ledgers may have persisted a synthetic parent and questions.
   // Strip only that active binding; retain genuine saved project checkpoints.
-  const cleanPrevious = legacyCasualProject ? {
+  return legacyCasualProject ? {
     ...previous, projectContext: null, objective: null, pending: [], answered: [],
     workProduct: undefined, projectClarification: undefined,
     projects: previous.projects?.filter(project => isWorkOrigin(project.projectContext.text)),
     stage: "working" as const, nextAction: "continue_original_goal" as const,
   } : previous;
+}
+
+export function applyUserToTaskProgress(
+  previous: TaskProgressState,
+  input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
+): TaskProgressState {
+  if (previous.lastUserMessageId === input.messageId) return previous;
+  const cleanPrevious = isolateCompanionProgress(previous);
   const state = checkpointProject({...cleanPrevious,lastUserSource:{userMessageId:input.messageId,text:input.text}});
   const transition = input.projectTransition;
   const turnIntent = classifyUserTurn(input.text);
