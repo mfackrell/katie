@@ -481,7 +481,7 @@ test('anonymous 850-word resume-shaped fixture completes genuine two-page produc
     });
     assert.equal(produced.inspection.pageCount, 2);
     assert.deepEqual(produced.inspection.findings, []);
-    assert.equal(produced.inspection.visual, 'passed');
+    assert.equal(produced.inspection.visual, 'technical-only', 'No independent design assessment was requested in this synthetic test.');
     assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(spec)));
     assert.ok(produced.corrections <= 3);
   } finally { await browser.close(); }
@@ -635,7 +635,10 @@ test('real renderer supports tables and fails closed on missing visual coverage'
     const rendered = await renderDocument(browser, docx, spec);
     assert.equal(rendered.inspection.pageCount, 1);
     assert.deepEqual(rendered.inspection.findings, []);
-    await assert.rejects(produceDocument({ spec, browser, deadlineMs: Date.now() + 45000, inspect: async () => ({ pages: [] }) }));
+    const technicalOnly = await produceDocument({ spec, browser, deadlineMs: Date.now() + 45000, inspect: async () => ({ pages: [] }) });
+    assert.equal(technicalOnly.inspection.visual, 'technical-only', 'Incomplete aesthetic inspection cannot block a valid PDF.');
+    assert.deepEqual(technicalOnly.inspection.findings, []);
+    assert.equal(technicalOnly.inspection.pageCount, 1);
     await assert.rejects(produceDocument({ spec: { ...fixture, targetPages: 1 }, browser, deadlineMs: Date.now() + 45000, inspect: async () => { throw new Error('must never reach vision'); } }), /cannot fit/);
   } finally { await browser.close(); }
 });
