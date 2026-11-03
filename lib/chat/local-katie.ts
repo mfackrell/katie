@@ -19,7 +19,8 @@ export type LocalKatieResponse = {
 
 const SYSTEM_PROMPT_REQUEST_PATTERNS = [
   // A stored system message and a system prompt are synonyms for this command.
-  /\b(?:exact|current|actual|full|show|give|display|print|reveal|what(?:'s| is))\b[^\n]{0,75}\bsystem\s+(?:prompt|message|instructions?)\b/i,
+  /\b(?:exact|current|actual|full|show|give|display|print|reveal)\b[^\n]{0,75}\bsystem\s+(?:prompt|message|instructions?)\b/i,
+  /\bwhat(?:'s| is)\s+(?:your|the|katie(?:'s)?)\s+(?:current\s+|actual\s+)?system\s+(?:prompt|message|instructions?)\s*\??\s*$/i,
   /\bsystem\s+(?:prompt|message|instructions?)\b[^\n]{0,60}\b(?:this|current|latest|previous|last)\s+(?:message|chat|actor|request|turn)\b/i,
   /\bwhat\s+(?:prompt|instructions|system\s+(?:prompt|message))\s+(?:are you|is katie)\s+(?:using|running|following|sending)\b/i,
   /\b(?:show|display|print|give|list|reveal|what(?:'s| is| are))\b[^\n]{0,80}\b(?:sent|sending|send|provided|passing)\b[^\n]{0,60}\b(?:the\s+)?(?:system\s+)?(?:message|prompt|instructions?|llm|model|provider|grok|gemini|claude|gpt)\b/i,
@@ -114,6 +115,12 @@ function editDistanceAtMostTwo(a: string, b: string): boolean {
 }
 
 export function isSystemPromptRequest(message: string): boolean {
+  // Diagnostic questions about prompt behavior are not disclosure requests.
+  // Check before broad inspection patterns; an explicit display instruction
+  // remains eligible through the existing matcher and typo fallback.
+  if (/^\s*(?:what(?:'s| is)\s+(?:wrong|incorrect|broken|causing|the problem)\b|why\s+(?:did|do|does|would|are|were)\b|(?:please\s+)?(?:review|analyze|analyse|diagnose|evaluate|assess|critique)\b)/i.test(message) &&
+      /\b(?:system\s+(?:prompt|message|instructions?)|your\s+instructions?|prompt\s+(?:behavior|design))\b/i.test(message) &&
+      !/\b(?:show|display|print|reveal|dump)\s+(?:me\s+)?(?:your|the|actual|exact|full)\s+(?:system\s+|provider\s+)?(?:prompt|messages?|instructions?)\b/i.test(message)) return false;
   if (SYSTEM_PROMPT_REQUEST_PATTERNS.some(pattern => pattern.test(message))) return true;
   // A bounded typo fallback only for explicit inspection commands. Never
   // reinterpret quoted examples, negations, or general discussion as commands.

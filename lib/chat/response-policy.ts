@@ -8,12 +8,22 @@ export type ResponsePolicy = {
   generationInstruction: string | null;
 };
 
-const CONVERSATION_INSTRUCTION = [
+const CONVERSATION_INSTRUCTION_LINES = [
   "NEXT RESPONSE: a brief conversational answer or clarification, normally under 150 words.",
   "Answer the user's current question. Acknowledge any facts supplied, explain unfamiliar terms plainly, and ask at most one necessary follow-up.",
   "Not knowing a term does not establish a lack of experience doing the underlying work. Preserve any unanswered factual question.",
   "Keep the active substantive task pending. Do not silently begin, resume, rewrite, or verify an application answer, report, analysis, code, or other deliverable in this response.",
   "Earlier saved drafts and task instructions are background; they do not override the current conversational question.",
+];
+const CONVERSATION_INSTRUCTION = CONVERSATION_INSTRUCTION_LINES.join("\n");
+
+// Personal exchanges should not be handled like work clarifications. Preserve
+// the same task boundaries, but allow reciprocal conversation without a
+// mandatory acknowledgment-and-stop pattern.
+const PERSONAL_CONVERSATION_INSTRUCTION = [
+  "NEXT RESPONSE: a natural personal conversation; match its depth and pace.",
+  "Engage naturally rather than simply acknowledging or summarizing what the user says. Contribute your own perspective, curiosity, or humor when appropriate, and let conversations develop organically.",
+  ...CONVERSATION_INSTRUCTION_LINES.slice(2),
 ].join("\n");
 
 // Detect direct production instructions before accepting a conversational
@@ -35,12 +45,35 @@ const SUBSTANTIVE_INTENTS = new Set([
   "assistant-reflection", "safety-sensitive-vision", "vision-analysis", "multimodal-reasoning", "image-generation",
 ]);
 
-function policy(purpose: ResponsePurpose, reason: string): ResponsePolicy {
+/**
+ * A model's intent label describes expertise, not whether this reply is a
+ * deliverable. A personal question about Katie's tone/behavior is still a
+ * conversation even if the router labels it assistant-reflection.
+ */
+function personalReflectionQuestion(message: string): boolean {
+  const text = message.trim();
+  if (!/^(?:(?:hey|katie)[,!]?\s+)?(?:why|what|how|did|do|are|were|can|could)\b/i.test(text)) return false;
+  if (/\b(?:system\s+(?:prompt|message)|provider|model|routing|code|bug|implementation|architecture|repository|audit|report|draft|application)\b/i.test(text)) return false;
+  return /\b(?:you|your|katie)\b/i.test(text) &&
+    /\b(?:respond(?:ed|ing)?|repl(?:y|ied)|answer(?:ed|ing)?|behav(?:e|ed|ior|iour)|react(?:ed|ion)?|tone|sound(?:ed)?|feel(?:ing)?|think(?:ing)?|said|say|act(?:ed|ing)?|seem(?:ed)?)\b/i.test(text);
+}
+
+function personalConversationalTurn(message: string, intent?: string | null): boolean {
+  if (intent === "social-emotional") return true;
+  if (personalReflectionQuestion(message)) return true;
+  const text = message.trim();
+  return GREETING.test(text) || ACKNOWLEDGMENT.test(text) ||
+    /^(?:(?:hey|hi)[,!]?\s+)?(?:you(?:'re| are| seem| sound| were)|i (?:feel|felt|like|love|miss|wish)|that(?:'s| is) (?:funny|sweet|cute)|lol\b|haha\b|a little pissy\b)/i.test(text);
+}
+
+function policy(purpose: ResponsePurpose, reason: string, personalConversation = false): ResponsePolicy {
   return {
     purpose,
     requiresSubstantiveProcessing: purpose === "deliverable",
     reason,
-    generationInstruction: purpose === "conversation" ? CONVERSATION_INSTRUCTION : null,
+    generationInstruction: purpose === "conversation"
+      ? (personalConversation ? PERSONAL_CONVERSATION_INSTRUCTION : CONVERSATION_INSTRUCTION)
+      : null,
   };
 }
 
@@ -67,12 +100,22 @@ export function decideResponsePolicy(input: {
   // message also answers a different part of a multi-part clarification.
   if (isTerminologyClarification(input.message)) return policy("conversation", "terminology_clarification");
   const message = input.message.trim();
-  if (ACKNOWLEDGMENT.test(message) || GREETING.test(message)) return policy("conversation", "acknowledgment_or_greeting");
+  if (ACKNOWLEDGMENT.test(message) || GREETING.test(message))
+    return policy("conversation", "acknowledgment_or_greeting",
+      !input.hasPendingDeliverable && personalConversationalTurn(message, input.intent));
   if (BARE_CONFIRMATION.test(message)) {
     return input.hasPendingDeliverable
       ? policy("deliverable", "confirmation_of_pending_work")
-      : policy("conversation", "standalone_confirmation");
+      : policy("conversation", "standalone_confirmation", personalConversationalTurn(message, input.intent));
   }
+
+  // Output purpose can be mislabeled by the classifier when interpersonal
+  // reflection is routed through a specialized reasoning model. Retain that
+  // model choice, but select natural conversational instructions for the reply.
+  // Explicit work, attachments, tools, and pending professional work already
+  // took precedence above.
+  if (!input.hasPendingDeliverable && personalConversationalTurn(message, input.intent))
+    return policy("conversation", "personal_conversation", true);
 
   // Purpose is independent of domain: a routine rewrite is still a deliverable,
   // while a contextual clarification may mention code or financial analysis.

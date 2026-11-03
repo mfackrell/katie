@@ -36,6 +36,8 @@ import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel"
 import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
+import { Task4aContinuationOwnerApproval } from "@/components/task4a-continuation-owner-approval";
+import { Task4aSavedSpecificationRecovery } from "@/components/task4a-saved-specification-recovery";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
@@ -1048,16 +1050,6 @@ export function ChatPanel({
     scrollToBottom();
   }, [messages, loading]);
 
-  // Follow the expanding central response only when the user is already near
-  // the latest message. Do not yank the view back if they scroll up to read.
-  useEffect(() => {
-    if (!loading || !streamingAnswer) return;
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
-    if (distanceFromBottom < 260) container.scrollTop = container.scrollHeight;
-  }, [loading, streamingAnswer]);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -1129,6 +1121,15 @@ export function ChatPanel({
   }, [chatId]);
 
   useEffect(()=>{if(isHydratingMessages)return;const frame=requestAnimationFrame(()=>{try{const saved=window.sessionStorage.getItem(`katie.scroll.v1.${chatId}`);if(saved&&messagesContainerRef.current)messagesContainerRef.current.scrollTop=Number(saved);}catch{}});return()=>cancelAnimationFrame(frame);},[chatId,isHydratingMessages]);
+
+  // Follow growing central response only when the reader is already near the bottom.
+  useEffect(() => {
+    if (!loading || !streamingAnswer) return;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+    if (distanceFromBottom < 260) container.scrollTop = container.scrollHeight;
+  }, [loading, streamingAnswer]);
 
   const messagesByChatIdRef = useRef<Record<string, Message[]>>({});
 
@@ -1262,7 +1263,10 @@ export function ChatPanel({
     if(!chatId||!actorId||projectApprovalPending||loading)return;
     setProjectApprovalPending(true);setProjectApprovalError(null);
     try{
-      const response=await fetch('/api/projects',{method:'PATCH',headers:{'Content-Type':'application/json'},
+      const bearer=await ownerSessionBearer();
+      if(!bearer)throw Error('Sign in as Katie owner to approve project resources.');
+      const response=await fetch('/api/projects',{method:'PATCH',
+       headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},
        body:JSON.stringify({actorId,chatId,scopeHash:hash,authorizedCeiling:ceiling,renewalHours:hours})});
       const result=await response.json() as {error?:string};
       if(!response.ok)throw Error(result.error??'Resource approval failed');
@@ -2947,6 +2951,8 @@ export function ChatPanel({
       {attachmentSaveError&&<p role="alert" className="px-5 text-xs text-amber-200">Attachments are retained for this session; browser storage could not save them for refresh.</p>}
       {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
       {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
+      {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
+      {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
       {resourceRecovery?.chatId===chatId && !managedAgentId ? (
         <DeveloperResourceCard proposal={resourceRecovery.proposal}
          pending={projectApprovalPending||loading} error={projectApprovalError}

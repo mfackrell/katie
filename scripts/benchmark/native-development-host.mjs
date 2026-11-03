@@ -31,10 +31,11 @@ const denied=message=>{throw Error('NATIVE_HOST_DENIED: '+message)};
 if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const requestBody=readFileSync(requestFile,'utf8');
-const ordinary=/<!--\s*katie-native-developer[:\s]/.test(requestBody);
+const task4a=/<!--\s*katie-native-task4a[:\s]/.test(requestBody);
+const ordinary=task4a||/<!--\s*katie-native-developer[:\s]/.test(requestBody);
 const proof=(ordinary?readDeveloperHandoff:readNativeHandoff)(requestBody,signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['authorityKind','accountId','scopeHash','releaseSha','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId','resourceAmendmentId'])
+for(const key of ['authorityKind','accountId','scopeHash','releaseSha','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','task4aContinuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId','resourceAmendmentId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
@@ -292,11 +293,11 @@ const server=createNativeHttpBridge({
  beforeRequest:preserveWip,
  onFailure:classification=>{gatewayFailure??=classification;},
  requireInputCount:true,
- db,grantToken,trialId:ordinary?null:proof.trialId,developerProjectId:ordinary?project.id:null,executionEpoch,
+ db,grantToken,trialId:ordinary?null:proof.trialId,developerProjectId:ordinary?project.id:null,task4a,executionEpoch,
  providerNamespace:'openai-responses',upperTokens:perRequestCap,
  upstream,clientToken,fullMission:true,
  recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens,usage})=>{
-  const {data,error}=await db.rpc('benchmark_reconcile_provider_usage',{
+  const {data,error}=await db.rpc(task4a?'task4a_native_reconcile_provider_usage':'benchmark_reconcile_provider_usage',{
    p_call:requestKey,p_linked:true,
    p_provider_request:providerRequestId,p_usage:usage
   });
@@ -361,7 +362,7 @@ try{
  };
  const safelyRunPhase=async(phase,findings='')=>{
   if(phase==='repair'){for(const stage of ['repair','verification','final_review'])capacityCompletedStages.delete(stage);capacityNotRequiredStages.delete('repair');}
-  const {data:phaseLive,error:phaseLiveError}=await db.rpc(ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{p_digest:tokenDigest(grantToken),...(ordinary?{p_project:project.id}:{p_trial:proof.trialId}),p_epoch:executionEpoch});
+  const {data:phaseLive,error:phaseLiveError}=await db.rpc(task4a?'task4a_native_live':ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{p_digest:tokenDigest(grantToken),...(ordinary?{p_project:project.id}:{p_trial:proof.trialId}),p_epoch:executionEpoch});
   if(phaseLiveError||phaseLive!==true){activeWipPhase={phase,reviewFindings:findings,boundary:true};preserveWip();denied('native phase authority stopped or expired');}
   await forecastCapacity(phase);diagnostics.capacityForecasts.push(latestCapacityForecast);diagnostics.capacityForecasts=diagnostics.capacityForecasts.slice(-12);saveDiagnostics();
   pauseForCapacity(phase,findings);
@@ -389,7 +390,7 @@ try{
       .in('state',['reserved','unresolved']).limit(1);
     if(ledgerError||!Array.isArray(pending)||pending.length)
      denied('native recovery requires authoritative reconciliation of pending provider charges');
-    const {data:stillLive,error:liveError}=await db.rpc(ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{
+    const {data:stillLive,error:liveError}=await db.rpc(task4a?'task4a_native_live':ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{
      p_digest:tokenDigest(grantToken),...(ordinary?{p_project:project.id}:{p_trial:proof.trialId}),p_epoch:executionEpoch
     });
     if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');

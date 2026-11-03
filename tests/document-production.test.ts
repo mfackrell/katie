@@ -14,7 +14,7 @@ import { createDocumentStore, hash, documentLinks } from '../lib/documents/stora
 import { createDocumentDownload } from '../lib/documents/download';
 import { resolveDocumentDownload } from '../lib/documents/client-download';
 import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
-import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
+import { generateDocx, paginate, DocumentPageFitError, documentPageStyle, DOCUMENT_TYPE } from '../lib/documents/generate';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
 import { eligibleDocumentVisualCandidates, selectDocumentVisualInspector } from '../lib/documents/visual-routing';
@@ -23,6 +23,64 @@ import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
 import type { LlmProvider } from '../lib/providers/types';
+
+
+test('post-949 appearance retains pre-949 balanced pagination decisions', () => {
+  const spec = documentSchema.parse({title:'General report',targetPages:2,blocks:[
+    {kind:'heading',level:1,text:'Opening'},
+    {kind:'paragraph',text:'First section body'},
+    {kind:'paragraph',text:'Continuation of first section'},
+    {kind:'heading',level:2,text:'Analysis'},
+    {kind:'paragraph',text:'Second section body'},
+    {kind:'paragraph',text:'Evidence continued'},
+    {kind:'paragraph',text:'Conclusions and next actions'},
+  ]});
+  const heights = [100,120,120,80,200,200,200];
+  const layout = paginate(spec,heights,2,4,true);
+  assert.deepEqual(layout.pages,[[0,1,2,3,4],[5,6]],
+    'The former balanced pagination algorithm must not be replaced by cosmetic heading preferences.');
+  assert.deepEqual(layout.pages.flat(),[0,1,2,3,4,5,6]);
+});
+
+test('document export retains Unicode arrows in DOCX and PDF text', {timeout:120000}, async () => {
+  const spec = documentSchema.parse({title:'Role progression',targetPages:1,blocks:[
+    {kind:'heading',level:1,text:'Role progression'},
+    {kind:'paragraph',text:'Finance Analyst → Finance Manager → Interim CFO'},
+    {kind:'paragraph',text:'Operations — accounting · technology'},
+    {kind:'paragraph',text:'International services organization with five operating divisions, multi-entity accounting requirements, and regional finance teams: Fractional CFO → Full-Time CFO → Interim CFO (after acquisition).'},
+  ]});
+  const browser = await launchWebsiteBrowser();
+  try {
+    const docx = await generateDocx(spec,{pages:[[0,1,2,3]],spacing:4});
+    const raw = await (mammoth.extractRawText as unknown as (input:{buffer:Buffer}) => Promise<{value:string}>)({buffer:docx});
+    assert.equal(normalizedText(raw.value), normalizedText(contentText(spec)));
+    const rendered = await renderDocument(browser,docx,spec);
+    assert.equal(rendered.inspection.pageCount,1);
+    assert.deepEqual(rendered.inspection.findings,[],
+      'Unicode glyphs must survive PDF generation and reading-order extraction without silent substitution.');
+    const extractedPdf = await rasterizePdf(browser,rendered.pdf);
+    assert.equal(pdfTextMatchesSource(extractedPdf.text,contentText(spec),extractedPdf.fragments),true,
+      'Retain exact glyph identity and reading order while permitting verified physical line wraps.');
+  } finally {await browser.close();}
+});
+
+test('semantic document hierarchy stays distinct without reducing readable body text', async () => {
+  assert.equal(DOCUMENT_TYPE.bodyHalfPoints, 22);
+  assert.ok(DOCUMENT_TYPE.headingHalfPoints[0] > DOCUMENT_TYPE.headingHalfPoints[1]);
+  assert.ok(DOCUMENT_TYPE.headingHalfPoints[1] > DOCUMENT_TYPE.headingHalfPoints[2]);
+  assert.ok(DOCUMENT_TYPE.headingHalfPoints[2] >= DOCUMENT_TYPE.bodyHalfPoints);
+  const spec = documentSchema.parse({title:'General report',targetPages:1,blocks:[
+    {kind:'heading',level:1,text:'General report'},
+    {kind:'heading',level:2,text:'Findings'},
+    {kind:'heading',level:3,text:'Observed trends'},
+    {kind:'paragraph',text:'Some factual content remains unchanged.'},
+    {kind:'bullet',text:'First finding preserved verbatim.'},
+  ]});
+  const bytes = await generateDocx(spec,{pages:[[0,1,2,3,4]],spacing:4});
+  const extracted = await mammoth.extractRawText({buffer: bytes} as unknown as Parameters<typeof mammoth.extractRawText>[0]);
+  for (const block of spec.blocks) if ('text' in block)
+    assert.ok(extracted.value.includes(block.text), 'DOCX must retain source wording');
+});
 
 const fixture = documentSchema.parse(JSON.parse(readFileSync('fixtures/documents/executive-resume.json', 'utf8')));
 const scope = { ownerId: '11111111-1111-4111-8111-111111111111', actorId: '22222222-2222-4222-8222-222222222222', chatId: '33333333-3333-4333-8333-333333333333', requestId: 'fixture-request' };

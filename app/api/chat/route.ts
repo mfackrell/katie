@@ -1,5 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
@@ -86,7 +86,7 @@ import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
-import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
+import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog, isolateCompanionProgress } from "@/lib/chat/task-progress";
 import { selectTaskProgressPrompt } from "@/lib/chat/task-progress-prompt";
 import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
@@ -863,10 +863,10 @@ async function executeChat(request: NextRequest) {
     // durable task/question binding as review resumption before borrowing scope.
     const taskProgressUserMessageId = workflowMessageId("user") ?? crypto.randomUUID();
     const taskProgressAssistantMessageId = workflowMessageId("assistant") ?? crypto.randomUUID();
-    const priorTaskProgress = mergeTaskProjects(
+    const priorTaskProgress = isolateCompanionProgress(mergeTaskProjects(
       syncTaskProgress(await cachedWorkflowValue("task-progress", () => loadTaskProgress(actorId, chatId)), attachmentHistory),
       currentAgentTask() ? [] : await cachedWorkflowValue("actor-projects", () => loadActorTaskProjects(actorId)),
-    );
+    ));
     // Resolve task identity from firsthand text BEFORE historical files can
     // influence routing. The later model router cannot silently replace it.
     let contextClassification: Awaited<ReturnType<typeof inferRequestClassification>> | undefined;
@@ -1814,6 +1814,7 @@ async function executeChat(request: NextRequest) {
       ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
     documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
     documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
+    documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
@@ -1831,8 +1832,10 @@ async function executeChat(request: NextRequest) {
       message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
       hasAttachments: attachments.length > 0 || images.length > 0,
       requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
-      hasPendingDeliverable: Boolean(taskProgress.objective &&
-        (taskProgress.lastUserIntent === "answer" || pendingReviewClarification)),
+      hasPendingDeliverable: Boolean(
+        (taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer") ||
+        pendingReviewClarification
+      ),
       explicitReviewRetry: verifyingSavedDraft,
     });
     const taskProgressPrompt = selectTaskProgressPrompt({

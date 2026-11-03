@@ -5,7 +5,7 @@ import {readNativeHandoff} from './native-dispatch-contract.mjs';
 const [,,command,source,destination]=process.argv;
 if(command!=='verify'||!source||!destination)throw Error('NATIVE_HANDOFF_CLI_INVALID');
 const body=readFileSync(source,'utf8');
-const ordinary=/<!--\s*katie-native-developer[:\s]/.test(body);
+const ordinary=/<!--\s*katie-native-(?:developer|task4a)[:\s]/.test(body);
 const tagged=ordinary||/<!--\s*katie-native-benchmark[:\s]/.test(body);
 if(!tagged){writeFileSync(destination,JSON.stringify({native:false}));process.exit(0);}
 const payload=(ordinary?readDeveloperHandoff:readNativeHandoff)(body,process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY);
@@ -14,6 +14,7 @@ if(!projectMatch)throw Error('NATIVE_PROJECT_BINDING_MISSING');
 let project;try{project=JSON.parse(Buffer.from(projectMatch[1],'base64url').toString())}
 catch{throw Error('NATIVE_PROJECT_BINDING_INVALID')}
 if(project.projectId!==payload.projectId||project.contractHash!==payload.contractHash||
+   (payload.authorityKind==='task4a-developer'&&(project.codingModel!=='gpt-5.3-codex'||project.reviewModel!=='gpt-5.3-codex'))||
    (ordinary?Boolean(project.benchmarkContractHash):project.benchmarkContractHash!==payload.benchmarkContractHash)||project.baselineSha!==payload.baselineSha)
  throw Error('NATIVE_HANDOFF_PROJECT_MISMATCH');
 writeFileSync(destination,JSON.stringify({native:true,...payload}));

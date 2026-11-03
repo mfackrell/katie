@@ -40,6 +40,42 @@ export function documentRequest(message: string): { pages?: number } | null {
   return count ? { pages: words[count[1].toLowerCase()] ?? Number(count[1]) } : {};
 }
 
+/**
+ * A same-document continuation can inherit the last explicit page count, but
+ * never from a model reply, another chat, or a newer different document.
+ * This resolves only an explicit "again" request; it does not select content.
+ */
+export function inheritDocumentPageConstraint(
+  message: string,
+  current: { pages?: number } | null,
+  recentMessages: readonly { role: string; content: string }[],
+): { pages?: number } | null {
+  if (!current || current.pages !== undefined ||
+      !/\b(?:again|same|redo|re-?export|re-?generate|re-?create|reissue)\b/i.test(message) ||
+      /\b(?:new|different|another|unrelated)\s+(?:document|report|resume|résumé|file|version)\b/i.test(message)) return current;
+
+  // Distinctive topic terms are document identity evidence, not a taxonomy of
+  // permissible documents. Generic workflow/format terms cannot create a match.
+  const generic = new Set('a an the and or of for with into from about to in as on at my your our this that these those final same again please give make create produce generate export send provide deliver inspect revised updated earlier previous original version copy docx pdf word file files document documents page pages first attempt formatting format link links actual new'.split(' '));
+  const terms = (value: string) => new Set(value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
+    .filter(word => word.length >= 4 && !generic.has(word)));
+  const subject = terms(message);
+  if (subject.size === 0) return current;
+
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const previous = recentMessages[i];
+    if (previous.role !== 'user' || previous.content === message) continue;
+    const earlier = documentRequest(previous.content);
+    if (!earlier) continue;
+    const earlierTerms = terms(previous.content);
+    // A newer, explicitly requested different document ends continuity.
+    if (![...subject].some(term => earlierTerms.has(term))) return current;
+    if (earlier.pages !== undefined) return { ...current, pages: earlier.pages };
+  }
+  return current;
+}
+
 export function answeredDocumentRequest(progress: {
   lastUserIntent?: string; objective: { text: string; userMessageId: string } | null;
   answered: Array<{ taskId?: string; userMessageId: string }>;

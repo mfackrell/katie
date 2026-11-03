@@ -194,7 +194,19 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
     const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
-    if(!fullBinding&&task.repository_full_name==='mfackrell/katie')return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
+    if(!fullBinding&&task.repository_full_name==='mfackrell/katie'){
+      if(project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'){
+        // Preparation is a no-op unless the *original* project has both an
+        // authenticated continuation and a separately approved coding scope.
+        const result=await getSupabaseAdminClient().rpc<boolean>('task4a_prepare_native_development',{
+          p_project:project.projectId,p_task:task.id,p_scope:project.scopeHash,
+          p_contract:project.contractHash,p_baseline:project.baselineSha
+        });
+        if(result.error||result.data!==true)return persist(task,'dispatching','Waiting for verified Task 4A owner, scope and native spending authority. No external work submitted.');
+        return persist(task,'dispatching','Task 4A native authority prepared; existing authenticated dispatcher will submit the bounded development task.');
+      }
+      return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
+    }
     if(fullBinding){
       if(!fullDispatchEnabled||!nativeDispatchEnabled)
         throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');
@@ -687,7 +699,7 @@ async function dispatchOrdinaryNativeDevelopment(){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
@@ -704,7 +716,8 @@ async function dispatchOrdinaryNativeDevelopment(){
   const client=github(),binding=await repository(task);
   const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
   if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
-  const proof:DeveloperDispatchPayload={authorityKind:'ordinary-developer',taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
+  const task4aId=typeof a.developer_authority?.task4aContinuationId==='string'?a.developer_authority.task4aContinuationId:null;
+  const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
   const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
@@ -920,7 +933,7 @@ export function verifiedPreviewUrl(raw: unknown, approvedOrigins: readonly strin
 // project and custom aliases are not delivery evidence even if they are HTTPS.
 export function immutablePreviewUrl(raw:unknown,approvedOrigins:readonly string[]=[]):string|null{
  const safe=verifiedPreviewUrl(raw,approvedOrigins),rule=process.env.PROJECT_PREVIEW_HOST_PATTERN;if(!safe||!rule||!rule.startsWith('^')||!rule.endsWith('$'))return null;
- try{const u=new URL(safe),nonce=new RegExp(rule).exec(u.hostname)?.[1];return u.hostname.endsWith('.vercel.app')&&!u.hostname.includes('-git-')&&typeof nonce==='string'&&/^[a-z0-9]{9}$/.test(nonce)?safe:null;}catch{return null;}
+ try{const u=new URL(safe),nonce=new RegExp(rule).exec(u.hostname)?.[1];return u.href===u.origin+'/'&&u.hostname.endsWith('.vercel.app')&&!u.hostname.includes('-git-')&&typeof nonce==='string'&&/^[a-z0-9]{9}$/.test(nonce)?safe:null;}catch{return null;}
 }
 export async function developmentPreview(task: AgentTask, project: ProjectAcceptanceBinding, approvedOrigins: readonly string[] = []) {
   const receipt = parseCompletionReceipt(task.external.receipt, task.repository_full_name ?? '', Number(task.external.issueNumber), Number((task.external.receipt as Record<string, unknown>)?.run_id), 'success', project);

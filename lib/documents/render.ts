@@ -22,7 +22,15 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
       const bytes = await readFile(join(process.cwd(), `node_modules/@fontsource/arimo/files/arimo-latin-${weight}-normal.woff2`));
       return `@font-face{font-family:Arial;font-weight:${weight};font-style:normal;src:url(data:font/woff2;base64,${bytes.toString('base64')}) format('woff2')}`;
     }));
-    await page.addStyleTag({ content: fonts.join('\n') });
+    // The Latin-only Arimo files do not contain every symbol used in genuine
+    // documents (notably U+2192). Pin a local, bundled Arial-compatible fallback
+    // for common arrows. Other text keeps its existing fonts and geometry.
+    const arrowFonts = await Promise.all([400, 700].map(async weight => {
+      const style = weight === 700 ? 'Bold' : 'Regular';
+      const bytes = await readFile(join(process.cwd(), `node_modules/pdfjs-dist/standard_fonts/LiberationSans-${style}.ttf`));
+      return `@font-face{font-family:Arial;font-weight:${weight};font-style:normal;src:url(data:font/ttf;base64,${bytes.toString('base64')}) format('truetype');unicode-range:U+2190-2195}`;
+    }));
+    await page.addStyleTag({ content: [...fonts, ...arrowFonts].join('\n') });
     await page.addScriptTag({ content: await script('jszip/dist/jszip.min.js') });
     await page.addScriptTag({ content: await script('docx-preview/dist/docx-preview.min.js') });
     await page.evaluate(async base64 => {

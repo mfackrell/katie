@@ -13,7 +13,7 @@ const key=process.env.RUNPOD_API_KEY;
 afterEach(()=>{if(key===undefined)delete process.env.RUNPOD_API_KEY;else process.env.RUNPOD_API_KEY=key;});
 function fixture(){
   process.env.RUNPOD_API_KEY='fixture-key';
-  let row:LedgerAttempt|null=null, sends=0, polls=0, now=0, allowed=true, pause=false, failPoll=false, mismatch=false, queue=false, submissionStatus=200, lostAcceptance=false, exposureAccepted=false;
+  let row:LedgerAttempt|null=null, sends=0, polls=0, now=0, allowed=true, pause=false, failPoll=false, mismatch=false, queue=false, submissionStatus=200, statusMissing=false, lostAcceptance=false, exposureAccepted=false;
   const calls:Array<{name:string;args:Record<string,unknown>}>=[];
   const ledger=createStandaloneLedger({async rpc<T>(name:string,args:Record<string,unknown>){
     calls.push({name,args});let result:unknown;
@@ -51,11 +51,12 @@ function fixture(){
     }
     polls++;assert.match(String(input),/\/status\/job-accepted-123$/);
     if(failPoll)throw Error('Disconnected');
+    if(statusMissing)return Response.json({error:'Job unavailable'},{status:404});
     if(queue)return Response.json({id:'job-accepted-123',status:'IN_PROGRESS'});
     return Response.json({id:mismatch?'another-job-456':'job-accepted-123',status:'COMPLETED',executionTime:1200,output:{choices:[{finish_reason:'stop',message:{content:'A brown dog in a room.'}}],usage:{prompt_tokens:100,completion_tokens:10},cost:0}});
   };
   const run=(question='Describe photo')=>runWithStandaloneAccounting(scope,()=>describeImageWithRunpodQwen(image,question,{ledgerFactory:()=>ledger,fetchFn:wire,sleep:async()=>{now+=2500;},now:()=>now,attachmentId:'immutable-attachment'}));
-  return {run,calls,ledger,get row(){return row;},get sends(){return sends;},get polls(){return polls;},set failPoll(v:boolean){failPoll=v;},set queue(v:boolean){queue=v;},set allowed(v:boolean){allowed=v;},set pause(v:boolean){pause=v;},set mismatch(v:boolean){mismatch=v;},set submissionStatus(v:number){submissionStatus=v;},set lostAcceptance(v:boolean){lostAcceptance=v;},set exposureAccepted(v:boolean){exposureAccepted=v;},set state(v:LedgerAttempt['state']){row={...row!,state:v};}};
+  return {run,calls,ledger,get row(){return row;},get sends(){return sends;},get polls(){return polls;},set failPoll(v:boolean){failPoll=v;},set queue(v:boolean){queue=v;},set allowed(v:boolean){allowed=v;},set pause(v:boolean){pause=v;},set mismatch(v:boolean){mismatch=v;},set submissionStatus(v:number){submissionStatus=v;},set statusMissing(v:boolean){statusMissing=v;},set lostAcceptance(v:boolean){lostAcceptance=v;},set exposureAccepted(v:boolean){exposureAccepted=v;},set state(v:LedgerAttempt['state']){row={...row!,state:v};}};
 }
 test('Qwen reserves reviewed $0.02 under original owner/request before one submission and retains estimate without inventing actual',async()=>{
   const f=fixture(),result=await f.run();
@@ -161,4 +162,20 @@ test('Qwen uncertainty auto-authorized by durable owner policy escalates without
  const ref={fileId:'genuine',fileName:'current.jpg',mimeType:'image/jpeg',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
  for(let i=0;i<2;i++)await observeStandaloneStillImages([ref],{qwen:()=>f.run(),escalate:async()=>{escalations++;return{text:'Safe independent observation',model:'premium'};}});
  assert.equal(f.sends,1);assert.equal(escalations,2);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');
+});
+
+
+test('saved RunPod 404 retains the original job ID and exposure while marking uncertainty, never resubmitting',async()=>{
+ const f=fixture();f.statusMissing=true;
+ await assert.rejects(f.run(),{code:'standalone_runpod_result_unavailable'});
+ assert.equal(f.sends,1);
+ assert.equal(f.polls,1);
+ assert.equal(f.row?.state,'uncertain');
+ assert.equal(f.row?.provider_request_id,'job-accepted-123');
+ assert.equal(f.row?.reserved_microusd,'20000');
+ assert.equal(f.row?.actual_microusd,null);
+ assert.equal(f.calls.filter(x=>x.name==='standalone_mark_uncertain').length,1);
+ await assert.rejects(f.run(),{code:'standalone_runpod_result_unavailable'});
+ assert.equal(f.sends,1,'failed job is never submitted a second time');
+ assert.equal(f.row?.provider_request_id,'job-accepted-123');
 });

@@ -7,21 +7,21 @@ const route=readFileSync("app/api/chat/route.ts","utf8");
 const migration=readFileSync("supabase/migrations/20261102154000_itm_two_stage_batch_claims.sql","utf8");
 const originalCheckpoint=readFileSync("supabase/migrations/20261026165000_intermediate_memory_checkpoint.sql","utf8");
 
-test("two-stage intermediate summary is triggered by 30 older role-attributed messages",()=>{
+test("two bounded model stages process 30 older conversational messages",()=>{
   assert.match(summary,/SUMMARY_BATCH_MESSAGES = 30/);
   assert.match(summary,/remaining < SUMMARY_BATCH_MESSAGES/);
   assert.match(summary,/olderMessages\.slice\(after, after \+ SUMMARY_BATCH_MESSAGES\)/);
   assert.match(summary,/summarizeNewBatch\(batch\)/);
-  assert.match(summary,/reconcileIntermediateMemory\(summary, newSummary\)/);
-  assert.ok(summary.indexOf("summarizeNewBatch(batch)")<summary.indexOf("reconcileIntermediateMemory(summary, newSummary)"));
-  assert.doesNotMatch(summary,/compactOversizedDraft/);
+  assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, plan\)/);
+  assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
-test("reconciliation uses existing character contract and source-cursor atomic checkpoint",()=>{
+
+test("semantic edit plans retain atomic source-cursor checkpoint",()=>{
   assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
-  assert.match(summary,/ITM_HARD_MAX_CHARACTERS = 15000/);
-  assert.match(summary,/completedText\(response, "reconciliation", ITM_HARD_MAX_CHARACTERS\)/);
+  assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
+  assert.match(summary,/if \(output\.length > ITM_TARGET_CHARACTERS\)/);
   assert.match(summary,/p_expected_cursor: expectedCursor, p_content: payload/);
-  assert.match(summary,/if \(commit\.data !== true\)/);
   assert.match(originalCheckpoint,/pg_advisory_xact_lock/);
   assert.match(originalCheckpoint,/if v_cursor is distinct from p_expected_cursor/);
 });
@@ -56,23 +56,16 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 });
 
 
-test("reconciliation has an explicit 10,000-token bound and versioned fail-closed recovery",()=>{
-  assert.match(summary,/RECONCILE_MAX_TOKENS = 10000/);
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v3-priority-recovery"/);
-  assert.match(summary,/max_tokens: RECONCILE_MAX_TOKENS/);
-  assert.match(summary,/return completedText\(response, "reconciliation", ITM_HARD_MAX_CHARACTERS\)/);
-  assert.match(summary,/if \(response\.stop_reason !== "end_turn" \|\| !text \|\| text\.length > maxCharacters\)/);
+
+test("v7 uses semantic reconciliation with bounded edit output, not full memory rewrite",()=>{
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v7-semantic-edits"/);
+  assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
+  assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
+  assert.equal((summary.match(/client\.post</g)||[]).length,2);
+  assert.match(summary,/parseEpisodePlan\(completedText\(response, "semantic plan"/);
   assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
-});
-
-
-test("oversized reconciliation has exactly one bounded priority recovery and unchanged hard storage ceiling",()=>{
-  assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
-  assert.match(summary,/ITM_HARD_MAX_CHARACTERS = 15000/);
-  assert.match(summary,/ITM_ACCEPT_MAX_CHARACTERS = 7500/);
-  assert.match(summary,/RECOVERY_MAX_TOKENS = 4000/);
-  assert.equal((summary.match(/max_tokens: RECOVERY_MAX_TOKENS/g)??[]).length,1);
-  assert.match(summary,/completedText\(response, "reconciliation draft", ITM_RECOVERY_DRAFT_MAX_CHARACTERS\)/);
-  assert.match(summary,/completedText\(recovered, "priority recovery", ITM_ACCEPT_MAX_CHARACTERS\)/);
-  assert.match(summary,/p_expected_cursor: expectedCursor, p_content: payload/);
+  assert.match(summary,/p_state: "blocked"/);
+  assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, plan\)/);
+  assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
 });
