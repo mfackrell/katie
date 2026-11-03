@@ -61,8 +61,7 @@ test('qualifying visual evidence produces a re-render, comparison and genuine PD
   let firstHeight = 0;
   let beforeImage: Buffer | undefined;
   try {
-    const result = await produceDocument({spec,browser,deadlineMs:Date.now()+110000,requireDesignAssessment:true,
-      inspect: async (rendered, attempt, context) => {
+    const result = await produceDocument({spec,browser,deadlineMs:Date.now()+110000,inspect: async (rendered, attempt, context) => {
         calls++;
         assert.equal(rendered.inspection.findings.length,0);
         if (!context?.previous) {
@@ -94,22 +93,62 @@ test('qualifying visual evidence produces a re-render, comparison and genuine PD
   } finally {await browser.close();}
 });
 
-test('material design issue without a safe action fails closed instead of delivering', {timeout:120000}, async()=>{
+test('design rejection, malformed review and unavailable model preserve mechanically valid files', {timeout:120000}, async()=>{
   const spec = parseDocument('# Proposal\n\n## Scope\n\nThe services and fee schedule are described.',1);
   const browser=await launchWebsiteBrowser();
   try {
-    await assert.rejects(
-      produceDocument({spec,browser,deadlineMs:Date.now()+65000,requireDesignAssessment:true,
-        inspect:async()=>({pages:[passPage(1)],design:{...improvementReport().design!,actions:[]}}),
-      }),
-      /A design REPAIR requires material evidence and a bounded action/
-    );
-    await assert.rejects(
-      produceDocument({spec,browser,deadlineMs:Date.now()+65000,requireDesignAssessment:true,
-        inspect:async()=>({pages:[passPage(1)]}),
-      }),
-      /Professional document-design assessment was omitted/
-    );
+    const scenarios = [
+      {name:'blocked', inspect:async()=>({ pages:[passPage(1)], design:{
+        verdict:'blocked' as const,summary:'The page needs more visual polish before final presentation.',
+        issues:[{page:1,category:'density' as const,severity:'material' as const,evidence:'Unbalanced separation between labels and body paragraphs.'}],
+        actions:[],comparison:'not_applicable' as const,
+      }})},
+      {name:'unsupported', inspect:async()=>({pages:[passPage(1)],design:{...improvementReport().design!,actions:[]}})},
+      {name:'no-model', inspect:async():Promise<VisualReport>=>{throw new Error('No professional design model available.');}},
+      {name:'missing-report', inspect:async()=>({pages:[passPage(1)]})},
+    ];
+    for(const scenario of scenarios){
+      const produced=await produceDocument({
+        spec,browser,deadlineMs:Date.now()+65000,
+        inspect:scenario.inspect,
+        canSkipDesignReviewError:async()=>true,
+      });
+      assert.equal(produced.inspection.pageCount,1,scenario.name);
+      assert.deepEqual(produced.inspection.findings,[],scenario.name);
+      assert.equal(produced.inspection.visual,'technical-only',scenario.name);
+      assert.equal(produced.corrections,0,scenario.name);
+      assert.ok(produced.docx.length>500 && produced.pdf.length>500,scenario.name);
+    }
+    const approval=Object.assign(new Error('Approval required'),{code:'standalone_approval_required'});
+    await assert.rejects(produceDocument({
+      spec,browser,deadlineMs:Date.now()+65000,
+      inspect:async()=>{throw approval;},
+      canSkipDesignReviewError:async()=>false,
+    }),error=>error===approval,'Financial authorization must not be bypassed by aesthetic fallback.');
+  } finally {await browser.close();}
+});
+
+test('unproven or regressed design revision returns the original validated bytes', {timeout:120000}, async()=>{
+  const spec=parseDocument('# Executive portfolio\n\n## Operations\n\n' +
+    Array.from({length:6},(_,i)=>'- Supported financial operations '+(i+1)+'.').join('\n\n'),1);
+  const browser=await launchWebsiteBrowser();
+  try {
+    let calls=0;
+    let originalHash:string|undefined;
+    const produced=await produceDocument({spec,browser,deadlineMs:Date.now()+110000,
+      inspect:async(rendered,_attempt,context)=>{
+        calls++;
+        if(!context?.previous){
+          originalHash=rendered.inspection.pageHashes[0];
+          return improvementReport();
+        }
+        return {...acceptanceReport(),design:{...acceptanceReport().design!,comparison:'regressed'}};
+      },
+    });
+    assert.equal(calls,2);
+    assert.equal(produced.inspection.pageHashes[0],originalHash);
+    assert.equal(produced.inspection.visual,'technical-only');
+    assert.equal(produced.corrections,0);
   } finally {await browser.close();}
 });
 
