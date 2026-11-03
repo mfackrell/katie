@@ -44,6 +44,7 @@ test('Task 4A repair endpoint cannot act without owner sign-in and exact saved s
   from(table){
    return {
     select(){return this;},eq(){return this;},in(){return this;},
+    limit:async()=>({data:commits>0?[{id:'synthetic-recovery-receipt'}]:[],error:null}),
     maybeSingle:async()=>({data:table==='work_projects'?p:table==='agent_missions'?mission:
      table==='project_continuation_authorizations'?{id:randomUUID(),revoked_at:null,deadline:new Date(Date.now()+3600000).toISOString()}:null,error:null}),
     returns:async()=>({data:jobs,error:null})
@@ -89,6 +90,9 @@ test('Task 4A repair endpoint cannot act without owner sign-in and exact saved s
  assert.equal(receipt.spendingAuthorized,false);
  assert.equal(commits,1);assert.equal(baselineCalls,1);
  p.status='awaiting_approval';
+ const done=await GET(new Request('https://katie.local/api/projects/task4a-specification-recovery'));
+ assert.equal(done.status,200);
+ assert.equal((await done.json()).recovered,true);
  assert.equal((await POST(request({confirm:true,sourceHash:ready.sourceHash}))).status,409);
  assert.equal(commits,1);
  p.status='failed';
