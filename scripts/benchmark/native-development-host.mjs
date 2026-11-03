@@ -171,9 +171,24 @@ if(proof.resourceAmendmentId){
 const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
 const priorRefs=recoveryRefs(boundary.root,task.id);
 let recoveryPlan=null,priorCapacityObservations=[],priorRepairIterations=[],priorLifecycleEvidence=null;
+// Only this exact owner-confirmed, pre-provider native-gate failure can start
+// from its unchanged baseline without a native WIP checkpoint. It had no
+// provider call or native source change; all ordinary failed tasks still
+// require the existing authenticated diagnostics and checkpoint recovery.
+let task4aPregrant=false;
+if(proof.authorityKind==='task4a-developer'&&
+ approval.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
+ if(priorRefs.length)denied('Task 4A pregrant recovery unexpectedly contains native WIP');
+ const {data,error}=await db.rpc('task4a_pregrant_redispatch_ready',{
+  p_task:task.id,p_approval:approval.id
+ });
+ if(error||data!==true||wipContext.baseSha!==wipContext.baselineSha)
+  denied('Task 4A zero-inference original-task recovery evidence changed');
+ task4aPregrant=true;
+}
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
-if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId)){
+if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant)){
  const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
  // Authenticated diagnostics may carry measured history even when the accepted
  // predecessor stopped at the clean baseline and has no source to restore.
