@@ -3,10 +3,21 @@ import { getAvailableProviders } from '@/lib/providers';
 import { buildCandidateMetadata } from '@/lib/router/model-intent';
 import { rankControlPlaneByActualCost } from '@/lib/router/control-plane-economics';
 import { StandaloneAccountingError, createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
+import { getAccountingScope } from '@/lib/standalone-accounting/context';
 import { loadStandalonePricing } from '@/lib/standalone-accounting/pricing-intake';
 import type { PricingSnapshot } from '@/lib/standalone-accounting/pricing';
 
 export type DocumentVisualCandidate = { provider: LlmProvider; modelId: string };
+const designDepth = (candidate: DocumentVisualCandidate): number => {
+  const tier = buildCandidateMetadata(candidate.provider.name, candidate.modelId, 'multimodal-reasoning').reasoning_depth_tier;
+  return tier === 'high' ? 2 : tier === 'medium' ? 1 : 0;
+};
+/** A low-depth model may inspect clipping, but cannot certify professional
+ * design. Keep model quality as a hard floor before considering price. */
+export function qualifiedDocumentDesignCandidates(candidates: DocumentVisualCandidate[]): DocumentVisualCandidate[] {
+  return candidates.filter(candidate => designDepth(candidate) >= 1);
+}
+
 
 /** Price and capability must be verified against the EXACT model, never inherited
  * from the unrelated text-writing model. Discovery alone is not financial evidence. */
@@ -42,15 +53,31 @@ export async function selectDocumentVisualInspector(input: {
     try { return { provider, models: await provider.listModels() }; }
     catch { return { provider, models: [] as string[] }; }
   }));
-  const candidates = eligibleDocumentVisualCandidates(pricing, available);
-  // Keep the activity-bound exact-model replay check in production. The
-  // selector's optional snapshot is reserved for deterministic offline tests.
+  const candidates = qualifiedDocumentDesignCandidates(
+    eligibleDocumentVisualCandidates(pricing, available),
+  );
+  if (!candidates.length) throw new StandaloneAccountingError(
+    'no_qualified_document_design_vision',
+    'No available priceable vision model meets the professional-design reasoning threshold. No file was delivered.',
+  );
+  // Preserve financial authorization/replay. The saved activity's exact model
+  // always wins over new quality rankings; no duplicate provider dispatch.
   const ranked = await rankControlPlaneByActualCost(candidates, input.params, input.pricing, input.activity);
   if (!ranked.length) throw new StandaloneAccountingError(
     'no_priceable_document_vision',
-    'No currently available document-inspection model has verified image pricing for these pages. No visual model was called and no files were delivered.',
+    'No qualified document-design model has verified pricing for these page images. No file was delivered.',
   );
-  const chosen = ranked[0];
+  const scope = getAccountingScope();
+  const saved = scope?.kind === 'standalone' && !input.pricing
+    ? await createStandaloneLedger().lookupAttempt(
+      scope.context.userId, scope.context.requestId,
+      `${input.activity}:${scope.counter.get(input.activity) ?? 0}`,
+    ) : null;
+  // The existing cost preflight sorts by real prepared payload cost. Choose
+  // the strongest reasoning tier available, then cheapest within that tier.
+  // Do not claim this metadata floor is an empirical aesthetic benchmark.
+  const ordered = saved ? ranked : [...ranked].sort((a,b)=> designDepth(b)-designDepth(a));
+  const chosen = ordered[0];
   console.info('[DocumentVision] selected priced model', {
     activity: input.activity, provider: chosen.provider.name, model: chosen.modelId,
     eligibleCandidates: candidates.length,
