@@ -349,9 +349,15 @@ export function applyUserToTaskProgress(
   // Classification of an ordinary reply as "continuation" is not permission.
   if (!state.projectContext && !transition && !isUserWorkAssignment(input.text) &&
       !(state.projects?.length && /^(?:continue|resume|return|go back|back to)\b/i.test(input.text.trim()))) {
-    return { ...state, objective: null, pending: [], answered: [], workProduct: undefined,
+    // A standalone screening/drafting request is a new deliverable, but not
+    // a managed project. Keep its current objective for independent review.
+    const standaloneDeliverable = turnIntent === "new_task";
+    return { ...state,
+      objective: standaloneDeliverable ? {text: input.text, userMessageId: input.messageId} : null,
+      pending: [], answered: [], workProduct: undefined,
       projectClarification: undefined, lastUserMessageId: input.messageId,
-      lastUserIntent: "conversation", stage: "working", nextAction: "continue_original_goal" };
+      lastUserIntent: standaloneDeliverable ? "new_task" : "conversation",
+      stage: "working", nextAction: "continue_original_goal" };
   }
   if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
       turnIntent !== "conversation" && !isProjectBrief(input.text) &&
