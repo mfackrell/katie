@@ -8,6 +8,7 @@ import { freezePreparedRequest, prepareStandaloneRequest, estimatePreparedReques
 import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
 import { OpenAiProvider } from '../lib/providers/openai-provider';
+import { openAiCacheSettings } from '../lib/providers/openai-cache';
 import { nativeToolTurn } from '../lib/providers/native-tools';
 import * as accountingDispatch from '../lib/standalone-accounting/dispatch';
 import { describeAttachmentEvidence } from '../lib/uploads/attachment-observations';
@@ -940,4 +941,52 @@ test('Grok malformed reasoning or conflicting totals fail closed without false s
   assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
   assert.equal(f.events.includes('settle'),false);
  }
+});
+
+
+test('GPT-5.5 with both unreviewed cache errors prepares exact same-model uncached owner approval',async()=>{
+ const model='gpt-5.5',key='katie:v1:fixture-chat';
+ const hints=openAiCacheSettings(model,key,'responses');
+ assert.deepEqual(hints,{prompt_cache_key:key,prompt_cache_retention:'24h'});
+ const priced=PRICING_SNAPSHOT.models.find(row=>row.provider==='openai'&&row.model==='gpt-5.5-pro')!;
+ const pricing:PricingSnapshot={...PRICING_SNAPSHOT,version:'fixture-gpt55',
+  models:[...PRICING_SNAPSHOT.models,{...priced,model,supportsStreaming:true}]};
+ const body={model,input:[{role:'user',content:'Preserve the complete original input.'}],max_output_tokens:256,...hints};
+ const original=prepareStandaloneRequest('openai',model,'/v1/responses',body);
+ assert.deepEqual(estimatePreparedRequest(original,pricing).issues,[
+  'No reviewed no-fee cache metadata policy for this exact model',
+  'Unsupported OpenAI prompt_cache_retention for this exact model',
+ ]);
+ const f=fakeLedger(true,pricing);let counts=0,paid=0;
+ const send=createAccountingFetch('openai',async(url,init)=>{
+  if(String(url).endsWith('/input_tokens')){
+   counts++;assert.deepEqual(JSON.parse(String(init?.body)),{model,input:body.input});
+   return Response.json({input_tokens:42});
+  }
+  paid++;const transmitted=JSON.parse(String(init?.body));
+  assert.equal(transmitted.model,model);
+  assert.deepEqual(transmitted.input,body.input);
+  assert.equal(transmitted.max_output_tokens,256);
+  assert.equal(transmitted.prompt_cache_key,undefined);
+  assert.equal(transmitted.prompt_cache_retention,undefined);
+  return Response.json({id:'mock-gpt55',model,status:'completed',output:[],
+   usage:{input_tokens:42,output_tokens:7,input_tokens_details:{cached_tokens:0}}});
+ },f.factory);
+ const input={method:'POST',body:JSON.stringify(body)};
+ const run=(resumed=false)=>runWithStandaloneAccounting({...context,requestId:'gpt55-cache-mismatch',resumed},
+  ()=>send('https://api.openai.com/v1/responses',input));
+ await assert.rejects(run(),error=>standaloneAccountingCause(error)?.code==='standalone_approval_required');
+ assert.equal(counts,1);assert.equal(paid,0);assert.equal(f.attempts.length,1);
+ const quote=f.attempts[0];
+ assert.equal(quote.state,'paused');
+ assert.equal(quote.model,model);
+ assert.equal(quote.preflight_estimate.ownerApprovalRequired,'selected_model_uncached');
+ assert.equal(quote.preflight_estimate.inputCountSource,'provider');
+ assert.notEqual(quote.prepared_hash,original.hash);
+ assert.deepEqual(JSON.parse(String(quote.prepared_payload.serializedBody)).input,body.input);
+ quote.state='reserved'; // Simulates a separate owner approve_once decision.
+ await run(true);
+ assert.equal(paid,1);assert.equal(counts,1,'resume must reuse exact count');
+ assert.equal(f.attempts.length,1);
+ assert.equal(quote.state,'settled');
 });

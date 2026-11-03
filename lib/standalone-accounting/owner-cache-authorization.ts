@@ -6,6 +6,7 @@ import type { PricingSnapshot } from './pricing';
  * unchanged. Only optional cache metadata is removed before any paid send. */
 export const OWNER_SELECTED_UNCACHED = 'selected_model_uncached' as const;
 const UNREVIEWED_CACHE = 'No reviewed no-fee cache metadata policy for this exact model';
+const UNREVIEWED_RETENTION = 'Unsupported OpenAI prompt_cache_retention for this exact model';
 const CONTEXT_ISSUE = 'Estimated input plus output exceeds supported context window';
 
 export function proposeSelectedModelUncached(
@@ -19,7 +20,7 @@ export function proposeSelectedModelUncached(
   // uncertainty to survive cache-hint removal so dispatch can count the final
   // immutable payload before offering an owner-approved uncached attempt.
   if (!first.issues.includes(UNREVIEWED_CACHE) ||
-      first.issues.some(issue => issue !== UNREVIEWED_CACHE && issue !== CONTEXT_ISSUE)) return null;
+      first.issues.some(issue => issue !== UNREVIEWED_CACHE && issue !== UNREVIEWED_RETENTION && issue !== CONTEXT_ISSUE)) return null;
   const uncachedPayload = { ...original.payload };
   delete uncachedPayload.prompt_cache_key;
   delete uncachedPayload.prompt_cache_retention;
