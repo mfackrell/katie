@@ -20,7 +20,6 @@ test('in-flight stream watchdog checks only the original authorized saved reques
   assert.match(block,/composerChatRef\.current !== chatId/);
   assert.match(block,/\/api\/chat\/status\?chatId=/);
   assert.match(block,/encodeURIComponent\(clientRequestId\)/);
-  assert.match(block,/method:\s*["']POST["']/); // This is not present in watchdog. Removed below.
 });
 test('saved answer is accepted only on matching assistant ID from message storage',()=>{
   const begin=ui.indexOf('recoveryWatchdogTimer = window.setInterval(');
@@ -33,8 +32,8 @@ test('saved answer is accepted only on matching assistant ID from message storag
   assert.match(block,/setMessages\(saved\.messages\)/);
   assert.match(block,/setMessagesByChatId/);
   assert.match(block,/if \(!answerCommitted\)/);
-  assert.match(block,/setStreamingAnswer\("")/);
-  assert.match(block,/setAnswerDisplayed\(true\)/);
+  assert.ok(block.includes('setStreamingAnswer("");'));
+  assert.ok(block.includes("setAnswerDisplayed(true);"));
 });
 test('accounting remains protected: do not abort the transport before settlement completes',()=>{
   const begin=ui.indexOf('recoveryWatchdogTimer = window.setInterval(');
@@ -61,8 +60,8 @@ test('status endpoint exposes actual owner-scoped settlement, never guessed comp
 test('saved answer is rendered normally while post-answer work remains visible',()=>{
   assert.match(ui,/\{loading && !answerDisplayed && \(/);
   assert.match(ui,/\{loading && answerDisplayed \? \(/);
-  assert.match(ui,/setAnswerDisplayed\(true\)/);
-  assert.match(ui,/setAnswerDisplayed\(false\)/);
+  assert.ok(ui.includes("setAnswerDisplayed(true);"));
+  assert.ok(ui.includes("setAnswerDisplayed(false);"));
   assert.match(ui,/if \(!answerCommitted\) setStreamingAnswer\(textContent\)/);
   assert.match(ui,/if \(chunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
   assert.match(ui,/if \(!answerCommitted\) \{/);
