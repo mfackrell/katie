@@ -3188,6 +3188,16 @@ export function ChatPanel({
                       `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
               </p>
             </div>
+            {processingActivity.length > 1 && !streamingAnswer ? (
+              <ol aria-label="Katie live processing activity" className="mt-2 space-y-1 border-t border-white/10 pt-2 text-xs text-zinc-400">
+                {processingActivity.slice(-3).map((step,index) => (
+                  <li key={index} className="flex gap-2">
+                    <span className="text-emerald-400" aria-hidden="true">•</span>
+                    <span>{step.message}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
             {streamingAnswer ? (
               <div aria-label="Streaming assistant response" className="mt-3 border-t border-white/10 pt-3 text-zinc-100/95">
                 <AssistantMarkdown>{streamingAnswer}</AssistantMarkdown>
