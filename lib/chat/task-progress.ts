@@ -217,16 +217,16 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
 function isWorkOrigin(text: string): boolean {
   const trimmed = text.trim();
   return isProjectBrief(trimmed) ||
-    /^(?:(?:please|now|can you|could you|would you|i want you to|i need you to|we need to)\\s+)?(?:write|draft|build|create|prepare|produce|rewrite|revise|implement|fix|repair|analy[sz]e|review|investigate|research|design|develop|calculate|reconcile|evaluate|assess|plan|summari[sz]e|compare|find)\\b/i.test(trimmed) ||
-    /^(?:new\\s+(?:task|project|engagement)|(?:interim|fractional)\\s+(?:cfo|controller)|(?:cfo|controller)\\s+(?:role|position|opportunity))\\b/i.test(trimmed);
+    /^(?:(?:please|now|can you|could you|would you|i want you to|i need you to|we need to)\s+)?(?:write|draft|build|create|prepare|produce|rewrite|revise|implement|fix|repair|analy[sz]e|review|investigate|research|design|develop|calculate|reconcile|evaluate|assess|plan|summari[sz]e|compare|find)\b/i.test(trimmed) ||
+    /^(?:new\s+(?:task|project|engagement)|(?:interim|fractional)\s+(?:cfo|controller)|(?:cfo|controller)\s+(?:role|position|opportunity))\b/i.test(trimmed);
 }
 
 /** Social banter is not an implicit project brief, even in legacy ledgers. */
 function isCompanionOrigin(text: string): boolean {
   const trimmed = text.trim();
   if (isWorkOrigin(trimmed)) return false;
-  return /\\b(?:katie|pissy|lol|haha|hehe|joking|kidding|flirting|chatting|bored|how are you|what'?s up|good morning|good evening|good night)\\b/i.test(trimmed) ||
-    /^(?:a little|yeah|yep|nope|nah|hmm|maybe|sort of|kind of|not really|just saying|i guess|because you|what about you)\\b/i.test(trimmed);
+  return /\b(?:katie|pissy|lol|haha|hehe|joking|kidding|flirting|chatting|bored|how are you|what'?s up|good morning|good evening|good night)\b/i.test(trimmed) ||
+    /^(?:a little|yeah|yep|nope|nah|hmm|maybe|sort of|kind of|not really|just saying|i guess|because you|what about you)\b/i.test(trimmed);
 }
 
 export function emptyTaskProgress(): TaskProgressState {
