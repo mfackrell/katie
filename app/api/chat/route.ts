@@ -1831,8 +1831,10 @@ async function executeChat(request: NextRequest) {
       message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
       hasAttachments: attachments.length > 0 || images.length > 0,
       requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
-      hasPendingDeliverable: Boolean(taskProgress.objective &&
-        (taskProgress.lastUserIntent === "answer" || pendingReviewClarification)),
+      hasPendingDeliverable: Boolean(
+        (taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer") ||
+        pendingReviewClarification
+      ),
       explicitReviewRetry: verifyingSavedDraft,
     });
     const taskProgressPrompt = selectTaskProgressPrompt({
