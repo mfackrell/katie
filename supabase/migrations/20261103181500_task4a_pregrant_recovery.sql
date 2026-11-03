@@ -161,7 +161,7 @@ begin
   and t.external->'receipt'->>'outcome'='BLOCKED'
   and t.external->'receipt'->>'pr_url' is null
   and t.external->>'developerApprovalId' in (a.previous_developer_approval_id::text,a.id::text)
-  and t.status='dispatching'
+  and t.status in ('dispatching','submitted')
   and not exists(select 1 from benchmark_budget_calls c where c.account_id=a.account_id)
   and not exists(select 1 from benchmark_execution_grants g where g.developer_approval_id=a.id)
   and not exists(select 1 from mission_calls c join mission_assignments j on j.id=c.job_id
