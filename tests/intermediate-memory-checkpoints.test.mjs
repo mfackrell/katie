@@ -7,19 +7,20 @@ const route=readFileSync("app/api/chat/route.ts","utf8");
 const migration=readFileSync("supabase/migrations/20261102154000_itm_two_stage_batch_claims.sql","utf8");
 const originalCheckpoint=readFileSync("supabase/migrations/20261026165000_intermediate_memory_checkpoint.sql","utf8");
 
-test("one-model-stage ITM batches 30 older conversational messages",()=>{
+test("two bounded model stages process 30 older conversational messages",()=>{
   assert.match(summary,/SUMMARY_BATCH_MESSAGES = 30/);
   assert.match(summary,/remaining < SUMMARY_BATCH_MESSAGES/);
   assert.match(summary,/olderMessages\.slice\(after, after \+ SUMMARY_BATCH_MESSAGES\)/);
   assert.match(summary,/summarizeNewBatch\(batch\)/);
-  assert.match(summary,/composeRollingEpisodes\(summary, newSummary, checkpoint\.createdAt \?\? null\)/);
+  assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, plan\)/);
   assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
 
-test("deterministic rollover retains atomic source-cursor checkpoint",()=>{
+test("semantic edit plans retain atomic source-cursor checkpoint",()=>{
   assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
-  assert.match(summary,/ITM_NEW_EPISODE_MAX_CHARACTERS = 3300/);
-  assert.match(summary,/if \(result\.length > ITM_TARGET_CHARACTERS\)/);
+  assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
+  assert.match(summary,/if \(output\.length > ITM_TARGET_CHARACTERS\)/);
   assert.match(summary,/p_expected_cursor: expectedCursor, p_content: payload/);
   assert.match(originalCheckpoint,/pg_advisory_xact_lock/);
   assert.match(originalCheckpoint,/if v_cursor is distinct from p_expected_cursor/);
@@ -56,19 +57,15 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 
-test("v6 eliminates full-memory model rewrite and retains fail-closed batch claims",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "single-stage-30-messages-v6-deterministic-rollover"/);
+test("v7 uses semantic reconciliation with bounded edit output, not full memory rewrite",()=>{
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v7-semantic-edits"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
-  assert.match(summary,/max_tokens: SUMMARY_MAX_TOKENS/);
-  assert.equal((summary.match(/client\.post</g)||[]).length,1);
+  assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
+  assert.equal((summary.match(/client\.post</g)||[]).length,2);
+  assert.match(summary,/parseEpisodePlan\(completedText\(response, "semantic plan"/);
   assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
   assert.match(summary,/p_state: "blocked"/);
-  assert.match(summary,/return result/);
-});
-
-test("older summaries are rolled forward by local code without enlarging the memory",()=>{
-  assert.match(summary,/previousEpisodes\(priorSummary: string\)/);
-  assert.match(summary,/clipCompleteThought\(newSummary, ITM_NEW_EPISODE_MAX_CHARACTERS\)/);
-  assert.match(summary,/result\.length > ITM_TARGET_CHARACTERS/);
+  assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, plan\)/);
   assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
 });
