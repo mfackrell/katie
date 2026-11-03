@@ -417,7 +417,7 @@ test("single recovery applies the same episodic-only retention rules without rai
   assert.match(editor,/What were we talking about the other day/);
   assert.match(editor,/DROP: permanent biography/);
   assert.match(editor,/KEEP older discussions when they are still open/);
-  assert.match(editor,/HARD OUTPUT TARGET: at most 6,000 characters/);
+  assert.match(editor,/MAXIMUM OUTPUT: 6,000 characters/);
   assert.match(h.calls[2].body.messages[0].content,/6,000 characters/);
   assert.equal(h.memory().summary,"Recent unresolved topic.");
   assert.equal(h.writes.length,1);
