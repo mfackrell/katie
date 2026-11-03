@@ -16,11 +16,18 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query(readFileSync('supabase/migrations/20261101160000_ordinary_developer_authority.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261103173000_task4a_native_origin_guard.sql','utf8'));
  }
+ const actor=randomUUID(),chat=randomUUID(),owner=randomUUID(),project=randomUUID(),repo=randomUUID();
+ await db.query("insert into actors(id,name,actor_kind) values($1,'Ordinary synthetic owner','standard')",[actor]);
+ await db.query("insert into chats(id,actor_id,title) values($1,$2,'First shortage synthetic fixture')",[chat,actor]);
+ await db.query("insert into repo_sync_runs(id,repository_full_name) values($1,'mfackrell/katie')",[repo]);
+ await db.query('select standalone_bind_scope($1,$2,$3)',[owner,actor,chat]);
+ await db.query('set role service_role');
+ const p=(await db.query('select create_work_project($1,$2,$3,$4,$5,$6) p',[project,'ordinary-'+project,actor,chat,'Synthetic original display repair',repo])).rows[0].p;
  // Original Task 4A may not enter the generic owner-consent path.
  // The fixture uses only synthetic records and rolls back afterward.
  await db.query('begin');
  const guardActor=randomUUID(),guardChat=randomUUID(),guardProject='6d1c29f1-b31e-47a5-aabb-cbcf1326f388',guardMission=randomUUID();
- const guardTeam=(await db.query("select team from work_projects where id='44444444-4444-4444-8444-444444444444'")).rows[0].team;
+ const guardTeam=(await db.query('select team from work_projects where id=$1',[project])).rows[0].team;
  await db.query("insert into actors(id,name) values($1,'Task4A synthetic guard')",[guardActor]);
  await db.query("insert into chats(id,actor_id,title) values($1,$2,'Task4A guard')",[guardChat,guardActor]);
  await db.query("insert into work_projects(id,request_id,actor_id,chat_id,objective,team,status,phase,token_allowance) values($1,$2,$3,$4,'Synthetic Task4A', $5,'running','development',600000)",[guardProject,randomUUID(),guardActor,guardChat,guardTeam]);
@@ -31,13 +38,6 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await assert.rejects(db.query('select developer_initial_snapshot($1,$2)',[randomUUID(),guardJob]),/TASK4A_REQUIRES_CONTINUATION_BOUND_NATIVE_AUTHORITY/);
  await db.query('reset role');
  await db.query('rollback');
- const actor=randomUUID(),chat=randomUUID(),owner=randomUUID(),project=randomUUID(),repo=randomUUID();
- await db.query("insert into actors(id,name,actor_kind) values($1,'Ordinary synthetic owner','standard')",[actor]);
- await db.query("insert into chats(id,actor_id,title) values($1,$2,'First shortage synthetic fixture')",[chat,actor]);
- await db.query("insert into repo_sync_runs(id,repository_full_name) values($1,'mfackrell/katie')",[repo]);
- await db.query('select standalone_bind_scope($1,$2,$3)',[owner,actor,chat]);
- await db.query('set role service_role');
- const p=(await db.query('select create_work_project($1,$2,$3,$4,$5,$6) p',[project,'ordinary-'+project,actor,chat,'Synthetic original display repair',repo])).rows[0].p;
  const contract={path:'/pilot',scenarios:[{name:'Recovered',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]},scope='a'.repeat(64),baseline=(process.env.KATIE_TEST_ORDINARY_HOST==='1'||options.initialLifecycle)?'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319':'b'.repeat(40),contractHash='c'.repeat(64);
  const spec={name:'Synthetic display',summary:'Repair displayed state',requirements:['Display Recovered'],allowedPaths:['app/pilot/'],milestones:[{title:'Display',instruction:'Implement approved display',contract}],finalContract:contract};
  // Declare a frozen fixture before approval; the actual scope approval RPC owns
