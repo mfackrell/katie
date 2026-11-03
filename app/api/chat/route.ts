@@ -948,8 +948,10 @@ async function executeChat(request: NextRequest) {
       contextClassification = { ...(contextClassification ?? {intent: "general-text", preferredProvider: null}),
         projectTransition: {action: "ambiguous", clarification: "I could not read this upload well enough to identify its task. Does it start a new project or belong to the current one?"} };
     }
+    // Observed attachment text is evidence for the classifier, never a
+    // firsthand user assignment or durable project identity.
     const pdfProgress = isProjectStopRequest ? {...priorTaskProgress, projectClarification: undefined} : applyUserToTaskProgress(priorTaskProgress, {
-      messageId: taskProgressUserMessageId, text: taskIdentityText,
+      messageId: taskProgressUserMessageId, text: message,
       projectRelation: contextClassification?.projectRelation,
       projectTransition: contextClassification?.projectTransition,
     });
