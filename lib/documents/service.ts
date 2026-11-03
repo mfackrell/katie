@@ -1,5 +1,6 @@
 import type { ChatGenerateParams, LlmProvider, ProviderResponse } from '@/lib/providers/types';
-import { getAccountingScope, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
+import { getAccountingScope, runWithStandaloneActivity, standaloneAccountingCause } from '@/lib/standalone-accounting/context';
+import { createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { cachedWorkflowValue } from '@/lib/standalone-accounting/workflow';
 import { currentAgentTask } from '@/lib/agents/policy';
 import { launchWebsiteBrowser } from '@/lib/research/website-evidence';
@@ -38,7 +39,23 @@ export async function deliverDocument(input: {
     const timer = setTimeout(() => { void browser.close().catch(() => undefined); }, Math.max(1, deadlineMs - Date.now()));
     try {
       const produced = await produceDocument({ spec, browser, deadlineMs,
-        requireDesignAssessment: true,
+        // Aesthetic review is best effort, but a pending payment/approval or
+        // uncertain provider charge must never be silently settled as success.
+        canSkipDesignReviewError: async error => {
+          const accountingFailure = standaloneAccountingCause(error);
+          if (accountingFailure) return [
+            'standalone_no_qualified_document_design_vision',
+            'standalone_no_priceable_document_vision',
+          ].includes(accountingFailure.code ?? '');
+          const active = getAccountingScope();
+          if (active?.kind === 'standalone') {
+            const uncertain = await createStandaloneLedger().requestUncertainties(
+              active.context.userId, active.context.requestId,
+            );
+            return uncertain.length === 0;
+          }
+          return true;
+        },
         inspect: async (rendered, attempt, context) => {
           const activity = `document-visual-${attempt}`;
           const usable = (context?.layout.pages ?? []).map(indices =>
