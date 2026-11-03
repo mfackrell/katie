@@ -21,6 +21,8 @@ create table if not exists public.benchmark_native_spending_approvals(
  max_tokens bigint,deadline timestamptz,revoked_at timestamptz,consumed_at timestamptz,
  project_id uuid,mission_assignment_id uuid,task_id uuid,
  developer_authority jsonb,continuation_id uuid);
+alter table public.benchmark_native_spending_approvals
+ add column if not exists previous_developer_approval_id uuid references public.benchmark_native_spending_approvals(id);
 create table if not exists public.benchmark_execution_grants(
  id uuid primary key default gen_random_uuid(),token_digest text,project_id uuid,
  execution_epoch bigint,developer_approval_id uuid,mission_assignment_id uuid,
