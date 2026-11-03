@@ -14,7 +14,7 @@ import { createDocumentStore, hash, documentLinks } from '../lib/documents/stora
 import { createDocumentDownload } from '../lib/documents/download';
 import { resolveDocumentDownload } from '../lib/documents/client-download';
 import { produceDocument, shouldStopForReadingOrder, shouldTryCompactLayout } from '../lib/documents/production';
-import { generateDocx, paginate, DocumentPageFitError, documentPageStyle } from '../lib/documents/generate';
+import { generateDocx, paginate, DocumentPageFitError, documentPageStyle, DOCUMENT_TYPE } from '../lib/documents/generate';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { deliverDocument } from '../lib/documents/service';
 import { eligibleDocumentVisualCandidates, selectDocumentVisualInspector } from '../lib/documents/visual-routing';
@@ -23,6 +23,39 @@ import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
 import type { LlmProvider } from '../lib/providers/types';
+
+
+test('pagination prefers semantic section starts when both pages can fit unchanged content', () => {
+  const spec = documentSchema.parse({title:'General report',targetPages:2,blocks:[
+    {kind:'heading',level:1,text:'Opening'},
+    {kind:'paragraph',text:'First section body'},
+    {kind:'heading',level:2,text:'Analysis'},
+    {kind:'paragraph',text:'Second section body'},
+    {kind:'heading',level:2,text:'Conclusions'},
+    {kind:'paragraph',text:'Third section body'},
+  ]});
+  const layout = paginate(spec,[100,260,80,260,80,260],2,2,true);
+  assert.deepEqual(layout.pages,[ [0,1], [2,3,4,5] ]);
+  assert.deepEqual(layout.pages.flat(),[0,1,2,3,4,5]);
+});
+
+test('semantic document hierarchy stays distinct without reducing readable body text', async () => {
+  assert.equal(DOCUMENT_TYPE.bodyHalfPoints, 22);
+  assert.ok(DOCUMENT_TYPE.headingHalfPoints[0] > DOCUMENT_TYPE.headingHalfPoints[1]);
+  assert.ok(DOCUMENT_TYPE.headingHalfPoints[1] > DOCUMENT_TYPE.headingHalfPoints[2]);
+  assert.ok(DOCUMENT_TYPE.headingHalfPoints[2] >= DOCUMENT_TYPE.bodyHalfPoints);
+  const spec = documentSchema.parse({title:'General report',targetPages:1,blocks:[
+    {kind:'heading',level:1,text:'General report'},
+    {kind:'heading',level:2,text:'Findings'},
+    {kind:'heading',level:3,text:'Observed trends'},
+    {kind:'paragraph',text:'Some factual content remains unchanged.'},
+    {kind:'bullet',text:'First finding preserved verbatim.'},
+  ]});
+  const bytes = await generateDocx(spec,{pages:[[0,1,2,3,4]],spacing:4});
+  const extracted = await mammoth.extractRawText({buffer: bytes} as unknown as Parameters<typeof mammoth.extractRawText>[0]);
+  for (const block of spec.blocks) if ('text' in block)
+    assert.ok(extracted.value.includes(block.text), 'DOCX must retain source wording');
+});
 
 const fixture = documentSchema.parse(JSON.parse(readFileSync('fixtures/documents/executive-resume.json', 'utf8')));
 const scope = { ownerId: '11111111-1111-4111-8111-111111111111', actorId: '22222222-2222-4222-8222-222222222222', chatId: '33333333-3333-4333-8333-333333333333', requestId: 'fixture-request' };

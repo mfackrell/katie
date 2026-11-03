@@ -5,11 +5,12 @@ import { documentSchema } from './model';
 import { produceDocument } from './production';
 import { sha256 } from './render';
 
-// Reviewed raster fingerprints of the fixed synthetic fixture, with pinned Arimo
-// fonts, Chromium 148 and PDF.js 5.4.624. Not a substitute for arbitrary-document vision.
+// Synthetic two-page fixture independently inspected 2026-11-02 from CI run 41544220652.
+// Readable hierarchy and no clipping; second page continues the bullet list.
+// Pinned raster fingerprints catch technical drift, not general design quality.
 export const QUALIFIED_PAGES = [
-  '5c2f9e160bcc6da7c42b39c7743948e4c4638e4ec20865dec0abcc5de4e234b8',
-  'a8517e0e01a1ef3d32485dce2a6441452098bfb81e0d8d697a51e93d079844f3',
+  'a60404323d66e76baaac5b3134ba513f099d5b06e420a6f2e4f7f3792d9d1564',
+  'db7d776fa457085bad17f21e4b08fce7f0e261e154a0979b6f8861936f586b42',
 ];
 export async function qualifyDocument(browser: Browser, deadlineMs: number) {
   const spec = documentSchema.parse(JSON.parse(await readFile(join(process.cwd(), 'fixtures/documents/executive-resume.json'), 'utf8')));
