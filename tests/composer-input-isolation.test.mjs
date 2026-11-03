@@ -45,3 +45,10 @@ test("Chromium acceptance measures short/long-thread p95 latency, React commits,
   assert.match(browser, /recoveredDraft !== shortTyping\.text/);
   assert.match(browser, /Quick Enter should send without waiting for draft debounce/);
 });
+
+test("programmatic composer edits force local input synchronization without relying on debounced draft echo", () => {
+  assert.match(panel, /composerValueRef\.current = nextValue;\s*setInput\(nextValue\);\s*resetComposerInput\(version=>version\+1\)/);
+  assert.match(panel, /setInput\(SAVED_DOCUMENT_EXPORT_PROMPT\);\s*resetComposerInput\(version=>version\+1\)/);
+  assert.match(panel, /setInput\("Change this project's scope: "\);\s*resetComposerInput\(version=>version\+1\)/);
+  assert.match(panel, /setInput\(content\);\s*resetComposerInput\(version=>version\+1\);\s*setStatusMessage\(httpCause\)/);
+});
