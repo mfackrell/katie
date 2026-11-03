@@ -10,6 +10,7 @@ on:
       - 'tests/helpers/project-lifecycle-postgres.mjs'
       - 'tests/projects-sql.test.mjs'
       - 'tests/helpers/task4a-continuation-postgres.mjs'
+      - 'tests/helpers/task4a-post-migration-research-admission.mjs'
       - 'tests/task4a-continuation-owner.test.mjs'
       - 'app/api/projects/task4a-continuation/route.ts'
       - 'lib/projects/owner-authorization.ts'
