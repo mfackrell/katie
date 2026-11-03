@@ -1,4 +1,4 @@
-import {encodeDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
+import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
@@ -709,8 +709,20 @@ async function dispatchOrdinaryNativeDevelopment(){
   try{
    task=await readTask(a.task_id);c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
    if(a.previous_developer_approval_id){
-    const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
-    if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+    // One pre-provider Task 4A gate failure has no WIP checkpoint to recover.
+    // Only the separately owner-consented, immutable replacement approval
+    // may use the original issue; ordinary successors retain the WIP gate.
+    const pregrant=c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+    if(pregrant){
+      const {data:ready,error}=await db.rpc<boolean>('task4a_pregrant_redispatch_ready',{
+        p_task:task.id,p_approval:a.id
+      });
+      if(error||ready!==true)continue;
+    }else{
+      const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
+      if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+    }
    }
   }catch{continue;} // Ineligible or unavailable evidence denies this row, not unrelated approvals.
   const client=github(),binding=await repository(task);
@@ -737,7 +749,29 @@ async function dispatchOrdinaryNativeDevelopment(){
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
-   if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!unpackDevelopmentRequest(existing.data.body??'').startsWith(marker(task)+'\n'))continue;
+   const priorBody=unpackDevelopmentRequest(existing.data.body??'');
+   if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||
+     !priorBody.startsWith(marker(task)+'\n'))continue;
+   if(authority.authorityKind==='task4a-developer'&&
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
+     // Authenticate the old incorrect signed issue against the historical
+     // dispatch instant. It must never be replayed as a new grant.
+     let oldProof:ReturnType<typeof readDeveloperHandoff>;
+     try{oldProof=readDeveloperHandoff(priorBody,key,
+       Date.parse(String(task.external.dispatchStartedAt??'')));}catch{continue;}
+     const oldApproval=a.previous_developer_approval_id;
+     const failure=task.external.receipt;
+     if(oldProof.authorityKind!=='ordinary-developer'||
+       oldProof.projectId!==c.projectId||oldProof.taskId!==task.id||
+       oldProof.approvalId!==oldApproval||oldProof.scopeHash!==c.scopeHash||
+       oldProof.contractHash!==c.contractHash||oldProof.baselineSha!==c.baselineSha||
+       issue!==969||failure?.outcome!=='BLOCKED'||failure?.run_id!==41673059705||
+       failure?.pr_url!==null)continue;
+     const run=await client.actions.getWorkflowRun({...binding,run_id:41673059705});
+     if(run.data.conclusion!=='failure'||run.data.status!=='completed'||
+       run.data.head_sha!==task.external.developerReleaseSha||
+       run.data.event!=='issues')continue;
+   }
   }else if(task.external.attempted||task.external.issueNumber)continue;
   const claim=await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});if(claim.error||claim.data!==true)continue;
   const claimed=await readTask(task.id);
