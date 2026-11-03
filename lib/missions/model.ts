@@ -49,6 +49,25 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  const fullBinding=await fullProjectBinding(claim);
+ // One owner-approved project continuation binds research/specification/review
+ // to a fixed verified-price transport. Actual atomic authorization remains
+ // inside the canonical mission-call reservation, never this read.
+ let continuation:{allowed_models:string[]}|null=null;
+ if(claim.mission.project_id){
+  const {data,error}=await getSupabaseAdminClient().from('project_continuation_authorizations')
+   .select('allowed_models').eq('project_id',claim.mission.project_id)
+   .maybeSingle<{allowed_models:string[]}>();
+  // Older deployments/projects without this migration must fail closed for
+  // this specific saved Task 4A, rather than silently using legacy free-dollar authority.
+  if(error&&claim.mission.project_id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388')
+   throw Error('Task 4A continuation financial admission unavailable');
+  if(!error)continuation=data;
+ }
+ if(continuation&&tools==='research')
+  throw Error('Task 4A continuation does not authorize paid live web tools; reuse the completed source research');
+ const continuationModel=continuation?'openai:gpt-5.6-sol':null;
+ if(continuationModel&&continuation&&!continuation.allowed_models.includes(continuationModel))
+  throw Error('Continuation model is not on the owner-approved list');
  const ordinaryAuthority=claim.mission.project_id?await rpc<{bound:boolean;live:boolean;model:string}|null>('developer_bound_mission_authority',{p_mission:claim.mission.id}):null;
  const ordinary=Boolean(ordinaryAuthority?.bound);
  if(ordinary&&(!ordinaryAuthority?.live||ordinaryAuthority.model!=='gpt-5.3-codex'||process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'))throw Error('Ordinary lifecycle authority is unavailable; no generic fallback permitted');
@@ -82,7 +101,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   }:{
    reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
-  },fixedModel:metered?{provider:'openai',modelId:'gpt-5.3-codex'}:undefined,research:effectiveTools==='research',review:claim.job.role==='review',
+  },fixedModel:metered?{provider:'openai',modelId:'gpt-5.3-codex'}:continuationModel?{provider:'openai',modelId:'gpt-5.6-sol'}:undefined,research:effectiveTools==='research',review:claim.job.role==='review',
   // The server already knows specification writing is architecture/planning.
   // Avoid paying a second classifier to rediscover this known phase.
   planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)),
@@ -98,14 +117,14 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
   try{
    let result:ModelResult;
-   try{result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,metered,ordinary);}
+   try{result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,metered,ordinary,Boolean(continuation));}
    catch(error){
     if(error instanceof MissionModelFailure&&typeof error.partial.partialText==='string')incomplete=error.partial;
     if(!(error instanceof MissionModelFailure)||error.partial.incompleteReason!=='max_output_tokens'||!String(error.partial.partialText??'').trim()||expandedOutputTokens||Number(error.partial.outputTokenLimit)>=12000)throw error;
     // One capacity correction on the selected model, within the same ledger and
     // wall-clock window. Never rotate through providers with an identical cap.
     expandedOutputTokens=Math.min(12000,Number(error.partial.outputTokenLimit)*2);
-    result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,metered,ordinary);
+    result=await executeMissionModel(claim,instruction,input,effectiveTools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat,metered,ordinary,Boolean(continuation));
    }
    const complete={...result,requestedExecutionEffort:claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string'?'low':['compose','revise'].includes(claim.job.role)&&claim.mission.project_kind!=='specification'?'medium':undefined,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
    if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
@@ -139,7 +158,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat,fullBenchmark=false,ordinary=false):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat,fullBenchmark=false,ordinary=false,fenced=false):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const specificationV2=(claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget?.version===2;
@@ -160,7 +179,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const callId=randomUUID();
   const calculatorAvailable=tools==='calculate'&&turn<3&&calculations.length<8;
   const calculatorPhase=tools!=='calculate'?'':'\nUse the calculator whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Return the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
-  const request={...(fullBenchmark?{service_tier:'default'}:{}),model:selectedModel,instructions:instruction+(gameSpecification&&!specificationPatch&&['compose','revise'].includes(claim.job.role)?'\nGAME RULE SCHEMA: Every rule.category must be one of '+GAME_RULE_CATEGORIES.join(', ')+'. Do not invent categories such as state, transition, outcome, invalid-action, terminal or architecture; use an applicable allowed category or other. Every verified/approved rule ID, including engine architecture and UI requirements, must appear in at least one acceptance scenario ruleIds list. UNKNOWN SCHEMA: game.rules.unknowns must be an array; use [] if none. Every entry needs {id,question,status:\"open\"|\"resolved\",blocking:boolean,ruleIds:[existingRuleId]}. For resolved entries, also include decisionSourceId identifying a real source. A descriptive {id,description} entry is INVALID. Unspecified cosmetic or storage-key details can remain open nonblocking questions only if their ruleIds resolve; never silently treat a blocking gameplay decision as nonblocking. Each scenario needs nonempty valid ruleIds and invariantIds. On repair, satisfy ALL supplied diagnostics together, including missingRuleCoverage, uniqueCharacterLimit and assessmentCapacity; fixing only the first error is insufficient.\nGAME SPECIFICATION SIZE: Return minified complete JSON. The lossless unique specification must fit 40,000 characters; the server counts canonically identical repeated browser contracts once. Return the complete expanded JSON with all required copies; do not emit references or omit data. Use one complete milestone when the original request permits it; do not invent staged increments. Each browser contract has at most 100 TOTAL steps across all scenarios, not 100 per scenario. Count navigation, clicks and assertions. Use concise rule descriptions and consolidated browser paths while retaining every required rule, state assertion, invalid action and reload check. No omitted requirements or placeholder references.':'')+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Use at most four native web calls. If the first query returns no results, broaden the query before concluding that research is unavailable. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':'')+(gameSpecification&&specificationV2&&!specificationPatch&&['compose','revise'].includes(claim.job.role)?'\n'+COMPACT_GAME_INSTRUCTION:''),input:context,max_output_tokens:outputTokens,store:false,executionEffort:targetedPatch?'low' as const:deliverableEnvelope?'medium' as const:undefined,
+  const request={...((fullBenchmark||fenced)?{service_tier:'default'}:{}),model:selectedModel,instructions:instruction+(gameSpecification&&!specificationPatch&&['compose','revise'].includes(claim.job.role)?'\nGAME RULE SCHEMA: Every rule.category must be one of '+GAME_RULE_CATEGORIES.join(', ')+'. Do not invent categories such as state, transition, outcome, invalid-action, terminal or architecture; use an applicable allowed category or other. Every verified/approved rule ID, including engine architecture and UI requirements, must appear in at least one acceptance scenario ruleIds list. UNKNOWN SCHEMA: game.rules.unknowns must be an array; use [] if none. Every entry needs {id,question,status:\"open\"|\"resolved\",blocking:boolean,ruleIds:[existingRuleId]}. For resolved entries, also include decisionSourceId identifying a real source. A descriptive {id,description} entry is INVALID. Unspecified cosmetic or storage-key details can remain open nonblocking questions only if their ruleIds resolve; never silently treat a blocking gameplay decision as nonblocking. Each scenario needs nonempty valid ruleIds and invariantIds. On repair, satisfy ALL supplied diagnostics together, including missingRuleCoverage, uniqueCharacterLimit and assessmentCapacity; fixing only the first error is insufficient.\nGAME SPECIFICATION SIZE: Return minified complete JSON. The lossless unique specification must fit 40,000 characters; the server counts canonically identical repeated browser contracts once. Return the complete expanded JSON with all required copies; do not emit references or omit data. Use one complete milestone when the original request permits it; do not invent staged increments. Each browser contract has at most 100 TOTAL steps across all scenarios, not 100 per scenario. Count navigation, clicks and assertions. Use concise rule descriptions and consolidated browser paths while retaining every required rule, state assertion, invalid action and reload check. No omitted requirements or placeholder references.':'')+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Use at most four native web calls. If the first query returns no results, broaden the query before concluding that research is unavailable. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':'')+(gameSpecification&&specificationV2&&!specificationPatch&&['compose','revise'].includes(claim.job.role)?'\n'+COMPACT_GAME_INSTRUCTION:''),input:context,max_output_tokens:outputTokens,store:false,executionEffort:targetedPatch?'low' as const:deliverableEnvelope?'medium' as const:undefined,
    ...(reviewFormat?{text:{format:missionReviewFormat(reviewFormat)}}:targetedPatch||specificationPatch?{text:{format:zodTextFormat(missionRevisionPatchSchema,'mission_revision_patch')}}:claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?{text:{format:gameSpecification?{type:'json_object'}:zodTextFormat(projectPlanSchema.omit({game:true}),'project_specification')}}:deliverableEnvelope?{text:{format:zodTextFormat(missionDeliverableSchema,'mission_deliverable')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],include:['web_search_call.action.sources'],tool_choice:'required',max_tool_calls:4}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
@@ -184,7 +203,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   try{
    if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
    const response=await client.responses.create(request,{timeout:inferenceTimeout});
-   if(fullBenchmark&&(response as {service_tier?:string}).service_tier!=='default')throw Error('Full provider service tier uncertain; reservation retained');
+   if((fullBenchmark||fenced)&&(response as {service_tier?:string}).service_tier!=='default')throw Error('Full provider service tier uncertain; reservation retained');
    let draftCheckpointFailed=false;
    if(gameSpecification&&specificationV2&&['compose','revise'].includes(claim.job.role)){
     try{draftCheckpointFailed=!await rpc<boolean>('checkpoint_mission_specification_draft',{p_id:claim.job.id,p_lease:claim.job.lease,p_response:response.output_text??'',p_candidate:null,p_validation:'Provider response captured before semantic validation: '+response.status});}

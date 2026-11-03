@@ -3,7 +3,9 @@ import {freshNativePhaseWork} from './native-phase-profile.mjs';
 // is synthesized; the service snapshot authenticates the original project owner.
 export async function readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha}){
  const deny=()=>{throw Error('ORDINARY_NATIVE_AUTHORITY_DENIED');};
- if(proof.authorityKind!=='ordinary-developer'||approval.developer_authority?.version!=='ordinary-developer-v1'
+ if(!['ordinary-developer','task4a-developer'].includes(proof.authorityKind)||
+  (proof.authorityKind==='task4a-developer'?(approval.developer_authority?.task4aContinuationId!==proof.task4aContinuationId||project.id!=='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'):approval.developer_authority?.task4aContinuationId!==undefined)||
+  approval.developer_authority?.version!=='ordinary-developer-v1'
   ||approval.trial_id!==null||approval.continuation_id!==null||account.arm!=='developer'
   ||account.trial_id!==null||account.experiment_id!==null||account.developer_project_id!==project.id
   ||account.developer_task_id!==task.id||proof.accountId!==account.id||approval.account_id!==account.id||approval.task_id!==task.id
@@ -16,6 +18,10 @@ export async function readOrdinaryNativeAuthority({db,proof,approval,project,acc
   ||s.ownerId!==approval.owner_id||s.accountId!==account.id||s.revoked||s.frozen
   ||s.position.expiresAt<=Date.now()||project.status!=='running'||project.phase!=='development')deny();
  for(const key of ['taskId','projectId','scopeHash','contractHash','baselineSha'])if(s.binding[key]!==proof[key])deny();
+ if(proof.authorityKind==='task4a-developer'){
+  const check=await db.rpc('task4a_native_authority_ready',{p_project:project.id,p_task:task.id,p_authority:proof.task4aContinuationId});
+  if(check.error||check.data!==true)deny();
+ }
  return s;
 }
 

@@ -28,6 +28,12 @@ function trustedTools(root){
   mkdirSync(join(root, 'scripts'));
   mkdirSync(join(root, 'temp', 'project-tools'), {recursive:true});
   for(const name of ['project-game-rules.mjs','project-game-check.mjs','project-context.mjs','request-envelope.mjs','project-browser-check.mjs','project-sandbox.mjs','project-ci.mjs','project-scope.mjs','project-browser-engine.mjs','recovery-scope.mjs']){const source=new URL('../scripts/'+name,import.meta.url);copyFileSync(source,join(root,'scripts',name));copyFileSync(source,join(root,'temp','project-tools',name));}
+  // The trusted workflow now executes this fail-closed gate even for ordinary
+  // tasks with no project marker. The disposable checkout must retain its
+  // exact trusted imports; no model-authored or project branch files are used.
+  mkdirSync(join(root,'scripts','benchmark'),{recursive:true});
+  for(const name of ['developer-dispatch-contract.mjs','task4a-native-gate.mjs'])
+   copyFileSync(new URL('../scripts/benchmark/'+name,import.meta.url),join(root,'scripts','benchmark',name));
 }
 function shell(script, root, mode, extra = {}) {
   return spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {

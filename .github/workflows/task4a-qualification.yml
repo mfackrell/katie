@@ -1,0 +1,110 @@
+name: Task 4A protected Preview nonbillable qualification
+
+on:
+  pull_request:
+    paths:
+      - 'lib/agents/development.ts'
+      - 'lib/projects/preview.ts'
+      - 'tests/task4a-preview-security.test.mjs'
+      - 'tests/helpers/lifecycle-preview-transport.mjs'
+      - 'tests/helpers/project-lifecycle-postgres.mjs'
+      - 'tests/projects-sql.test.mjs'
+      - 'tests/helpers/task4a-continuation-postgres.mjs'
+      - 'tests/task4a-continuation-owner.test.mjs'
+      - 'app/api/projects/task4a-continuation/route.ts'
+      - 'lib/projects/owner-authorization.ts'
+      - 'lib/missions/model.ts'
+      - 'components/task4a-continuation-owner-approval.tsx'
+      - 'components/chat-panel.tsx'
+      - 'supabase/migrations/20261102211500_task4a_continuation_admission.sql'
+      - 'supabase/migrations/20261102211600_task4a_expired_research_owner_recovery.sql'
+      - 'supabase/migrations/20261102211700_task4a_verified_model_price_sources.sql'
+      - 'supabase/migrations/20261102211800_task4a_native_developer_bridge.sql'
+      - 'scripts/benchmark/developer-dispatch-contract.mjs'
+      - 'scripts/benchmark/developer-dispatch-contract.d.mts'
+      - 'scripts/benchmark/native-development-host.mjs'
+      - 'scripts/benchmark/native-dispatch-cli.mjs'
+      - 'scripts/benchmark/ordinary-native-authority.mjs'
+      - 'scripts/benchmark/authenticated-native-gateway.mjs'
+      - 'scripts/benchmark/native-http-bridge.mjs'
+      - 'tests/task4a-native-bridge.test.mjs'
+      - 'docs/qualifications/task4a-readiness-2026-11-02.json'
+      - '.github/workflows/task4a-qualification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  task4a-fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      QUALIFICATION_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install repository dependencies without running scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Production-validator Preview security fixture matrix
+        run: |
+          mkdir -p task4a-qualification
+          KATIE_TASK4A_CASE_REPORT=task4a-qualification/cases.json KATIE_TEST_REPORT_PATH=task4a-qualification/test-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/task4a-preview-security.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const report=JSON.parse(readFileSync('task4a-qualification/test-report.json','utf8'));
+          if(!report.success||report.counts.tests!==8||report.counts.passed!==8||report.counts.failed||report.counts.skipped||report.counts.todo||report.completed!==8)
+            throw new Error('Task 4A negative-case matrix missing or failed');
+          const caseReport=JSON.parse(readFileSync('task4a-qualification/cases.json','utf8'));
+          if(caseReport.cases.length<35||caseReport.cases.some(c=>c.verdict!=='PASS')||!caseReport.cases.some(c=>c.kind==='positive')||!caseReport.cases.some(c=>c.kind==='negative'))
+            throw new Error('Task 4A case-level evidence missing or incomplete');
+          const receipt={version:1,task:'4A',headSha:process.env.QUALIFICATION_HEAD_SHA,assertions:report.counts,caseCount:caseReport.cases.length,
+            evidenceClass:'DETERMINISTIC_FIXTURE',fixturePassed:true,
+            actualGitHubVercelLiveValidated:false,protectedPreviewHttpAccessValidated:false,
+            projectCompletionVerified:false,task4aVerdict:'BLOCKED_LIVE_TARGET',
+            paidProviderInference:0};
+          writeFileSync('task4a-qualification/receipt.json',JSON.stringify(receipt,null,2)+'\n');
+          console.log('Task 4A deterministic source-validator qualification: PASS; live requirement: BLOCKED');
+          NODE
+      - name: Verify authenticated Task 4A owner approval endpoint
+        run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
+      - name: Verify Task 4A signed native gateway and unchanged legacy routes
+        run: node --test tests/task4a-native-bridge.test.mjs
+      - name: Install isolated PostgreSQL and filesystem containment
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Verify actual PostgreSQL lifecycle against fake Vercel edge
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-lifecycle-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-lifecycle-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.skipped||r.counts.cancelled||r.counts.todo||r.completed!==1)
+            throw new Error('Isolated project lifecycle regression did not complete');
+          const path='task4a-qualification/receipt.json',receipt=JSON.parse(readFileSync(path,'utf8'));
+          receipt.postgresLifecycle={passed:true,evidenceClass:'ACTUAL_ISOLATED_POSTGRES_AND_CHROMIUM_WITH_SYNTHETIC_EDGE',testFile:'tests/projects-sql.test.mjs'};
+          writeFileSync(path,JSON.stringify(receipt,null,2)+'\n');
+          console.log('Isolated PostgreSQL project lifecycle: PASS; real hosted Task 4A still blocked');
+          NODE
+      - name: Retain independently inspectable machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4a-deterministic-qualification
+          path: task4a-qualification/
+          retention-days: 90

@@ -13,7 +13,7 @@ export function previewTransport(real,{fixture,trace}){
   assert.equal(projectId,fixture.context.projectId);
   assert.deepEqual(JSON.parse(JSON.stringify(contract)),fixture.context.contract);
   const run=async(actualContract,origin,options)=>{
-   assert.deepEqual(JSON.parse(JSON.stringify(actualContract)),fixture.context.contract);assert.equal(origin,syntheticPreviewOrigin);assert.equal(options.deployed,true);assert.ok(Array.isArray(options.cookies));assert.equal(options.cookies.length,0);
+   assert.deepEqual(JSON.parse(JSON.stringify(actualContract)),fixture.context.contract);assert.equal(origin,syntheticPreviewOrigin);assert.equal(options.deployed,true);assert.ok(Array.isArray(options.cookies));assert.equal(options.cookies.length,1);assert.equal(options.cookies[0].url,syntheticPreviewOrigin+'/');assert.equal(Object.hasOwn(options.cookies[0],'domain'),false);
    const candidate=fixture.continued,output=join(candidate.runtime,'final-project-browser.json');
    const module=join(candidate.runtime,'project-tools/project-browser-check.mjs');
    const code=`import {checkProject} from ${JSON.stringify(module)}; const r=await checkProject(JSON.parse(process.argv[1])); if(!r?.passed)process.exitCode=1;`;
@@ -25,6 +25,21 @@ export function previewTransport(real,{fixture,trace}){
    assert.equal(receipt.passed,true);assert.equal(receipt.headSha,preview.headSha);assert.equal(receipt.contractHash,fixture.context.contractHash);
    fixture.finalBrowser=receipt;trace.push({boundary:'actual_local_final_browser',head:receipt.headSha,contractHash:receipt.contractHash});return receipt.checks;
   };
-  return real.verifyDeployedPreview(preview,contract,projectId,async url=>{assert.equal(new URL(url).origin,syntheticPreviewOrigin);return new Response('Synthetic deployment transport; actual candidate checked separately');},run);
+  const priorSecret=process.env.PROJECT_PREVIEW_BYPASS_SECRET,priorPattern=process.env.PROJECT_PREVIEW_HOST_PATTERN;
+  // Synthetic edge authentication only. No real deployment or provider credential.
+  process.env.PROJECT_PREVIEW_BYPASS_SECRET='fixture-only-edge-secret';
+  process.env.PROJECT_PREVIEW_HOST_PATTERN='^katie-([a-z0-9]{9})-synthetic\\.vercel\\.app$';
+  try{return await real.verifyDeployedPreview(preview,contract,projectId,async (url,options)=>{
+   assert.equal(new URL(url).origin,syntheticPreviewOrigin);
+   if(options.headers?.['x-vercel-protection-bypass']){
+    assert.equal(options.headers['x-vercel-protection-bypass'],'fixture-only-edge-secret');
+    return new Response(null,{status:302,headers:{'set-cookie':'_vercel_jwt=fixture-host-cookie; Path=/; Secure; HttpOnly','location':'/'}});
+   }
+   assert.equal(options.headers?.cookie,'_vercel_jwt=fixture-host-cookie');
+   return new Response('Synthetic deployment transport; actual candidate checked separately',{status:200});
+  },run);}finally{
+   if(priorSecret===undefined)delete process.env.PROJECT_PREVIEW_BYPASS_SECRET;else process.env.PROJECT_PREVIEW_BYPASS_SECRET=priorSecret;
+   if(priorPattern===undefined)delete process.env.PROJECT_PREVIEW_HOST_PATTERN;else process.env.PROJECT_PREVIEW_HOST_PATTERN=priorPattern;
+  }
  }};
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { recoveryResourceProposal } from '@/lib/projects/recovery-budget';
+import { verifiedProjectOwnerSession } from '@/lib/projects/owner-authorization';
 import { getChatById, getMessages } from '@/lib/data/persistence-store';
 import { projectForChat, projectRpc, type Project } from '@/lib/projects/store';
 import { hasPendingExecutiveDelivery } from '@/lib/executive/delivery';
@@ -100,12 +101,16 @@ const recoveryApprovalInput=projectIdentity.extend({
   renewalHours:z.union([z.literal(48),z.literal(72)]),
 }).strict();
 
+// Resource authorization is sensitive even when actor/chat IDs are valid.
+// Ordinary Katie chats do not require sign-in; owner spending consent does.
+// This follows the existing owner-session verification used by self-tools.
 // Owner-initiated action only: a forecast or cron can NEVER approve spending.
 export async function PATCH(request:NextRequest){
  let stage='load_owned_project';
  let input:z.infer<typeof recoveryApprovalInput>;
  try{input=recoveryApprovalInput.parse(await request.json());}
  catch{return NextResponse.json({error:'Invalid resource authorization'}, {status:400});}
+ if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required for spending authorization'},{status:403});
  try{
   const p=await ownedProject(input.actorId,input.chatId);
   if(!p)return NextResponse.json({error:'Project chat unavailable'},{status:404});
