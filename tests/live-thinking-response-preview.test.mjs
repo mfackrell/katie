@@ -1,17 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+
 const panel = readFileSync('components/reasoning-explainer-panel.tsx', 'utf8');
 const chat = readFileSync('components/chat-panel.tsx', 'utf8');
-test('thinking panel presents existing streamed answer only while loading', () => {
-  assert.match(panel, /streamingAnswer\?: string/);
-  assert.match(panel, /loading && streamingAnswer \?/);
-  assert.match(panel, /aria-label="Live response preview"/);
-  assert.match(panel, /streamingAnswer\.slice\(-1600\)/);
-  assert.match(panel, /!state\.startedAt && !streamingAnswer/);
+
+test('thinking panel shows status and collaboration, never streamed answer content', () => {
+  assert.doesNotMatch(panel, /streamingAnswer\?: string|Live response preview|streamingAnswer\.slice/);
+  assert.match(panel, /collaborationActivity/);
+  assert.match(panel, /statusMessage/);
 });
-test('status rail and popup share the existing chat delta state', () => {
-  assert.equal((chat.match(/streamingAnswer=\{streamingAnswer\}/g) ?? []).length, 2);
-  assert.match(chat, /if \(chunk\.type === "delta"\) \{\s*textContent \+= chunk\.text;\s*setStreamingAnswer\(textContent\)/);
+
+test('central conversation progress owns live assistant text while the right rail stays status-only', () => {
+  assert.equal((chat.match(/streamingAnswer=\{streamingAnswer\}/g) ?? []).length, 0);
+  assert.match(chat, /aria-label="Katie response progress"/);
+  assert.match(chat, /aria-label="Streaming assistant response"/);
   assert.match(chat, /<AssistantMarkdown>\{streamingAnswer\}<\/AssistantMarkdown>/);
+  assert.match(chat, /if \(chunk\.type === "delta"\) \{\s*textContent \+= chunk\.text;\s*setStreamingAnswer\(textContent\)/);
 });

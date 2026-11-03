@@ -73,8 +73,8 @@ test("ordinary streaming responses are untouched, including short replies", () =
   assert.equal(streamed, long);
   assert.equal(resolveChatAnswer(long), long);
   const short = new ChatAnswerStreamBoundary();
-  assert.equal(short.write("Yes, that makes sense."), "");
-  assert.equal(short.flushAccepted(), "Yes, that makes sense.");
+  assert.equal(short.write("Yes, that makes sense."), "Yes, that makes sense.", "Short replies must stream on the first safe delta.");
+  assert.equal(short.flushAccepted(), "");
   assert.equal(resolveChatAnswer("1.5s is the measured delay in the report."), "1.5s is the measured delay in the report.");
 });
 
@@ -98,4 +98,50 @@ test("chat route protects streams and persisted content with the same boundary",
   const save = route.indexOf("await saveMessage(chatId, {\n              id: assistantMessageId");
   assert.ok(sanitize > 0 && save > sanitize);
   assert.match(route, /chatAnswerBoundary\.flushAccepted\(\)/);
+});
+
+test("very short normal replies stream before the provider finishes", () => {
+  for (const reply of ["Yeah.", "That is interesting.", "I hear you.", "Absolutely!", "Thanks for telling me."]) {
+    const boundary = new ChatAnswerStreamBoundary();
+    let visible = "";
+    for (const char of reply) visible += boundary.write(char);
+    assert.equal(visible, reply, reply);
+    assert.equal(boundary.flushAccepted(), "", reply);
+  }
+});
+
+test("a possible editorial timing prefix remains withheld across every stream split", () => {
+  for (const candidate of ["1.5s\\n\\nThe user is describing the situation.", "12s\\r\\n\\r\\nThe user is thinking about this."]) {
+    const raw = candidate.replace(/\\n/g, "\n").replace(/\\r/g, "\r");
+    for (const splitIndex of [1, 2, 3, 5, 6, 8, 10, 15, 18, raw.length - 1]) {
+      const boundary = new ChatAnswerStreamBoundary();
+      const shown = boundary.write(raw.slice(0, splitIndex)) + boundary.write(raw.slice(splitIndex));
+      assert.equal(shown, "", "Editorial planning text must not leak with any split.");
+      assert.equal(boundary.flushAccepted(), "");
+      assert.equal(resolveChatAnswer(raw), null);
+    }
+  }
+});
+
+test("normal numerical and duration-like replies are released once ruled out", () => {
+  const examples = [
+    ["1.5s", " is the measured delay."],
+    ["12", " months of runway remain."],
+    ["202", "6 revenue was higher."],
+    ["1.", " A practical recommendation is to verify the ledger."],
+  ];
+  for (const [prefix, remainder] of examples) {
+    const boundary = new ChatAnswerStreamBoundary();
+    assert.equal(boundary.write(prefix), "", prefix);
+    assert.equal(boundary.write(remainder), prefix + remainder, prefix + remainder);
+    assert.equal(boundary.flushAccepted(), "");
+  }
+});
+
+test("unresolved editorial prefixes are still fail-closed", () => {
+  for (const prefix of ["1.5s", "1.5s\n", "1.5s\n\nThe u", "12s\r\n\r\nThe user"]) {
+    const boundary = new ChatAnswerStreamBoundary();
+    assert.equal(boundary.write(prefix), "", prefix);
+    assert.equal(boundary.flushAccepted(), prefix, "A non-editorial completed reply remains eligible only after final validation.");
+  }
 });
