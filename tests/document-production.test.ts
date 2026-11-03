@@ -47,10 +47,11 @@ test('document export retains Unicode arrows in DOCX and PDF text', {timeout:120
     {kind:'heading',level:1,text:'Role progression'},
     {kind:'paragraph',text:'Finance Analyst → Finance Manager → Interim CFO'},
     {kind:'paragraph',text:'Operations — accounting · technology'},
+    {kind:'paragraph',text:'International services organization with five operating divisions, multi-entity accounting requirements, and regional finance teams: Fractional CFO → Full-Time CFO → Interim CFO (after acquisition).'},
   ]});
   const browser = await launchWebsiteBrowser();
   try {
-    const docx = await generateDocx(spec,{pages:[[0,1,2]],spacing:4});
+    const docx = await generateDocx(spec,{pages:[[0,1,2,3]],spacing:4});
     const raw = await (mammoth.extractRawText as unknown as (input:{buffer:Buffer}) => Promise<{value:string}>)({buffer:docx});
     assert.equal(normalizedText(raw.value), normalizedText(contentText(spec)));
     const rendered = await renderDocument(browser,docx,spec);
