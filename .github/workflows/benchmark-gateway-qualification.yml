@@ -4,6 +4,8 @@ on:
     paths:
       - 'scripts/benchmark/**'
       - 'supabase/migrations/*benchmark*'
+      - 'supabase/migrations/20261103173000_task4a_native_origin_guard.sql'
+      - 'tests/helpers/assert-ordinary-authority.mjs'
       - '.github/workflows/benchmark-gateway-qualification.yml'
   workflow_dispatch:
   workflow_call:
