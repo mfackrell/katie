@@ -74,3 +74,14 @@ test('composer isolation remains intact through saved-answer handoff',()=>{
  assert.match(composer,/useState\(props\.externalValue\)/);
  assert.match(composer,/250\)/);
 });
+
+
+test('every saved chat response path publishes its durable assistant message ID',()=>{
+  const replay=route.indexOf('if (idempotencyClaim.mode === "existing")');
+  const local=route.indexOf('if (localKatieResponse) {');
+  const generation=route.indexOf('emitChunk({\n              type: "content"',local);
+  assert.ok(replay>0&&local>replay&&generation>local);
+  assert.match(route.slice(replay,local),/type: "content",\s*messageId: idempotencyClaim\.record\.assistantMessageId,/);
+  assert.match(route.slice(local,generation),/type: "content",\s*messageId: localAssistantMessageId,/);
+  assert.match(route.slice(generation),/type: "content",\s*messageId: assistantMessageId,/);
+});
