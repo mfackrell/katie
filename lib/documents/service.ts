@@ -4,6 +4,7 @@ import { cachedWorkflowValue } from '@/lib/standalone-accounting/workflow';
 import { currentAgentTask } from '@/lib/agents/policy';
 import { launchWebsiteBrowser } from '@/lib/research/website-evidence';
 import { parseDocument } from './model';
+import { PAGE, documentPageStyle } from './generate';
 import { isDocumentCapabilityDenial } from './intent';
 import { produceDocument, visualReportSchema } from './production';
 import { selectDocumentVisualInspector } from './visual-routing';
@@ -43,7 +44,7 @@ export async function deliverDocument(input: {
           const usable = (context?.layout.pages ?? []).map(indices =>
             Math.round(indices.reduce((sum, i) => sum + (rendered.heights[i] ?? 0), 0)),
           );
-          const capacity = context?.layout.compact ? 944 : 915;
+          const capacity = (PAGE.height - 2 * documentPageStyle(context?.layout).margin - 12) * 96 / 72;
           const occupancy = usable.map(h => Math.round(h / capacity * 100));
           const previousCount = context?.previous?.images.length ?? 0;
           const headingOutline = spec.blocks.filter(block => block.kind === 'heading')
