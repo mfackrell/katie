@@ -40,11 +40,13 @@ test('saved content provides durable ID, followed by final answer event before f
  const memory=route.indexOf('await scheduleMemoryPersistence(',final);
  assert.ok(save>0&&content>save&&final>content&&memory>final);
  assert.match(panel,/const commitSavedAnswer = \(\) =>/);
- assert.match(panel,/!savedAssistantMessageId \|\| !sawFinalReasoningAnswer/);
+ assert.match(panel,/!savedAssistantMessageId \|\| !sawContentEvent/);
  assert.match(panel,/if \(chunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
  assert.match(panel,/if \(trailingChunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
  assert.match(panel,/id: savedAssistantMessageId,/);
- assert.match(panel,/current\.filter\(entry => entry\.id !== assistantMessage\.id\)/);
+ assert.match(panel,/upsertSavedAssistant\(current, assistantMessage\)/);
+ assert.match(panel,/upsertSavedAssistant\(cache\[chatId\] \?\? \[\], assistantMessage\)/);
+ assert.doesNotMatch(panel,/setMessages\(\(current\) => \{[\s\S]{0,170}setMessagesByChatId/);
  assert.match(panel,/if \(!answerCommitted\) \{/);
 });
 
@@ -56,4 +58,19 @@ test('post-answer processing and accounting remain durable and can report failur
  assert.match(panel,/if \(answerCommitted\) \{[\s\S]*?later workflow processing needs attention/);
  assert.match(panel,/clearPendingChatRequest\(chatId\);\n      setStatusMessage\("Response received\."\)/);
  assert.match(panel,/setStatusMessage\("Answer saved\. Finalizing memory and request accounting…"/);
+});
+
+test('content event completes the UI before final_answer, while truncated delta-only streams recover',()=>{
+ assert.match(panel,/sawContentEvent = true/);
+ assert.match(panel,/model = chunk\.model \?\? model;\s*\/\/ "content" is already persisted;[\s\S]*?commitSavedAnswer\(\)/);
+ assert.match(panel,/model = trailingChunk\.model \?\? model;\s*commitSavedAnswer\(\)/);
+ assert.match(panel,/if \(!sawContentEvent && !answerCommitted\) \{\s*throw new Error\("Stream ended without a persisted assistant content event\."\)/);
+ assert.match(panel,/pollForPersistedAssistant\(/);
+});
+test('composer isolation remains intact through saved-answer handoff',()=>{
+ const composer=readFileSync('components/chat-composer-input.tsx','utf8');
+ assert.match(panel,/<ChatComposerInput/);
+ assert.match(panel,/composerValueRef\.current/);
+ assert.match(composer,/useState\(props\.externalValue\)/);
+ assert.match(composer,/250\)/);
 });
