@@ -72,17 +72,20 @@ export async function verifyTask4aPregrantRecoveryPostgres(db){
   await db.query('set role service_role');
   assert.equal((await one(db,'select task4a_native_recovery_proposal() proposal')).proposal,null);
   await db.query('rollback to savepoint revoke');await db.query('release savepoint revoke');
-  // Both immutable deadlines are authoritative; do not revive expired grants.
-  for(const table of ['project_continuation_authorizations','benchmark_native_spending_approvals']){
-   const toExpire=table==='project_continuation_authorizations'?continuation:original;
-   await db.query('savepoint expiry_denies');
+  // Simulate a revoked continuation and an expired native deadline independently.
+  // The continuation deadline is immutable; do not bypass its protection in tests.
+  for(const scenario of ['revoked-continuation','expired-native']){
+   await db.query('savepoint authority_denies');
    await db.query('reset role');
-   await db.query("update "+table+" set deadline=clock_timestamp()-interval '1 second' where id=$1",[toExpire]);
+   if(scenario==='revoked-continuation')
+    await db.query("update project_continuation_authorizations set revoked_at=clock_timestamp() where id=$1",[continuation]);
+   else
+    await db.query("update benchmark_native_spending_approvals set deadline=clock_timestamp()-interval '1 second' where id=$1",[original]);
    await db.query('set role service_role');
    assert.equal((await one(db,'select task4a_native_recovery_proposal() proposal')).proposal,null,
-    'Expired authority must require a fresh owner decision, not silent renewal');
-   await db.query('rollback to savepoint expiry_denies');
-   await db.query('release savepoint expiry_denies');
+    'Revoked or expired authority cannot be revived by old consent');
+   await db.query('rollback to savepoint authority_denies');
+   await db.query('release savepoint authority_denies');
   }
   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
   const result=(await one(db,'select task4a_confirm_pregrant_recovery($1,$2) recovered',[owner,proposal.proposal.digest])).recovered;
