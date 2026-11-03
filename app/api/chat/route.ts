@@ -92,7 +92,7 @@ import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
-import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
+import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
 import {
   isCreativeNarrativeTurn,
   preferredClaudeCreativeModel,
