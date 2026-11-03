@@ -3,7 +3,7 @@ import {useCallback,useEffect,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 const TASK4A_ORIGINAL_CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
 
-type Status={ready?:boolean;sourceHash?:string;correction?:{before:string;after:string};
+type Status={ready?:boolean;recovered?:boolean;sourceHash?:string;correction?:{before:string;after:string};
  existingAuthorityExpiresAt?:string;error?:string};
 
 export function Task4aSavedSpecificationRecovery({chatId}:{chatId:string}){
@@ -24,7 +24,7 @@ export function Task4aSavedSpecificationRecovery({chatId}:{chatId:string}){
   }catch{setState({error:'Saved specification recovery unavailable'});}
  },[eligible]);
  useEffect(()=>{void refresh();},[refresh]);
- if(!eligible||!state)return null;
+ if(!eligible||!state||state.recovered)return null;
  if(!state.ready||!state.sourceHash)return <section className="rounded-xl border p-3 text-sm" aria-label="Task 4A saved specification recovery">
   <p>{state.error??'The saved specification recovery is not currently eligible.'}</p>
   <button type="button" className="underline" onClick={()=>{void refresh();}}>Refresh saved recovery</button>
@@ -41,8 +41,8 @@ export function Task4aSavedSpecificationRecovery({chatId}:{chatId:string}){
    });
    const result=await response.json() as {recovered?:boolean;error?:string};
    if(!response.ok||result.recovered!==true)throw Error(result.error??'Recovery not committed.');
-   setMessage('Saved specification recovered; refresh this conversation to review its separate scope-approval request.');
-   await refresh();
+   setMessage('Saved specification recovered. Opening the separate scope-approval request.');
+   window.location.reload();
   }catch(e){setMessage(e instanceof Error?e.message:'Recovery unavailable');}
   finally{setBusy(false);}
  };
