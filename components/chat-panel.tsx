@@ -2927,9 +2927,9 @@ export function ChatPanel({
                     checked={showLiveReasoningExplainer}
                     onChange={(event) => handleLiveReasoningVisibility(event.target.checked)}
                     className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
-                    aria-label="Show live reasoning explainer"
+                    aria-label="Show live processing activity"
                   />
-                  <span>Live reasoning</span>
+                  <span>Live activity</span>
                 </label>
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
