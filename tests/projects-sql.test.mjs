@@ -145,10 +145,13 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query(readFileSync('tests/fixtures/task4a-native-bridge-sql.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261102211800_task4a_native_developer_bridge.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261103162000_task4a_reviewed_specification_recovery.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261103173000_task4a_native_origin_guard.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261103181500_task4a_pregrant_recovery.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261103225000_task4a_successor_continuation.sql','utf8'));
   await db.query('set role service_role');
   await verifyTask4aSavedSpecificationPostgres(db);
   await verifyTask4aPregrantRecoveryPostgres(db);
+  await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true});
   await verifyTask4aNativePostgres(db,connect);
   await verifyPostMigrationResearchAdmission(db);
   await verifyProjectLifecyclePostgres(db);

@@ -12,7 +12,7 @@ const contract='e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e
 const baseline='49c8a5f791e66c351436bb97839193b53d7a1cd1';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 
-export async function verifyTask4aPregrantRecoveryPostgres(db){
+export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false}={}){
  await db.query('reset role');
  await db.query('begin');
  try{
@@ -29,6 +29,15 @@ export async function verifyTask4aPregrantRecoveryPostgres(db){
   ]);
   await db.query('select create_mission($1,$2,$3,120,null)',[research,'Original research historical fixture',team]);
   await db.query("update agent_missions set project_id=$2,project_kind='research',status='blocked',actual_tokens=76519,reserved_tokens=76519,calls=4,routing_calls=5 where id=$1",[research,project]);
+  if(successorMode){
+   const historicalJob=await one(db,'select id from mission_assignments where mission_id=$1 limit 1',[research]);
+   assert.ok(historicalJob);
+   for(let i=0;i<9;i++){
+    const n=i===8?8519:8500;
+    await db.query("insert into mission_calls(id,job_id,lease,model,reserved_tokens,actual_tokens,status) values($1,$2,$3,'openai:gpt-5.6-sol',$4,$4,'completed')",
+     [randomUUID(),historicalJob.id,randomUUID(),n]);
+   }
+  }
   await db.query('select create_mission($1,$2,$3,120,null)',[mission,'Original development fixture',team]);
   await db.query("update agent_missions set project_id=$2,project_kind='development',status='blocked',token_allowance=120000,deadline=now()+interval '6 hours' where id=$1",[mission,project]);
   await db.query('update work_projects set active_mission_id=$2 where id=$1',[project,mission]);
@@ -40,8 +49,8 @@ export async function verifyTask4aPregrantRecoveryPostgres(db){
   await db.query("select create_agent_task($1,$2,'Synthetic Task4A pregrant only','development',$3)",[task,dev.agent_id,repo]);
   const external={attempted:true,issueNumber:969,issueUrl:'https://github.com/mfackrell/katie/issues/969',developerApprovalId:original,developerReleaseSha:'7a7232268d9f300cd42a7ca713be643ec7d3a863',receipt:{run_id:41673059705,outcome:'BLOCKED',pr_url:null}};
   await db.query("update agent_tasks set status='blocked',external=$2 where id=$1",[task,external]);
-  await db.query("insert into project_continuation_authorizations(id,project_id,actor_id,chat_id,source_mission_id,approval_digest,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence) values($1,$2,$3,$4,$5,$6,now()+interval '4 hours',440326,53,15000000,60000,60000,6,6,array['openai:gpt-5.6-sol','openai:gpt-5.3-codex'],76519,9,now()-interval '1 minute','[]'::jsonb)",[
-   continuation,project,actor,chat,research,'a'.repeat(64)
+  await db.query("insert into project_continuation_authorizations(id,project_id,actor_id,chat_id,source_mission_id,approval_digest,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence) values($1,$2,$3,$4,$5,$6,case when $7::boolean then now()-interval '2 hours' else now()+interval '4 hours' end,440326,53,15000000,60000,60000,6,6,array['openai:gpt-5.6-sol','openai:gpt-5.3-codex'],76519,9,now()-interval '1 minute','[]'::jsonb)",[
+   continuation,project,actor,chat,research,'a'.repeat(64),successorMode
   ]);
   await db.query("update model_registry set pricing_status='verified',pricing_verified_at=now(),source_metadata=jsonb_build_object('pricing_verification_source','https://developers.openai.com/api/docs/models/gpt-5.3-codex') where provider_name='openai' and model_id='gpt-5.3-codex'");
   await db.query("insert into benchmark_budget_accounts(id,experiment_id,arm,owner_actor_id,cap_tokens,developer_project_id,developer_task_id) values($1,null,'developer',$2,180000,$3,$4)",[
@@ -54,6 +63,59 @@ export async function verifyTask4aPregrantRecoveryPostgres(db){
   ]);
   await db.query('set role service_role');
   const before=await one(db,'select count(*)::int approvals from benchmark_native_spending_approvals where project_id=$1',[project]);
+  if(successorMode){
+   assert.equal((await one(db,'select task4a_native_recovery_proposal() x')).x,null);
+   const opts=[300000,30,8000000,60000,60000,6,6,3600,['openai:gpt-5.3-codex']];
+   const preview=async(args=opts)=>(await one(db,
+    'select task4a_successor_proposal($1,$2,$3,$4,$5,$6,$7,$8,$9) x',args)).x;
+   const offer=await preview();
+   assert.equal(offer.ready,true,JSON.stringify(offer));
+   assert.equal(Number(offer.proposal.historicalActualTokens),76519);
+   assert.equal(Number(offer.proposal.historicalCalls),9);
+   assert.equal(Number(offer.proposal.maximumNewTokens),523481);
+   assert.equal(offer.proposal.predecessorId,continuation);
+   assert.equal((await preview([600000,...opts.slice(1)])).ready,false);
+   assert.equal((await preview([...opts.slice(0,8),['openai:unverified']])).ready,false);
+   const historical=(await one(db,'select to_jsonb(a) obj from project_continuation_authorizations a where id=$1',[continuation])).obj;
+   const consent=async(who,digest)=>one(db,
+    'select task4a_authorize_successor($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) x',
+    [who,digest,...opts]);
+   for(const [who,digest] of [[randomUUID(),offer.digest],[owner,'0'.repeat(64)]]){
+    await db.query('savepoint reject');
+    await assert.rejects(consent(who,digest),/TASK4A_SUCCESSOR_STALE_OR_UNAUTHORIZED/);
+    await db.query('rollback to savepoint reject');await db.query('release savepoint reject');
+   }
+   const saved=(await consent(owner,offer.digest)).x;
+   assert.equal(saved.authorized,true);
+   assert.equal(saved.predecessorId,continuation);
+   assert.deepEqual((await one(db,'select to_jsonb(a) obj from project_continuation_authorizations a where id=$1',[continuation])).obj,historical);
+   assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,saved.authorizationId);
+   assert.equal((await one(db,'select status from work_projects where id=$1',[project])).status,'blocked');
+   await db.query('savepoint duplicate');
+   await assert.rejects(consent(owner,offer.digest),/TASK4A_SUCCESSOR_STALE_OR_UNAUTHORIZED/);
+   await db.query('rollback to savepoint duplicate');await db.query('release savepoint duplicate');
+   const nativeOffer=(await one(db,'select task4a_native_recovery_proposal() x')).x;
+   assert.equal(nativeOffer.ready,true);
+   assert.equal(nativeOffer.proposal.continuationId,saved.authorizationId);
+   await db.query('savepoint revoked');
+   await db.query('reset role');
+   await db.query('update project_continuation_authorizations set revoked_at=clock_timestamp() where id=$1',[saved.authorizationId]);
+   await db.query('set role service_role');
+   assert.equal((await one(db,'select task4a_native_recovery_proposal() x')).x,null);
+   await db.query('rollback to savepoint revoked');await db.query('release savepoint revoked');
+   const recovered=(await one(db,'select task4a_confirm_pregrant_recovery($1,$2) x',[owner,nativeOffer.digest])).x;
+   assert.equal(recovered.recovered,true);
+   assert.equal(recovered.continuationId,saved.authorizationId);
+   assert.equal(recovered.originalIssueNumber,969);
+   assert.equal((await one(db,'select task4a_native_authority_ready($1,$2,$3) ok',[project,task,continuation])).ok,false);
+   assert.equal((await one(db,'select task4a_native_authority_ready($1,$2,$3) ok',[project,task,saved.authorizationId])).ok,true);
+   assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,recovered.newApprovalId])).ok,true);
+   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
+   assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
+   assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_successor_continuation_authorized'",[project])).n,1);
+   console.log('TASK4A_PHASE2_SUCCESSOR_POSTGRES_PASS');
+   return;
+  }
   const proposal=await one(db,'select task4a_native_recovery_proposal() proposal');
   assert.equal(proposal.proposal.ready,true,'Exact original failed-gate case must be eligible');
   assert.equal(proposal.proposal.proposal.oldApprovalId,original);
