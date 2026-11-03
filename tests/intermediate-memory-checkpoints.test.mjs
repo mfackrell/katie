@@ -10,16 +10,16 @@ const originalCheckpoint=readFileSync("supabase/migrations/20261026165000_interm
 test("one-model-stage ITM batches 30 older conversational messages",()=>{
   assert.match(summary,/SUMMARY_BATCH_MESSAGES = 30/);
   assert.match(summary,/remaining < SUMMARY_BATCH_MESSAGES/);
-  assert.match(summary,/olderMessages\\.slice\\(after, after \\+ SUMMARY_BATCH_MESSAGES\\)/);
-  assert.match(summary,/summarizeNewBatch\\(batch\\)/);
-  assert.match(summary,/composeRollingEpisodes\\(summary, newSummary, checkpoint\\.createdAt \\?\\? null\\)/);
-  assert.doesNotMatch(summary,/reconcileIntermediateMemory\\(/);
+  assert.match(summary,/olderMessages\.slice\(after, after \+ SUMMARY_BATCH_MESSAGES\)/);
+  assert.match(summary,/summarizeNewBatch\(batch\)/);
+  assert.match(summary,/composeRollingEpisodes\(summary, newSummary, checkpoint\.createdAt \?\? null\)/);
+  assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
 
 test("deterministic rollover retains atomic source-cursor checkpoint",()=>{
   assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
   assert.match(summary,/ITM_NEW_EPISODE_MAX_CHARACTERS = 3300/);
-  assert.match(summary,/if \\(result\\.length > ITM_TARGET_CHARACTERS\\)/);
+  assert.match(summary,/if \(result\.length > ITM_TARGET_CHARACTERS\)/);
   assert.match(summary,/p_expected_cursor: expectedCursor, p_content: payload/);
   assert.match(originalCheckpoint,/pg_advisory_xact_lock/);
   assert.match(originalCheckpoint,/if v_cursor is distinct from p_expected_cursor/);
@@ -60,15 +60,15 @@ test("v6 eliminates full-memory model rewrite and retains fail-closed batch clai
   assert.match(summary,/ITM_PROCESSOR_VERSION = "single-stage-30-messages-v6-deterministic-rollover"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/max_tokens: SUMMARY_MAX_TOKENS/);
-  assert.equal((summary.match(/client\\.post</g)||[]).length,1);
+  assert.equal((summary.match(/client\.post</g)||[]).length,1);
   assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
   assert.match(summary,/p_state: "blocked"/);
   assert.match(summary,/return result/);
 });
 
 test("older summaries are rolled forward by local code without enlarging the memory",()=>{
-  assert.match(summary,/previousEpisodes\\(priorSummary: string\\)/);
-  assert.match(summary,/clipCompleteThought\\(newSummary, ITM_NEW_EPISODE_MAX_CHARACTERS\\)/);
-  assert.match(summary,/result\\.length > ITM_TARGET_CHARACTERS/);
-  assert.match(summary,/sourceMessageCount: after \\+ SUMMARY_BATCH_MESSAGES/);
+  assert.match(summary,/previousEpisodes\(priorSummary: string\)/);
+  assert.match(summary,/clipCompleteThought\(newSummary, ITM_NEW_EPISODE_MAX_CHARACTERS\)/);
+  assert.match(summary,/result\.length > ITM_TARGET_CHARACTERS/);
+  assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
 });
