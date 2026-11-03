@@ -186,7 +186,7 @@ test('trusted workflow fails closed for an original Task4A project without an au
 
   const other=project(randomUUID());
   const ordinaryOther=run(header(other)+encodeDeveloperHandoff({
-   ...ordinaryPermission,projectId:other.projectId,contractHash:other.contractHash,baselineSha:other.baselineSha
+   ...ordinaryPermission,authorityKind:'ordinary-developer',projectId:other.projectId,contractHash:other.contractHash,baselineSha:other.baselineSha
   },key));
   assert.equal(ordinaryOther.cli.status,0,ordinaryOther.cli.stderr);
   assert.equal(ordinaryOther.guard.status,0,ordinaryOther.guard.stderr);
