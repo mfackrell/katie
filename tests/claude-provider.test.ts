@@ -533,7 +533,7 @@ test("Nov 3 nine-turn production routing replay sends only personal guidance on 
         persona: [actor, taskScope.text, decision.generationInstruction].filter(Boolean).join("\n\n"),
         user: fixture.message,
         history: history.map(({ role, content }) => ({ role, content })),
-        onProviderSystemPrepared: async audit => auditedSystems.push(audit.systemMessages.join("\n")),
+        onProviderSystemPrepared: async audit => { auditedSystems.push(audit.systemMessages.join("\n")); },
       });
       assert.equal(result.text, "An ordinary reply.");
       history.push({ id: "replay-user-" + index, role: "user", content: fixture.message });
