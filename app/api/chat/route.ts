@@ -2,7 +2,7 @@ import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedA
 import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
-import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
+import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
@@ -710,6 +710,22 @@ export async function POST(request: NextRequest) {
     if (isStandaloneAccountingError(error)) return NextResponse.json({error:error instanceof Error?error.message:String(error),code: error && typeof error === "object" && "code" in error ? error.code : "standalone_accounting_unavailable"},{status:error && typeof error === "object" && "status" in error && typeof error.status === "number" ? error.status : 402});
     return NextResponse.json({ error: "Task configuration or permissions denied. Check the saved task and request ID." }, { status: 403 });
   }
+}
+
+/** Trusted internal entry called only by the leased reaction-reply worker.
+ * There is no HTTP route for this function. The underlying workflow verifies
+ * the durable job and actor/chat owner binding before any paid preparation.
+ */
+export async function executeVerifiedReactionReplyChat(
+  request: NextRequest, jobId: number,
+): Promise<Response> {
+  const payload = await parseIncomingPayload(request.clone());
+  const {data:role,error}=await getSupabaseAdminClient()
+    .from("actors").select("actor_kind").eq("id",payload.actorId)
+    .maybeSingle<{actor_kind:string}>();
+  if(error||!role||role.actor_kind==="executive")
+    return NextResponse.json({error:"Invalid reaction reply actor."},{status:403});
+  return executeVerifiedReactionReplyWorkflow(request,payload,executeChat,jobId);
 }
 
 async function executeChat(request: NextRequest) {
