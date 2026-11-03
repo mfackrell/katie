@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 
 const code=readFileSync("lib/memory/summarizer.ts","utf8");
-test("intermediate source cursor advances only after source summarization and deterministic compaction",()=>{
-  assert.ok(code.indexOf("summarizeNewBatch(batch)") < code.indexOf("composeRollingEpisodes(summary, newSummary, checkpoint.createdAt ?? null)"));
+test("intermediate source cursor advances only after complete semantic reconciliation",()=>{
+  assert.ok(code.indexOf("summarizeNewBatch(batch)") < code.indexOf("reconcileEpisodePlan(episodes, newSummary)"));
   assert.ok(code.indexOf("composeRollingEpisodes(summary, newSummary, checkpoint.createdAt ?? null)") <
             code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
   assert.match(code,/if \(response\.stop_reason !== "end_turn" \|\| !text \|\| text\.length > maxCharacters\)/);
+  assert.match(code,/assembleEpisodePlan\(episodes, plan\)/);
   assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);
   assert.match(code,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
   assert.match(code,/if \(existing\?\.summarizedThroughMessageId\)/);
