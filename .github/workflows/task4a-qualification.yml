@@ -10,6 +10,13 @@ on:
       - 'tests/helpers/project-lifecycle-postgres.mjs'
       - 'tests/projects-sql.test.mjs'
       - 'tests/helpers/task4a-continuation-postgres.mjs'
+      - 'tests/helpers/task4a-saved-specification-postgres.mjs'
+      - 'tests/fixtures/task4a-saved-specification.mjs'
+      - 'tests/task4a-saved-specification-recovery.test.mjs'
+      - 'app/api/projects/task4a-specification-recovery/route.ts'
+      - 'lib/projects/task4a-saved-specification-recovery.ts'
+      - 'components/task4a-saved-specification-recovery.tsx'
+      - 'supabase/migrations/20261103162000_task4a_reviewed_specification_recovery.sql'
       - 'tests/helpers/task4a-post-migration-research-admission.mjs'
       - 'tests/task4a-continuation-owner.test.mjs'
       - 'app/api/projects/task4a-continuation/route.ts'
@@ -73,6 +80,8 @@ jobs:
           NODE
       - name: Verify authenticated Task 4A owner approval endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
+      - name: Verify saved Task 4A specification repair and authenticated recovery endpoint
+        run: node --experimental-test-isolation=none --test tests/task4a-saved-specification-recovery.test.mjs
       - name: Verify Task 4A signed native gateway and unchanged legacy routes
         run: node --test tests/task4a-native-bridge.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment

@@ -37,6 +37,7 @@ import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
 import { Task4aContinuationOwnerApproval } from "@/components/task4a-continuation-owner-approval";
+import { Task4aSavedSpecificationRecovery } from "@/components/task4a-saved-specification-recovery";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
@@ -2942,6 +2943,7 @@ export function ChatPanel({
       {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
       {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
       {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
+      {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
       {resourceRecovery?.chatId===chatId && !managedAgentId ? (
         <DeveloperResourceCard proposal={resourceRecovery.proposal}
          pending={projectApprovalPending||loading} error={projectApprovalError}
