@@ -241,8 +241,8 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     ${code(statement(declaration('imageAssets')))}
     const assistantText = result.text || streamedText;
     const assistantPresentation = null;
-    ${code(statement(contentCall))}
     const assistantMessageId = taskProgressAssistantMessageId;
+    ${code(statement(contentCall))}
     ${completionBlock}
     return { result, taskProgress, escalatedConversation, reviewCompleted };
   })()`), {
