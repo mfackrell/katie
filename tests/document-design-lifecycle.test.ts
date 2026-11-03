@@ -103,6 +103,12 @@ test('design rejection, malformed review and unavailable model preserve mechanic
         issues:[{page:1,category:'density' as const,severity:'material' as const,evidence:'Unbalanced separation between labels and body paragraphs.'}],
         actions:[],comparison:'not_applicable' as const,
       }})},
+      {name:'page-blocked', inspect:async()=>({pages:[{
+        ...passPage(1),verdict:'blocked' as const,repair:'none' as const,
+        observations:'The page is technically readable but its composition needs professional polish.',
+      }],design:{verdict:'pass' as const,
+        summary:'No additional document-wide corrective actions can be justified.',
+        issues:[],actions:[],comparison:'not_applicable' as const}})},
       {name:'unsupported', inspect:async()=>({pages:[passPage(1)],design:{...improvementReport().design!,actions:[]}})},
       {name:'no-model', inspect:async():Promise<VisualReport>=>{throw new Error('No professional design model available.');}},
       {name:'missing-report', inspect:async()=>({pages:[passPage(1)]})},
