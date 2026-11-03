@@ -184,6 +184,11 @@ test('trusted workflow fails closed for an original Task4A project without an au
   assert.equal(copied.cli.status,0);
   assert.notEqual(copied.guard.status,0,'A signed Task 4A authority copied to another issue is invalid');
   assert.match(copied.guard.stderr,/TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
+  const copiedWithoutProject=run(signed,970);
+  assert.equal(copiedWithoutProject.cli.status,0);
+  assert.equal(copiedWithoutProject.manifest.native,true);
+  assert.notEqual(copiedWithoutProject.guard.status,0,'Signed Task 4A proof remains bound when its project marker is erased');
+  assert.match(copiedWithoutProject.guard.stderr,/TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED/);
 
   const stripped=run(originalHeader,969);
   assert.equal(stripped.cli.status,0);

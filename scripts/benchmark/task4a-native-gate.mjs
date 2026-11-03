@@ -15,7 +15,10 @@ export function requireTask4aNativeGrant(request,project,manifest,key,now=Date.n
  // both project metadata and the native handoff are removed from its body.
  const originalIssue=String(issueNumber??'')===String(TASK4A_ORIGINAL_ISSUE);
  const originalProject=project?.projectId===TASK4A_ORIGINAL_PROJECT;
- if(!originalIssue&&!originalProject)return;
+ // A valid Task 4A signature is never portable to another issue, even when
+ // someone deletes its accompanying project marker.
+ const signedTask4a=manifest?.authorityKind==='task4a-developer';
+ if(!originalIssue&&!originalProject&&!signedTask4a)return;
  if(!originalProject||(issueNumber!==null&&!originalIssue))
   throw Error('TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED');
  if(manifest?.native!==true||manifest.authorityKind!=='task4a-developer')
