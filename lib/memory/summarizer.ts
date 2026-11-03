@@ -155,9 +155,12 @@ function composeRollingEpisodes(
 ): string {
   const date = checkpointTime && /^\d{4}-\d{2}-\d{2}/.test(checkpointTime)
     ? checkpointTime.slice(0, 10) : "recent";
-  const current = "Conversation through " + date + ":\n" +
+  // An intentionally empty source-batch summary still advances the cursor,
+  // but must never evict meaningful prior conversations.
+  const nothingMaterial = newSummary.trim().toLowerCase() === "(nothing material)";
+  const current = nothingMaterial ? "" : "Conversation through " + date + ":\n" +
     clipCompleteThought(newSummary, ITM_NEW_EPISODE_MAX_CHARACTERS);
-  const chosen = [current];
+  const chosen = current ? [current] : [];
   let size = ITM_EPISODE_HEADER.length + 2 + current.length;
   const earlier = previousEpisodes(priorSummary);
   // Keep recent episodes in order. When a legacy narrative first enters this
@@ -179,7 +182,7 @@ function composeRollingEpisodes(
     chosen.push(item);
     size += ITM_EPISODE_SEPARATOR.length + item.length;
   }
-  const result = ITM_EPISODE_HEADER + "\n\n" + chosen.join(ITM_EPISODE_SEPARATOR);
+  const result = chosen.length ? ITM_EPISODE_HEADER + "\n\n" + chosen.join(ITM_EPISODE_SEPARATOR) : "";
   if (result.length > ITM_TARGET_CHARACTERS) throw new Error("ITM deterministic bounds violated");
   return result;
 }
