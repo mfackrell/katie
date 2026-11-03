@@ -207,3 +207,14 @@ test('trusted workflow fails closed for an original Task4A project without an au
   assert.equal(ordinaryPlain.guard.status,0,ordinaryPlain.guard.stderr);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('original-project dispatcher rejects unbound ordinary approval and verifies live Task4A continuation before signing',()=>{
+ const source=readFileSync('lib/agents/development.ts','utf8');
+ const missing=source.indexOf("if(c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&!task4aId)continue;");
+ const validate=source.indexOf("db.rpc<boolean>('task4a_native_authority_ready'",missing);
+ const sign=source.indexOf('encodeDeveloperHandoff(',validate);
+ assert.ok(missing>=0&&validate>missing&&sign>validate,
+  'Missing continuation must fail closed before signing, and live binding must be validated before signing');
+ assert.ok(source.slice(validate,sign).includes('if(live.error||live.data!==true)continue;'),
+  'Expired, revoked, mismatched or unverified Task4A authority must never reach native handoff creation');
+});
