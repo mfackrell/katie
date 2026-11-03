@@ -1055,8 +1055,11 @@ test('Gemini policy block without complete zero-output evidence holds uncertain 
 
 
 
+const haiku55Pricing:PricingSnapshot={...PRICING_SNAPSHOT,version:'fixture-anthropic-haiku55',
+ models:[...PRICING_SNAPSHOT.models,
+  {...PRICING_SNAPSHOT.models.find(row=>row.provider==='anthropic'&&row.model==='claude-haiku-4-5')!,model:'claude-haiku-5-5'}]};
 test('Anthropic definitive insufficient-credit 400 is recorded as zero-cost rejection without inventing a completion',async()=>{
- const f=fakeLedger();let counts=0,paid=0;
+ const f=fakeLedger(false,haiku55Pricing);let counts=0,paid=0;
  const rejection={type:'error',error:{type:'invalid_request_error',
   message:'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'},
   request_id:'req_011CfixtureCredit100'};
@@ -1093,7 +1096,7 @@ test('Anthropic 400 without exact nonbillable proof remains uncertain',async()=>
   {type:'error',error:{type:'invalid_request_error',message:'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'},request_id:'req_bad',usage:{input_tokens:3}},
   {type:'error',error:{type:'invalid_request_error',message:'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}},
  ] .entries()){
-  const f=fakeLedger();let paid=0;
+  const f=fakeLedger(false,haiku55Pricing);let paid=0;
   const send=createAccountingFetch('anthropic',async(url)=>{
     if(String(url).endsWith('/count_tokens'))return Response.json({input_tokens:10});
     paid++;return Response.json(reply,{status:400});
