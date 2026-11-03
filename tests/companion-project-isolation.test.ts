@@ -68,5 +68,8 @@ test("professional finance and coding projects retain pending questions and answ
 test("response policy production call requires a real project for answer-based pending work", () => {
   const route = readFileSync("app/api/chat/route.ts", "utf8");
   assert.match(route, /taskProgress\.projectContext && taskProgress\.objective && taskProgress\.lastUserIntent === "answer"/);
-  assert.match(route, /\|\|\s*pendingReviewClarification/);
+  assert.match(route, /const sourceLinkedPendingWork = Boolean\(/);
+  assert.match(route, /selectTaskProgressPrompt\(\{/);
+  assert.match(route, /progress: reviewTaskProgress, responsePurpose: "deliverable"/);
+  assert.match(route, /hasPendingDeliverable: sourceLinkedPendingWork \|\| Boolean\(pendingReviewClarification\)/);
 });
