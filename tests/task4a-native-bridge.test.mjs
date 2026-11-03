@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {encodeDeveloperHandoff,readDeveloperHandoff} from '../scripts/benchmark/developer-dispatch-contract.mjs';
+import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority} from '../scripts/benchmark/developer-dispatch-contract.mjs';
 import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract.mjs';
 import {projectMarker,contractHash} from '../scripts/project-context.mjs';
 import {forwardAuthorizedModelRequest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
@@ -22,6 +22,20 @@ const proof={
  baselineSha:'c'.repeat(40),releaseSha:'d'.repeat(40),
  expiresAt:Date.now()+180000
 };
+test('Task4A can never classify an unbound grant as ordinary development',()=>{
+ const original='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+ assert.throws(()=>classifyDeveloperDispatchAuthority(original,{version:'ordinary-developer-v1'}),/TASK4A_BOUND_OWNER_AUTHORITY_REQUIRED/);
+ assert.throws(()=>classifyDeveloperDispatchAuthority(original,{task4aContinuationId:'bad'}),/TASK4A_BOUND_OWNER_AUTHORITY_REQUIRED/);
+ assert.deepEqual(classifyDeveloperDispatchAuthority(original,{task4aContinuationId:authority}),
+   {authorityKind:'task4a-developer',task4aContinuationId:authority});
+ assert.deepEqual(classifyDeveloperDispatchAuthority(randomUUID(),{version:'ordinary-developer-v1'}),
+   {authorityKind:'ordinary-developer'});
+ assert.throws(()=>classifyDeveloperDispatchAuthority(randomUUID(),{task4aContinuationId:authority}),/FOREIGN_TASK4A_AUTHORITY_DENIED/);
+ const code=readFileSync('lib/agents/development.ts','utf8');
+ assert.match(code,/classifyDeveloperDispatchAuthority\(c\.projectId,a\.developer_authority\)/);
+ assert.match(code,/task4a_native_authority_ready/);
+ assert.match(code,/if\(verified\.error\|\|verified\.data!==true\)continue/);
+});
 test('Task4A handoff is signed separately and bound to original project and continuation',()=>{
  const signed=encodeDeveloperHandoff(proof,key);
  assert.match(signed,/<!-- katie-native-task4a:/);
