@@ -121,9 +121,6 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
                 })+'\n'));
                 const notice=await settle(collected());
                 if(notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify(notice)+'\n'));
-                if(!notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify({
-                  type:'processing_update',stage:'accounting',message:'Request accounting finalized.'
-                })+'\n'));
                 if(!disconnected)controller.close();
               }catch(error){
                 // A stream read or settlement failure must not silently count
