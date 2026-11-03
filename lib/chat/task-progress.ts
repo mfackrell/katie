@@ -572,9 +572,12 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
     // reviewer questions, without the original professional brief. Replay
     // from the latest standalone deliverable against the verified parent;
     // otherwise its questions are lost because no synthetic parent is allowed.
-    const scopedTaskStart = history.findLastIndex(entry =>
-      entry.role === "user" && classifyUserTurn(entry.content) === "new_task" &&
-      !isUserWorkAssignment(entry.content));
+    let scopedTaskStart = -1;
+    for (let index = history.length - 1; index >= 0; index--) {
+      const entry = history[index];
+      if (entry.role === "user" && classifyUserTurn(entry.content) === "new_task" &&
+          !isUserWorkAssignment(entry.content)) { scopedTaskStart = index; break; }
+    }
     if (!recent.projectContext &&
         hasProjectAuthority(previous.projectContext, previous.projectAuthority) &&
         scopedTaskStart >= 0) {
