@@ -88,7 +88,7 @@ import { getPendingReviewClarification, resolvePendingReviewClarification } from
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
 import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog, isolateCompanionProgress } from "@/lib/chat/task-progress";
 import { selectTaskProgressPrompt } from "@/lib/chat/task-progress-prompt";
-import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
+import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects, verifyTaskProgressForUse } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
@@ -879,8 +879,12 @@ async function executeChat(request: NextRequest) {
     // durable task/question binding as review resumption before borrowing scope.
     const taskProgressUserMessageId = workflowMessageId("user") ?? crypto.randomUUID();
     const taskProgressAssistantMessageId = workflowMessageId("assistant") ?? crypto.randomUUID();
+    // Standalone workflow replay can return a cached checkpoint without
+    // running loadTaskProgress. Verify its source before history reconciliation.
+    const cachedTaskProgress = await cachedWorkflowValue("task-progress", () => loadTaskProgress(actorId, chatId));
+    const verifiedTaskProgress = await verifyTaskProgressForUse(actorId, chatId, cachedTaskProgress);
     const priorTaskProgress = isolateCompanionProgress(mergeTaskProjects(
-      syncTaskProgress(await cachedWorkflowValue("task-progress", () => loadTaskProgress(actorId, chatId)), attachmentHistory),
+      syncTaskProgress(verifiedTaskProgress, attachmentHistory),
       currentAgentTask() ? [] : await cachedWorkflowValue("actor-projects", () => loadActorTaskProjects(actorId)),
     ));
     // Resolve task identity from firsthand text BEFORE historical files can
