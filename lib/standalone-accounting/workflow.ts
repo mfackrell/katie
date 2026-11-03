@@ -113,8 +113,17 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
                   if(done)break;
                   if(value){record(value);if(!disconnected)controller.enqueue(value);}
                 }
+                // The answer may already be visible in chat. Settlement must
+                // remain mandatory, but its status is not a reason to hold the
+                // saved answer in a temporary streaming bubble.
+                if(!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify({
+                  type:'processing_update',stage:'accounting',message:'Finalizing the saved request and accounting.'
+                })+'\n'));
                 const notice=await settle(collected());
                 if(notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify(notice)+'\n'));
+                if(!notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify({
+                  type:'processing_update',stage:'accounting',message:'Request accounting finalized.'
+                })+'\n'));
                 if(!disconnected)controller.close();
               }catch(error){
                 // A stream read or settlement failure must not silently count
