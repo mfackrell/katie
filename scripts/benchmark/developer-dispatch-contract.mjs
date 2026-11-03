@@ -28,10 +28,12 @@ export function readDeveloperHandoff(source,secret,now=Date.now()){
  const text=String(source),matches=[...text.matchAll(/<!-- katie-native-(developer|task4a):([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->/g)];
  if(matches.length!==1||/<!--\s*katie-native-benchmark[:\s]/.test(text))throw Error('DEVELOPER_HANDOFF_MISSING_DUPLICATED_OR_MIXED');
  const [,tag,content,signed]=matches[0];
+ // Authenticate the exact signed bytes before inspecting caller-supplied fields.
+ const kind=tag==='task4a'?'task4a-developer':'ordinary-developer';
+ const expected=signature(content,secret,kind),actual=Buffer.from(signed,'base64url');
+ if(actual.length!==expected.length||!timingSafeEqual(actual,expected))throw Error('DEVELOPER_HANDOFF_UNAUTHENTICATED');
  let p;try{p=JSON.parse(Buffer.from(content,'base64url').toString('utf8'));}catch{deny();}
  validate(p,now);
- if((tag==='task4a')!==(p.authorityKind==='task4a-developer'))deny();
- const expected=signature(content,secret,p.authorityKind),actual=Buffer.from(signed,'base64url');
- if(actual.length!==expected.length||!timingSafeEqual(actual,expected))throw Error('DEVELOPER_HANDOFF_UNAUTHENTICATED');
+ if(p.authorityKind!==kind)deny();
  return Object.freeze(p);
 }
