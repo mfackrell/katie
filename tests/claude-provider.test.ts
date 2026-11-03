@@ -5,6 +5,8 @@ const test = (name: string, fn: () => Promise<void>) => nodeTest(name, () => run
 import assert from "node:assert/strict";
 import { ClaudeProvider } from "../lib/providers/claude-provider";
 import { decideResponsePolicy } from "../lib/chat/response-policy";
+import { emptyTaskProgress, type TaskProgressState } from "../lib/chat/task-progress";
+import { selectTaskProgressPrompt } from "../lib/chat/task-progress-prompt";
 import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
 import { getAdaptiveResponseCompositionInstruction } from "../lib/chat/adaptive-response-composition";
 import { readFileSync } from "node:fs";
@@ -429,6 +431,129 @@ test("outbound provider system payload follows final personal response purpose, 
     assert.ok(sentSystems.every(system => system.includes("Actor instructions stay unchanged.")));
     const route = readFileSync("app/api/chat/route.ts", "utf8");
     assert.match(route, /responsePurpose: responsePurposeHint, intent: resolvedRequestIntent/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
+
+test("Nov 3 nine-turn production routing replay sends only personal guidance on the Anthropic wire", async () => {
+  // Message content is privacy-safe paraphrase. The ordering, primary intent
+  // labels, Haiku handoffs, stale checkpoint, and observed instruction split
+  // are recovered from the Nov 3 production audit.
+  const turns = [
+    { message: "We adjusted how you respond. Can you just chat normally?", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "That is much better; I wanted you to start the conversation.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "I still have business tasks to do today. Right now we're chatting.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "It is another place to find projects. I am not sure if it is any good.", intent: "general-text", model: "claude-haiku-5-5" },
+    { message: "I have been working already. This chat is just a way to test conversational continuity.", intent: "general-text", model: "claude-haiku-5-5" },
+    { message: "Other agents are handling the testing. I just need normal conversation with you.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "The work is never really finished.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "So what do you want to talk about?", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "I used to raise two animals, and the breeding plan did not work out.", intent: "social-emotional", model: "claude-sonnet-5" },
+  ] as const;
+  const originalInstructionSelections = [
+    "personal", "personal", "restrictive", "restrictive", "restrictive",
+    "personal", "restrictive", "personal", "restrictive",
+  ];
+  assert.equal(originalInstructionSelections.filter(value => value === "personal").length, 4);
+  assert.equal(originalInstructionSelections.filter(value => value === "restrictive").length, 5);
+
+  const stale: TaskProgressState = {
+    ...emptyTaskProgress(),
+    projectContext: {
+      userMessageId: "old-synthetic-image-turn",
+      text: "Ok, fine. How about this one?\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n[redacted historical image observation]",
+    },
+    objective: { userMessageId: "old-conversation-turn", text: "A casual personal remark" },
+    lastUserIntent: "answer",
+    pending: [{ id: "old-q", assistantMessageId: "old-assistant", index: 0, text: "A historical question?" }],
+  };
+  const history: Array<{ id: string; role: "user" | "assistant"; content: string }> = [
+    { id: "seed-user", role: "user", content: "Can we just talk normally?" },
+    { id: "seed-assistant", role: "assistant", content: "Sure. What is on your mind?" },
+  ];
+  const actor = [
+    "Katie actor instructions remain unchanged.",
+    getDeliverableStandardInstruction(),
+    getAdaptiveResponseCompositionInstruction(),
+  ].join("\n\n");
+  const priorFetch = globalThis.fetch;
+  const sentSystems: string[] = [];
+  const auditedSystems: string[] = [];
+  const sentModels: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    const payload = JSON.parse(String(init?.body)) as {
+      model: string; system: string | Array<{ text: string }>;
+    };
+    sentModels.push(payload.model);
+    sentSystems.push(typeof payload.system === "string"
+      ? payload.system : payload.system.map(part => part.text).join(""));
+    return jsonResponse({
+      content: [{ type: "text", text: "An ordinary reply." }],
+      stop_reason: "end_turn",
+    });
+  }) as typeof fetch;
+
+  try {
+    const provider = new ClaudeProvider("offline-test-key");
+    for (const [index, fixture] of turns.entries()) {
+      // A bad same-project hint cannot resurrect this synthetic checkpoint.
+      const taskScope = selectTaskProgressPrompt({
+        message: fixture.message,
+        currentUserMessageId: "replay-user-" + index,
+        history,
+        progress: stale,
+        responsePurpose: "deliverable",
+        managedTask: false,
+        explicitProjectControl: false,
+        explicitSavedProjectReference: false,
+        pendingReviewContinuation: false,
+        projectRelation: "same_project",
+      });
+      assert.equal(taskScope.text, "", "Turn " + (index + 1) + ": no stale project");
+      const sourceLinkedPendingWork = Boolean(
+        stale.projectContext && stale.objective && stale.lastUserIntent === "answer" && taskScope.text
+      );
+      assert.equal(sourceLinkedPendingWork, false, "Turn " + (index + 1) + ": no false pending work");
+      const decision = decideResponsePolicy({
+        message: fixture.message,
+        intent: fixture.intent,
+        responsePurpose: "conversation",
+        hasPendingDeliverable: sourceLinkedPendingWork,
+      });
+      assert.equal(decision.purpose, "conversation", "Turn " + (index + 1));
+      assert.equal(decision.reason, fixture.intent === "general-text"
+        ? "contextual_personal_conversation" : "personal_conversation", "Turn " + (index + 1));
+      const result = await provider.generate({
+        ...baseParams,
+        modelId: fixture.model,
+        cacheablePersona: actor,
+        persona: [actor, taskScope.text, decision.generationInstruction].filter(Boolean).join("\n\n"),
+        user: fixture.message,
+        history: history.map(({ role, content }) => ({ role, content })),
+        onProviderSystemPrepared: async audit => auditedSystems.push(audit.systemMessages.join("\n")),
+      });
+      assert.equal(result.text, "An ordinary reply.");
+      history.push({ id: "replay-user-" + index, role: "user", content: fixture.message });
+      history.push({ id: "replay-assistant-" + index, role: "assistant", content: "An ordinary reply." });
+    }
+    assert.equal(sentSystems.length, 9);
+    assert.deepEqual(auditedSystems, sentSystems,
+      "The wire payload must match the provider-system audit for every replayed turn.");
+    assert.deepEqual(sentModels, turns.map(turn => turn.model));
+    for (const [index, system] of sentSystems.entries()) {
+      assert.match(system, /NEXT RESPONSE: a natural personal conversation/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /NEXT RESPONSE: a brief conversational answer or clarification/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /normally under 150 words/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /KATIE_DURABLE_TASK_PROGRESS/, "Turn " + (index + 1));
+      assert.match(system, /Katie actor instructions remain unchanged/, "Turn " + (index + 1));
+    }
+    const route = readFileSync("app/api/chat/route.ts", "utf8");
+    assert.match(route, /const sourceLinkedPendingWork = Boolean/);
+    assert.match(route, /progress: reviewTaskProgress, responsePurpose: "deliverable"/);
+    assert.match(route, /hasPendingDeliverable: sourceLinkedPendingWork \|\| Boolean\(pendingReviewClarification\)/);
     assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
   } finally {
     globalThis.fetch = priorFetch;
