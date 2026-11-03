@@ -53,3 +53,15 @@ test('internal authorization requires leased persisted reaction and unique activ
  assert.match(verifiedOwner,/grant execute on function public\.standalone_verified_reaction_reply_owner[\s\S]+to service_role/);
  assert.doesNotMatch(verifiedOwner,/to anon|to authenticated/);
 });
+
+test('reaction replies need no interactive owner login; normal anonymous guest sessions remain valid',()=>{
+ const auth=fs.readFileSync('lib/standalone-accounting/auth.ts','utf8');
+ const session=fs.readFileSync('app/api/session/route.ts','utf8');
+ assert.match(session,/signInAnonymously\(\)/);
+ assert.match(session,/No user email or login action is required/);
+ assert.match(auth,/export async function authorizeStandaloneCaller/);
+ assert.doesNotMatch(route,/KATIE_OWNER_AUTH_USER_ID|isAnonymous===false|!principal\.isAnonymous/);
+ assert.match(route,/await authorizeStandaloneCaller\(req,actorId,chatId\)/);
+ assert.doesNotMatch(worker,/authenticateStandalonePrincipal|authorizeStandaloneCaller/);
+ assert.match(worker,/executeVerifiedReactionReplyChat\(request,job.id\)/);
+});
