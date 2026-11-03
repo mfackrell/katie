@@ -990,3 +990,65 @@ test('GPT-5.5 with both unreviewed cache errors prepares exact same-model uncach
  assert.equal(f.attempts.length,1);
  assert.equal(quote.state,'settled');
 });
+
+
+test('Gemini PROHIBITED_CONTENT with provider-proven zero output settles input rather than accumulating uncertain exposure',async()=>{
+ const f=fakeLedger();let counted=0,paid=0;
+ const responseBody={responseId:'blocked-gemini-unique-receipt',modelVersion:'gemini-2.5-flash',
+  promptFeedback:{blockReason:'PROHIBITED_CONTENT'},
+  usageMetadata:{promptTokenCount:8249,totalTokenCount:8249,
+   promptTokensDetails:[{modality:'TEXT',tokenCount:8249}],serviceTier:'standard'}};
+ const send=createAccountingFetch('google',async(url)=>{
+  if(String(url).endsWith(':countTokens')){counted++;return Response.json({totalTokens:8249});}
+  paid++;return Response.json(responseBody);
+ },f.factory);
+ const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+ const input={method:'POST',body:JSON.stringify({
+  contents:[{role:'user',parts:[{text:'Classify the saved attachment references.'}]}],
+  generationConfig:{maxOutputTokens:256,thinkingConfig:{thinkingBudget:0}},
+ })};
+ const run=(resumed=false)=>runWithStandaloneAccounting({...context,requestId:'blocked-gemini-usage',resumed},()=>send(url,input));
+ const response=await run();
+ assert.equal(response.status,200);
+ const body=await response.json();
+ assert.equal(body.promptFeedback.blockReason,'PROHIBITED_CONTENT');
+ assert.equal(body.candidates,undefined,'do not fabricate a blocked model answer');
+ assert.equal(paid,1);assert.equal(counted,1);
+ const a=f.attempts[0];
+ assert.equal(a.state,'settled');
+ assert.equal(a.usage?.inputTokens,8249);
+ assert.equal(a.usage?.outputTokens,0);
+ assert.equal(a.actual_microusd,'2475','8249 billed input tokens at the reviewed Gemini Flash input rate');
+ assert.equal(a.evidence?.resolvedModel,'gemini-2.5-flash');
+ await run(true);
+ assert.equal(paid,1,'saved receipt never replays provider generation');
+ assert.equal(counted,1,'saved count is not repeated');
+});
+
+test('Gemini policy block without complete zero-output evidence holds uncertain exposure',async()=>{
+ const invalid=[
+  {promptTokenCount:8249}, // Missing total
+  {promptTokenCount:8249,totalTokenCount:8250}, // Contradictory total
+  {promptTokenCount:8249,totalTokenCount:8249,thoughtsTokenCount:1}, // Hidden output
+  {promptTokenCount:8249,totalTokenCount:8249,candidatesTokenCount:1},
+  {promptTokenCount:8249,totalTokenCount:8249,toolUsePromptTokenCount:1},
+ ];
+ for(const [i,usage] of invalid.entries()){
+  const f=fakeLedger();let paid=0;
+  const send=createAccountingFetch('google',async(url)=>{
+   if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:8249});
+   paid++;
+   return Response.json({responseId:'blocked-gemini-incomplete-'+i,modelVersion:'gemini-2.5-flash',
+    promptFeedback:{blockReason:'PROHIBITED_CONTENT'},usageMetadata:usage});
+  },f.factory);
+  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'invalid-gemini-block-'+i},()=>send(url,{
+   method:'POST',body:JSON.stringify({contents:[{role:'user',parts:[{text:'Classify the saved attachment references.'}]}],
+    generationConfig:{maxOutputTokens:256}}),
+  })),isStandaloneAccountingError);
+  assert.equal(paid,1);
+  assert.equal(f.attempts[0].state,'uncertain');
+  assert.equal(f.attempts[0].actual_microusd,undefined);
+  assert.equal(f.events.includes('settle'),false);
+ }
+});
