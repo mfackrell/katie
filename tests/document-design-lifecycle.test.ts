@@ -93,7 +93,7 @@ test('material design issue without a safe action fails closed instead of delive
       produceDocument({spec,browser,deadlineMs:Date.now()+65000,requireDesignAssessment:true,
         inspect:async()=>({pages:[passPage(1)],design:{...improvementReport().design!,actions:[]}}),
       }),
-      /No safe, material document design adjustment is available/
+      /A design REPAIR requires material evidence and a bounded action/
     );
     await assert.rejects(
       produceDocument({spec,browser,deadlineMs:Date.now()+65000,requireDesignAssessment:true,
