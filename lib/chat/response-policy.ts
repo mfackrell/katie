@@ -45,6 +45,12 @@ const SUBSTANTIVE_INTENTS = new Set([
   "assistant-reflection", "safety-sensitive-vision", "vision-analysis", "multimodal-reasoning", "image-generation",
 ]);
 
+// The classifier's purpose is contextual; these expertise labels are compatible
+// with an ordinary personal exchange, not a standing instruction to produce work.
+const CONVERSATIONAL_INTENTS = new Set([
+  "general-text", "text", "social-emotional", "emotional-analysis", "assistant-reflection",
+]);
+
 /**
  * A model's intent label describes expertise, not whether this reply is a
  * deliverable. A personal question about Katie's tone/behavior is still a
@@ -119,7 +125,12 @@ export function decideResponsePolicy(input: {
 
   // Purpose is independent of domain: a routine rewrite is still a deliverable,
   // while a contextual clarification may mention code or financial analysis.
-  if (input.responsePurpose) return policy(input.responsePurpose, "contextual_response_purpose");
+  if (input.responsePurpose === "conversation") {
+    const personalConversation = !input.hasPendingDeliverable &&
+      (input.intent == null || CONVERSATIONAL_INTENTS.has(input.intent));
+    return policy("conversation", personalConversation ? "contextual_personal_conversation" : "contextual_response_purpose", personalConversation);
+  }
+  if (input.responsePurpose === "deliverable") return policy("deliverable", "contextual_response_purpose");
   if (input.hasPendingDeliverable) return policy("deliverable", "pending_work_conservative_fallback");
   if (input.intent && SUBSTANTIVE_INTENTS.has(input.intent)) return policy("deliverable", "substantive_intent_fallback");
   return policy("deliverable", "uncertain_output_conservative_fallback");
