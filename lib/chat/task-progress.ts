@@ -314,7 +314,9 @@ export function isProfessionalProfileMaterial(message: string): boolean {
 
 /** Normalize legacy companion state before any consumer can treat it as project authority. */
 export function isolateCompanionProgress(previous: TaskProgressState): TaskProgressState {
-  const legacyCasualProject = previous.projectContext && isCompanionOrigin(previous.projectContext.text);
+  const legacyCasualProject = previous.projectContext &&
+    !hasProjectAuthority(previous.projectContext, previous.projectAuthority) &&
+    isCompanionOrigin(previous.projectContext.text);
   // Legacy conversational ledgers may have persisted a synthetic parent and questions.
   // Strip only that active binding; retain genuine saved project checkpoints.
   return legacyCasualProject ? {
