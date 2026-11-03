@@ -160,8 +160,12 @@ begin
   and t.external->'receipt'->>'run_id'='41673059705'
   and t.external->'receipt'->>'outcome'='BLOCKED'
   and t.external->'receipt'->>'pr_url' is null
-  and t.external->>'developerApprovalId'=a.previous_developer_approval_id::text
+  and t.external->>'developerApprovalId' in (a.previous_developer_approval_id::text,a.id::text)
   and t.status='dispatching'
+  and not exists(select 1 from benchmark_budget_calls c where c.account_id=a.account_id)
+  and not exists(select 1 from benchmark_execution_grants g where g.developer_approval_id=a.id)
+  and not exists(select 1 from mission_calls c join mission_assignments j on j.id=c.job_id
+    where j.id=p_task)
   and a.revoked_at is null and a.consumed_at is null
   and a.deadline>clock_timestamp()
   and exists(select 1 from benchmark_native_spending_approvals old
