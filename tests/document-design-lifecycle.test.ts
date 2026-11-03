@@ -7,6 +7,7 @@ import { produceDocument, type VisualReport } from '../lib/documents/production'
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import mammoth from 'mammoth';
+import { mkdirSync, writeFileSync } from 'node:fs';
 
 const passPage = (page: number) => ({
   page, verdict: 'pass' as const, repair: 'none' as const,
@@ -58,6 +59,7 @@ test('qualifying visual evidence produces a re-render, comparison and genuine PD
   const browser = await launchWebsiteBrowser();
   let calls = 0;
   let firstHeight = 0;
+  let beforeImage: Buffer | undefined;
   try {
     const result = await produceDocument({spec,browser,deadlineMs:Date.now()+110000,requireDesignAssessment:true,
       inspect: async (rendered, attempt, context) => {
@@ -65,6 +67,7 @@ test('qualifying visual evidence produces a re-render, comparison and genuine PD
         assert.equal(rendered.inspection.findings.length,0);
         if (!context?.previous) {
           firstHeight = rendered.heights.reduce((a,b)=>a+b,0);
+          beforeImage = rendered.images[0];
           return improvementReport();
         }
         assert.notDeepEqual(rendered.inspection.pageHashes,context.previous.inspection.pageHashes);
@@ -75,6 +78,12 @@ test('qualifying visual evidence produces a re-render, comparison and genuine PD
     });
     assert.equal(calls,2,'One baseline review and one confirmation: no unbounded paid calls');
     assert.equal(result.corrections,1);
+    // Keep real PDF page rasters for independent visual inspection in CI.
+    mkdirSync('test-artifacts/documents',{recursive:true});
+    if (!beforeImage) throw new Error('The original design image was not rendered.');
+    writeFileSync('test-artifacts/documents/design-before.png',beforeImage);
+    writeFileSync('test-artifacts/documents/design-after.png',result.images[0]);
+
     assert.equal(result.inspection.visual,'passed');
     assert.deepEqual(result.inspection.findings,[]);
     assert.equal(result.inspection.pageCount,1);
@@ -118,6 +127,9 @@ test('different document structures preserve technical integrity without a requi
       assert.equal(rendered.inspection.pageCount,1);
       assert.deepEqual(rendered.inspection.findings,[]);
       assert.ok(rendered.images[0].length>2500);
+      mkdirSync('test-artifacts/documents',{recursive:true});
+      writeFileSync(`test-artifacts/documents/design-${spec.title.toLowerCase().replace(/[^a-z0-9]+/g,'-')}.png`,rendered.images[0]);
+
     }
   } finally {await browser.close();}
 });
