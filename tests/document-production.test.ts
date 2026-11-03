@@ -22,6 +22,7 @@ import { PRICING_SNAPSHOT, type PricingSnapshot } from '../lib/standalone-accoun
 import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
+import { StandaloneAccountingError } from '../lib/standalone-accounting/ledger';
 import type { LlmProvider } from '../lib/providers/types';
 
 
@@ -334,6 +335,21 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     assert.match(result.text, /Created and inspected 2 pages/); assert.match(result.text, /format=docx/); assert.match(result.text, /format=pdf/);
     assert.equal(uploads, 3); assert.equal(visualCalls, 2);
     assert.ok([...files.keys()].every(path => path.startsWith(`chats/${scope.chatId}/document-`)));
+    // Missing qualified design models are an optional preflight, not a failed
+    // document. No provider is contacted and the validated files are saved.
+    const retryId = scope.requestId + '-no-design-model';
+    const fallback = await runWithStandaloneAccounting({...context,requestId:retryId}, () =>
+      deliverDocument({
+        ...input,requestId:retryId,
+        selectVisualInspector:async()=>{throw new StandaloneAccountingError(
+          'no_qualified_document_design_vision','No qualified design model is available.');
+        },
+      }));
+    assert.match(fallback.text,/Created and inspected 2 pages/);
+    assert.match(fallback.text,/format=pdf/);
+    assert.equal(visualCalls,2,'Unavailable reviewer must never dispatch a model.');
+    assert.equal(uploads,6,'Independent scoped mechanical files remain deliverable.');
+
   } finally {
     if (oldUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = oldUrl;
     if (oldKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = oldKey;
