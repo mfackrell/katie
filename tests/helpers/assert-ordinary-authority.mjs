@@ -14,6 +14,12 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await db.query(readFileSync('supabase/migrations/20261023182000_owner_approved_resource_ceiling.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261101160000_ordinary_developer_authority.sql','utf8'));
+ // The native bridge is qualified separately. This ordinary-schema fixture
+ // supplies its minimal Task 4A locator for the owner/claim deny guards.
+ await db.query('create table if not exists public.project_continuation_authorizations(id uuid primary key,project_id uuid,revoked_at timestamptz,deadline timestamptz)');
+ await db.query("do $ begin if to_regprocedure('public.task4a_native_authority_ready(uuid,uuid,uuid)') is null then execute 'create function public.task4a_native_authority_ready(uuid,uuid,uuid) returns boolean language sql stable as ''select false''';end if;end $");
+ await db.query(readFileSync('supabase/migrations/20261103180500_task4a_ordinary_authority_guard.sql','utf8'));
+ await (await import('./task4a-ordinary-owner-guard.mjs')).verifyTask4aOrdinaryOwnerFence(db);
  }
  const actor=randomUUID(),chat=randomUUID(),owner=randomUUID(),project=randomUUID(),repo=randomUUID();
  await db.query("insert into actors(id,name,actor_kind) values($1,'Ordinary synthetic owner','standard')",[actor]);
