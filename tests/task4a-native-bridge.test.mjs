@@ -63,6 +63,9 @@ test('trusted workflow recognizes Task4A signed host; no plain Codex fallback',(
  assert.match(cli,/task4a-developer/);
  assert.match(host,/task4a_native_reconcile_provider_usage/);
  assert.match(host,/task4a_native_live/);
+ assert.match(host,/task4a_pregrant_redispatch_ready/);
+ assert.match(host,/!proof\.startupRecoveryId&&!task4aPregrant/);
+ assert.match(host,/wipContext\.baseSha!==wipContext\.baselineSha/);
  assert.match(host,/task4a,executionEpoch/);
  assert.match(workflow,/if: steps\.task\.outputs\.native != 'true'\n        uses: openai\/codex-action@v1/);
 });
