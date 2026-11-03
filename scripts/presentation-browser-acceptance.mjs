@@ -23,6 +23,8 @@ const fixture = `
 import { StructuredResponseView } from "@/components/structured-response-view";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
 import { ChatPanel } from "@/components/chat-panel";
+import { Profiler } from "react";
+function onChatRender() { const browser = window as typeof window & { __katieChatCommits?: number }; browser.__katieChatCommits = (browser.__katieChatCommits ?? 0) + 1; }
 import type { StructuredResponse } from "@/lib/chat/structured-response";
 const response = {
   version: 1, fallbackMarkdown: "Before. After.",
@@ -41,7 +43,7 @@ export default function PresentationAcceptancePage() {
     <div data-testid="equation"><AssistantMarkdown>{${JSON.stringify(equationMarkdown)}}</AssistantMarkdown></div>
     <div className="h-[700px]" data-testid="stream-chat">
       <aside id="katie-live-status" data-testid="thinking-status-rail" />
-      <ChatPanel actorId="11111111-1111-4111-8111-111111111111" chatId="22222222-2222-4222-8222-222222222222" activeActorName="Acceptance" activeChatTitle="Streaming regression" activeRepoId="" repoInjectionEnabled={false} statusRailOpen />
+      <Profiler id="chat" onRender={onChatRender}><ChatPanel actorId="11111111-1111-4111-8111-111111111111" chatId="22222222-2222-4222-8222-222222222222" activeActorName="Acceptance" activeChatTitle="Streaming regression" activeRepoId="" repoInjectionEnabled={false} statusRailOpen /></Profiler>
     </div>
   </main>;
 }
@@ -83,11 +85,16 @@ try {
     headless: true,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  let historySize = 0;
   await page.route("**/api/**", route => {
     const url = new URL(route.request().url());
     const body = route.request().postDataJSON();
     const payload = url.pathname === "/api/models" ? { openai: ["fixture"] }
-      : url.pathname === "/api/messages" ? { messages: [] }
+      : url.pathname === "/api/messages" ? { messages: Array.from({ length: historySize }, (_, i) => ({
+        id: `fixture-message-${i}`, role: i % 2 === 0 ? "user" : "assistant",
+        content: i % 2 === 0 ? "Historical question "+i : "## Historical answer "+i+"\\n\\n".concat("Financial modeling and operations context. ".repeat(12)),
+        chatId: "22222222-2222-4222-8222-222222222222", createdAt: "2026-11-03T12:00:00.000Z"
+      })) }
       : url.pathname === "/api/ui-state" ? { state: { key: body?.key ?? url.searchParams.get("key"), version: 1, value: body?.value ?? {} } }
       : url.pathname === "/api/version" ? { version: "fixture" } : {};
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
@@ -98,6 +105,7 @@ try {
     const original = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       if (new URL(input instanceof Request ? input.url : String(input), location.href).pathname !== "/api/chat") return original(input, init);
+      window.__lastChatPayload = JSON.parse(init.body);
       const encoder = new TextEncoder();
       return new Response(new ReadableStream({ start(controller) {
         const emit = value => controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
@@ -174,7 +182,68 @@ try {
   await centralProgress.waitFor({ state: "hidden" });
   await page.getByText("Stream complete", { exact: true }).waitFor();
   if ((await page.locator('[data-testid="stream-chat"]').innerText()).includes("<katie-presentation-v1>")) throw new Error("Internal presentation markup leaked");
-  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, centralProgressStream: true, noRightRailDuplication: true }));
+
+  // Measure the real composer in Chromium, with React commits tracked by a
+  // Profiler around ChatPanel. The same text must survive draft persistence.
+  const probeInput = async label => {
+    const result = await page.evaluate(async () => {
+      const textarea = document.querySelector('textarea[placeholder="Ask Acceptance…"]');
+      if (!textarea) throw new Error("Composer missing");
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+      const runtime = window;
+      const beforeCommits = runtime.__katieChatCommits ?? 0;
+      const observerResults = [];
+      const observer = new PerformanceObserver(list => observerResults.push(...list.getEntries().map(entry=>entry.duration)));
+      try { observer.observe({ type: "longtask", buffered: false }); } catch {}
+      const durations = [];
+      let expected = textarea.value;
+      const characters = "Keystrokes must remain responsive even after long conversations.";
+      for (const char of characters) {
+        const before = performance.now();
+        expected += char;
+        nativeSetter.call(textarea, expected);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        if (textarea.value !== expected) throw new Error("Composer lost a keystroke before paint");
+        durations.push(performance.now() - before);
+      }
+      observer.disconnect();
+      const sorted = [...durations].sort((a,b)=>a-b);
+      return {
+        p95: sorted[Math.ceil(sorted.length*0.95)-1],
+        commits: (runtime.__katieChatCommits ?? 0) - beforeCommits,
+        strokes: characters.length,
+        longTasks: observerResults.length,
+        maxLongTask: Math.max(0,...observerResults),
+        text: expected,
+      };
+    });
+    if (result.p95 >= 50) throw new Error(label + " p95 typing latency exceeds 50ms: " + JSON.stringify(result));
+    if (result.commits > result.strokes * 2 + 4) throw new Error(label + " React commits per keystroke regressed: " + JSON.stringify(result));
+    if (!Number.isFinite(result.maxLongTask)) throw new Error(label + " invalid long task measurement");
+    return result;
+  };
+  await composer.fill("");
+  const shortTyping = await probeInput("short history");
+  await page.waitForTimeout(1000);
+  const recoveredDraft = await page.evaluate(() => sessionStorage.getItem("katie.draft.v1.22222222-2222-4222-8222-222222222222"));
+  if (recoveredDraft !== shortTyping.text) throw new Error("Debounced composer draft not persisted");
+  await page.reload();
+  if (await composer.inputValue() !== shortTyping.text) throw new Error("Composer draft did not recover after reload");
+  historySize = 160;
+  await page.reload();
+  await page.getByText("Historical answer 159", { exact: false }).waitFor();
+  await composer.fill("");
+  const longTyping = await probeInput("160-message history");
+  await composer.fill("Quick Enter should send without waiting for draft debounce.");
+  await composer.press("Enter");
+  await page.getByLabel("Katie response progress", { exact: true }).waitFor();
+  const sent = await page.evaluate(() => window.__lastChatPayload?.message);
+  if (sent !== "Quick Enter should send without waiting for draft debounce.") throw new Error("Enter submitted stale composer text: " + sent);
+  await page.evaluate(() => window.__finishPresentationStream());
+  await page.getByLabel("Katie response progress", { exact: true }).waitFor({state:"hidden"});
+  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, centralProgressStream: true, noRightRailDuplication: true, composerPerformance: { shortTyping, longTyping, persistedDraft: true, quickEnter: true } }));
+
 } finally {
   await cleanup();
 }
