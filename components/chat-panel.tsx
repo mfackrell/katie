@@ -6,6 +6,7 @@ import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
+import { ChatComposerInput } from "@/components/chat-composer-input";
 import { SAVED_DOCUMENT_EXPORT_PROMPT } from "@/lib/documents/intent";
 import {
   ClipboardEvent,
@@ -14,6 +15,8 @@ import {
   MouseEvent as ReactMouseEvent,
   useEffect,
   useMemo,
+  memo,
+  useCallback,
   useRef,
   useState,
 } from "react";
@@ -313,7 +316,6 @@ type SelectionExplainer = {
 
 const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
 const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
-const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
 const MAX_DIRECT_IMAGE_BYTES = 1_750_000;
 const MAX_IMAGE_DIMENSION = 1600;
 const MIN_IMAGE_DIMENSION = 640;
@@ -782,6 +784,9 @@ function normalizeAvailableModels(payload: unknown): AvailableModels {
   return normalized;
 }
 
+const MemoizedAssistantMarkdown = memo(AssistantMarkdown);
+const MemoizedMessageReactions = memo(MessageReactions);
+
 export function ChatPanel({
   managedAgentId,
   actorId,
@@ -805,12 +810,14 @@ export function ChatPanel({
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
+  const composerValueRef = useRef("");
+  const [composerResetVersion, resetComposerInput] = useState(0);
   const [replyTo, setReplyTo] = useState<Pick<Message, "id" | "role" | "content"> | null>(null);
   useEffect(() => setReplyTo(null), [chatId]);
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
   const [draftReady,setDraftReady]=useState(false);
-  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
+  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);resetComposerInput(version=>version+1);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
   const draftInitialized=useRef(false);
   useEffect(()=>{
     if(draftInitialized.current||!draft.state)return;
@@ -915,6 +922,9 @@ export function ChatPanel({
   const [collaborationActive, setCollaborationActive] = useState(false);
   const [collaborationSummary, setCollaborationSummary] = useState<CollaborationUiMetadata | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const onMessageReaction = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("katie:reaction-reply-queued", {detail:{chatId}}));
+  }, [chatId]);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [showModelControls, setShowModelControls] = useState(true);
   const [selectionExplainer, setSelectionExplainer] = useState<SelectionExplainer | null>(null);
@@ -922,6 +932,7 @@ export function ChatPanel({
   const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
   const [showLiveReasoningExplainer, setShowLiveReasoningExplainer] = useState(true);
   const [reasoningState, setReasoningState] = useState<ReasoningUiState>(createReasoningUiState);
+  const [processingActivity, setProcessingActivity] = useState<Array<{stage:string;message:string}>>([]);
   const [reasoningPopupVisible, setReasoningPopupVisible] = useState(false);
   const [reasoningPopupDismissed, setReasoningPopupDismissed] = useState(false);
   const [explainerOpen, setExplainerOpen] = useState(false);
@@ -946,35 +957,11 @@ export function ChatPanel({
 
   const hasComposerAttachments = selectedImages.length + selectedVideos.length + selectedFiles.length + fileReferences.length > 0;
   const composerAttachmentsReady = attachmentsReady && attachmentChatId===chatId;
-  const canSend = useMemo(
-    () =>
-      !managedAgentId && draftReady && (attachmentsReady || input.trim().length > 0) &&
-      (!hasComposerAttachments || composerAttachmentsReady) && hasValidChatSelection &&
-      (input.trim().length > 0 ||
-        selectedImages.length > 0 ||
-        selectedVideos.length > 0 ||
-        selectedFiles.length > 0 ||
-        fileReferences.length > 0) &&
-      !loading &&
-      !uploadingFiles,
-    [
-      input,
-      loading,
-      selectedFiles.length,
-      selectedImages.length,
-      selectedVideos.length,
-      uploadingFiles,
-      fileReferences.length,
-      hasValidChatSelection,
-      managedAgentId,
-      draftReady,
-      attachmentsReady,
-      hasComposerAttachments,
-      composerAttachmentsReady,
-      attachmentChatId,
-      chatId,
-    ],
-  );
+  // Submit uses the immediate composer ref, never the debounced saved-draft echo.
+  const canSendForText = (text: string) =>
+    !managedAgentId && draftReady && (attachmentsReady || text.trim().length > 0) &&
+    (!hasComposerAttachments || composerAttachmentsReady) && hasValidChatSelection &&
+    (text.trim().length > 0 || hasComposerAttachments) && !loading && !uploadingFiles;
 
   const scrollToTop = () => {
     messagesContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
@@ -1155,6 +1142,7 @@ export function ChatPanel({
       setCollaborationActive(false);
       setCollaborationSummary(null);
       setReasoningState(createReasoningUiState());
+      setProcessingActivity([]);
       setReasoningPopupVisible(false);
       setCopiedMessageId(null);
 
@@ -1279,6 +1267,7 @@ export function ChatPanel({
 
   function requestProjectChanges() {
     setInput("Change this project's scope: ");
+    resetComposerInput(version=>version+1);
     requestAnimationFrame(()=>textareaRef.current?.focus());
   }
 
@@ -1409,7 +1398,7 @@ export function ChatPanel({
           }
         } else if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
-          if (!cancelled) setInput(pending.content);
+          if (!cancelled) {setInput(pending.content);resetComposerInput(version=>version+1);}
           if (!cancelled) {
             const failure: Message = { id: error.messageId ?? pending.requestId ?? crypto.randomUUID(), chatId,
               role: "assistant", content: chatFailureContent(error.message), createdAt: new Date().toISOString() };
@@ -1630,17 +1619,18 @@ export function ChatPanel({
       );
       return;
     }
-    if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!canSend && !reactionContent)) {
+    const latestComposerText = composerValueRef.current.trim();
+    if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!reactionContent && !canSendForText(latestComposerText))) {
       return;
     }
 
     setAccountingResumeFailure("");
     const replySnapshot = reactionContent ? null : replyTo;
     const documentSourceMessageId = replySnapshot?.role === "assistant" &&
-      input.trim() === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
-    const content = reactionContent ?? (documentSourceMessageId ? input.trim() : replySnapshot
-      ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${input.trim()}`
-      : input.trim());
+      latestComposerText === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
+    const content = reactionContent ?? (documentSourceMessageId ? latestComposerText : replySnapshot
+      ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${latestComposerText}`
+      : latestComposerText);
     const composerImages = reactionContent ? [] : [...selectedImages];
     let preparedImages: ReturnType<typeof prepareComposerImages>;
     try { preparedImages=prepareComposerImages(composerImages);setAttachmentError(""); }
@@ -1654,7 +1644,9 @@ export function ChatPanel({
 
     if (!reactionContent) {
       setReplyTo(null);
+      composerValueRef.current = "";
       setInput("");
+      resetComposerInput(value => value + 1);
       setSelectedImages([]);
       setSelectedVideos([]);
       setSelectedFiles([]);
@@ -1673,6 +1665,7 @@ export function ChatPanel({
     setStatusMessage("Routing request and selecting the lead model…");
     setFailoverNotice("");
     setReasoningState(createReasoningUiState());
+    setProcessingActivity([]);
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
       setReasoningPopupVisible(true);
@@ -1694,6 +1687,7 @@ export function ChatPanel({
     });
 
     let requestStage = "preparing attachments";
+    let answerCommitted = false;
     let uploadedReferencesForRetry: FileReference[] | null = null;
     const clientRequestId = crypto.randomUUID();
 
@@ -1901,6 +1895,7 @@ export function ChatPanel({
         // for the next send rather than uploading the file a second time.
         if (uploadedReferencesForRetry && composerChatRef.current===chatId) setFileReferences(cleanPendingAttachments({images:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
         setInput(content);
+        resetComposerInput(version=>version+1);
         setStatusMessage(httpCause);
         return;
       }
@@ -1919,46 +1914,42 @@ export function ChatPanel({
       let provider = "unknown";
       let model = "unknown";
       let sawInitialMetadata = false;
-      let sawReasoningStart = false;
       let sawFinalReasoningAnswer = false;
-      let fallbackReasoningDeltaCount = 0;
-      let fallbackProgress = 0;
+      let savedAssistantMessageId: string | null = null;
 
-      const applyFallbackReasoningFromDelta = (delta: string) => {
-        if (!delta.trim() || sawReasoningStart) {
-          return;
-        }
-        const now = new Date().toISOString();
-        setReasoningState((current) =>
-          applyReasoningEvent(current, {
-            type: "reasoning_start",
-            requestId: `fallback-${chatId}`,
-            categories: FALLBACK_REASONING_CATEGORIES,
-            startedAt: now
-          }),
-        );
-        sawReasoningStart = true;
+      // The server's content event follows the durable assistant-message write.
+      // Do not wait for memory processing or workflow settlement to visually
+      // finalize a reply that has already been saved. Pending workflow
+      // recovery/accounting remains active until the stream actually ends.
+      const commitSavedAnswer = () => {
+        if (answerCommitted || !savedAssistantMessageId || !sawFinalReasoningAnswer) return;
+        answerCommitted = true;
+        const assistantMessage: Message = {
+          id: savedAssistantMessageId,
+          chatId,
+          role: "assistant",
+          model,
+          content: textContent,
+          ...(presentation ? { presentation } : {}),
+          assets,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((current) => {
+          const nextMessages = [...current.filter(entry => entry.id !== assistantMessage.id), assistantMessage];
+          setMessagesByChatId(cache => ({...cache,[chatId]:nextMessages}));
+          return nextMessages;
+        });
+        setStreamingAnswer("");
+        setMeta({ provider, model });
+        setStatusMessage("Answer saved. Finalizing memory and request accounting…");
       };
 
-      const applyFallbackReasoningUpdate = (delta: string) => {
-        if (!delta.trim() || !sawReasoningStart) {
-          return;
-        }
-        const category = FALLBACK_REASONING_CATEGORIES[fallbackReasoningDeltaCount % FALLBACK_REASONING_CATEGORIES.length];
-        fallbackReasoningDeltaCount += 1;
-        fallbackProgress = Math.min(95, fallbackProgress + 4);
-        setReasoningState((current) =>
-          applyReasoningEvent(current, {
-            type: "reasoning_update",
-            requestId: current.requestId ?? `fallback-${chatId}`,
-            category,
-            explanationDelta: delta,
-            score: null,
-            confidence: null,
-            progress: fallbackProgress,
-            updatedAt: new Date().toISOString()
-          }),
-        );
+      const recordProcessingUpdate = (stage: string, message: string) => {
+        setStatusMessage(message);
+        setProcessingActivity(current => {
+          if (current.at(-1)?.stage === stage && current.at(-1)?.message === message) return current;
+          return [...current, {stage,message}].slice(-8);
+        });
       };
 
       while (true) {
@@ -1979,10 +1970,12 @@ export function ChatPanel({
           const chunk = JSON.parse(line) as
             | ChatMetadataChunk
             | { type: "delta"; text: string }
+            | { type: "processing_update"; stage: string; message: string }
             | {type:"accounting_pause";code:string;requestId:string;message:string}
             | ReasoningStreamEvent
             | {
                 type: "content";
+                messageId?: string;
                 text: string;
                 presentation?: StructuredResponse;
                 assets?: Array<{ type: string; url: string }>;
@@ -2006,6 +1999,10 @@ export function ChatPanel({
             return;
           }
           if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
+          if (chunk.type === "processing_update") {
+            recordProcessingUpdate(chunk.stage,chunk.message);
+            continue;
+          }
 
           // Required review emits metadata without modelId/provider. Render its
           // progress instead of accidentally clearing the active model state.
@@ -2066,8 +2063,7 @@ export function ChatPanel({
           if (chunk.type === "delta") {
             textContent += chunk.text;
             setStreamingAnswer(textContent);
-            applyFallbackReasoningFromDelta(chunk.text);
-            applyFallbackReasoningUpdate(chunk.text);
+            // Output text belongs only to the answer, never to Thinking.
           }
 
           if (
@@ -2076,16 +2072,15 @@ export function ChatPanel({
             chunk.type === "reasoning_snapshot" ||
             chunk.type === "final_answer"
           ) {
-            if (chunk.type === "reasoning_start") {
-              sawReasoningStart = true;
-            }
             if (chunk.type === "final_answer") {
               sawFinalReasoningAnswer = true;
             }
             setReasoningState((current) => applyReasoningEvent(current, chunk));
+            if (chunk.type === "final_answer") commitSavedAnswer();
           }
 
           if (chunk.type === "content") {
+            savedAssistantMessageId = chunk.messageId ?? null;
             textContent = chunk.text;
             setStreamingAnswer(textContent);
             if (chunk.presentation) {
@@ -2106,9 +2101,11 @@ export function ChatPanel({
           | ChatMetadataChunk
           | { type: "delta"; text: string }
             | {type:"accounting_pause";code:string;requestId:string;message:string}
+          | { type: "processing_update"; stage: string; message: string }
           | ReasoningStreamEvent
           | {
               type: "content";
+              messageId?: string;
               text: string;
               presentation?: StructuredResponse;
               assets?: Array<{ type: string; url: string }>;
@@ -2117,6 +2114,7 @@ export function ChatPanel({
             };
 
         if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message, trailingChunk.messageId);
+        if (trailingChunk.type === "processing_update") recordProcessingUpdate(trailingChunk.stage,trailingChunk.message);
 
         if (trailingChunk.type === "metadata" && trailingChunk.review) {
           setStatusMessage(reviewStatusMessage(trailingChunk.review));
@@ -2164,8 +2162,7 @@ export function ChatPanel({
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
           setStreamingAnswer(textContent);
-          applyFallbackReasoningFromDelta(trailingChunk.text);
-          applyFallbackReasoningUpdate(trailingChunk.text);
+          // Output text belongs only to the answer, never to Thinking.
         }
 
         if (
@@ -2174,16 +2171,15 @@ export function ChatPanel({
           trailingChunk.type === "reasoning_snapshot" ||
           trailingChunk.type === "final_answer"
         ) {
-          if (trailingChunk.type === "reasoning_start") {
-            sawReasoningStart = true;
-          }
           if (trailingChunk.type === "final_answer") {
             sawFinalReasoningAnswer = true;
           }
           setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
+          if (trailingChunk.type === "final_answer") commitSavedAnswer();
         }
 
         if (trailingChunk.type === "content") {
+          savedAssistantMessageId = trailingChunk.messageId ?? null;
           textContent = trailingChunk.text;
           setStreamingAnswer(textContent);
           if (trailingChunk.presentation) {
@@ -2200,22 +2196,26 @@ export function ChatPanel({
 
       abortControllerRef.current = null;
       setMeta({ provider, model });
+      if (!answerCommitted) {
+        // Legacy/fallback stream lacking a saved message ID: preserve behavior,
+        // but never append a second message after early finalization.
+        const assistantMessage: Message = {
+          id: savedAssistantMessageId ?? crypto.randomUUID(),
+          chatId,
+          role: "assistant",
+          model,
+          content: textContent,
+          ...(presentation ? { presentation } : {}),
+          assets,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((current) => {
+          const nextMessages = [...current.filter(entry => entry.id !== assistantMessage.id), assistantMessage];
+          setMessagesByChatId(cache => ({...cache,[chatId]:nextMessages}));
+          return nextMessages;
+        });
+      }
       setStreamingAnswer("");
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        chatId,
-        role: "assistant",
-        model,
-        content: textContent,
-        ...(presentation ? { presentation } : {}),
-        assets,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages((current) => {
-        const nextMessages = [...current, assistantMessage];
-        setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
-        return nextMessages;
-      });
       if (!sawFinalReasoningAnswer) {
         setReasoningState((current) =>
           applyReasoningEvent(current, {
@@ -2246,13 +2246,21 @@ export function ChatPanel({
         return;
       }
 
+      if (answerCommitted) {
+        // Answer was saved and already displayed; post-answer errors must not
+        // manufacture another assistant response or replace the good answer.
+        setStatusMessage(`Answer saved; later workflow processing needs attention: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+
       if (requestStage === "preparing attachments") {
         // The optimistic message never reached /api/chat. Restore its draft
         // and the original browser File objects so a retry can consult the
         // durable /api/upload/result instead of uploading video bytes again.
         if (!reactionContent && composerChatRef.current===chatId) {
           setAttachmentError(error instanceof Error?error.message:"The selected attachments could not be prepared.");
-          setInput(replySnapshot ? input : content);
+          setInput(replySnapshot ? composerValueRef.current : content);
+          resetComposerInput(version=>version+1);
           setReplyTo(replySnapshot);
           setSelectedFiles(filesToUpload);
           setSelectedVideos(videosToUpload);
@@ -2348,7 +2356,7 @@ export function ChatPanel({
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
-            if (!reactionContent) { setInput(replySnapshot ? input : content); setReplyTo(replySnapshot); }
+            if (!reactionContent) { setInput(replySnapshot ? composerValueRef.current : content); resetComposerInput(version=>version+1); setReplyTo(replySnapshot); }
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
@@ -2469,12 +2477,15 @@ export function ChatPanel({
 
   function handleEmojiSelect(emoji: { emoji: string }) {
     const textarea = textareaRef.current;
-    const selectionStart = textarea?.selectionStart ?? input.length;
-    const selectionEnd = textarea?.selectionEnd ?? input.length;
-    const nextValue = `${input.slice(0, selectionStart)}${emoji.emoji}${input.slice(selectionEnd)}`;
+    const current = composerValueRef.current;
+    const selectionStart = textarea?.selectionStart ?? current.length;
+    const selectionEnd = textarea?.selectionEnd ?? current.length;
+    const nextValue = `${current.slice(0, selectionStart)}${emoji.emoji}${current.slice(selectionEnd)}`;
     const nextCursorPosition = selectionStart + emoji.emoji.length;
 
+    composerValueRef.current = nextValue;
     setInput(nextValue);
+    resetComposerInput(version=>version+1);
     setEmojiPickerOpen(false);
 
     requestAnimationFrame(() => {
@@ -2604,22 +2615,6 @@ export function ChatPanel({
         if(composerChatRef.current===originChatId)setUploadingFiles(false);
       });
   }
-
-  function handleInputChange(event: FormEvent<HTMLTextAreaElement>) {
-    const textarea = event.currentTarget;
-    setInput(textarea.value);
-
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
-  }
-
-  useEffect(() => {
-    if (!textareaRef.current || input.length !== 0) {
-      return;
-    }
-
-    textareaRef.current.style.height = "auto";
-  }, [input]);
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
   const showExplainer = !modelExplainerHidden && (isRoutingSelectionInFlight || hasExplainerData(selectionExplainer));
@@ -2905,9 +2900,9 @@ export function ChatPanel({
                     checked={showLiveReasoningExplainer}
                     onChange={(event) => handleLiveReasoningVisibility(event.target.checked)}
                     className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
-                    aria-label="Show live reasoning explainer"
+                    aria-label="Show live processing activity"
                   />
-                  <span>Live reasoning</span>
+                  <span>Live activity</span>
                 </label>
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
@@ -2974,7 +2969,7 @@ export function ChatPanel({
         <div className="space-y-2 text-xs" aria-live="polite">
           <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
           {imageObservationStages.length > 0 && <ul aria-label="Image analysis stages" className="space-y-1 text-zinc-400">{imageObservationStages.map((stage,index)=><li key={`${index}:${stage}`}>{stage}</li>)}</ul>}
-          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
+          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} processingActivity={processingActivity} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
         </div>, statusMount
       ) : null}
       {!statusRailOpen && showLiveReasoningExplainer && reasoningPopupVisible ? (
@@ -2984,6 +2979,7 @@ export function ChatPanel({
               loading={loading}
               state={reasoningState}
               statusMessage={statusMessage}
+              processingActivity={processingActivity}
               collaborationActive={collaborationActive}
               collaborationActivity={collaborationActivity}
               collaborationSummary={collaborationSummary}
@@ -3056,6 +3052,7 @@ export function ChatPanel({
                   onClick={() => {
                     setReplyTo({id:message.id,role:message.role,content:message.content});
                     setInput(SAVED_DOCUMENT_EXPORT_PROMPT);
+                    resetComposerInput(version=>version+1);
                     requestAnimationFrame(()=>textareaRef.current?.focus());
                   }}
                   className="shrink-0 rounded-lg border border-sky-400/25 px-2 py-1 text-[11px] text-sky-300 hover:bg-sky-400/10 disabled:opacity-40">Word/PDF</button>
@@ -3100,16 +3097,14 @@ export function ChatPanel({
               message.role === "assistant" ? (
                 <div className="break-words text-zinc-100/95">
                   {!(message.presentation?.blocks.some(block => block.type === "markdown")) &&
-                    <AssistantMarkdown>{message.content}</AssistantMarkdown>}
+                    <MemoizedAssistantMarkdown>{message.content}</MemoizedAssistantMarkdown>}
                   {message.presentation && <StructuredResponseView response={message.presentation} assets={message.assets} actorId={actorId} chatId={message.chatId} messageId={message.id} onDownload={url => void handleDownload(url, `katie-generated-${Date.now()}.png`)} ordered={message.presentation.blocks.some(block => block.type === "markdown")} />}
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
               )
             ) : null}
-            {message.role === "assistant" && message.id && <MessageReactions actorId={actorId} chatId={chatId} messageId={message.id} disabled={loading || Boolean(managedAgentId)} onReaction={() => {
-              window.dispatchEvent(new CustomEvent("katie:reaction-reply-queued", {detail:{chatId}}));
-            }} />}
+            {message.role === "assistant" && message.id && <MemoizedMessageReactions actorId={actorId} chatId={chatId} messageId={message.id} disabled={loading || Boolean(managedAgentId)} onReaction={onMessageReaction} />}
             {message.attachments?.length ? (
               <ul aria-label="Referenced files" className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
                 {message.attachments.map(file => (
@@ -3174,6 +3169,16 @@ export function ChatPanel({
                       `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
               </p>
             </div>
+            {processingActivity.length > 1 && !streamingAnswer ? (
+              <ol aria-label="Katie live processing activity" className="mt-2 space-y-1 border-t border-white/10 pt-2 text-xs text-zinc-400">
+                {processingActivity.slice(-3).map((step,index) => (
+                  <li key={index} className="flex gap-2">
+                    <span className="text-emerald-400" aria-hidden="true">•</span>
+                    <span>{step.message}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
             {streamingAnswer ? (
               <div aria-label="Streaming assistant response" className="mt-3 border-t border-white/10 pt-3 text-zinc-100/95">
                 <AssistantMarkdown>{streamingAnswer}</AssistantMarkdown>
@@ -3281,8 +3286,29 @@ export function ChatPanel({
           </ul>
         ) : null}
 
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-2 shadow-[0_14px_36px_rgba(0,0,0,0.2)] backdrop-blur-sm sm:rounded-[28px] sm:p-3 sm:shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
-          <div className="flex items-end gap-2">
+        <ChatComposerInput
+          key={chatId}
+          externalValue={input}
+          resetVersion={composerResetVersion}
+          currentValueRef={composerValueRef}
+          textareaRef={textareaRef}
+          onDraftChange={setInput}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          actorName={activeActorName}
+          managed={Boolean(managedAgentId)}
+          draftReady={draftReady}
+          attachmentsReady={attachmentsReady}
+          hasAttachments={hasComposerAttachments}
+          composerAttachmentsReady={composerAttachmentsReady}
+          hasValidChatSelection={hasValidChatSelection}
+          loading={loading}
+          uploadingFiles={uploadingFiles}
+          collaborationActive={collaborationActive}
+          routingInFlight={isRoutingSelectionInFlight}
+          statusMessage={statusMessage}
+          onCancel={handleCancelRequest}
+          fileControl={<>
             <input
               ref={fileInputRef}
               type="file"
@@ -3298,21 +3324,8 @@ export function ChatPanel({
             >
               📷
             </button>
-            <div className="relative min-w-0 flex-1">
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                enterKeyHint="send"
-                autoComplete="off"
-                autoCorrect="on"
-                spellCheck
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={`Ask ${activeActorName || "Katie"}…`}
-                className="min-h-[44px] max-h-36 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2.5 text-[16px] leading-6 text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring sm:min-h-[48px] sm:max-h-48 sm:rounded-2xl sm:px-4 sm:py-3 sm:pr-14 sm:text-sm"
-              />
+          </>}
+          emojiControl={<>
               <div ref={emojiPickerRef} className="absolute bottom-2 right-2 block">
                 <button
                   type="button"
@@ -3337,37 +3350,8 @@ export function ChatPanel({
                   </div>
                 ) : null}
               </div>
-            </div>
-            <div className="flex flex-none items-end gap-2">
-              {loading ? (
-                <button
-                  type="button"
-                  onClick={handleCancelRequest}
-                  className="h-11 rounded-xl border border-red-400/30 bg-red-500/10 px-3 text-xs font-medium text-red-100 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 sm:rounded-2xl sm:px-4 sm:text-sm"
-                >
-                  Cancel
-                </button>
-              ) : null}
-              <button
-                type="submit"
-                disabled={!canSend}
-                className="h-11 min-w-16 flex-none rounded-xl bg-gradient-to-r from-emerald-500 to-sky-500 px-4 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(16,185,129,0.25)] transition active:scale-95 disabled:opacity-50 sm:rounded-2xl sm:px-5 sm:py-3"
-              >
-                {uploadingFiles
-                  ? "Uploading..."
-                  : loading
-                    ? collaborationActive
-                      ? "Collaborating..."
-                      : isRoutingSelectionInFlight
-                        ? "Routing..."
-                        : statusMessage.toLowerCase().includes("synthes")
-                          ? "Synthesizing..."
-                          : "Thinking..."
-                    : "Send"}
-              </button>
-            </div>
-          </div>
-        </div>
+          </>}
+        />
       </form>
     </main>
   );
