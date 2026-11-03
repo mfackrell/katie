@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,writeFileSync,rmSync,mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
 import {encodeDeveloperHandoff,readDeveloperHandoff} from '../scripts/benchmark/developer-dispatch-contract.mjs';
+import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract.mjs';
+import {projectMarker,contractHash} from '../scripts/project-context.mjs';
 import {forwardAuthorizedModelRequest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
 
 const id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
@@ -102,4 +108,102 @@ test('ordinary and benchmark modes retain their original RPCs',async()=>{
    upstream,providerNamespace:'openai-responses',recordReceipt:async()=>{}});
   assert.deepEqual(events,[variant.live,variant.reserve]);
  }
+});
+
+
+test('trusted workflow fails closed for an original Task4A project without an authentic signed native grant',()=>{
+ const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
+ const parseAt=workflow.indexOf('node scripts/project-context.mjs prepare ');
+ const gateAt=workflow.indexOf('node scripts/benchmark/task4a-native-gate.mjs ');
+ const unmeteredAt=workflow.indexOf('        uses: openai/codex-action@v1');
+ assert.ok(parseAt>=0&&gateAt>parseAt&&unmeteredAt>gateAt,
+  'The executable original-project authority gate must run after trusted project parsing and before any unmetered action');
+ const dir=mkdtempSync(join(tmpdir(),'task4a-native-guard-'));
+ const requestFile=join(dir,'original-request.md'),manifestFile=join(dir,'verified-manifest.json'),
+  contextFile=join(dir,'validated-project.json');
+ const contract={path:'/pilot',scenarios:[{name:'state transition',steps:[
+  {action:'click',selector:'#advance'},
+  {action:'expectText',selector:'#state',value:'Ready'}
+ ]}]};
+ const project=id=>({
+  version:1,projectId:id,baseSha:'a'.repeat(40),baselineSha:'b'.repeat(40),
+  allowedPaths:['app/pilot/'],contractHash:contractHash(contract),contract,
+  codingModel:'gpt-5.3-codex',reviewModel:'gpt-5.3-codex'
+ });
+ const run=(request)=>{
+  rmSync(manifestFile,{force:true});rmSync(contextFile,{force:true});
+  writeFileSync(requestFile,request);
+  const env={...process.env,KATIE_NATIVE_HANDOFF_HMAC_KEY:key};
+  const cli=spawnSync(process.execPath,['scripts/benchmark/native-dispatch-cli.mjs','verify',requestFile,manifestFile],
+   {encoding:'utf8',env,timeout:10000});
+  if(cli.status!==0)return {cli};
+  const parser=spawnSync(process.execPath,['scripts/project-context.mjs','prepare',requestFile],
+   {encoding:'utf8',env,timeout:10000});
+  if(parser.status!==0)return {cli,parser};
+  writeFileSync(contextFile,parser.stdout);
+  const guard=spawnSync(process.execPath,['scripts/benchmark/task4a-native-gate.mjs',requestFile,contextFile,manifestFile],
+   {encoding:'utf8',env,timeout:10000});
+  return {cli,parser,guard,manifest:JSON.parse(readFileSync(manifestFile,'utf8'))};
+ };
+ const header=p=>'<!-- katie-managed-task:'+task+' -->\n\n'+projectMarker(p)+'\n\n';
+ const original=project(id),originalHeader=header(original);
+ const permission={...proof,contractHash:original.contractHash,baselineSha:original.baselineSha,expiresAt:Date.now()+300000};
+ const signed=encodeDeveloperHandoff(permission,key);
+ try{
+  const approved=run(originalHeader+signed);
+  assert.equal(approved.cli.status,0,approved.cli.stderr);
+  assert.equal(approved.parser.status,0,approved.parser.stderr);
+  assert.equal(approved.manifest.native,true);
+  assert.equal(approved.guard.status,0,approved.guard.stderr);
+
+  const stripped=run(originalHeader);
+  assert.equal(stripped.cli.status,0);
+  assert.equal(stripped.manifest.native,false);
+  assert.notEqual(stripped.guard.status,0,'Stripped Task4A marker must never select the unmetered action');
+  assert.match(stripped.guard.stderr,/TASK4A_NATIVE_AUTHORITY_REQUIRED/);
+
+  const {task4aContinuationId:discarded,...ordinaryPermission}=permission;
+  const wrongKind=run(originalHeader+encodeDeveloperHandoff({...ordinaryPermission,authorityKind:'ordinary-developer'},key));
+  assert.equal(wrongKind.cli.status,0);
+  assert.equal(wrongKind.manifest.native,true);
+  assert.notEqual(wrongKind.guard.status,0);
+  assert.match(wrongKind.guard.stderr,/TASK4A_NATIVE_AUTHORITY_REQUIRED/);
+
+  const tampered=run(originalHeader+signed.replace(/\.[A-Za-z0-9_-]+ -->$/,'.AAAA -->'));
+  assert.notEqual(tampered.cli.status,0,'Invalid HMAC must fail in native verifier');
+  assert.match(tampered.cli.stderr,/UNAUTHENTICATED/);
+  const mismatched=run(originalHeader+encodeDeveloperHandoff({...permission,projectId:randomUUID()},key));
+  assert.notEqual(mismatched.cli.status,0,'An authentic grant for another project must not pass');
+
+  // The second cryptographic check rejects a fabricated verified-manifest
+  // file even if a hostile caller bypassed the native CLI in a local test.
+  writeFileSync(requestFile,originalHeader);
+  writeFileSync(contextFile,JSON.stringify(original));
+  writeFileSync(manifestFile,JSON.stringify(approved.manifest));
+  const forged=spawnSync(process.execPath,['scripts/benchmark/task4a-native-gate.mjs',requestFile,contextFile,manifestFile],
+   {encoding:'utf8',env:{...process.env,KATIE_NATIVE_HANDOFF_HMAC_KEY:key},timeout:10000});
+  assert.notEqual(forged.status,0,'A forged manifest is not an authenticated native grant');
+
+  const other=project(randomUUID());
+  const ordinaryOther=run(header(other)+encodeDeveloperHandoff({
+   ...ordinaryPermission,projectId:other.projectId,contractHash:other.contractHash,baselineSha:other.baselineSha
+  },key));
+  assert.equal(ordinaryOther.cli.status,0,ordinaryOther.cli.stderr);
+  assert.equal(ordinaryOther.guard.status,0,ordinaryOther.guard.stderr);
+
+  const benchmarkProject={...project(randomUUID()),benchmarkContractHash:'f'.repeat(64)};
+  const benchmark=run(header(benchmarkProject)+encodeNativeHandoff({
+   taskId:randomUUID(),trialId:randomUUID(),approvalId:randomUUID(),
+   projectId:benchmarkProject.projectId,contractHash:benchmarkProject.contractHash,
+   benchmarkContractHash:benchmarkProject.benchmarkContractHash,
+   baselineSha:benchmarkProject.baselineSha,expiresAt:Date.now()+300000
+  },key));
+  assert.equal(benchmark.cli.status,0,benchmark.cli.stderr);
+  assert.equal(benchmark.guard.status,0,benchmark.guard.stderr);
+
+  const ordinaryPlain=run('Owner-authored ordinary coding issue with no managed project');
+  assert.equal(ordinaryPlain.cli.status,0);
+  assert.equal(ordinaryPlain.manifest.native,false);
+  assert.equal(ordinaryPlain.guard.status,0,ordinaryPlain.guard.stderr);
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });

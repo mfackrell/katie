@@ -96,6 +96,7 @@ jobs:
           native="$(jq -r '.native' "$RUNNER_TEMP/native-benchmark.json")"
           echo "native=$native" >> "$GITHUB_OUTPUT"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
+          node scripts/benchmark/task4a-native-gate.mjs "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/project-context.json" "$RUNNER_TEMP/native-benchmark.json"
           node scripts/recovery-scope.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/recovery-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
           recovery="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/recovery-context.json")"
