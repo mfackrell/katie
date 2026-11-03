@@ -139,6 +139,7 @@ export async function verifyTask4aSavedSpecificationPostgres(db){
   assert.equal(event.data.developmentApproved,false);
   assert.deepEqual(event.data.originalReviewResult,review);
   await query('savepoint immutable_receipt');
+  await query('reset role');
   await assert.rejects(query("update project_events set data='{}'::jsonb where id=$1",[event.id]),/immutable/);
   await query('rollback to savepoint immutable_receipt');
   await query('release savepoint immutable_receipt');
