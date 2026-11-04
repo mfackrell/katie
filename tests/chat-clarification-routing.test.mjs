@@ -487,6 +487,16 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
     ts.isFunctionDeclaration(node)&&node.name?.text===name ||
     ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>ts.isIdentifier(declaration.name)&&declaration.name.text===name),ast),`image helper ${name}`).getText(ast).replace(/^export\s+/,'');
   const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
+  // The route executes the real versioned visual-memory verifier; introducing
+  // a new image helper must not cause these isolated production-code tests to
+  // substitute a placeholder for Katie's first-person provenance contract.
+  const visualSource=readFileSync('lib/chat/visual-memory.ts','utf8');
+  const visualAst=ts.createSourceFile('visual-memory.ts',visualSource,ts.ScriptTarget.Latest,true);
+  const visualDefinition=name=>unique(findNodes(node=>
+    ts.isFunctionDeclaration(node)&&node.name?.text===name ||
+    ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>ts.isIdentifier(d.name)&&d.name.text===name),visualAst),
+    `visual memory helper ${name}`).getText(visualAst).replace(/^export\s+/,'');
+  const visualDefinitions=['KATIE_VISUAL_EPISODE_VERSION','SOURCE_HASH','buildKatieVisualEpisode'].map(visualDefinition).join('\n');
   const events=[];
   const image={fileId:'profile-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
   const context=identityFixture(f,progress,history,[image],async()=>{throw Error('Ordinary profile evidence must not become project intake');},async()=>{throw Error('Legacy Gemini/Grok observation must not run before Qwen');});
@@ -512,6 +522,7 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
     },
   });
   const result=await vm.runInNewContext(compile(`(async()=>{
+    ${visualDefinitions}
     ${definitions}
     ${contextResolutionBlock}
     ${code(statement(declaration('attachments')))}
