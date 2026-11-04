@@ -96,6 +96,15 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
             running = running.filter(attempt => attempt.id !== original.id);
             return reply({ attemptId: original.id, requestId: original.requestId, state: 'uncertain', cancellationRequested: true, heldExposureMicrousd: original.reservedMicrousd, message: 'Cancellation requested for remaining work. This attempt was already dispatched; its spending exposure remains held until provider usage is reconciled.' });
           }
+          if (body.action === 'preview_reductions') return reply({
+            attemptId:original.id,preparedHash:original.preparedHash,pricingVersion:original.pricingVersion,
+            budgetRevision:original.budgetRevision,reservedMicrousd:original.reservedMicrousd,
+            options:[
+              {strategy:'truncate_tokens',available:true,provider:original.provider,model:original.model,estimateMicrousd:'120000',inputTokens:200,outputAllowance:2048,changes:[{kind:'output',path:'max_output_tokens',before:4096,after:2048}],tradeoffs:['Some older context may be omitted. A smaller output allowance can shorten the answer.']},
+              {strategy:'switch_model',available:true,provider:original.provider,model:'gpt-4o-mini',estimateMicrousd:'100000',inputTokens:500,outputAllowance:4096,changes:[{kind:'model',path:'model',before:original.model,after:'gpt-4o-mini'}],tradeoffs:['The cheaper model may have weaker instruction following.']},
+            ],
+          });
+          if (body.action === 'reduce_cost') assert.equal(body.strategy,'truncate_tokens','The owner selected truncation rather than an implicit model switch');
           if (body.action === 'reduce_cost') proposals = proposals.map(attempt => attempt.id === original.id ? pending('revised', { requestId: original.requestId, reservedMicrousd: '120000', preparedHash: 'b'.repeat(64), pauseReason: 'cost_reduction_review', tradeoffs: 'Older context was omitted. A smaller output allowance can shorten the answer.', preview: { ...attempt.preview, outputAllowance: 2048 } }) : attempt);
           else { proposals = proposals.filter(attempt => attempt.id !== original.id); if (body.action === 'approve_once') running.push({ ...original, state: 'dispatched' }); }
           return reply({ attemptId: original.id, requestId: original.requestId, state: body.action === 'approve_once' ? 'reserved' : body.action === 'cancel' ? 'cancelled' : 'paused', ...(body.action === 'cancel' ? { cancellationRequested: true, message: 'Attempt cancelled before dispatch.' } : {}) });
@@ -214,14 +223,22 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(resumes.length, 1, 'cancelling running work must not resume or start another provider attempt');
     assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalsBeforeCancel, 'active cancellation never approves');
     await active.waitFor({ state: 'detached' });
-    await card('attempt-reduce').getByRole('button', { name: 'Reduce cost' }).click();
+    const reduceCard=card('attempt-reduce');
+    await reduceCard.getByRole('button', { name: 'Reduce cost' }).click();
+    const choices=reduceCard.getByRole('region',{name:'Reduced-cost choices'});
+    await choices.getByText('Truncate tokens',{exact:true}).waitFor();
+    await choices.getByText('Switch to a different model',{exact:true}).waitFor();
+    assert.match(await choices.innerText(),/gpt-4o-mini/);
+    assert.equal(resumes.length,1,'previewing alternatives cannot dispatch');
+    assert.equal(decisions.filter(d=>d.action==='reduce_cost').length,0,'preview alone cannot prepare or authorize');
+    await choices.getByRole('button',{name:'Prepare this proposal'}).first().click();
     await usage.getByText('Reduction tradeoffs:', { exact: false }).waitFor();
     assert.equal(resumes.length, 1, 'cost reduction cannot dispatch');
     assert.match(await card('attempt-revised').innerText(), /configured output allowance 2,048/);
     assert.equal(await card('attempt-revised').getByRole('button', { name: 'Approve once' }).count(), 1);
     await card('attempt-cancel').getByRole('button', { name: 'Cancel', exact: true }).click();
     await usage.getByText('Attempt cancelled before dispatch.', { exact: true }).waitFor();
-    assert.deepEqual(decisions.map(body => body.action), ['approve_once', 'cancel', 'reduce_cost', 'cancel']);
+    assert.deepEqual(decisions.map(body => body.action), ['approve_once', 'cancel', 'preview_reductions', 'reduce_cost', 'cancel']);
     assert.equal(resumes.length, 1, 'cancel cannot dispatch');
     await page.setViewportSize({ width: 390, height: 844 });
     await card('attempt-revised').getByRole('button', { name: 'Approve once' }).scrollIntoViewIfNeeded();

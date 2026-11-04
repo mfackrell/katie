@@ -6,7 +6,7 @@ import type { FrozenPreparedRequest } from '@/lib/standalone-accounting/estimate
 import { cancelStandaloneAttempt } from '@/lib/standalone-accounting/dispatch';
 import { accountingError, accountingScope, noStore, scopeSchema } from '../_shared';
 
-const decision = scopeSchema.extend({ attemptId: z.string().uuid(), action: z.enum(['approve_once', 'reduce_cost', 'cancel', 'accept_exposure']), preparedHash: z.string().regex(/^[a-f0-9]{64}$/), pricingVersion: z.string().min(1).max(200), budgetRevision: z.number().int().nonnegative(), reservedMicrousd: z.string().regex(/^\d+$/) }).strict();
+const decision = scopeSchema.extend({ attemptId: z.string().uuid(), action: z.enum(['approve_once', 'reduce_cost', 'preview_reductions', 'cancel', 'accept_exposure']), strategy: z.enum(['truncate_tokens','switch_model']).optional(), preparedHash: z.string().regex(/^[a-f0-9]{64}$/), pricingVersion: z.string().min(1).max(200), budgetRevision: z.number().int().nonnegative(), reservedMicrousd: z.string().regex(/^\d+$/) }).strict();
 export async function POST(request: NextRequest) {
   try {
     const input = decision.parse(await request.json());
@@ -35,8 +35,27 @@ export async function POST(request: NextRequest) {
     if (attempt.state !== 'paused') return NextResponse.json({ error: 'Only a paused proposal can be reduced.' }, { status: 409, headers: noStore });
     if(attempt.provider==='runpod')return NextResponse.json({error:'Qwen uses a fixed reviewed infrastructure reservation. Cancel and request fewer images to reduce exposure.'},{status:409,headers:noStore});
     const pricing=await loadStandalonePricing(ledger,attempt.pricing_version);
-    const reduced = reducePreparedRequest(attempt.prepared_payload as unknown as FrozenPreparedRequest,{},pricing);
-    if (reduced.estimate.status !== 'estimated' || reduced.estimate.reservationMicrousd === null || BigInt(reduced.estimate.reservationMicrousd) >= BigInt(attempt.reserved_microusd) || reduced.changes.length === 0) {
+    const prepared=attempt.prepared_payload as unknown as FrozenPreparedRequest;
+    if(input.action==='preview_reductions') {
+      const options=(['truncate_tokens','switch_model'] as const).map(strategy=>{
+        const candidate=reducePreparedRequest(prepared,{strategy},pricing);
+        const available=candidate.available&&candidate.estimate.status==='estimated'&&candidate.estimate.reservationMicrousd!==null&&BigInt(candidate.estimate.reservationMicrousd)<BigInt(attempt.reserved_microusd)&&candidate.changes.length>0;
+        return {
+          strategy,available,provider:candidate.revised.provider,model:candidate.revised.model,
+          estimateMicrousd:available?candidate.estimate.reservationMicrousd:null,
+          inputTokens:available?candidate.estimate.inputTokens:null,
+          outputAllowance:available?candidate.estimate.outputAllowance:null,
+          changes:available?candidate.changes:[],
+          tradeoffs:candidate.tradeoffs,
+        };
+      });
+      return NextResponse.json({
+        attemptId:attempt.id,preparedHash:attempt.prepared_hash,pricingVersion:attempt.pricing_version,
+        budgetRevision:attempt.budget_revision,reservedMicrousd:attempt.reserved_microusd,options,
+      },{headers:noStore});
+    }
+    const reduced = reducePreparedRequest(prepared,{strategy:input.strategy??'auto'},pricing);
+    if (!reduced.available || reduced.estimate.status !== 'estimated' || reduced.estimate.reservationMicrousd === null || BigInt(reduced.estimate.reservationMicrousd) >= BigInt(attempt.reserved_microusd) || reduced.changes.length === 0) {
       return NextResponse.json({ error: 'No smaller supported proposal is available. Cancel this attempt and revise the request or budget settings.' }, { status: 409, headers: noStore });
     }
     await ledger.registerPricing(pricing.version,pricing);
