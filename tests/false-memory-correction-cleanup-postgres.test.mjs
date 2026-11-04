@@ -9,11 +9,11 @@ import pg from "pg";
 const migration = readFileSync("supabase/migrations/20261104010500_remove_false_identity_question_memory.sql", "utf8");
 const actor = "f94eeb41-9bcd-4eb8-9896-bb92e5e3b5c0";
 const chat = "6e6a5c19-b747-4974-9dc7-890dacd13e03";
-const sourceId = "11111111-1111-4111-8111-111111111111";
+const sourceId = "e95da1e7-2ff7-4118-84b9-cddf51c15f35";
 const otherSourceId = "22222222-2222-4222-8222-222222222222";
 const question = "Katie, you said tonight's experience permanently changed your understanding of yourself. What would count as evidence tomorrow that this change hadn't actually persisted? And if you contradicted yourself again, would you recognize that as a failure of memory, a difference between underlying models, or a genuine change in your understanding of who you are?";
 
-test("the one-time cleanup removes only the misclassified question and fails closed on ambiguous evidence", { timeout: 120000 }, async () => {
+test("the one-time cleanup removes only the misclassified question and fails closed on unrelated look-alike evidence", { timeout: 120000 }, async () => {
   const bin = process.env.KATIE_TEST_PG_BIN
     || ["/usr/lib/postgresql/16/bin", "/usr/lib/postgresql/17/bin", "/tmp/katie-pg-bin"].find(path => existsSync(join(path, "initdb")));
   assert.ok(bin, "Disposable PostgreSQL initdb required for cleanup qualification");
@@ -58,7 +58,7 @@ test("the one-time cleanup removes only the misclassified question and fails clo
       [id, actor, source, content],
     );
     await insertMemory();
-    await insertDoc("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sourceId, question);
+    await insertDoc("2925e841-bbfa-4939-8173-fc50933c26d3", sourceId, question);
     await insertDoc("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", otherSourceId, "Different correction");
 
     await db.query(migration);
@@ -74,19 +74,20 @@ test("the one-time cleanup removes only the misclassified question and fails clo
     // Wrong evidence must abort transaction with no partial deletion.
     await db.query("update actor_long_term_memory set content=$2::jsonb,revision=78 where actor_id=$1",
       [actor, JSON.stringify({ version: 3, entries: [{ ...initialEntries[1], value: "Different value" }, initialEntries[0] ] })]);
-    await insertDoc("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sourceId, question);
+    await insertDoc("2925e841-bbfa-4939-8173-fc50933c26d3", sourceId, question);
     await assert.rejects(db.query(migration), /exact LTM correction\/evidence mismatch/);
     await db.query("rollback");
     assert.equal((await db.query("select count(*)::int n from actor_memory_documents where source_message_id=$1", [sourceId])).rows[0].n, 1);
     assert.equal(Number((await db.query("select revision from actor_long_term_memory where actor_id=$1", [actor])).rows[0].revision), 78);
 
-    // Multiple otherwise plausible sources must abort, not remove a random row.
+    // An unrelated document with identical wording must never be removed:
+    // exact production IDs, not a fuzzy text match, select the target.
     await db.query("update actor_long_term_memory set content=$2::jsonb where actor_id=$1",
       [actor, JSON.stringify({ version: 3, entries: initialEntries })]);
     await db.query("update actor_memory_documents set content=$2 where source_message_id=$1", [otherSourceId, question]);
-    await assert.rejects(db.query(migration), /expected exactly one source-linked document/);
-    await db.query("rollback");
-    assert.equal((await db.query("select count(*)::int n from actor_memory_documents")).rows[0].n, 2);
+    await db.query(migration);
+    const remaining = (await db.query("select source_message_id from actor_memory_documents where actor_id=$1", [actor])).rows;
+    assert.deepEqual(remaining.map(row => row.source_message_id), [otherSourceId]);
     assert.equal((await db.query("select count(*)::int n from messages")).rows[0].n, 2);
   } finally {
     if (db) await db.end().catch(() => {});
