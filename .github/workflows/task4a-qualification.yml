@@ -126,6 +126,22 @@ jobs:
           writeFileSync(path,JSON.stringify(receipt,null,2)+'\n');
           console.log('Isolated PostgreSQL project lifecycle: PASS; real hosted Task 4A still blocked');
           NODE
+      - name: Exercise two concurrent owner approvals in a separate isolated PostgreSQL cluster
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const report=JSON.parse(readFileSync('task4a-qualification/postgres-race-report.json','utf8'));
+          if(!report.success||report.counts.tests!==1||report.counts.passed!==1||report.counts.failed||report.counts.skipped||report.counts.cancelled||report.counts.todo||report.completed!==1)
+            throw Error('Actual two-connection successor race qualification failed');
+          console.log('Distinct PostgreSQL connections: exactly one successor grant and one audit event');
+          NODE
       - name: Retain independently inspectable machine evidence
         if: always()
         uses: actions/upload-artifact@v4
