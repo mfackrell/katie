@@ -334,6 +334,12 @@ begin
  if a.revoked_at is not null or a.deadline<=clock_timestamp()
  then raise exception 'Task 4A owner grant expired or revoked';end if;
  if new.project_continuation_id is not null then
+  -- Project-level reservations may prebind research/assessment calls. The
+  -- original native development task MUST use the signed execution-grant
+  -- adapter below, never a caller-supplied prebound continuation/price.
+  if m.project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
+    and (j.role='development' or m.project_kind='development')
+  then raise exception 'TASK4A_DEVELOPMENT_REQUIRES_NATIVE_ADMISSION';end if;
   if new.project_continuation_id is distinct from a.id
    or new.project_reserved_microusd is null
    or jsonb_typeof(new.project_pricing_evidence) is distinct from 'object'

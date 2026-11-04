@@ -177,6 +177,19 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    await db.query('rollback to savepoint revoked');await db.query('release savepoint revoked');
    const recovered=(await one(db,'select task4a_confirm_pregrant_recovery($1,$2) x',[owner,nativeOffer.digest])).x;
    assert.equal(recovered.recovered,true);
+   // Attempt to forge a canonical prebound financial receipt. Only the
+   // signed native execution-grant path may admit the original development task.
+   await db.query('savepoint prebound_bypass');
+   try{
+    await assert.rejects(
+     db.query("insert into mission_calls(id,job_id,lease,model,reserved_tokens,project_continuation_id,project_reserved_microusd,project_pricing_evidence) values($1,$2,$3,'gpt-5.3-codex',1000,$4,1000,'{}'::jsonb)",[
+      randomUUID(),task,randomUUID(),saved.authorizationId]),
+     /TASK4A_DEVELOPMENT_REQUIRES_NATIVE_ADMISSION/,
+     'No prebound development call may evade signed native financial admission');
+   }finally{
+    await db.query('rollback to savepoint prebound_bypass');
+    await db.query('release savepoint prebound_bypass');
+   }
    assert.equal(recovered.continuationId,saved.authorizationId);
    assert.equal(recovered.originalIssueNumber,969);
    assert.equal((await one(db,'select task4a_native_authority_ready($1,$2,$3) ok',[project,task,continuation])).ok,false);
