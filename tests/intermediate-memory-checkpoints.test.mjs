@@ -17,7 +17,7 @@ test("two bounded model stages process 30 older conversational messages",()=>{
   assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
 
-test("factual source excerpts retain atomic source-cursor checkpoint",()=>{
+test("source-cited factual episodes retain atomic source-cursor checkpoint",()=>{
   assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.match(summary,/if \(output\.length > ITM_TARGET_CHARACTERS\)/);
@@ -57,8 +57,8 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 
-test("v8 uses Grok source excerpts and bounded index-only retention",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v8-grok-factual-extracts"/);
+test("v9 uses Grok factual episodes and bounded index-only retention",()=>{
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v9-grok-grounded-factual-episodes"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.equal((summary.match(/client\.chat\.completions\.create\(/g)||[]).length,2);
@@ -68,8 +68,11 @@ test("v8 uses Grok source excerpts and bounded index-only retention",()=>{
   assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
   assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
-  assert.match(summary,/parseGroundedExcerpts\(completedText\(response, "quote selection"/);
+  assert.match(summary,/parseGroundedEpisodes\(completedText\(response, "factual episodes"/);
   assert.match(summary,/!message\.content\.includes\(quote\)/);
+  assert.match(summary,/getMessages\(chatId\)/);
+  assert.doesNotMatch(summary,/getRecentMessages\(chatId, Number\.MAX_SAFE_INTEGER\)/);
+  assert.match(summary,/When a new episode corrects/);
   assert.match(summary,/createActivityAccountingFetch\("grok", "memory-summary"\)/);
   assert.doesNotMatch(summary,/api\.anthropic\.com|CLAUDE_API_KEY/);
 });
