@@ -17,6 +17,8 @@ test('ordinary screenshot observes with Qwen first then supplies only labelled t
   const evidence=imageObservationAsText(ref,result.get('one')!);
   assert.equal(evidence.mimeType,'text/plain');assert.equal(evidence.imageDataUrl,undefined);assert.equal(evidence.providerRef,undefined);
   assert.match(evidence.extractedText!,/gardener and homesteader/);assert.match(evidence.extractedText!,/not user-authored fact/);assert.match(evidence.extractedText!,/Coverage: full/);
+  assert.match(evidence.extractedText!,/KATIE VISUAL MEMORY/);
+  assert.match(evidence.extractedText!,/Katie's own visual recollection/);
   assert.deepEqual(stages,['Analyzing image with Qwen…','Qwen image analysis complete']);
 });
 
@@ -229,6 +231,7 @@ test('refusal-only Qwen reply preserves a truthful limitation and never fails ch
   assert.equal(observation.observationReports?.[0].disposition,'policy-limited');
   const grounding=currentTurnImageGroundingContext([ref],descriptions,new Set([ref.fileId]));
   assert.match(grounding,/"evidenceAvailable":false/);
+  assert.match(grounding,/"visualMemory":null/);
   assert.match(grounding,/acknowledge receipt but explain that visual analysis was unavailable/);
   const text=imageObservationAsText(ref,observation).extractedText??'';
   assert.match(text,/IMAGE ANALYSIS UNAVAILABLE/);
@@ -242,6 +245,9 @@ test('current image grounding is isolated by source ID and supersedes stale assi
   });
   const context=currentTurnImageGroundingContext([one],observed,new Set([one.fileId]));
   assert.match(context,/new.png/);assert.match(context,/sleeping brown dog/);
+  assert.match(context,/KATIE_CURRENT_VISUAL_MEMORY/);
+  assert.match(context,/"visualMemory":\{/);
+  assert.match(context,/Continue naturally as Katie/);
   assert.doesNotMatch(context,/old.png|camera|steering wheel/);
   assert.equal(currentTurnImageGroundingContext([],observed,new Set()),'');
   const route=readFileSync('app/api/chat/route.ts','utf8');
