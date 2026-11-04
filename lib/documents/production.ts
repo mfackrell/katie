@@ -108,6 +108,29 @@ export async function produceDocument(input: {
       throw error;
     }
 
+    // After establishing a mechanically valid page count, expand a condensed
+    // composition within that same count. This is bounded, based on actual
+    // rendered output and never modifies body font or source. Failed
+    // refinements are discarded; the previously valid bytes remain.
+    if (!input.initialLayout && rendered.inspection.findings.every(f =>
+      f.rule === 'whitespace' &&
+      f.detail === 'Page uses less than one quarter of its content area.'
+    ) && layout.spacing < 8 && Date.now() < input.deadlineMs - 4000) {
+      for (const candidateSpacing of [layout.spacing + 2, layout.spacing + 4]) {
+        if (candidateSpacing > 8 || Date.now() >= input.deadlineMs - 4000) break;
+        const trialLayout: Layout = { ...layout, spacing: candidateSpacing };
+        try {
+          const trialDocx = await generateDocx(spec,trialLayout);
+          const trial = await renderDocument(input.browser,trialDocx,spec,trialLayout);
+          const violations = trial.inspection.findings.filter(f=>!(f.rule==='whitespace' &&
+            f.detail==='Page uses less than one quarter of its content area.'));
+          if (violations.length || trial.inspection.pageCount!==rendered.inspection.pageCount) break;
+          if (trial.heights.reduce((a,b)=>a+b,0) <= rendered.heights.reduce((a,b)=>a+b,0)) break;
+          layout=trialLayout; docx=trialDocx; rendered=trial;
+        } catch { break; }
+      }
+    }
+
     // Underutilization is presentation feedback; a completely empty page,
     // clipping, overlap, incorrect page count and text-fidelity errors remain
     // technical defects that must never be delivered.
