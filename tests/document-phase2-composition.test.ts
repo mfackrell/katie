@@ -3,12 +3,19 @@ import assert from 'node:assert/strict';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { parseDocument, contentText, normalizedText, pdfTextMatchesSource } from '../lib/documents/model';
 import { resolveDurableDocumentRequest } from '../lib/documents/continuity';
+import { documentRequest } from '../lib/documents/intent';
 import { generateDocx, paginate, PAGE, documentPageStyle, type Layout } from '../lib/documents/generate';
 import { chooseInitialComposition, produceDocument } from '../lib/documents/production';
 import { renderDocument } from '../lib/documents/render';
 import { designAssessmentSchema, proposeDesignLayout } from '../lib/documents/design';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import JSZip from 'jszip';
+
+test('explicit revision of an existing Word file retains production routing',()=>{
+  assert.deepEqual(documentRequest('Revise this Word document again.'),{});
+  assert.deepEqual(documentRequest('Update the PDF again.'),{});
+  assert.equal(documentRequest('Explain how to revise a Word document.'),null);
+});
 
 test('persisted explicit same-document constraints survive retries without borrowing from unrelated documents',()=>{
   const original={identity:'resume',pages:2,sourceUserMessageId:'user-1',
