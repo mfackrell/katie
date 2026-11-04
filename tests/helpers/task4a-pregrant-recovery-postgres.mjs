@@ -30,6 +30,9 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
   await db.query('select create_mission($1,$2,$3,120,null)',[research,'Original research historical fixture',team]);
   await db.query("update agent_missions set project_id=$2,project_kind='research',status='blocked',actual_tokens=76519,reserved_tokens=76519,calls=4,routing_calls=5 where id=$1",[research,project]);
   if(successorMode){
+   // These historical unbound research calls happened BEFORE the project
+   // entered its funded development phase. Reproduce that chronology.
+   await db.query("update work_projects set phase='research' where id=$1",[project]);
    const historicalJob=await one(db,'select id from mission_assignments where mission_id=$1 limit 1',[research]);
    assert.ok(historicalJob);
    for(let i=0;i<9;i++){
@@ -37,6 +40,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     await db.query("insert into mission_calls(id,job_id,lease,model,reserved_tokens,actual_tokens,status) values($1,$2,$3,'openai:gpt-5.6-sol',$4,$4,'completed')",
      [randomUUID(),historicalJob.id,randomUUID(),n]);
    }
+   await db.query("update work_projects set phase='development' where id=$1",[project]);
   }
   await db.query('select create_mission($1,$2,$3,120,null)',[mission,'Original development fixture',team]);
   await db.query("update agent_missions set project_id=$2,project_kind='development',status='blocked',token_allowance=120000,deadline=now()+interval '6 hours' where id=$1",[mission,project]);
