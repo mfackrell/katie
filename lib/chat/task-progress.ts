@@ -1,4 +1,5 @@
 import type { Message } from "@/lib/types/chat";
+import type { DocumentContract } from "@/lib/documents/continuity";
 
 /**
  * Task progress is a source-linked conversation ledger, not another model's
@@ -42,6 +43,8 @@ export type ProjectSnapshot = {
   requirementsRevision?: number;
 };
 export type TaskProgressState = {
+  /** Explicit document identity/page constraints, never synthesized from model text. */
+  documentContract?: DocumentContract;
   version: 1;
   /** Per-active-project criteria version; ordinary revisions do not increment it. */
   requirementsRevision?: number;
