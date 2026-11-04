@@ -1,0 +1,35 @@
+name: Nonbillable Codex SDK transport qualification
+on:
+  pull_request:
+    paths:
+      - 'scripts/benchmark/**'
+      - '.github/workflows/codex-native-denial.yml'
+  workflow_dispatch:
+jobs:
+  real-codex-denial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install exact SDK (disposable job only)
+        run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Run real CLI/SDK against local deny-only gateway
+        run: node scripts/benchmark/real-codex-denial-probe.mjs
+      - name: Qualify synthetic streaming Responses protocol
+        run: node scripts/benchmark/real-codex-synthetic-probe.mjs
+      - name: Qualify interrupted stream and fresh-process recovery
+        run: node scripts/benchmark/real-codex-interruption-probe.mjs
+      - name: Install filesystem isolation for containment probe
+        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+      - name: Test kernel filesystem and network fencing (without Codex)
+        run: bash scripts/benchmark/os-containment-probe.sh
+      - name: Qualify real SDK within sandbox against synthetic gateway
+        run: bash scripts/benchmark/real-codex-bwrap-probe.sh
