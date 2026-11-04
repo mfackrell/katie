@@ -7,6 +7,7 @@ import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
 import { ChatComposerInput } from "@/components/chat-composer-input";
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog";
 import { SAVED_DOCUMENT_EXPORT_PROMPT } from "@/lib/documents/intent";
 import {
   ClipboardEvent,
@@ -803,6 +804,9 @@ export function ChatPanel({
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
+  const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
+  useEffect(() => { setDeleteCandidate(null); setDeleteFailure(null); }, [chatId]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
   const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
@@ -2484,8 +2488,10 @@ export function ChatPanel({
   }
 
   async function handleDeleteMessage(messageId: string) {
-    if (loading || deletingMessageId || !window.confirm("Permanently delete this message? This cannot be undone.")) return;
+    if (deletingMessageId || deleteCandidate !== messageId) return;
+    if (loading) { setDeleteFailure("Finish the current response before deleting a message."); return; }
     setDeletingMessageId(messageId);
+    setDeleteFailure(null);
     try {
       const bearer = await ownerSessionBearer();
       const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&messageId=${encodeURIComponent(messageId)}`, {
@@ -2499,9 +2505,12 @@ export function ChatPanel({
       setMessages(current => current.filter(message => message.id !== messageId));
       setMessagesByChatId(current => ({...current, [chatId]: (current[chatId] ?? []).filter(message => message.id !== messageId)}));
       setReplyTo(current => current?.id === messageId ? null : current);
+      setDeleteCandidate(null);
       setStatusMessage("Message deleted.");
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Message deletion failed.");
+      const message = error instanceof Error ? error.message : "Message deletion failed.";
+      setDeleteFailure(message);
+      setStatusMessage(message);
     } finally {
       setDeletingMessageId(null);
     }
@@ -3143,7 +3152,7 @@ export function ChatPanel({
               >
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
               </button>
-              <button type="button" onClick={() => void handleDeleteMessage(message.id)} disabled={loading || deletingMessageId !== null} aria-label={`Delete ${message.role} message`} className="shrink-0 rounded-lg border border-red-500/25 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/10 disabled:opacity-40">{deletingMessageId === message.id ? "Deleting…" : "Delete"}</button></div>
+              <button type="button" onClick={() => { setDeleteFailure(null); setDeleteCandidate(message.id); }} disabled={loading || deletingMessageId !== null} aria-label={`Delete ${message.role} message`} className="shrink-0 rounded-lg border border-red-500/25 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/10 disabled:opacity-40">{deletingMessageId === message.id ? "Deleting…" : "Delete"}</button></div>
             </div>
             {message.role === "assistant" &&
             message.content.startsWith("[Katie video analysis pending:") ? (() => {
@@ -3435,6 +3444,17 @@ export function ChatPanel({
           </>}
         />
       </form>
+      {deleteCandidate && (
+        <DeleteConfirmationDialog
+          title="Delete message?"
+          description="Permanently delete this message? This cannot be undone."
+          confirmLabel="Delete message"
+          busy={deletingMessageId !== null}
+          error={deleteFailure}
+          onCancel={() => setDeleteCandidate(null)}
+          onConfirm={() => void handleDeleteMessage(deleteCandidate)}
+        />
+      )}
     </main>
   );
 }
