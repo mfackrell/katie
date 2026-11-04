@@ -73,6 +73,36 @@ try {
           orphans.push({heading,page:i+1,nextPage:i+2,method:'heading is last visible line on page'});
       }
     }
+    const normalizedPages=pageText.map(normalize);
+    const markdown=name==='forced-sections'?'':readFileSync('fixtures/documents/phase1-'+name+'.md','utf8');
+    const semanticLines=markdown.split(/\r?\n/).map(line=>line.trim()).filter(Boolean)
+      .filter(line=>!/^\|\s*-/.test(line));
+    const groups=[];let currentGroup=null;
+    const findPage=value=>{
+      const normalized=normalize(value.replace(/^#{1,3}\s+/,'').replace(/^[-*+]\s+/,'').replace(/\*\*/g,'').replace(/__/g,''));
+      if(!normalized||normalized.startsWith('|'))return null;
+      const search=normalized.slice(0,Math.min(24,normalized.length));
+      const matches=normalizedPages.map((txt,i)=>txt.includes(search)?i+1:null).filter(Boolean);
+      return matches.length===1?matches[0]:null;
+    };
+    for(const line of semanticLines){
+      const isHeading=/^#{2,3}\s/.test(line);
+      if(isHeading){
+        currentGroup={heading:line.replace(/^#{2,3}\s+/,''),
+          heading_page:findPage(line), first_support_page:null, support_pages:[]};
+        groups.push(currentGroup);
+      }else if(currentGroup&& !line.startsWith('|')){
+        const onPage=findPage(line);
+        if(onPage!==null){
+          currentGroup.first_support_page??=onPage;
+          currentGroup.support_pages.push(onPage);
+        }
+      }
+    }
+    const orphanHeadings=groups.filter(g=>g.heading_page&&g.first_support_page&&
+      g.heading_page!==g.first_support_page);
+    const multiPageGroups=groups.filter(g=>new Set([g.heading_page,...g.support_pages].filter(Boolean)).size>1)
+      .map(g=>({heading:g.heading, pages:[...new Set([g.heading_page,...g.support_pages])].filter(Boolean).sort()}));
     const item={name,office_pages:office.length,browser_pages:chromium.length,word_pdf_page_parity:parity,
       office_geometry:office,browser_geometry:chromium,
       initial_chromium_geometry:initialChromium,initial_office_geometry:initialOffice,
@@ -85,7 +115,8 @@ try {
       initial_estimated_min_pages:original.estimated_min_pages ?? null,
       initial_actual_browser_page_count:original.initial_pdf_pages ?? null,
       short_page_signals_not_automatic_defects:shortPageEvidence,
-      orphan_heading_signals:orphans,mechanical_source:original,
+      orphan_heading_signals:orphans,heading_support_separations:orphanHeadings,
+      section_group_page_spans:multiPageGroups,mechanical_source:original,
       pending_independent_visual_design_approval:true,
       microsoft_word_parity:'NOT TESTED'};
     for(let i=1;i<=office.length;i++)
