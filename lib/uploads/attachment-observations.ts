@@ -37,6 +37,10 @@ export async function describeAttachmentEvidence(reference: FileReference, optio
     parts.push({ fileData: { fileUri: reference.providerRef.googleFileUri, mimeType: reference.mimeType } });
     coverage = "sampled"; // Video frame sampling or PDF interpretation is not exhaustive.
   } else parts.push({ text: sample.text });
+  // A truthy data URL alone does not establish that image pixels were passed to
+  // the inspection model: malformed imageDataUrl falls through without inlineData.
+  const actualImagePart = reference.mimeType.startsWith("image/") &&
+    parts.some(part => "inlineData" in part && part.inlineData.mimeType.startsWith("image/"));
   const fallback: Description = {
     observedSummary: `File: ${reference.fileName}. ${sample.coverage === "metadata" ? "No content summary is available. " : "Uninterpreted source excerpt (incomplete): "}${sample.text.slice(0, 2000)}`,
     summaryModel: "source-excerpt", summaryCoverage: "metadata",
@@ -44,7 +48,7 @@ export async function describeAttachmentEvidence(reference: FileReference, optio
   const grokOnOtherBlock = async (): Promise<Description> => {
     const key = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? process.env["grok_api_key"];
     // Only images with available pixels can be sent to the vision fallback.
-    if (!key || !reference.imageDataUrl) return fallback;
+    if (!key || !actualImagePart || !reference.imageDataUrl) return fallback;
     const grok = new GrokProvider(key);
     const modelId = selectGrokVisionFallback(await grok.listModels());
     if (!modelId) return fallback;
@@ -79,7 +83,7 @@ export async function describeAttachmentEvidence(reference: FileReference, optio
     if (response.candidates?.[0]?.finishReason === "MAX_TOKENS") return fallback;
     return text ? {
       observedSummary: text.slice(0, 5000), summaryModel: model, summaryCoverage: coverage,
-      ...(reference.mimeType.startsWith("image/") && reference.imageDataUrl
+      ...(actualImagePart && reference.imageDataUrl
         ? { observationSourceHash: imageObservationHash(reference.imageDataUrl),
             observationAt: new Date().toISOString() } : {}),
     } : fallback;
