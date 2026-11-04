@@ -6,6 +6,7 @@ import { BenchmarkOwnerApproval } from "@/components/benchmark-owner-approval";
 import { SpecialistDirectory } from "@/components/specialist-directory";
 import Notepad from "@/components/Notepad";
 import Link from "next/link";
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog";
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PendingMissionApprovals } from "@/components/pending-mission-approvals";
@@ -47,14 +48,16 @@ function date(value: string | null) {
 }
 function DeleteChatButton({ chat, onDeleted }: { chat: ChatThread; onDeleted: () => void }) {
   const [deleting, setDeleting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
   async function remove() {
-    if (deleting || !window.confirm(`Permanently delete “${chat.title}” and its messages? This cannot be undone.`)) return;
+    if (deleting || !confirming) return;
     setDeleting(true);
     setError("");
     try {
       const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, { method: "DELETE" });
       if (!response.ok) throw new Error("Could not delete this chat. Please try again.");
+      setConfirming(false);
       onDeleted();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not delete this chat.");
@@ -63,8 +66,19 @@ function DeleteChatButton({ chat, onDeleted }: { chat: ChatThread; onDeleted: ()
     }
   }
   return <div className="shrink-0">
-    <button type="button" className="min-h-11 rounded-lg px-3 text-sm text-zinc-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40" aria-label={`Delete chat: ${chat.title}`} disabled={deleting} onClick={() => void remove()}>{deleting ? "Deleting…" : "Delete"}</button>
-    {error && <p role="alert" className="max-w-48 text-xs text-red-300">{error}</p>}
+    <button type="button" className="min-h-11 rounded-lg px-3 text-sm text-zinc-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40" aria-label={`Delete chat: ${chat.title}`} disabled={deleting} onClick={() => { setError(""); setConfirming(true); }}>{deleting ? "Deleting…" : "Delete"}</button>
+    {error && !confirming && <p role="alert" className="max-w-48 text-xs text-red-300">{error}</p>}
+    {confirming && (
+      <DeleteConfirmationDialog
+        title="Delete conversation?"
+        description={`Permanently delete “${chat.title}” and its messages? This cannot be undone.`}
+        confirmLabel="Delete conversation"
+        busy={deleting}
+        error={error}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => void remove()}
+      />
+    )}
   </div>;
 }
 function Status({ item }: { item: WorkItem }) {
