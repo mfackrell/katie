@@ -286,8 +286,12 @@ try {
     .getByRole("heading", { name: "Welcome back", exact: true })
     .waitFor();
   await page.getByText("Operations analysis", { exact: true }).waitFor();
-  page.once("dialog", dialog => dialog.dismiss());
   await page.getByRole("button", { name: "Delete chat: Operations analysis", exact: true }).click();
+  const homeDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
+  await homeDeleteDialog.waitFor();
+  assert.equal(mutations.filter(r => r.path === "/api/chats").length, 0);
+  await homeDeleteDialog.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await page.getByRole("alertdialog").count(), 0);
   assert.equal(mutations.filter(r => r.path === "/api/chats").length, 0);
   await page.screenshot({ path: output + "/home-desktop.png", fullPage: true });
   await page.getByRole("link", { name: "Conversations", exact: true }).click();
@@ -295,8 +299,10 @@ try {
     .getByRole("heading", { name: "Conversations", exact: true })
     .waitFor();
   assert.equal(await page.getByText("Internal QA history").count(), 0);
-  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Delete chat: Disposable UI check", exact: true }).click();
+  const disposableDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
+  await disposableDeleteDialog.waitFor();
+  await disposableDeleteDialog.getByRole("button", { name: "Delete conversation", exact: true }).click();
   await page.getByText("Disposable UI check", { exact: true }).waitFor({ state: "hidden" });
   assert.equal(chats.some(chat => chat.title === "Disposable UI check"), false);
   await page.getByLabel("Search conversations").fill("Operations");
@@ -410,6 +416,12 @@ try {
     .click();
   await page.getByText("Operations analysis", { exact: true }).click();
   await composer.waitFor();
+  await page.getByRole("button", { name: "Delete chat: Operations analysis", exact: true }).click();
+  const mobileDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
+  await mobileDeleteDialog.waitFor();
+  assert.equal(mutations.filter(r => r.path === "/api/chats").length, 1, "Mobile confirmation must not send a request");
+  await mobileDeleteDialog.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await page.getByRole("alertdialog").count(), 0);
   assert.ok(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
