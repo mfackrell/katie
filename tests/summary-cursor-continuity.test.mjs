@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 
 const code=readFileSync("lib/memory/summarizer.ts","utf8");
-test("ITM source cursor advances only after verified Grok excerpts and retention",()=>{
+test("ITM source cursor advances only after source-cited Grok factual episodes and retention",()=>{
   assert.ok(code.indexOf("summarizeNewBatch(batch)") < code.indexOf("reconcileEpisodePlan(episodes, newSummary)"));
-  assert.ok(code.indexOf("parseGroundedExcerpts") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
-  assert.match(code,/parseGroundedExcerpts\(completedText\(response, "quote selection"/);
+  assert.ok(code.indexOf("parseGroundedEpisodes") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
+  assert.match(code,/parseGroundedEpisodes\(completedText\(response, "factual episodes"/);
   assert.match(code,/choice\?\.finish_reason !== "stop"/);
   assert.match(code,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
+  assert.match(code,/getMessages\(chatId\)/);
   assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);
   assert.match(code,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
   assert.match(code,/if \(existing\?\.summarizedThroughMessageId\)/);
