@@ -47,8 +47,10 @@ export function buildKatieVisualEpisode(
       observation.observationReports?.some(report =>
         report.disposition === "policy-limited" || report.disposition === "unavailable")) return;
 
-  const observedAt = observation.observationAt && !Number.isNaN(Date.parse(observation.observationAt))
-    ? observation.observationAt : fallbackTimestamp;
+  // Never silently replace an invalid persisted observation timestamp with
+  // today's date. The fallback applies only when no original time exists.
+  if (observation.observationAt && Number.isNaN(Date.parse(observation.observationAt))) return;
+  const observedAt = observation.observationAt ?? fallbackTimestamp;
   if (Number.isNaN(Date.parse(observedAt))) return;
   return {
     version: KATIE_VISUAL_EPISODE_VERSION,
