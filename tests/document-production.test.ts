@@ -22,6 +22,7 @@ import { PRICING_SNAPSHOT, type PricingSnapshot } from '../lib/standalone-accoun
 import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { isLikelyProviderRefusal, runWithRefusalFallback } from '../lib/router/refusal-detection';
 import { getAccountingScope, runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
+import { StandaloneAccountingError } from '../lib/standalone-accounting/ledger';
 import type { LlmProvider } from '../lib/providers/types';
 
 
@@ -101,6 +102,28 @@ function storageFixture() {
     } as unknown as Parameters<typeof createDocumentStore>[0],
   };
 }
+
+test('technical-only DOCX/PDF can be privately delivered while mechanical errors still fail closed', {timeout:90000}, async()=>{
+  const spec=parseDocument('# Executive summary\n\n## Performance\n\n- Reconciled cash forecasts and reporting.',1);
+  const browser=await launchWebsiteBrowser();
+  try {
+    const docx=await generateDocx(spec,{pages:[spec.blocks.map((_,i)=>i)],spacing:4});
+    const rendered=await renderDocument(browser,docx,spec);
+    assert.deepEqual(rendered.inspection.findings,[]);
+    const storage=storageFixture();
+    const store=createDocumentStore(storage.storage);
+    const mechanicallyAccepted={...rendered.inspection,visual:'technical-only' as const};
+    const receipt=await store.save(scope,{docx,pdf:rendered.pdf},mechanicallyAccepted,0);
+    assert.equal(receipt.pages,1);
+    assert.equal(hash((await store.read(scope,receipt.id,'docx')).bytes),hash(docx));
+    assert.equal(hash((await store.read(scope,receipt.id,'pdf')).bytes),hash(rendered.pdf));
+    await assert.rejects(store.read({...scope,ownerId:other},receipt.id,'pdf'),/access denied/);
+    await assert.rejects(store.save(scope,{docx,pdf:rendered.pdf},
+      {...mechanicallyAccepted,visual:'pending'},0),/Unvalidated documents/);
+    await assert.rejects(store.save(scope,{docx,pdf:rendered.pdf},
+      {...mechanicallyAccepted,findings:[{rule:'reading-order' as const,page:1,detail:'Text differs'}]},0),/Unvalidated documents/);
+  } finally {await browser.close();}
+});
 
 test('PDF.js EOL fragment alignment preserves exact ordered glyphs', () => {
   const joined = (parts: Array<{str:string;hasEOL:boolean}>) =>
@@ -312,6 +335,21 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     assert.match(result.text, /Created and inspected 2 pages/); assert.match(result.text, /format=docx/); assert.match(result.text, /format=pdf/);
     assert.equal(uploads, 3); assert.equal(visualCalls, 2);
     assert.ok([...files.keys()].every(path => path.startsWith(`chats/${scope.chatId}/document-`)));
+    // Missing qualified design models are an optional preflight, not a failed
+    // document. No provider is contacted and the validated files are saved.
+    const retryId = scope.requestId + '-no-design-model';
+    const fallback = await runWithStandaloneAccounting({...context,requestId:retryId}, () =>
+      deliverDocument({
+        ...input,requestId:retryId,
+        selectVisualInspector:async()=>{throw new StandaloneAccountingError(
+          'no_qualified_document_design_vision','No qualified design model is available.');
+        },
+      }));
+    assert.match(fallback.text,/Created and inspected 2 pages/);
+    assert.match(fallback.text,/format=pdf/);
+    assert.equal(visualCalls,2,'Unavailable reviewer must never dispatch a model.');
+    assert.equal(uploads,6,'Independent scoped mechanical files remain deliverable.');
+
   } finally {
     if (oldUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = oldUrl;
     if (oldKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = oldKey;
@@ -459,7 +497,7 @@ test('anonymous 850-word resume-shaped fixture completes genuine two-page produc
     });
     assert.equal(produced.inspection.pageCount, 2);
     assert.deepEqual(produced.inspection.findings, []);
-    assert.equal(produced.inspection.visual, 'passed');
+    assert.equal(produced.inspection.visual, 'technical-only', 'No independent design assessment was requested in this synthetic test.');
     assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(spec)));
     assert.ok(produced.corrections <= 3);
   } finally { await browser.close(); }
@@ -613,7 +651,10 @@ test('real renderer supports tables and fails closed on missing visual coverage'
     const rendered = await renderDocument(browser, docx, spec);
     assert.equal(rendered.inspection.pageCount, 1);
     assert.deepEqual(rendered.inspection.findings, []);
-    await assert.rejects(produceDocument({ spec, browser, deadlineMs: Date.now() + 45000, inspect: async () => ({ pages: [] }) }));
+    const technicalOnly = await produceDocument({ spec, browser, deadlineMs: Date.now() + 45000, inspect: async () => ({ pages: [] }) });
+    assert.equal(technicalOnly.inspection.visual, 'technical-only', 'Incomplete aesthetic inspection cannot block a valid PDF.');
+    assert.deepEqual(technicalOnly.inspection.findings, []);
+    assert.equal(technicalOnly.inspection.pageCount, 1);
     await assert.rejects(produceDocument({ spec: { ...fixture, targetPages: 1 }, browser, deadlineMs: Date.now() + 45000, inspect: async () => { throw new Error('must never reach vision'); } }), /cannot fit/);
   } finally { await browser.close(); }
 });

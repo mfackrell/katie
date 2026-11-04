@@ -109,4 +109,4 @@ export function parseDocument(markdown: string, targetPages?: number): DocumentS
 }
 
 export type Finding = { rule: 'overflow' | 'overlap' | 'page-count' | 'reading-order' | 'whitespace' | 'visual'; page: number; detail: string };
-export type Inspection = { pageCount: number; findings: Finding[]; extractedText: string; pageHashes: string[]; visual: 'pending' | 'passed'; };
+export type Inspection = { pageCount: number; findings: Finding[]; extractedText: string; pageHashes: string[]; visual: 'pending' | 'passed' | 'technical-only'; };

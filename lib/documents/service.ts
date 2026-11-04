@@ -1,5 +1,6 @@
 import type { ChatGenerateParams, LlmProvider, ProviderResponse } from '@/lib/providers/types';
-import { getAccountingScope, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
+import { getAccountingScope, runWithStandaloneActivity, standaloneAccountingCause } from '@/lib/standalone-accounting/context';
+import { createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { cachedWorkflowValue } from '@/lib/standalone-accounting/workflow';
 import { currentAgentTask } from '@/lib/agents/policy';
 import { launchWebsiteBrowser } from '@/lib/research/website-evidence';
@@ -38,7 +39,23 @@ export async function deliverDocument(input: {
     const timer = setTimeout(() => { void browser.close().catch(() => undefined); }, Math.max(1, deadlineMs - Date.now()));
     try {
       const produced = await produceDocument({ spec, browser, deadlineMs,
-        requireDesignAssessment: true,
+        // Aesthetic review is best effort, but a pending payment/approval or
+        // uncertain provider charge must never be silently settled as success.
+        canSkipDesignReviewError: async error => {
+          const accountingFailure = standaloneAccountingCause(error);
+          if (accountingFailure) return [
+            'standalone_no_qualified_document_design_vision',
+            'standalone_no_priceable_document_vision',
+          ].includes(accountingFailure.code ?? '');
+          const active = getAccountingScope();
+          if (active?.kind === 'standalone') {
+            const uncertain = await createStandaloneLedger().requestUncertainties(
+              active.context.userId, active.context.requestId,
+            );
+            return uncertain.length === 0;
+          }
+          return true;
+        },
         inspect: async (rendered, attempt, context) => {
           const activity = `document-visual-${attempt}`;
           const usable = (context?.layout.pages ?? []).map(indices =>
@@ -60,7 +77,7 @@ export async function deliverDocument(input: {
 Return strict JSON only. Valid example for a material design defect:
 {"pages":[{"page":1,"verdict":"pass","observations":"All visible glyphs are readable and none overlap.","repair":"none"}],"design":{"verdict":"repair","summary":"Section titles and supporting bullets are insufficiently separated for the audience.","issues":[{"page":1,"category":"density","severity":"material","evidence":"Section and bullet groups are visually crowded."}],"actions":["section-separation"],"comparison":"not_applicable"}}.
 Choose verdict values from pass, repair, blocked. Allowed issue categories: hierarchy, density, balance, section-continuity, lists, other. Allowed actions: section-separation, list-rhythm, line-rhythm, heading-hierarchy, page-balance. Choose comparison from not_applicable, improved, unchanged, regressed.
-Include every current page exactly once. Use issue page=0 only for document-wide problems. For design PASS provide [] actions; for design REPAIR provide 1–2 supported design actions and at least one material issue. For BLOCKED provide no actions. When comparing an earlier candidate, comparison must explicitly say whether visible composition improved; do not claim improvement based on source text. Page-level repair should be none when only the document-wide design needs revision.`,
+Include every current page exactly once. Use issue page=0 only for document-wide problems. For design PASS provide [] actions; for design REPAIR provide 1–2 supported design actions and at least one material issue. For BLOCKED provide no actions. When comparing an earlier candidate, comparison must explicitly say whether visible composition improved; do not claim improvement based on source text. Each pages[].repair MUST be exactly one of "none", "increase_spacing", or "repaginate"; it is an enum, never a sentence or arbitrary instruction. Put descriptive critique in observations and design.issues[].evidence, and use only allowed design.actions for bounded layout changes. Source-text deletions or rewrites are not layout actions and must never be requested via pages[].repair. Page-level repair should be none when only the document-wide design needs revision.`,
             images: [...rendered.images, ...(context?.previous?.images ?? [])]
               .map(image => 'data:image/png;base64,' + image.toString('base64')),
           };
