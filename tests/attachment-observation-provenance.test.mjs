@@ -84,7 +84,10 @@ test("real image supplied to Grok vision fallback is source-bound; refusal witho
   const h = harness({ googleResult: { promptFeedback: { blockReason: "OTHER" } } });
   const descriptor = await h.describe(image(imageDataUrl));
   assert.deepEqual(h.calls.map(call => call.provider), ["google", "grok"]);
-  assert.deepEqual(h.calls[1].params.images, [imageDataUrl]);
+  // vm.runInNewContext gives arrays a different realm/prototype. Check the
+  // actual image payload rather than comparing cross-realm array identities.
+  assert.equal(h.calls[1].params.images?.length, 1);
+  assert.equal(h.calls[1].params.images[0], imageDataUrl);
   assert.equal(descriptor.summaryModel, "grok-4.7");
   assert.equal(descriptor.observationSourceHash, expectedHash);
 });
