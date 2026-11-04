@@ -134,15 +134,17 @@ try {
         emit({ type: "metadata", provider: "openai", modelId: "fixture" });
         emit({ type: "delta", text: "Streaming first part. " });
         window.__finishPresentationStream = () => {
-          emit({ type: "content", provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
+          window.__fixtureSavedMessageCounter = (window.__fixtureSavedMessageCounter ?? 0) + 1;
+          emit({ type: "content", messageId: "55555555-5555-4555-8555-" + String(window.__fixtureSavedMessageCounter).padStart(12, "0"), provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
             version: 1, fallbackMarkdown: "Streaming first part. Final answer.", blocks: [
               { type: "markdown", text: "Streaming first part. " },
               { type: "metric", label: "Stream complete", value: "Ready" },
               { type: "markdown", text: "Final answer." },
             ],
           } });
-          controller.close();
+          // Keep the HTTP stream open to prove saved content is visible before final_answer or EOF.
         };
+        window.__closePresentationStream = () => controller.close();
       } }), { headers: { "content-type": "application/x-ndjson" } });
     };
   });
@@ -201,8 +203,12 @@ try {
   if (await page.getByText("Stream complete", { exact: true }).count()) throw new Error("Uncommitted visual rendered during stream");
   if (!(await page.getByRole("button", { name: "Cancel", exact: true }).isVisible())) throw new Error("Stream completed before preview assertion");
   await page.evaluate(() => window.__finishPresentationStream());
-  await centralProgress.waitFor({ state: "hidden" });
   await page.getByText("Stream complete", { exact: true }).waitFor();
+  // The saved answer becomes a normal message before final_answer and before the stream closes.
+  await centralProgress.waitFor({ state: "hidden" });
+  if (!(await page.getByRole("button", { name: "Cancel", exact: true }).isVisible())) throw new Error("Stream was prematurely settled after saved content");
+  if ((await page.getByText("Stream complete", { exact: true }).count()) !== 1) throw new Error("Saved content published twice");
+  await page.evaluate(() => window.__closePresentationStream());
   if ((await page.locator('[data-testid="stream-chat"]').innerText()).includes("<katie-presentation-v1>")) throw new Error("Internal presentation markup leaked");
 
   // Measure the real composer in Chromium, with React commits tracked by a
@@ -268,7 +274,7 @@ try {
   await page.getByLabel("Katie response progress", { exact: true }).waitFor();
   const sent = await page.evaluate(() => window.__lastChatPayload?.message);
   if (sent !== "Quick Enter should send without waiting for draft debounce.") throw new Error("Enter submitted stale composer text: " + sent);
-  await page.evaluate(() => window.__finishPresentationStream());
+  await page.evaluate(() => { window.__finishPresentationStream(); window.__closePresentationStream(); });
   await page.getByLabel("Katie response progress", { exact: true }).waitFor({state:"hidden"});
   // Regression: a lost in-flight response stream must recover the exact
   // persisted answer and terminal workflow, without a duplicate paid request.
