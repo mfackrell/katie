@@ -1247,6 +1247,7 @@ async function executeChat(request: NextRequest) {
           }),
           JSON.stringify({
             type: "content",
+            messageId: idempotencyClaim.record.assistantMessageId,
             text: idempotencyClaim.record.assistantContent ?? "",
             ...(replayPresentation ? { presentation: replayPresentation } : {}),
             assets: idempotencyClaim.record.assistantAssets,
@@ -1438,6 +1439,7 @@ async function executeChat(request: NextRequest) {
         }),
         JSON.stringify({
           type: "content",
+          messageId: localAssistantMessageId,
           text: localResponseText,
           assets: [],
           provider: "local",
