@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - diagnostics/document-phase1-baseline-20261104
 
 jobs:
   gate:
