@@ -45,8 +45,6 @@ test('rendered-page selection saves an entire page on report and agreement witho
       assert.ok(after.inspection.pageCount < before.inspection.pageCount,
         name+': avoidable second page must be removed when same glyphs fit');
       assert.deepEqual(after.inspection.findings,[],name+': revised layout must be mechanically valid');
-      // The render pipeline itself checks ordered glyphs using PDF fragment metadata.
-      assert.equal(after.inspection.findings.some(f=>f.rule==='reading-order'),false);
       const originalZip=await JSZip.loadAsync(standardBytes);
       const afterZip=await JSZip.loadAsync(chosenBytes);
       const docxText=async(z:JSZip)=>((await z.file('word/document.xml')!.async('string'))
