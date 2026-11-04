@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "phase": "1",
+  "name": "Document engineering measured acceptance contract",
+  "rules": [
+    {
+      "id": "PAGE_COUNT_EXACT",
+      "classification": "hard",
+      "measurement": "Actual Chromium and office PDF page counts equal requested pages",
+      "phase1": "instrumented",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "SOURCE_FIDELITY",
+      "classification": "hard",
+      "measurement": "DOCX and PDF preserve ordered source glyphs and every semantic table cell",
+      "phase1": "instrumented",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "FONT_FLOOR",
+      "classification": "hard",
+      "measurement": "Document run font sizes, including default body settings, at least approved minimum (11pt for this résumé)",
+      "phase1": "instrumented",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "DOCX_OFFICE_PARITY",
+      "classification": "hard",
+      "measurement": "Office application and Chromium PDF agree on page count and reading order; report geometry deltas",
+      "phase1": "instrumented",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "NO_AVOIDABLE_PAGE_BREAK",
+      "classification": "structural",
+      "measurement": "Compare actual page geometry with viable unconstrained/compact layouts, not universal utilization cutoff",
+      "phase1": "pending_professional",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "HEADING_GROUP_CONTINUITY",
+      "classification": "structural",
+      "measurement": "Actual page line positions: heading and its first content block on same page, and bullets kept together when feasible",
+      "phase1": "pending_professional",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "ENGAGEMENT_GROUP_CONTINUITY",
+      "classification": "structural",
+      "measurement": "Heading, employer/date, first substantive accomplishment and related bullets form cohesive group when capacity allows",
+      "phase1": "pending_professional",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "TABLE_AND_CLAUSE_INTEGRITY",
+      "classification": "structural",
+      "measurement": "Table headers repeated appropriately; no stranded row/numbered clause label or signature heading",
+      "phase1": "pending_professional",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "PAGE_COMPOSITION",
+      "classification": "visual",
+      "measurement": "Independent page image inspection by qualified reviewer, assessing balance, hierarchy, hierarchy scale, whitespace reasons, margins, consistent rhythm",
+      "phase1": "pending_professional",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "DELIVERY_SEPARATION",
+      "classification": "authorization",
+      "measurement": "No assertion 'professionally passed' for technical-only delivery; stricter requested professional-quality contract blocks bad deliverables",
+      "phase1": "pending_professional",
+      "phase2": "mandatory_pass"
+    },
+    {
+      "id": "NO_PAID_INFERENCE_CI",
+      "classification": "security",
+      "measurement": "Qualification uses deterministic local reviewer and browser/LibreOffice only",
+      "phase1": "instrumented",
+      "phase2": "mandatory_pass"
+    }
+  ],
+  "provenance": {
+    "private_resume_docx_sha256": "58b4d24d01783651e6ef4a9a5c9444f45822798fe9f19c8f6f178faa459d263f",
+    "private_resume_pdf_sha256": "53c3d4e95fed0cacd311e544cb3b067eacc9c4076d4f081f781f3f0f1f737806",
+    "private_content_committed": false
+  },
+  "release_policy": "Never declare Phase 2 or 3 qualified while any mandatory requirement is pending or failing."
+}
