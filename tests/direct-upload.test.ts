@@ -73,7 +73,10 @@ test('saved Qwen observations retain provenance and can be refined only for the 
   assert.equal(updated.visualMemory?.sourceHash,imageObservationHash(image.imageDataUrl!));
   assert.equal(updated.visualMemory?.observedAt,refined.observationAt);
   assert.ok(verifiedKatieVisualEpisode(updated),"Refinements must update the same visual memory episode");
-  assert.deepEqual((await service.catalog(actorId,'actor')).attachments,[updated]);
+  const actorCatalog=(await service.catalog(actorId,'actor')).attachments;
+  assert.equal(actorCatalog.length,2);
+  assert.deepEqual(actorCatalog.find(entry=>entry.id===updated.id),updated);
+  assert.equal(actorCatalog.find(entry=>entry.id===unbound.id)?.visualMemory,undefined);
   assert.equal((await service.restore(chatId,updated,actorId)).imageDataUrl,image.imageDataUrl);
   assert.equal(await fake.files.get(`chats/${chatId}/${saved.id}.source`)!.text(),'image');
   const canonical=JSON.parse(await fake.files.get(`chats/${chatId}/${saved.id}.json`)!.text());
