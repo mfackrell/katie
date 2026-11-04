@@ -4,6 +4,7 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { parseDocument, contentText, normalizedText, pdfTextMatchesSource } from '../lib/documents/model';
 import { resolveDurableDocumentRequest } from '../lib/documents/continuity';
 import { documentRequest } from '../lib/documents/intent';
+import { emptyTaskProgress, syncTaskProgress } from '../lib/chat/task-progress';
 import { generateDocx, paginate, PAGE, documentPageStyle, type Layout } from '../lib/documents/generate';
 import { chooseInitialComposition, produceDocument } from '../lib/documents/production';
 import { renderDocument } from '../lib/documents/render';
@@ -15,6 +16,16 @@ test('explicit revision of an existing Word file retains production routing',()=
   assert.deepEqual(documentRequest('Revise this Word document again.'),{});
   assert.deepEqual(documentRequest('Update the PDF again.'),{});
   assert.equal(documentRequest('Explain how to revise a Word document.'),null);
+});
+
+test('history-window rotation cannot erase a previously approved document contract',()=>{
+  const contract={identity:'resume',pages:2,sourceUserMessageId:'original-request',
+    provenance:'current-user' as const};
+  const previous={...emptyTaskProgress(),documentContract:contract,
+    lastUserMessageId:'old-60-message-cursor'};
+  const recent=Array.from({length:60},(_,i)=>({id:'new-'+i,role:'user' as const,content:'Hello'}));
+  const reconciled=syncTaskProgress(previous,recent);
+  assert.deepEqual(reconciled.documentContract,contract);
 });
 
 test('persisted explicit same-document constraints survive retries without borrowing from unrelated documents',()=>{
