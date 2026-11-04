@@ -73,9 +73,17 @@ test('saved Qwen observations retain provenance and can be refined only for the 
   assert.equal(updated.visualMemory?.sourceHash,imageObservationHash(image.imageDataUrl!));
   assert.equal(updated.visualMemory?.observedAt,refined.observationAt);
   assert.ok(verifiedKatieVisualEpisode(updated),"Refinements must update the same visual memory episode");
+  // A later refusal must not rewrite Katie's established experience as though
+  // the earlier successful inspection never happened.
+  const refused={...refined,observedSummary:undefined,summaryCoverage:'metadata' as const,
+    observationAgreement:'policy-limited' as const,observationAt:'2026-10-29T18:02:00Z'};
+  const preserved=await service.updateImageObservation(chatId,updated,actorId,refused);
+  assert.equal(preserved.observedSummary,updated.observedSummary);
+  assert.deepEqual(preserved.visualMemory,updated.visualMemory);
+  assert.ok(verifiedKatieVisualEpisode(preserved),"The earlier valid visual recollection survives a later refusal");
   const actorCatalog=(await service.catalog(actorId,'actor')).attachments;
   assert.equal(actorCatalog.length,2);
-  assert.deepEqual(actorCatalog.find(entry=>entry.id===updated.id),updated);
+  assert.deepEqual(actorCatalog.find(entry=>entry.id===preserved.id),preserved);
   assert.equal(actorCatalog.find(entry=>entry.id===unbound.id)?.visualMemory,undefined);
   assert.equal((await service.restore(chatId,updated,actorId)).imageDataUrl,image.imageDataUrl);
   assert.equal(await fake.files.get(`chats/${chatId}/${saved.id}.source`)!.text(),'image');
@@ -84,6 +92,9 @@ test('saved Qwen observations retain provenance and can be refined only for the 
   assert.equal(canonical.evidenceDescriptor.observationSourceHash,description.observationSourceHash);
   assert.equal(canonical.evidenceDescriptor.visualMemory.version,"katie-visual-episode-v1");
   assert.equal(canonical.observationHistory[0].visualMemory.sourceHash,imageObservationHash(image.imageDataUrl!));
+  assert.equal(canonical.observationHistory.at(-1).observationAgreement,'policy-limited',
+    "A failed new observation is retained as evidence but cannot override the prior memory");
+  assert.equal(canonical.observationHistory.at(-1).summaryCoverage,'metadata');
 });
 
 test("large binary uploads use private signed storage and full extraction hydrates from a compact reference", async () => {
