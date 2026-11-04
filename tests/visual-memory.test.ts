@@ -65,6 +65,8 @@ test("metadata, legacy descriptions, mismatched sources and spoofed receipts nev
   assert.equal(buildKatieVisualEpisode({ ...base, observationSourceHash: "f".repeat(64) }, hash, "2026-11-03T23:01:30Z"), undefined);
   assert.equal(buildKatieVisualEpisode({ ...base, summaryCoverage: "metadata" }, hash, "2026-11-03T23:01:30Z"), undefined);
   assert.equal(buildKatieVisualEpisode({ ...base, observedSummary: "" }, hash, "2026-11-03T23:01:30Z"), undefined);
+  assert.equal(buildKatieVisualEpisode({ ...base, observationAt: "invalid" }, hash, "2026-11-03T23:01:30Z"), undefined,
+    "An invalid observation time cannot be presented as a new observation at persistence time");
   assert.equal(buildKatieVisualEpisode({ ...base, summaryModel: "source-excerpt" }, hash, "2026-11-03T23:01:30Z"), undefined);
   assert.equal(buildKatieVisualEpisode(base, "not-a-hash", "2026-11-03T23:01:30Z"), undefined);
 
