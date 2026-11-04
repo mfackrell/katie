@@ -44,7 +44,7 @@ test('saved content provides durable ID, followed by final answer event before f
  assert.match(panel,/if \(chunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
  assert.match(panel,/if \(trailingChunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
  assert.match(panel,/id: savedAssistantMessageId,/);
- assert.match(panel,/current\.filter\(entry => entry\.id !== assistantMessage\.id\)/);
+ assert.match(panel,/upsertSavedAssistant\(current, assistantMessage\)/);
  assert.match(panel,/if \(!answerCommitted\) \{/);
 });
 
