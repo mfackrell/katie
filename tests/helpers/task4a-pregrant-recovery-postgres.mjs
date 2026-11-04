@@ -123,6 +123,9 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    assert.equal(Number(offer.proposal.maximumNewTokens),523481);
    assert.equal(offer.proposal.predecessorId,continuation);
    assert.equal((await preview([600000,...opts.slice(1)])).ready,false);
+   const excessiveCalls=[...opts];excessiveCalls[1]=201;
+   assert.equal((await preview(excessiveCalls)).ready,false,
+    'Successor call ceiling must respect native table maximum of 200');
    assert.equal((await preview([...opts.slice(0,8),['openai:unverified']])).ready,false);
    await db.query('savepoint unverified_pricing');
    await db.query('reset role');
@@ -145,6 +148,18 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    const saved=(await consent(owner,offer.digest)).x;
    assert.equal(saved.authorized,true);
    assert.equal(saved.predecessorId,continuation);
+   await db.query('savepoint immutable_audit_event');
+   await db.query('reset role');
+   try{
+    await assert.rejects(
+     db.query("update project_events set data='{}'::jsonb where project_id=$1 and event='task4a_successor_continuation_authorized'",[project]),
+     /TASK4A_SUCCESSOR_AUDIT_IMMUTABLE/,
+     'Owner successor audit receipt must not be mutable');
+   }finally{
+    await db.query('rollback to savepoint immutable_audit_event');
+    await db.query('release savepoint immutable_audit_event');
+    await db.query('set role service_role');
+   }
    assert.deepEqual((await one(db,'select to_jsonb(a) obj from project_continuation_authorizations a where id=$1',[continuation])).obj,historical);
    assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,saved.authorizationId);
    assert.equal((await one(db,'select status from work_projects where id=$1',[project])).status,'blocked');

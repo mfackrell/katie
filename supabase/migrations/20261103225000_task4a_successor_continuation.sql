@@ -41,6 +41,22 @@ create trigger task4a_successor_insert_guard before insert
  on public.project_continuation_authorizations for each row
  execute function public.task4a_successor_insert_guard();
 
+-- Audit receipts must be append-only even if a privileged operator later
+-- acquires UPDATE or DELETE. Do not alter Phase 1 receipt history.
+create or replace function public.task4a_successor_audit_immutable()
+returns trigger language plpgsql set search_path=public as $
+begin
+ if old.event in ('task4a_successor_continuation_authorized','task4a_native_pregrant_recovered') then
+  raise exception 'TASK4A_SUCCESSOR_AUDIT_IMMUTABLE';
+ end if;
+ return case when tg_op='DELETE' then old else new end;
+end $;
+revoke all on function public.task4a_successor_audit_immutable() from public,anon,authenticated;
+drop trigger if exists task4a_successor_audit_immutable on public.project_events;
+create trigger task4a_successor_audit_immutable
+ before update or delete on public.project_events for each row
+ execute function public.task4a_successor_audit_immutable();
+
 -- A unique chain tip is required; ambiguity is a denial, never a fallback
 -- to the expired root grant.
 create or replace function public.task4a_current_continuation_id(p_project uuid)
@@ -193,7 +209,7 @@ begin
  then return jsonb_build_object('ready',false,'reason','owner_limits_required',
    'ledger',proposal);end if;
  if p_tokens<=p_assess_tokens+p_complete_tokens or p_tokens>remaining
-  or p_calls<=p_assess_calls+p_complete_calls or p_calls>500
+  or p_calls<=p_assess_calls+p_complete_calls or p_calls>200
   or p_money<=0 or p_money>100000000
   or p_assess_tokens<prior.assessment_reserve_tokens
   or p_complete_tokens<prior.completion_reserve_tokens
