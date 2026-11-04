@@ -42,6 +42,18 @@ try {
     const officePdf=join(output,name+'.pdf');
     const office=bbox(officePdf);
     const chromium=bbox(join(root,name+'.pdf'));
+    const firstPdf=join(root,name+'-initial.pdf');
+    const initialChromium=existsSync(firstPdf)?bbox(firstPdf):null;
+    const initialWordFile=join(root,name+'-initial.docx');
+    let initialOffice=null;
+    if(existsSync(initialWordFile)){
+      exec('soffice',['-env:UserInstallation=file://'+profile,'--headless','--convert-to','pdf','--outdir',output,initialWordFile]);
+      initialOffice=bbox(join(output,name+'-initial.pdf'));
+    }
+    const initialMeasuredPx=original.measured_total_block_heights_px ?? null;
+    const initialInkSpanPx=initialChromium
+      ? Number((initialChromium.reduce((n,p)=>n+p.vertical_ink_span_pt,0)*96/72).toFixed(3))
+      : null;
     const parity=office.length===chromium.length;
     const headings=(name==='forced-sections'?[]:
       readFileSync('fixtures/documents/phase1-'+name+'.md','utf8')
@@ -62,7 +74,17 @@ try {
       }
     }
     const item={name,office_pages:office.length,browser_pages:chromium.length,word_pdf_page_parity:parity,
-      office_geometry:office,browser_geometry:chromium,short_page_signals_not_automatic_defects:shortPageEvidence,
+      office_geometry:office,browser_geometry:chromium,
+      initial_chromium_geometry:initialChromium,initial_office_geometry:initialOffice,
+      initial_measured_DOM_block_sum_px:initialMeasuredPx,
+      initial_pdf_ink_extent_sum_px:initialInkSpanPx,
+      // This difference is descriptive, not a block-height calibration:
+      // glyph ink bounds exclude margins and leading included in DOM blocks.
+      initial_DOM_minus_PDF_ink_px:initialMeasuredPx===null||initialInkSpanPx===null?
+        null:Number((initialMeasuredPx-initialInkSpanPx).toFixed(3)),
+      initial_estimated_min_pages:original.estimated_min_pages ?? null,
+      initial_actual_browser_page_count:original.initial_pdf_pages ?? null,
+      short_page_signals_not_automatic_defects:shortPageEvidence,
       orphan_heading_signals:orphans,mechanical_source:original,
       pending_independent_visual_design_approval:true,
       microsoft_word_parity:'NOT TESTED'};
