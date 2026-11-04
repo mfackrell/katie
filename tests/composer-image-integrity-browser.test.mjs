@@ -15,7 +15,7 @@ test('composer images preserve selection identity through picker, paste, restore
  const root=resolve('.'), project=await mkdtemp(join(tmpdir(),'composer-next-'));
  const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(done=>socket.close(done));
  const origin=`http://127.0.0.1:${port}`,actorId='22222222-2222-4222-8222-222222222222',chatId='33333333-3333-4333-8333-333333333333';
- let server,browser,page,output='',mode='ok';const errors=[],external=[],chats=[],events=[],uploads=new Map();let sequence=0;
+ let server,browser,page,output='',mode='ok';const errors=[],external=[],chats=[],events=[],uploads=new Map();let sequence=0, savedAssistantSequence=0;
  const manifestModule={exports:{}};new Function('require','module','exports',ts.transpileModule(await readFile(join(root,'lib/uploads/attachment-manifest.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(createRequire(import.meta.url),manifestModule,manifestModule.exports);
  const {validateAttachmentManifest}=manifestModule.exports;const receivedCounts=new WeakMap();
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV3cAAAAASUVORK5CYII=';
@@ -60,7 +60,7 @@ test('composer images preserve selection identity through picker, paste, restore
   if(url.pathname==='/api/upload/prepare'){events.push('prepare');if(mode==='failed')return reply({error:'Fixture upload refused'},503);const token=`image-${++sequence}`;uploads.set(token,body);return reply({uploadToken:token,uploadUrl:`${origin}/fixture-storage/${token}`});}
   if(url.pathname.startsWith('/fixture-storage/')){events.push('storage');assert.deepEqual(req.postDataBuffer(),Buffer.from(png,'base64'),'private upload bytes match the visible PNG, including legacy recovery');return reply({});}
   if(url.pathname==='/api/upload/complete'){events.push('complete');const file=uploads.get(body.uploadToken);return reply({fileReference:{fileId:body.uploadToken,fileName:mode==='mismatch'?'wrong.png':file.name,mimeType:file.type,attachmentKind:'image',preview:'Image fixture',storageToken:`fixture-private-ref-${body.uploadToken}`}});}
-  if(url.pathname==='/api/chat'){events.push('chat');const counts=validateAttachmentManifest(body.attachmentManifest,body.fileReferences,body.images);receivedCounts.set(body,counts.imageCount+counts.videoCount+counts.fileCount);chats.push(body);return route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({type:'content',text:'Fixture image response.'})+'\n'});}
+  if(url.pathname==='/api/chat'){events.push('chat');const counts=validateAttachmentManifest(body.attachmentManifest,body.fileReferences,body.images);receivedCounts.set(body,counts.imageCount+counts.videoCount+counts.fileCount);chats.push(body);return route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({type:'content',messageId:'55555555-5555-4555-8555-'+String(++savedAssistantSequence).padStart(12,'0'),text:'Fixture image response.'})+'\n'});}
   if(url.pathname==='/api/actors')return reply({actors:[{id:actorId,name:'Fixture Katie',purpose:'Composer verification',actorKind:'standard'}]});
   if(url.pathname==='/api/chats')return reply({chats:[{id:chatId,actorId,title:'Composer fixture',createdAt:'2026-10-29T00:00:00Z',updatedAt:'2026-10-29T00:00:00Z'}]});
   if(url.pathname==='/api/messages')return reply({messages:[]});
