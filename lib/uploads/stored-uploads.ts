@@ -6,7 +6,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
-import { buildKatieVisualEpisode } from "@/lib/chat/visual-memory";
+import { buildKatieVisualEpisode, verifiedKatieVisualEpisode } from "@/lib/chat/visual-memory";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
@@ -689,11 +689,24 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const previous=record.evidenceDescriptor??attachment;
       const merged:ConversationAttachment={...previous,...description,id:attachment.id,chatId,actorId,fileName:previous.fileName,mimeType:previous.mimeType};
       const hash=createHash('sha256').update(image).digest('hex');
-      const descriptor:ConversationAttachment={
-        ...merged,
-        visualMemory:buildKatieVisualEpisode(merged,hash,new Date(now()).toISOString()),
-      };
-      const history=[...(Array.isArray(record.observationHistory)?record.observationHistory:[]),previous];
+      const latestEpisode=buildKatieVisualEpisode(merged,hash,new Date(now()).toISOString());
+      const priorEpisode=verifiedKatieVisualEpisode(previous);
+      // A refused, metadata-only, or otherwise unverified reinspection must NOT
+      // erase an earlier successful observation of these exact same pixels.
+      // Keep the prior perception as Katie's active memory; preserve the newer
+      // unsuccessful report in observationHistory for diagnostic provenance.
+      const keepPrior=Boolean(!latestEpisode && priorEpisode?.sourceHash===hash);
+      const descriptor:ConversationAttachment=latestEpisode
+        ? {...merged,visualMemory:latestEpisode}
+        : keepPrior
+          ? {...previous,id:attachment.id,chatId,actorId,fileName:previous.fileName,
+              mimeType:previous.mimeType,visualMemory:priorEpisode}
+          : {...merged,visualMemory:undefined};
+      const history=[
+        ...(Array.isArray(record.observationHistory)?record.observationHistory:[]),
+        previous,
+        ...(!latestEpisode ? [{...merged,visualMemory:undefined}] : []),
+      ];
       const saved=await objects.upload(`${path}.json`,JSON.stringify({...record,evidenceDescriptor:descriptor,observationHistory:history}),{contentType:'application/json',upsert:true});
       if(saved.error)throw new Error('Unable to retain the new image observation.');
       await writeCatalogEntry(chatId,descriptor);
