@@ -14,8 +14,8 @@ const code = ts.transpileModule(source, {
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const chat = { id: "chat/id ?&", actorId: "actor-btg", title: "Current application" };
 
-function harness({ confirmed = true, reply = async () => ({ ok: true, status: 200 }), loading = false, missing = false, storageThrows = false, activeChat = chat.id } = {}) {
-  const slots = [], requests = [], confirmations = [], routes = [];
+function harness({ reply = async () => ({ ok: true, status: 200 }), loading = false, missing = false, storageThrows = false, activeChat = chat.id } = {}) {
+  const slots = [], requests = [], routes = [];
   const storage = new Map([["katie.activeChatId", activeChat], ["katie.activeActorId", chat.actorId], ["other-setting", "keep"]]);
   let cursor = 0;
   const react = {
@@ -33,6 +33,7 @@ function harness({ confirmed = true, reply = async () => ({ ok: true, status: 20
   };
   const jsx = (type, props) => ({ type, props });
   function ChatPanel() {}
+  function DeleteConfirmationDialog() {}
   const mocks = {
     react,
     "react/jsx-runtime": { jsx, jsxs: jsx },
@@ -41,6 +42,7 @@ function harness({ confirmed = true, reply = async () => ({ ok: true, status: 20
     "@/components/memory-context": { MemoryContext: () => null },
     "@/components/conversation-work": { ConversationWork: () => null },
     "@/components/chat-panel": { ChatPanel },
+    "@/components/delete-confirmation-dialog": { DeleteConfirmationDialog },
     "@/components/standalone-usage": { StandaloneUsage: () => null },
     "@/components/workspace-data": { useResource: path => ({
       data: path === "/api/actors" ? { actors: [{ id: chat.actorId, name: "BTG" }] }
@@ -57,7 +59,7 @@ function harness({ confirmed = true, reply = async () => ({ ok: true, status: 20
       return mocks[name];
     },
     window: {
-      confirm(message) { confirmations.push(message); return confirmed; },
+      confirm() { throw Error("Native browser confirmation must not be used."); },
       localStorage: {
         getItem(key) { if (storageThrows) throw Error("Storage denied"); return storage.get(key) ?? null; },
         removeItem(key) { storage.delete(key); },
@@ -67,7 +69,7 @@ function harness({ confirmed = true, reply = async () => ({ ok: true, status: 20
   }, { filename: "chat-workspace.js" });
   return {
     render() { cursor = 0; return exports.default({ conversationId: chat.id }); },
-    requests, confirmations, routes, storage, ChatPanel,
+    requests, routes, storage, ChatPanel, DeleteConfirmationDialog,
   };
 }
 function all(node) {
@@ -81,6 +83,13 @@ function deleteButton(tree) {
   return button;
 }
 function alert(tree) { return all(tree).find(node => node.props?.role === "alert"); }
+function confirmation(h, tree) { return all(tree).find(node => node.type === h.DeleteConfirmationDialog); }
+function startDelete(h) {
+  deleteButton(h.render()).props.onClick();
+  const dialog = confirmation(h, h.render());
+  assert.ok(dialog, "Deletion must render an in-page confirmation");
+  return dialog;
+}
 
 test("delete is visible outside the collapsed settings and identifies this chat", () => {
   const h = harness(), tree = h.render(), button = deleteButton(tree);
@@ -93,14 +102,16 @@ test("delete is visible outside the collapsed settings and identifies this chat"
   }
 });
 
-test("canceling confirmation sends no deletion and keeps the conversation", async () => {
-  const h = harness({ confirmed: false });
-  deleteButton(h.render()).props.onClick();
+test("canceling in-page confirmation sends no deletion and keeps the conversation", async () => {
+  const h = harness();
+  const dialog = startDelete(h);
+  assert.match(dialog.props.description, /Current application/);
+  assert.match(dialog.props.description, /cannot be undone/);
+  assert.match(dialog.props.description, /long-term memory will be kept/);
+  assert.equal(h.requests.length, 0);
+  dialog.props.onCancel();
   await flush();
-  assert.equal(h.confirmations.length, 1);
-  assert.match(h.confirmations[0], /Current application/);
-  assert.match(h.confirmations[0], /cannot be undone/);
-  assert.match(h.confirmations[0], /long-term memory will be kept/);
+  assert.equal(confirmation(h, h.render()), undefined);
   assert.equal(h.requests.length, 0);
   assert.equal(h.routes.length, 0);
   assert.equal(h.storage.get("katie.activeChatId"), chat.id);
@@ -109,7 +120,9 @@ test("canceling confirmation sends no deletion and keeps the conversation", asyn
 
 test("confirmed deletion calls only the existing exact-chat endpoint and leaves for Conversations", async () => {
   const h = harness();
-  deleteButton(h.render()).props.onClick();
+  const dialog = startDelete(h);
+  assert.equal(h.requests.length, 0, "Opening confirmation must not delete anything");
+  dialog.props.onConfirm();
   await flush();
   assert.deepEqual(h.requests, [{ url: `/api/chats?id=${encodeURIComponent(chat.id)}`, method: "DELETE" }]);
   assert.deepEqual(h.routes, ["/conversations"]);
@@ -125,13 +138,15 @@ test("in-flight deletion disables the button and ignores repeated clicks", async
   const h = harness({ reply: () => new Promise(resolve => { finish = resolve; }) });
   const originalButton = deleteButton(h.render());
   originalButton.props.onClick();
-  originalButton.props.onClick();
+  const dialog = confirmation(h, h.render());
+  assert.ok(dialog);
+  dialog.props.onConfirm();
+  dialog.props.onConfirm();
   const pendingButton = deleteButton(h.render());
   assert.equal(pendingButton.props.disabled, true);
   assert.equal(pendingButton.props.children, "Deleting…");
   pendingButton.props.onClick();
   assert.equal(h.requests.length, 1);
-  assert.equal(h.confirmations.length, 1);
   assert.equal(h.routes.length, 0);
   finish({ ok: true, status: 200 });
   await flush();
@@ -141,16 +156,16 @@ test("in-flight deletion disables the button and ignores repeated clicks", async
 test("HTTP failure preserves the conversation and offers a working retry", async () => {
   let attempts = 0;
   const h = harness({ reply: async () => ++attempts === 1 ? { ok: false, status: 500 } : { ok: true, status: 200 } });
-  deleteButton(h.render()).props.onClick();
+  startDelete(h).props.onConfirm();
   await flush();
   const failed = h.render();
   assert.match(alert(failed).props.children, /Could not delete/);
+  assert.match(confirmation(h, failed).props.error, /Could not delete/);
   assert.equal(deleteButton(failed).props.disabled, false);
   assert.ok(all(failed).some(node => node.type === h.ChatPanel));
   assert.equal(h.routes.length, 0);
   assert.equal(h.storage.get("katie.activeChatId"), chat.id);
-  deleteButton(failed).props.onClick();
-  assert.equal(alert(h.render()), undefined, "Retry clears the old error");
+  confirmation(h, failed).props.onConfirm();
   await flush();
   assert.equal(h.requests.length, 2);
   assert.deepEqual(h.routes, ["/conversations"]);
@@ -158,7 +173,7 @@ test("HTTP failure preserves the conversation and offers a working retry", async
 
 test("network failure keeps the chat open without clearing its active pointer", async () => {
   const h = harness({ reply: async () => { throw Error("Offline"); } });
-  deleteButton(h.render()).props.onClick();
+  startDelete(h).props.onConfirm();
   await flush();
   assert.ok(alert(h.render()));
   assert.equal(deleteButton(h.render()).props.disabled, false);
@@ -178,7 +193,7 @@ test("authorization errors do not navigate or claim deletion", async () => {
 
 test("an already-deleted chat (404) also returns safely to Conversations", async () => {
   const h = harness({ reply: async () => ({ ok: false, status: 404 }) });
-  deleteButton(h.render()).props.onClick();
+  startDelete(h).props.onConfirm();
   await flush();
   assert.deepEqual(h.routes, ["/conversations"]);
   assert.equal(alert(h.render()), undefined);
@@ -186,7 +201,7 @@ test("an already-deleted chat (404) also returns safely to Conversations", async
 
 test("restricted local storage cannot strand a successfully deleted chat", async () => {
   const h = harness({ storageThrows: true });
-  deleteButton(h.render()).props.onClick();
+  startDelete(h).props.onConfirm();
   await flush();
   assert.deepEqual(h.routes, ["/conversations"]);
   assert.equal(alert(h.render()), undefined);
@@ -194,7 +209,7 @@ test("restricted local storage cannot strand a successfully deleted chat", async
 
 test("deleting this chat does not clear a different chat selected in another tab", async () => {
   const h = harness({ activeChat: "other-chat" });
-  deleteButton(h.render()).props.onClick();
+  startDelete(h).props.onConfirm();
   await flush();
   assert.equal(h.storage.get("katie.activeChatId"), "other-chat");
 });
