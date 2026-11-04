@@ -3721,7 +3721,8 @@ ${chunkWorkflowSummary}`;
               const { deliverDocument } = await import('@/lib/documents/service');
               result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
                 params: createParams(result.model), actorId, chatId, requestId,
-                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs });
+                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs,
+                requireProfessionalAcceptance: /\\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\\b/i.test(message) });
               streamedText = result.text;
             }
 
