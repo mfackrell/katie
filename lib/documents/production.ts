@@ -28,6 +28,38 @@ export function shouldTryCompactLayout(error: unknown, attempt: number, spec: Do
   return error instanceof DocumentPageFitError && attempt === 0 && spec.targetPages === 2 && !layout.compact;
 }
 
+/**
+ * Compare real browser renderings before inserting any hard Word sections.
+ * Compactness may save a page but never shrinks the explicit 11pt text.
+ * An explicit page cap always wins over page minimization.
+ * The comparison is deterministic and incurs no model/API costs.
+ */
+export async function chooseInitialComposition(
+  spec: DocumentSpec, browser: Browser, deadlineMs: number,
+): Promise<Layout> {
+  const indices=spec.blocks.map((_,i)=>i);
+  const candidates: Layout[]=[
+    {pages:[indices],spacing:4},
+    {pages:[indices],spacing:2},
+    {pages:[indices],spacing:2,compact:true},
+  ];
+  const viable: Array<{layout:Layout;pages:number;order:number}>=[];
+  for(let i=0;i<candidates.length;i++){
+    if(Date.now()>=deadlineMs-1000)break;
+    try {
+      const docx=await generateDocx(spec,candidates[i]);
+      const actual=await renderDocument(browser,docx,spec,candidates[i]);
+      const hard=actual.inspection.findings.filter(f=>
+        !(f.rule==='whitespace'&&f.detail==='Page uses less than one quarter of its content area.'));
+      if(hard.length===0 && (!spec.targetPages || actual.inspection.pageCount===spec.targetPages))
+        viable.push({layout:candidates[i],pages:actual.inspection.pageCount,order:i});
+    } catch { /* A candidate is never approved without a valid rendered artifact. */ }
+  }
+  if(!viable.length) return candidates[0]; // Existing measured recovery remains mandatory.
+  viable.sort((a,b)=>a.pages-b.pages||a.order-b.order);
+  return viable[0].layout;
+}
+
 /** 
  * Mechanics decide whether a document may be delivered. Design review selects
  * between mechanically valid candidates and must never revoke the baseline.
@@ -40,7 +72,7 @@ export async function produceDocument(input: {
   canSkipDesignReviewError?: (error: unknown) => Promise<boolean>;
 }): Promise<ProductionResult> {
   const spec = documentSchema.parse(input.spec);
-  let layout: Layout = input.initialLayout ?? { pages: [spec.blocks.map((_, i) => i)], spacing: 4 };
+  let layout: Layout = input.initialLayout ?? await chooseInitialComposition(spec,input.browser,input.deadlineMs);
   const indices = layout.pages.flat();
   if (JSON.stringify(indices) !== JSON.stringify(spec.blocks.map((_, i) => i)) ||
       !Number.isFinite(layout.spacing) || layout.spacing < 2 || layout.spacing > 12 ||
