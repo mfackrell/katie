@@ -40,7 +40,7 @@ test('saved content provides durable ID, followed by final answer event before f
  const memory=route.indexOf('await scheduleMemoryPersistence(',final);
  assert.ok(save>0&&content>save&&final>content&&memory>final);
  assert.match(panel,/const commitSavedAnswer = \(\) =>/);
- assert.match(panel,/!savedAssistantMessageId \|\| !sawFinalReasoningAnswer/);
+ assert.match(panel,/!savedAssistantMessageId \|\| !sawPersistedContent/);
  assert.match(panel,/if \(chunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
  assert.match(panel,/if \(trailingChunk\.type === "final_answer"\) commitSavedAnswer\(\)/);
  assert.match(panel,/id: savedAssistantMessageId,/);
