@@ -35,7 +35,7 @@ export function resolveDurableDocumentRequest(
   // A different explicit saved source cannot borrow the previous document's cap.
   const changedSource = Boolean(sourceMessageId && previous?.sourceMessageId && sourceMessageId!==previous.sourceMessageId);
   const pages = request.pages ?? (same && !changedSource ? previous?.pages : undefined);
-  const explicitPageCount = /\\b(?:one|two|three|four|five|six|\\d+)\\s*[- ]pages?\\b/i.test(message);
+  const explicitPageCount = /\b(?:one|two|three|four|five|six|\d+)\s*[- ]pages?\b/i.test(message);
   const inherits = !changedSource && ((same && !explicitPageCount) || (request.pages!==undefined && !explicitPageCount));
   if (request.pages!==undefined && (!Number.isInteger(request.pages) || request.pages<1 || request.pages>8))
     throw Error('Invalid explicit document page constraint.');
