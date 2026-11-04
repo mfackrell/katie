@@ -117,6 +117,15 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     'Unlinked duplicate native authority must block successor issuance');
    await db.query('rollback to savepoint orphaned_native_approval');
    await db.query('release savepoint orphaned_native_approval');
+   await db.query('savepoint uncertain_historical_receipt');
+   await db.query('reset role');
+   await db.query("update mission_calls set status='uncertain' where id=(select id from mission_calls where job_id in (select id from mission_assignments where mission_id=$1) order by id limit 1)",[research]);
+   await db.query('set role service_role');
+   const uncertainOffer=await preview();
+   assert.equal(uncertainOffer.ready,false,'Uncertain provider receipt cannot be ignored as free capacity');
+   assert.equal(uncertainOffer.reason,'historical_ledger_unreconciled');
+   await db.query('rollback to savepoint uncertain_historical_receipt');
+   await db.query('release savepoint uncertain_historical_receipt');
    const offer=await preview();
    assert.equal(offer.ready,true,JSON.stringify(offer));
    assert.equal(Number(offer.proposal.historicalActualTokens),76519);

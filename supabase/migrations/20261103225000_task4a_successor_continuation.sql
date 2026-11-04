@@ -161,7 +161,9 @@ begin
  from public.agent_missions where project_id=p.id;
  select coalesce(sum(c.actual_tokens),0),coalesce(sum(c.reserved_tokens),0),
   coalesce(sum(greatest(c.actual_tokens,c.reserved_tokens)),0),count(*),
-  count(*) filter(where c.status<>'completed' or c.actual_tokens is null),
+  count(*) filter(where c.status<>'completed' or c.actual_tokens is null
+    or (c.project_actual_microusd is not null
+      and c.project_actual_microusd>coalesce(c.project_reserved_microusd,0))),
   coalesce(sum(c.project_reserved_microusd),0),
   coalesce(sum(c.project_actual_microusd),0),
   coalesce(sum(case when c.project_continuation_id is not null
