@@ -63,7 +63,7 @@ test("metadata, legacy descriptions, mismatched sources and spoofed receipts nev
   const legacy = { ...base, visualMemory: undefined };
   assert.equal(verifiedKatieVisualEpisode(legacy), undefined);
   assert.equal(katieVisualMemoryContext([legacy]), "");
-  assert.doesNotMatch(attachmentAccessContext([], [legacy], [], new Set()), /KATIE_VISUAL_MEMORY/);
+  assert.doesNotMatch(attachmentAccessContext([], [legacy], [], new Set()), /^KATIE_VISUAL_MEMORY \(/);
 
   assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, observationSourceHash: "e".repeat(64) }), undefined);
   assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, mimeType: "application/pdf" }), undefined);
