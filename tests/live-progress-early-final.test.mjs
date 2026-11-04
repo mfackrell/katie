@@ -57,3 +57,14 @@ test('post-answer processing and accounting remain durable and can report failur
  assert.match(panel,/clearPendingChatRequest\(chatId\);\n      setStatusMessage\("Response received\."\)/);
  assert.match(panel,/setStatusMessage\("Answer saved\. Finalizing memory and request accounting…"/);
 });
+
+test('the saved content event promotes the canonical ID without waiting for final_answer',()=>{
+ assert.match(panel,/if \(chunk\.type === "content"\) \{[\s\S]*?sawPersistedContent = true;[\s\S]*?commitSavedAnswer\(\)/);
+ assert.match(panel,/if \(trailingChunk\.type === "content"\) \{[\s\S]*?sawPersistedContent = true;[\s\S]*?commitSavedAnswer\(\)/);
+ assert.match(panel,/if \(!answerCommitted && \(!sawPersistedContent \|\| !savedAssistantMessageId\)\)/);
+ assert.match(panel,/Stream ended without a confirmed persisted assistant message ID/);
+ assert.match(panel,/setMessagesByChatId\(cache => \(\{[\s\S]*?upsertSavedAssistant\(cache\[chatId\] \?\? \[\], assistantMessage\)/);
+ const replay=route.indexOf('type: "content",\n            messageId: idempotencyClaim.record.assistantMessageId');
+ const local=route.indexOf('type: "content",\n          messageId: localAssistantMessageId');
+ assert.ok(replay>0 && local>replay);
+});
