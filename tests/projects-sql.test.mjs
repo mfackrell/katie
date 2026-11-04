@@ -159,5 +159,10 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await assert.rejects(db.query("set role anon;select recover_project_development_dispatch('44444444-4444-4444-8444-444444444444');"),/permission denied/);
   await db.query('reset role');await db.query('set role service_role');
   await db.query('reset role');await db.query('set role anon');for(const table of ['work_projects','project_agents','project_runs','project_events'])await assert.rejects(db.query('select * from '+table),/permission denied/);await assert.rejects(db.query('select claim_work_project()'),/permission denied/);await assert.rejects(db.query("select retry_project_review('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222')"),/permission denied/);
+   await db.query('reset role');
+   await db.query('set role service_role');
+   // End-of-suite real multi-connection race: fixture is committed ONLY inside
+   // the disposable cluster, then the entire cluster is destroyed in finally.
+   await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true,concurrentMode:true,connect});
  }finally{await Promise.allSettled(clients.map(c=>c.end()));if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);rmSync(root,{recursive:true,force:true});}
 });

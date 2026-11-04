@@ -12,9 +12,10 @@ const contract='e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e
 const baseline='49c8a5f791e66c351436bb97839193b53d7a1cd1';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 
-export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false}={}){
+export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null}={}){
  await db.query('reset role');
  await db.query('begin');
+ let committedForConcurrency=false;
  try{
   const originalTeam=await one(db,"select team from work_projects where id='44444444-4444-4444-8444-444444444444'");
   const team=originalTeam.team,actor=randomUUID(),chat=randomUUID(),owner=randomUUID(),repo=randomUUID();
@@ -159,6 +160,35 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     await assert.rejects(consent(who,digest),/TASK4A_SUCCESSOR_STALE_OR_UNAUTHORIZED/);
     await db.query('rollback to savepoint reject');await db.query('release savepoint reject');
    }
+   if(concurrentMode){
+    assert.equal(typeof connect,'function','Two real isolated PostgreSQL clients required');
+    // Only this disposable Postgres cluster is committed. It is destroyed by
+    // tests/projects-sql.test.mjs; there are no production writes or paid calls.
+    await db.query('commit');
+    committedForConcurrency=true;
+    const rivals=await Promise.all([connect(),connect()]);
+    try{
+     await Promise.all(rivals.map(client=>client.query('set role service_role')));
+     const result=await Promise.allSettled(rivals.map(client=>
+      client.query('select task4a_authorize_successor($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) result',
+       [owner,offer.digest,...opts])));
+     assert.equal(result.filter(r=>r.status==='fulfilled').length,1,
+      'Two concurrent owner approvals must never create two successor grants');
+     assert.equal(result.filter(r=>r.status==='rejected').length,1,
+      'The second owner approval must fail under the admission lock and unique predecessor');
+     const admitted=result.find(r=>r.status==='fulfilled');
+     assert.equal(admitted.value.rows[0].result.authorized,true);
+     const successorRows=await one(db,'select count(*)::int n from project_continuation_authorizations where project_id=$1',[project]);
+     assert.equal(successorRows.n,2,'Original root plus exactly one child');
+     assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_successor_continuation_authorized'",[project])).n,1);
+     assert.equal((await one(db,'select status from work_projects where id=$1',[project])).status,'blocked');
+     assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
+     assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
+     assert.equal((await one(db,'select count(*)::int n from benchmark_native_spending_approvals where previous_developer_approval_id=$1',[original])).n,0);
+     console.log('TASK4A_SUCCESSOR_TWO_CONNECTION_RACE_POSTGRES_PASS');
+    }finally{await Promise.allSettled(rivals.map(client=>client.end()));}
+    return;
+   }
    const saved=(await consent(owner,offer.digest)).x;
    assert.equal(saved.authorized,true);
    assert.equal(saved.predecessorId,continuation);
@@ -282,7 +312,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
   await negative(owner,proposal.proposal.digest,/STALE_OR_UNAUTHORIZED/);
   console.log('TASK4A_NATIVE_PREGRANT_RECOVERY_POSTGRES_PASS: explicit owner consent, immutable prior approval, same account and limits, no paid calls, exact issue reuse');
  }finally{
-  await db.query('rollback');
+  if(!committedForConcurrency)await db.query('rollback');
   await db.query('reset role');
  }
 }
