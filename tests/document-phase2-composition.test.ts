@@ -42,6 +42,21 @@ test('rendered-page selection saves an entire page on report and agreement witho
       const selected=await chooseInitialComposition(spec,browser,Date.now()+45000);
       const chosenBytes=await generateDocx(spec,selected);
       const after=await renderDocument(browser,chosenBytes,spec,selected);
+      const final=await produceDocument({
+        spec,browser,deadlineMs:Date.now()+90000,
+        inspect:async rendered=>({
+          pages:rendered.images.map((_,i)=>({page:i+1,verdict:'pass' as const,repair:'none' as const,
+            observations:'Mechanically inspected offline; no independent professional design approval.'}))
+        })
+      });
+      const finalMeasured=await renderDocument(browser,final.docx,spec);
+      assert.equal(final.inspection.pageCount,after.inspection.pageCount,
+        name+': vertical expansion must not add another page');
+      assert.ok(finalMeasured.heights.reduce((a,b)=>a+b,0)>=after.heights.reduce((a,b)=>a+b,0),
+        name+': expansion must not reduce paragraph rhythm');
+      final.images.forEach((b,i)=>writeFileSync('test-artifacts/documents/phase2/'+name+'-final-'+(i+1)+'.png',b));
+      writeFileSync('test-artifacts/documents/phase2/'+name+'-final.docx',final.docx);
+      writeFileSync('test-artifacts/documents/phase2/'+name+'-final.pdf',final.pdf);
       assert.ok(after.inspection.pageCount < before.inspection.pageCount,
         name+': avoidable second page must be removed when same glyphs fit');
       assert.deepEqual(after.inspection.findings,[],name+': revised layout must be mechanically valid');
