@@ -1,6 +1,7 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
 import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
+import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
@@ -1845,6 +1846,13 @@ async function executeChat(request: NextRequest) {
     documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
     documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
     documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
+    const documentBinding = resolveDurableDocumentRequest(message, documentProduction,
+      taskProgress.documentContract, documentSourceMessageId);
+    documentProduction = documentBinding.request;
+    if (documentBinding.contract) taskProgress = { ...taskProgress,
+      documentContract: { ...documentBinding.contract,
+        sourceUserMessageId: documentBinding.contract.sourceUserMessageId || taskProgressUserMessageId },
+    };
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
