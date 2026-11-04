@@ -666,13 +666,13 @@ test('Nov 4 delivery-notice regression: false two-page receipts never become act
     'Created and inspected 2 pages.',
     '[Download Word document](/api/documents/download?actorId=fixture&format=docx) · [Download PDF](/api/documents/download?actorId=fixture&format=pdf)',
     'Both files are now available for download. The formatting has been refined.',
-  ].join('\\n');
+  ].join('\n');
   assert.equal(isDocumentDeliveryNarrative(fabricated), true);
   assert.equal(isDocumentDeliveryNarrative('Created and inspected two pages.'), true);
   assert.equal(isDocumentDeliveryNarrative('Here are your final Word and PDF files.'), true);
   assert.throws(() => parseDocument(fabricated, 2), /delivery notice rather than document content/);
   assert.throws(() => savedDocumentContent({role:'assistant',content:fabricated}), /not a usable document source/);
-  const legitimate = '# Financial systems report\\n\\n## Findings\\n\\nThe secure portal provides PDF and Word downloads for financial reporting.';
+  const legitimate = '# Financial systems report\n\n## Findings\n\nThe secure portal provides PDF and Word downloads for financial reporting.';
   assert.equal(isDocumentDeliveryNarrative(legitimate), false);
   assert.equal(parseDocument(legitimate,1).targetPages,1);
 
