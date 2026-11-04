@@ -52,7 +52,9 @@ returns uuid language sql stable set search_path=public as $$
    where child.predecessor_id=a.id
   )
  )
- select case when count(*)=1 then max(id) else null end from tips;
+ -- Cardinality-gated selection: UUID has no MAX aggregate on supported PG.
+ -- A value is only returned for exactly one terminal authorization.
+ select case when count(*)=1 then (array_agg(id))[1] else null::uuid end from tips;
 $$;
 revoke all on function public.task4a_current_continuation_id(uuid) from public,anon,authenticated;
 grant execute on function public.task4a_current_continuation_id(uuid) to service_role;

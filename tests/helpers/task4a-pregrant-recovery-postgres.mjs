@@ -64,6 +64,29 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
   await db.query('set role service_role');
   const before=await one(db,'select count(*)::int approvals from benchmark_native_spending_approvals where project_id=$1',[project]);
   if(successorMode){
+   // The actual function must deny zero and ambiguous terminal authorities.
+   assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[randomUUID()])).id,null,
+    'No project authorization must return NULL');
+   assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,continuation,
+    'A single existing root is the only eligible tip');
+   await db.query('savepoint ambiguous_tips');
+   await db.query('reset role');
+   try{
+    // Exercise corrupted/ambiguous data in rolled-back isolated Postgres ONLY;
+    // the production unique-root guard is restored by savepoint rollback.
+    await db.query('drop index public.task4a_continuation_one_root');
+    await db.query("insert into project_continuation_authorizations(id,project_id,actor_id,chat_id,source_mission_id,approval_digest,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence) select gen_random_uuid(),project_id,actor_id,chat_id,source_mission_id,$2,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence from project_continuation_authorizations where id=$1",[continuation,'b'.repeat(64)]);
+    await db.query('set role service_role');
+    assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,null,
+      'Multiple eligible successors must fail closed rather than choose one');
+   }finally{
+    await db.query('reset role');
+    await db.query('rollback to savepoint ambiguous_tips');
+    await db.query('release savepoint ambiguous_tips');
+    await db.query('set role service_role');
+   }
+   assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,continuation,
+    'Savepoint rollback restores unique-root security constraint');
    assert.equal((await one(db,'select task4a_native_recovery_proposal() x')).x,null);
    const opts=[300000,30,8000000,60000,60000,6,6,3600,['openai:gpt-5.3-codex']];
    const preview=async(args=opts)=>(await one(db,
