@@ -112,6 +112,15 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    assert.equal(offer.proposal.predecessorId,continuation);
    assert.equal((await preview([600000,...opts.slice(1)])).ready,false);
    assert.equal((await preview([...opts.slice(0,8),['openai:unverified']])).ready,false);
+   await db.query('savepoint unverified_pricing');
+   await db.query('reset role');
+   await db.query("update model_registry set pricing_status='estimated',source_metadata='{}'::jsonb where provider_name='openai' and model_id='gpt-5.3-codex'");
+   await db.query('set role service_role');
+   const unverified=(await preview()).reason;
+   assert.equal(unverified,'fresh_verified_model_pricing_required',
+    'Cached model catalog prices alone must never create successor authority');
+   await db.query('rollback to savepoint unverified_pricing');
+   await db.query('release savepoint unverified_pricing');
    const historical=(await one(db,'select to_jsonb(a) obj from project_continuation_authorizations a where id=$1',[continuation])).obj;
    const consent=async(who,digest)=>one(db,
     'select task4a_authorize_successor($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) x',

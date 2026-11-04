@@ -71,3 +71,21 @@ On any qualification or release failure, STOP further steps. Preserve pre/post d
 The Task 4A deterministic workflow runs real isolated PostgreSQL with both legacy Phase 1 pregrant and new successor fixtures, negative replay/revocation/stale-owner tests, original native authority restoration, and no new provider calls. Full CI, Native gateway/ordinary Developer and website regressions must all pass on the SAME immutable candidate SHA, followed by independent security signoff.
 
 Stop at release-ready engineering candidate. Production migration, deployment, owner consent, financial grants, original issue redispatch and paid inference are strictly excluded without separate owner authorization.
+
+
+## Verified pricing workflow investigation — November 4, 2026
+
+First-party provider pages reviewed on November 4 list gpt-5.3-codex at USD $1.75 input / $14 output per million and gpt-5.6-sol at USD $4 input / $20 output per million (short-context Standard). The gpt-5.3-codex model page labels that model DEPRECATED, so actual availability to Katie's account and native tool-calling capability are not established merely by public pricing or the provider's discovery list. GPT-5.6 Sol has longer-context and regional pricing differences; bounded admission uses verified Standard scope and a conservative 1.65x project reservation factor.
+
+Authoritative model-specific pages:
+- https://developers.openai.com/api/docs/models/gpt-5.3-codex
+- https://developers.openai.com/api/docs/models/gpt-5.6-sol
+- https://developers.openai.com/api/docs/pricing
+
+Why the production registry remains estimated: migration 20261102211700_task4a_verified_model_price_sources.sql recorded a fixed November 2 verification timestamp, not recurring verification. lib/models/registry.ts > retainTrustedPricing preserves verified first-party evidence only while less than 24 hours old and exactly matching both catalog rates. After expiry, scheduled refreshModelRegistry replaces rows from the third-party LiteLLM catalog with pricing_status=estimated and pricing_source=pricing_catalog, without the official source URL; its refreshed pricing_verified_at is not an independent verification. A public docs page or matching numeric catalog price by itself cannot establish live account eligibility or fresh production-verification provenance.
+
+OPERATIONAL HOLD: The production registry presently has estimated status and no first-party pricing_verification_source for either model. Before presenting a real owner successor approval, an authorized operator must obtain current first-party rate evidence, independently confirm the exact model is accessible in Katie's authorized API organization, and record its true observation time and model-specific official source through the existing verified-pricing process. Recheck freshness and agreement at owner approval and every paid admission; re-verify after 24 hours. Do NOT invent timestamps, adjust prices, claim deprecated model availability, or substitute models. This PR makes no production registry writes and keeps the paid path fail-closed.
+
+Protected reserve floor / proposal bounds: at least 60,000 assessment tokens and 60,000 completion tokens, six calls each, total new tokens at most the recomputed conservative project balance (historically 386,236), positive owner-chosen dollar ceiling up to $100, 300–172800 second duration capped by original project deadline, allowed models only the original two with gpt-5.3-codex required for native execution. These are constraints, NOT selected or approved successor amounts. The original native account has 180,000 tokens and $2.52 ceiling and requires separate owner consent.
+
+Phase 3 after separately approved release and fresh verified pricing: owner explicitly approves the digest-bound successor, independently approves the original Task 4A native pregrant repair bound to that successor and issue #969, and then separately approves financial execution under unchanged original scope/baseline. Only the native workflow may dispatch the existing issue. Verify GitHub original issue identity/signature, browser path, protected Preview authentication, immutable source SHA, browser contract and independent review before acceptance. No application production publication is included.
