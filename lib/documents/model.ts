@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isDocumentDeliveryNarrative } from './intent';
 
 const text = z.string().min(1).max(4000);
 export const blockSchema = z.discriminatedUnion('kind', [
@@ -83,6 +84,7 @@ export function pdfTextMatchesSource(extracted: string, source: string, fragment
 // Only a finite text grammar is accepted; no HTML, images, remote resources, fields or macros.
 const inline = (value: string) => value.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/`([^`]+)`/g, '$1').trim();
 export function parseDocument(markdown: string, targetPages?: number): DocumentSpec {
+  if (isDocumentDeliveryNarrative(markdown)) throw new Error('The model returned a delivery notice rather than document content. No files were delivered.');
   if (markdown.length > 50000 || /```|!\[|<\/?(?:script|iframe|img|style|html)\b/i.test(markdown)) throw new Error('Document contains unsupported content. No files were delivered.');
   const lines = markdown.trim().split(/\r?\n/), blocks: Block[] = [];
   for (let i = 0; i < lines.length; i++) {
