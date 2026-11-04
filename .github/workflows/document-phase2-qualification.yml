@@ -1,0 +1,63 @@
+name: document-phase2-qualification
+
+on:
+  pull_request:
+    paths:
+      - 'lib/documents/**'
+      - 'lib/chat/task-progress.ts'
+      - 'app/api/chat/route.ts'
+      - 'tests/document-phase*.test.ts'
+      - 'fixtures/documents/**'
+      - 'scripts/document-phase*.mjs'
+      - '.github/workflows/document-phase2-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  document-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck full code base
+        run: npm run typecheck
+      - name: Compile offline qualification suites
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.tests.json
+          mkdir -p .test-dist/node_modules
+          ln -s .. .test-dist/node_modules/@
+      - name: Phase 1 reproduction with actual generator
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase1-qualification.test.js
+      - name: Phase 2 genuine document comparison and delivery contract
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase2-composition.test.js
+      - name: Preserve render evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-phase2-browser-evidence
+          path: test-artifacts/documents/
+          if-no-files-found: warn
+      - name: Install office rendering
+        run: |
+          command -v soffice >/dev/null || sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+          command -v soffice
+      - name: Cross-render geometry and continuity
+        run: node scripts/document-phase1-word-acceptance.mjs
+      - name: Preserve real DOCX and independent office rendered pages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-phase2-office-evidence
+          path: test-artifacts/documents/
+          if-no-files-found: warn
