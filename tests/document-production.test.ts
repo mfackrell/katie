@@ -545,7 +545,8 @@ test('document capability disclaimers reroute before rendering and never become 
   assert.equal(isDocumentCapabilityDenial('# Executive Summary\n\n- Reduced costs.'), false);
   assert.equal(isDocumentCapabilityDenial('I cannot create prohibited or unsafe PDF materials.'), false);
   const routes = readFileSync('app/api/chat/route.ts','utf8');
-  assert.match(routes, /Boolean\(documentProduction\) && isDocumentCapabilityDenial\(generationResult.text/);
+  assert.match(routes, /Boolean\(documentProduction\) && \(isDocumentCapabilityDenial\(generationResult\.text \?\? ''\) \|\| isDocumentDeliveryNarrative\(generationResult\.text \?\? ''\)\)/,
+    'Document routing must preserve capability-refusal detection and reject fabricated delivery notices.');
   const calls: string[] = [];
   const selected = await runWithRefusalFallback({
     attempts: ['initial', 'alternate'], shouldRetryRefusal: true,
