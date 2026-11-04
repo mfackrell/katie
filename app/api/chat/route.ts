@@ -1131,7 +1131,6 @@ async function executeChat(request: NextRequest) {
       ? currentTurnImageGroundingContext(requestAttachments,freshTaskDescriptions,new Set(newAttachments.map(ref=>ref.fileId)))
       : '';
     const selectionContext = () => currentImageGrounding + '\n' + timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
-      + (standaloneImageObservation&&requestAttachments.some(file=>file.mimeType.startsWith('image/'))?'\nImage source retained privately; the current response model receives labelled textual visual observations. It has not directly inspected raw pixels.':'')
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
