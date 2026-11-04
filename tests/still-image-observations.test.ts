@@ -232,7 +232,8 @@ test('refusal-only Qwen reply preserves a truthful limitation and never fails ch
   const grounding=currentTurnImageGroundingContext([ref],descriptions,new Set([ref.fileId]));
   assert.match(grounding,/"evidenceAvailable":false/);
   assert.match(grounding,/"visualMemory":null/);
-  assert.match(grounding,/acknowledge receipt but explain that visual analysis was unavailable/);
+  assert.match(grounding,/this inspection provided no usable new evidence/);
+  assert.match(grounding,/Katie can still recall that earlier perception/);
   const text=imageObservationAsText(ref,observation).extractedText??'';
   assert.match(text,/IMAGE ANALYSIS UNAVAILABLE/);
   assert.match(text,/image content is unknown/i);
