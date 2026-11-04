@@ -7,7 +7,10 @@ export function documentRequest(message: string): { pages?: number } | null {
   if (/^\s*(?:explain\b|how\s+(?:do|does|can|to)\b|what\s+(?:is|are)\b)/i.test(message) ||
       /\b(?:do not|don't|never)\s+(?:create|produce|generate|make|export|save|convert)\b/i.test(message)) return null;
   // Format references used as INPUT must not turn PDF analysis into file production.
-  const output = message.replace(/\b(?:attached|uploaded|source|existing|this|that)\s+(?:pdf|docx|word (?:document|file))\b/gi, 'source attachment');
+  // An imperative to EDIT an existing file is an output request even when
+  // its object is "this Word document"; ordinary PDF-source analysis is not.
+  const editingFile = /^\\s*(?:(?:please|now)\\s+)?(?:revise|edit|update|redo|reissue)\\b[^.!?\\n]{0,100}\\b(?:pdf|docx|word document)\\b/i.test(message);
+  const output = editingFile ? message : message.replace(/\\b(?:attached|uploaded|source|existing|this|that)\\s+(?:pdf|docx|word (?:document|file))\\b/gi, 'source attachment');
   // Only an affirmative CURRENT instruction may start the document pipeline.
   // A discussion like "we are trying to get you to generate pdf's" contains
   // the same action words, but is a status report, not a generation request.
