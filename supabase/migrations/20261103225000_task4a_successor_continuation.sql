@@ -91,7 +91,7 @@ declare
  owner uuid;mission_actual bigint;mission_held bigint;mission_calls bigint;
  call_actual bigint;call_reserved bigint;call_conservative bigint;call_count bigint;
  unresolved bigint;bound_held_money numeric;bound_recorded_money numeric;
- unpriced_money numeric;conservative_used bigint;remaining bigint;
+ unpriced_money numeric;call_overrun_tokens bigint;call_overrun_count bigint;conservative_used bigint;remaining bigint;
  price_rows integer;prices jsonb;proposal jsonb; r public.project_runs;
 begin
  select * into p from public.work_projects
@@ -165,9 +165,11 @@ begin
   coalesce(sum(c.project_reserved_microusd),0),
   coalesce(sum(c.project_actual_microusd),0),
   coalesce(sum(case when c.project_continuation_id is not null
-    and c.project_actual_microusd is null then c.project_reserved_microusd else 0 end),0)
+    and c.project_actual_microusd is null then c.project_reserved_microusd else 0 end),0),
+  coalesce(sum(greatest(coalesce(c.actual_tokens,0)-c.reserved_tokens,0)),0),
+  count(*) filter(where c.actual_tokens>c.reserved_tokens)
  into call_actual,call_reserved,call_conservative,call_count,unresolved,
-  bound_held_money,bound_recorded_money,unpriced_money
+  bound_held_money,bound_recorded_money,unpriced_money,call_overrun_tokens,call_overrun_count
  from public.mission_calls c
  join public.mission_assignments j on j.id=c.job_id
  join public.agent_missions part on part.id=j.mission_id where part.project_id=p.id;
@@ -188,6 +190,7 @@ begin
   'historicalMissionReservedTokens',mission_held,
   'historicalCallActualTokens',call_actual,'historicalCallReservedTokens',call_reserved,
   'historicalConservativeTokens',conservative_used,'historicalCalls',call_count,
+  'historicalOverrunTokens',call_overrun_tokens,'historicalOverrunCalls',call_overrun_count,
   'historicalReservedExposureMicrousd',bound_held_money,
   'historicalRecordedActualMicrousd',bound_recorded_money,
   'historicalUnpricedActualExposureMicrousd',unpriced_money,

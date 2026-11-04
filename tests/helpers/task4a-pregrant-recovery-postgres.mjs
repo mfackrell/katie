@@ -122,6 +122,20 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    assert.equal(Number(offer.proposal.historicalCalls),9);
    assert.equal(Number(offer.proposal.maximumNewTokens),523481);
    assert.equal(offer.proposal.predecessorId,continuation);
+   await db.query('savepoint settled_token_overrun');
+   await db.query('reset role');
+   const changed=await one(db,"update mission_calls set actual_tokens=reserved_tokens+1000 where id=(select id from mission_calls where job_id in (select id from mission_assignments where mission_id=$1) order by id limit 1) returning id",[research]);
+   assert.ok(changed?.id);
+   await db.query('update agent_missions set actual_tokens=actual_tokens+1000 where id=$1',[research]);
+   await db.query('set role service_role');
+   const overrunOffer=await preview();
+   assert.equal(overrunOffer.ready,true,'Completed overrun must remain visible and conservatively encumbered');
+   assert.equal(Number(overrunOffer.proposal.historicalOverrunCalls),1);
+   assert.equal(Number(overrunOffer.proposal.historicalOverrunTokens),1000);
+   assert.equal(Number(overrunOffer.proposal.maximumNewTokens),522481,'Per-call maximum, not raw reservation, reduces remaining cap');
+   assert.notEqual(overrunOffer.digest,offer.digest,'Overrun changes the signed owner proposal');
+   await db.query('rollback to savepoint settled_token_overrun');
+   await db.query('release savepoint settled_token_overrun');
    assert.equal((await preview([600000,...opts.slice(1)])).ready,false);
    const excessiveCalls=[...opts];excessiveCalls[1]=201;
    assert.equal((await preview(excessiveCalls)).ready,false,

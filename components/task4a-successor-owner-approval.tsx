@@ -9,6 +9,7 @@ type Limits={tokens:number;calls:number;dollarsCents:number;assessmentTokens:num
 type Envelope={readiness?:{ready?:boolean;reason?:string;ledger?:{
   historicalActualTokens?:number;historicalCallReservedTokens?:number;
   historicalConservativeTokens?:number;historicalCalls?:number;
+  historicalOverrunTokens?:number;historicalOverrunCalls?:number;
   historicalReservedExposureMicrousd?:number;maximumNewTokens?:number;
  }};ready?:boolean;digest?:string;proposal?:{
   predecessorId:string;incrementalTokens:number;incrementalCalls:number;
@@ -87,6 +88,9 @@ export function Task4aSuccessorOwnerApproval({chatId}:{chatId:string}){
   <p>Prior continuation has expired. Actual historical usage: {Number(ledger.historicalActualTokens??0).toLocaleString()} tokens across {ledger.historicalCalls} calls.
    Conservative historical reservation: {Number(ledger.historicalCallReservedTokens??0).toLocaleString()} tokens;
    {'$'+((ledger.historicalReservedExposureMicrousd??0)/1_000_000).toFixed(6)} reserved exposure, not a confirmed charge.
+   Conservative per-call encumbrance: {Number(ledger.historicalConservativeTokens??0).toLocaleString()} tokens;
+   historical overrun: {Number(ledger.historicalOverrunCalls??0).toLocaleString()} call(s),
+   {Number(ledger.historicalOverrunTokens??0).toLocaleString()} excess tokens included in the encumbrance.
    Maximum conservatively available project tokens: {Number(ledger.maximumNewTokens??0).toLocaleString()}.</p>
   <p>Enter new limits; none of the expired balance is automatically renewed. Pricing must be freshly verified before any owner proposal can be approved.</p>
   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
