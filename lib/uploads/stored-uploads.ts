@@ -6,6 +6,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { buildKatieVisualEpisode } from "@/lib/chat/visual-memory";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
@@ -406,7 +407,21 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const safeReference: FileReference = privateEntry?.data ? JSON.parse(await privateEntry.data.text()) : { ...reference };
       delete (safeReference as FileReference & { decoderTiming?: unknown }).decoderTiming;
       const decoderTiming = getVideoTiming(reference);
-      const descriptor: ConversationAttachment = { ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType, createdAt: new Date(now()).toISOString(), hasOriginal: hasSource, chatId, actorId: options.actorId };
+      const createdAt = new Date(now()).toISOString();
+      // Only canonical source bytes can promote an observed image into
+      // Katie's actor-owned visual memory; never trust client-supplied claims.
+      const visualHash = safeReference.mimeType.startsWith("image/") && safeReference.imageDataUrl
+        ? createHash("sha256").update(safeReference.imageDataUrl).digest("hex") : undefined;
+      if (visualHash && options.description?.observationSourceHash &&
+          visualHash !== options.description.observationSourceHash)
+        throw new UploadInputError("Visual observation does not match its source image.");
+      const visualMemory = visualHash
+        ? buildKatieVisualEpisode(options.description ?? {}, visualHash, createdAt) : undefined;
+      const descriptor: ConversationAttachment = {
+        ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType,
+        createdAt, hasOriginal: hasSource, chatId, actorId: options.actorId,
+        visualMemory,
+      };
       const sourceFingerprint = source && reference.mimeType.startsWith("video/") ? createHash("sha256").update(Buffer.from(await source.arrayBuffer())).digest("hex") : undefined;
       const canonical = { sourceFingerprint, reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now(), evidenceDescriptor: descriptor, evidenceIndexPending: Boolean(indexSaved && options.actorId && (token || options.source)) };
       const saved = await objects.upload(`${path}.json`, JSON.stringify(canonical), { contentType: "application/json", upsert: true });
@@ -672,7 +687,12 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         createHash('sha256').update(image).digest('hex')!==description.observationSourceHash)
         throw new UploadInputError('Saved image evidence identity does not match its trusted source.');
       const previous=record.evidenceDescriptor??attachment;
-      const descriptor:ConversationAttachment={...previous,...description,id:attachment.id,chatId,actorId,fileName:previous.fileName,mimeType:previous.mimeType};
+      const merged:ConversationAttachment={...previous,...description,id:attachment.id,chatId,actorId,fileName:previous.fileName,mimeType:previous.mimeType};
+      const hash=createHash('sha256').update(image).digest('hex');
+      const descriptor:ConversationAttachment={
+        ...merged,
+        visualMemory:buildKatieVisualEpisode(merged,hash,new Date(now()).toISOString()),
+      };
       const history=[...(Array.isArray(record.observationHistory)?record.observationHistory:[]),previous];
       const saved=await objects.upload(`${path}.json`,JSON.stringify({...record,evidenceDescriptor:descriptor,observationHistory:history}),{contentType:'application/json',upsert:true});
       if(saved.error)throw new Error('Unable to retain the new image observation.');
