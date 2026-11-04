@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseDocument, contentText, normalizedText, pdfTextMatchesSource } from '../lib/documents/model';
 import { generateDocx, documentPageStyle, PAGE, type Layout } from '../lib/documents/generate';
 import { designAssessmentSchema, proposeDesignLayout, validDesign, DEFAULT_DESIGN } from '../lib/documents/design';
-import { produceDocument, type VisualReport } from '../lib/documents/production';
+import { produceDocument, visualReportSchema, type VisualReport } from '../lib/documents/production';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import mammoth from 'mammoth';
@@ -110,6 +110,11 @@ test('design rejection, malformed review and unavailable model preserve mechanic
         summary:'No additional document-wide corrective actions can be justified.',
         issues:[],actions:[],comparison:'not_applicable' as const}})},
       {name:'unsupported', inspect:async()=>({pages:[passPage(1)],design:{...improvementReport().design!,actions:[]}})},
+      {name:'invalid-enum-repair', inspect:async()=>visualReportSchema.parse({
+        pages:[{...passPage(1),verdict:'repair',
+          repair:'Remove an editorial heading and move two bullets together with the preceding section.'}],
+        design:improvementReport().design,
+      })},
       {name:'no-model', inspect:async():Promise<VisualReport>=>{throw new Error('No professional design model available.');}},
       {name:'missing-report', inspect:async()=>({pages:[passPage(1)]})},
     ];
@@ -122,6 +127,7 @@ test('design rejection, malformed review and unavailable model preserve mechanic
       assert.equal(produced.inspection.pageCount,1,scenario.name);
       assert.deepEqual(produced.inspection.findings,[],scenario.name);
       assert.equal(produced.inspection.visual,'technical-only',scenario.name);
+      assert.equal(normalizedText(produced.inspection.extractedText),normalizedText(contentText(spec)),scenario.name);
       assert.equal(produced.corrections,0,scenario.name);
       assert.ok(produced.docx.length>500 && produced.pdf.length>500,scenario.name);
     }
