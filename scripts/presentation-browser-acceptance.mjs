@@ -134,7 +134,7 @@ try {
         emit({ type: "metadata", provider: "openai", modelId: "fixture" });
         emit({ type: "delta", text: "Streaming first part. " });
         window.__finishPresentationStream = () => {
-          emit({ type: "content", provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
+          emit({ type: "content", messageId: "55555555-5555-4555-8555-000000000001", provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
             version: 1, fallbackMarkdown: "Streaming first part. Final answer.", blocks: [
               { type: "markdown", text: "Streaming first part. " },
               { type: "metric", label: "Stream complete", value: "Ready" },
