@@ -9,6 +9,7 @@ import { parseDocument, contentText, normalizedText, pdfTextMatchesSource } from
 import { generateDocx, paginate, PAGE, documentPageStyle, type Layout } from '../lib/documents/generate';
 import { renderDocument, rasterizePdf } from '../lib/documents/render';
 import { produceDocument } from '../lib/documents/production';
+import { documentRequest, inheritDocumentPageConstraint } from '../lib/documents/intent';
 
 const ROOT = 'test-artifacts/documents/phase1';
 const fixtures = [
@@ -29,6 +30,10 @@ test('PHASE1: actual offline Katie DOCX, Chromium PDF, glyphs, pagination, and m
       const onePage: Layout = { pages: [spec.blocks.map((_, i) => i)], spacing: 4 };
       const initialDocx = await generateDocx(spec, onePage);
       const first = await renderDocument(browser, initialDocx, spec, onePage);
+      writeFileSync(`${ROOT}/${fixture.name}-initial.docx`, initialDocx);
+      writeFileSync(`${ROOT}/${fixture.name}-initial.pdf`, first.pdf);
+      for (let i = 0; i < first.images.length; i++)
+        writeFileSync(`${ROOT}/${fixture.name}-initial-page-${i + 1}.png`, first.images[i]);
       // renderDocument.heights is measured from actual docx-preview DOM blocks.
       // paginate() uses their simple sum; its capacity assumes a flat rectangle.
       const blockHeightPx = first.heights.reduce((a, b) => a + b, 0);
@@ -115,4 +120,19 @@ test('PHASE1: actual offline Katie DOCX, Chromium PDF, glyphs, pagination, and m
       not_accepted_as_correct_layout: true,
     },null,2));
   } finally { await browser.close(); }
+});
+
+test('PHASE1: request lacking persisted page constraint can silently lose intended two-page limit', () => {
+  const retry = 'give me the final resume in docx and pdf again. i did not like the formatting of your first attempt';
+  const current = documentRequest(retry);
+  assert.deepEqual(current, {});
+  const inherited = inheritDocumentPageConstraint(retry,current,[
+    {role:'user',content:'Review this executive résumé and recommend formatting improvements.'},
+    {role:'assistant',content:'An earlier generated document is available.'},
+  ]);
+  assert.deepEqual(inherited, {});
+  const spec = parseDocument('# Example Name\n\n## Experience\n\n- Correct content.', inherited?.pages);
+  assert.equal(spec.targetPages, undefined);
+  // This is an intentionally reproduced loss-of-constraint condition; it is NOT acceptance.
+  // Phase 2 must preserve explicitly approved document constraints across retries.
 });
