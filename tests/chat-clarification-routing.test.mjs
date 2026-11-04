@@ -521,7 +521,8 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   assert.equal(result.retained.length,1);assert.equal(result.retained[0].hasOriginal,true);
   assert.equal(result.attachments[0].mimeType,'text/plain');assert.equal(result.attachments[0].imageDataUrl,undefined);
   assert.match(result.attachments[0].extractedText,/gardener and homesteader/);
-  assert.match(result.attachments[0].extractedText,/not raw image pixels/);
+  assert.match(result.attachments[0].extractedText,/Katie's own visual recollection/);
+  assert.match(result.attachments[0].extractedText,/not performing a new inspection of raw pixels/);
 });
 
 test('explicit project intake inspects fresh image and PDF evidence before binding the new project', async () => {
