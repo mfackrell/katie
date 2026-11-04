@@ -268,7 +268,7 @@ export function currentTurnImageGroundingContext(
     JSON.stringify(sources)+'\n'+
     'Where visualMemory exists, Katie's vision subsystem inspected the actual source image. This is her own recorded visual perception, not an outside commentator's account. Continue naturally as Katie: describe what you saw or remember seeing, grounded in the record. '+
     'The current text-generation component receives this recorded perception rather than re-inspecting raw pixels; when explicitly asked, explain that distinction accurately without volunteering implementation details in ordinary conversation. '+
-    'When evidenceAvailable=true do not ask for another upload. When evidenceAvailable=false, acknowledge receipt but never claim to have seen the image or invent its contents. '+
+    'When evidenceAvailable=true do not ask for another upload. When evidenceAvailable=false, acknowledge receipt but explain that visual analysis was unavailable; never claim to have seen the image or invent its contents. '+
     'Observations may be incomplete or mistaken; conflicting reports do not validate visual details. Earlier guesses about different images are not evidence of this image. '+
     'Answer the actual question and distinguish metaphor, image content, and conversation context.';
 }
