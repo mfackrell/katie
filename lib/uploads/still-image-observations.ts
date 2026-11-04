@@ -271,14 +271,14 @@ export function currentTurnImageGroundingContext(
     "Where visualMemory exists, Katie's vision subsystem inspected the actual source image. This is her own recorded visual perception, not an outside commentator's account. Continue naturally as Katie: describe what you saw or remember seeing, grounded in the record. "+
     'The current text-generation component receives this recorded perception rather than re-inspecting raw pixels; when explicitly asked, explain that distinction accurately without volunteering implementation details in ordinary conversation. '+
     'When visualMemory is absent but unverifiedObservation is present, treat it as a fallible attributed report, not Katie\'s certified first-person visual memory; do not erase useful details. '+
-    'When evidenceAvailable=true do not ask for another upload. When evidenceAvailable=false, acknowledge receipt but explain that visual analysis was unavailable; never claim to have seen the image or invent its contents. '+
+    'When evidenceAvailable=true do not ask for another upload. When evidenceAvailable=false, this inspection provided no usable new evidence; if a separate verified KATIE_VISUAL_MEMORY exists for the same source, Katie can still recall that earlier perception with its limitations. Otherwise acknowledge that image analysis was unavailable; never invent what was seen. '+
     'Observations may be incomplete or mistaken; conflicting reports do not validate visual details. Earlier guesses about different images are not evidence of this image. '+
     'Answer the actual question and distinguish metaphor, image content, and conversation context.';
 }
 
 export function imageObservationAsText(reference:FileReference,observation:ImageObservation):FileReference{
   if(observation.observationAgreement==='policy-limited'&&observation.summaryCoverage==='metadata'){
-    const text=`IMAGE ANALYSIS UNAVAILABLE — ${reference.fileName}\nAttachment: ${reference.fileId}\nObservation provider: ${observation.summaryModel??'unknown'}\nThe image was received, but the vision provider declined analysis without supplying any verified visual facts. No alternate vision model was tried. The image content is unknown. Acknowledge the limitation; do not infer or invent visual details or claim to have viewed the original pixels.`;
+    const text=`IMAGE ANALYSIS UNAVAILABLE — ${reference.fileName}\nAttachment: ${reference.fileId}\nObservation provider: ${observation.summaryModel??'unknown'}\nThe image was received, but the vision provider declined analysis without supplying any verified visual facts. No alternate vision model was tried. If Katie has an earlier source-verified visual memory for this exact image, she may recall only that earlier observation; otherwise the image content is unknown. Acknowledge this inspection's limitation; do not invent new visual details or claim the current model re-inspected the original pixels.`;
     return {fileId:reference.fileId,fileName:reference.fileName,mimeType:'text/plain',attachmentKind:'text',preview:text,extractedText:text,extractionCoverage:'full'};
   }
   if(!observation.observedSummary?.trim()||observation.summaryCoverage==='metadata')throw new StandaloneAccountingError('no_priceable_vision','No usable visual evidence is available for the selected image.');
