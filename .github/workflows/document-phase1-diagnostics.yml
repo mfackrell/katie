@@ -31,10 +31,23 @@ jobs:
           ln -s .. .test-dist/node_modules/@
       - name: Exercise Katie's actual generator in Chromium with synthetic documents
         run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase1-qualification.test.js
+      - name: Preserve generated Chromium evidence before office dependency installation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-phase1-browser-evidence
+          path: test-artifacts/documents/phase1/
+          if-no-files-found: warn
       - name: Install standard office renderer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+          if ! command -v soffice >/dev/null; then
+            sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation || {
+              sudo apt-get update
+              sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+            }
+          fi
+          command -v soffice
+          command -v pdftotext
       - name: Verify actual DOCX/PDF pagination and page-by-page geometry
         run: node scripts/document-phase1-word-acceptance.mjs
       - name: Record pending Phase 2 design contracts
