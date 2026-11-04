@@ -45,6 +45,9 @@ export async function describeAttachmentEvidence(reference: FileReference, optio
     observedSummary: `File: ${reference.fileName}. ${sample.coverage === "metadata" ? "No content summary is available. " : "Uninterpreted source excerpt (incomplete): "}${sample.text.slice(0, 2000)}`,
     summaryModel: "source-excerpt", summaryCoverage: "metadata",
   };
+  // No model receives image pixels if a purported image data URL is malformed.
+  // Save only source metadata; never turn a text-only response into visual memory.
+  if (reference.mimeType.startsWith("image/") && !actualImagePart) return fallback;
   const grokOnOtherBlock = async (): Promise<Description> => {
     const key = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? process.env["grok_api_key"];
     // Only images with available pixels can be sent to the vision fallback.
