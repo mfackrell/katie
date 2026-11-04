@@ -100,3 +100,22 @@ export function katieVisualMemoryContext(files: ConversationAttachment[]): strin
     "END_KATIE_VISUAL_MEMORY",
   ].join("\n");
 }
+
+/**
+ * Media-memory SQL search returns excerpts, not the private attachment
+ * descriptor. Join only exact actor/source IDs back to the actor catalog
+ * before granting the retrieved text first-person visual-memory status.
+ */
+export function recalledKatieVisualMemoryContext(
+  actorId: string,
+  catalog: ConversationAttachment[],
+  hits: Array<{ source_chat_id: string; attachment_id: string }>,
+  ambiguous = false,
+): string {
+  if (ambiguous || !hits.length) return "";
+  const identities = new Set(hits.map(hit => `${hit.source_chat_id}/${hit.attachment_id}`));
+  const matched = catalog.filter(file =>
+    file.actorId === actorId && Boolean(file.chatId) &&
+    identities.has(`${file.chatId}/${file.id}`));
+  return katieVisualMemoryContext(matched);
+}
