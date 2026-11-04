@@ -62,7 +62,7 @@ test('PHASE1: actual offline Katie DOCX, Chromium PDF, glyphs, pagination, and m
         'Blocked visual critique must not be mislabeled as professional approval');
       if (fixture.pages) assert.equal(produced.inspection.pageCount, fixture.pages,
         fixture.name + ': explicit page count must survive into the actual generator');
-      const word = await mammoth.extractRawText({ buffer: produced.docx });
+      const word = await (mammoth.extractRawText as unknown as (args: { buffer: Buffer }) => Promise<{value: string}>)({ buffer: produced.docx });
       assert.equal(normalizedText(word.value), normalizedText(contentText(spec)),
         fixture.name + ': DOCX source text changed');
       const extracted = await rasterizePdf(browser, produced.pdf);
