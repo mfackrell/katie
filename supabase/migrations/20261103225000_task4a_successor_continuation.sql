@@ -292,6 +292,10 @@ begin
   where id=public.task4a_current_continuation_id(m.project_id) for update;
  if a.id is null then
   if m.project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
+   and (exists(select 1 from public.project_continuation_authorizations existing
+     where existing.project_id=m.project_id)
+     or exists(select 1 from public.work_projects project_state
+       where project_state.id=m.project_id and project_state.phase in ('development','assessment')))
   then raise exception 'TASK4A_NO_UNAMBIGUOUS_CURRENT_AUTHORITY';end if;
   return new;
  end if;
@@ -403,7 +407,11 @@ begin
   -- unmetered mission-call reservation. Unrelated ordinary projects keep
   -- their existing no-Task4A-continuation behavior.
   if m.project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
-     and authority.id is null then return false;end if;
+     and authority.id is null and (exists(select 1 from public.project_continuation_authorizations existing
+     where existing.project_id=m.project_id)
+     or exists(select 1 from public.work_projects project_state
+       where project_state.id=m.project_id and project_state.phase in ('development','assessment')))
+  then return false;end if;
   if found then
    if authority.deadline<=clock_timestamp() or authority.revoked_at is not null or authority.authorized_at>clock_timestamp()
     or p_model<>all(authority.allowed_models) then return false;end if;
