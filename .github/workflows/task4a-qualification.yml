@@ -12,6 +12,10 @@ on:
       - 'tests/helpers/task4a-continuation-postgres.mjs'
       - 'tests/helpers/task4a-pregrant-recovery-postgres.mjs'
       - 'supabase/migrations/20261103181500_task4a_pregrant_recovery.sql'
+      - 'supabase/migrations/20261103225000_task4a_successor_continuation.sql'
+      - 'app/api/projects/task4a-successor/route.ts'
+      - 'components/task4a-successor-owner-approval.tsx'
+      - 'tests/task4a-successor-owner.test.mjs'
       - 'app/api/projects/task4a-native-recovery/route.ts'
       - 'components/task4a-native-recovery-approval.tsx'
       - 'tests/task4a-native-owner-recovery.test.mjs'
@@ -93,6 +97,8 @@ jobs:
         run: node --test tests/task4a-native-bridge.test.mjs
       - name: Verify original Task 4A owner-consented pregrant endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-native-owner-recovery.test.mjs
+      - name: Verify successor preview and affirmative owner consent endpoint
+        run: node --experimental-test-isolation=none --test tests/task4a-successor-owner.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
@@ -119,6 +125,22 @@ jobs:
           receipt.postgresLifecycle={passed:true,evidenceClass:'ACTUAL_ISOLATED_POSTGRES_AND_CHROMIUM_WITH_SYNTHETIC_EDGE',testFile:'tests/projects-sql.test.mjs'};
           writeFileSync(path,JSON.stringify(receipt,null,2)+'\n');
           console.log('Isolated PostgreSQL project lifecycle: PASS; real hosted Task 4A still blocked');
+          NODE
+      - name: Exercise two concurrent owner approvals in a separate isolated PostgreSQL cluster
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const report=JSON.parse(readFileSync('task4a-qualification/postgres-race-report.json','utf8'));
+          if(!report.success||report.counts.tests!==1||report.counts.passed!==1||report.counts.failed||report.counts.skipped||report.counts.cancelled||report.counts.todo||report.completed!==1)
+            throw Error('Actual two-connection successor race qualification failed');
+          console.log('Distinct PostgreSQL connections: exactly one successor grant and one audit event');
           NODE
       - name: Retain independently inspectable machine evidence
         if: always()
