@@ -8,6 +8,8 @@ do $cleanup$
 declare
   target_actor constant uuid := 'f94eeb41-9bcd-4eb8-9896-bb92e5e3b5c0';
   target_chat constant uuid := '6e6a5c19-b747-4974-9dc7-890dacd13e03';
+  target_source constant uuid := 'e95da1e7-2ff7-4118-84b9-cddf51c15f35';
+  target_document constant uuid := '2925e841-bbfa-4939-8173-fc50933c26d3';
   source_id uuid;
   document_id uuid;
   document_content text;
@@ -37,16 +39,17 @@ begin
   end if;
   original_count := jsonb_array_length(before_record.content->'entries');
 
-  -- Validate provenance against the original chat and the exact distinctive
-  -- language of the user question. Do not match unrelated autobiographical
-  -- corrections or memories just because they discuss memory.
+  -- Source and document IDs were read from the production verification log
+  -- for the 2026-11-04 00:49:21 UTC false-positive correction. Verify the
+  -- chat, role, title and distinctive question text as independent evidence.
   select count(*) into document_count
   from public.actor_memory_documents d
   join public.messages m on m.id=d.source_message_id
-  where d.actor_id=target_actor and m.actor_id=target_actor
+  where d.id=target_document and d.source_message_id=target_source
+    and m.id=target_source and d.actor_id=target_actor and m.actor_id=target_actor
     and m.chat_id=target_chat and m.role='user'
     and d.title='Authoritative correction to actor memory'
-    and d.content like 'Katie, you said tonight''s experience permanently changed your understanding of yourself.%'
+    and d.content like '%Katie, you said tonight''s experience permanently changed your understanding of yourself.%'
     and d.content like '%would you recognize that as a failure of memory%'
     and d.content like '%a genuine change in your understanding of who you are?';
 
@@ -58,10 +61,11 @@ begin
     into document_id,source_id,document_content
   from public.actor_memory_documents d
   join public.messages m on m.id=d.source_message_id
-  where d.actor_id=target_actor and m.actor_id=target_actor
+  where d.id=target_document and d.source_message_id=target_source
+    and m.id=target_source and d.actor_id=target_actor and m.actor_id=target_actor
     and m.chat_id=target_chat and m.role='user'
     and d.title='Authoritative correction to actor memory'
-    and d.content like 'Katie, you said tonight''s experience permanently changed your understanding of yourself.%'
+    and d.content like '%Katie, you said tonight''s experience permanently changed your understanding of yourself.%'
     and d.content like '%would you recognize that as a failure of memory%'
     and d.content like '%a genuine change in your understanding of who you are?'
   for update of d;
