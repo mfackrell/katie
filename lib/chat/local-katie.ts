@@ -152,16 +152,8 @@ export function isExplicitMemoryCorrection(message: string): boolean {
   const namedMemoryTarget =
     /\b(?:(?:your|katie(?:'s)?)\s+(?:(?:long[- ]term|short[- ]term|intermediate|saved|stored)\s+)*(?:memory|memories|recollections?)|(?:facts?|details?|statements?|information|entries?|records?)\s+you\s+(?:(?:have|had)\s+)?remember(?:ed)?|what\s+you\s+(?:(?:have|had)\s+)?(?:remember(?:ed)?|stored|saved)|(?:saved|stored)\s+(?:memory|memories|facts?|entries?|records?|details?))\b/i;
   if (!namedMemoryTarget.test(message)) return false;
-  const editVerb =
-    "correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe";
-  const explicitInstruction = new RegExp(
-    String.raw\`^\\s*(?:(?:hey|hi)\\s+)?(?:katie[,!:] ?\\s*)?(?:(?:please|kindly)\\s+)?(?:\${editVerb})\\b\` +
-    String.raw\`|^\\s*(?:can|could|would|will)\\s+you\\s+(?:please\\s+)?(?:\${editVerb})\\b\` +
-    String.raw\`|\\b(?:i\\s+(?:want|need)\\s+(?:you\\s+)?to|we\\s+(?:need|have)\\s+to|you\\s+(?:need|have|must|should)\\s+to|please)\\s+(?:\${editVerb})\\b\` +
-    String.raw\`|[.!]\\s*(?:\${editVerb})\\b\` +
-    String.raw\`|^\\s*(?:your|katie(?:'s)?)\\s+(?:long[- ]term\\s+|short[- ]term\\s+|intermediate\\s+)?memor(?:y|ies)\\s+is\\s+(?:wrong|incorrect|inaccurate|outdated)\\b\`,
-    "i",
-  );
+  const explicitInstruction =
+    /^\s*(?:(?:hey|hi)\s+)?(?:katie[,!:] ?\s*)?(?:(?:please|kindly)\s+)?(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|^\s*(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|\b(?:i\s+(?:want|need)\s+(?:you\s+)?to|we\s+(?:need|have)\s+to|you\s+(?:need|have|must|should)\s+to|please)\s+(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|[.!]\s*(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|^\s*(?:your|katie(?:'s)?)\s+(?:long[- ]term\s+|short[- ]term\s+|intermediate\s+)?memor(?:y|ies)\s+is\s+(?:wrong|incorrect|inaccurate|outdated)\b/i;
   if (!explicitInstruction.test(message)) return false;
   // Ordinary correction verbs require a nearby memory reference. Clarification
   // verbs require an OWNED memory reference, so a question such as "clarify
