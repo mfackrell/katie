@@ -686,8 +686,14 @@ begin
  select * into acct from benchmark_budget_accounts where id=bad.account_id;
  select * into a from project_continuation_authorizations
   where id=public.task4a_current_continuation_id(p.id) and project_id=p.id;
- -- Fresh consent on the successor has its OWN expiry, not the invalid grant's.
- deadline:=least(a.deadline,p.deadline);
+ -- Without a separately owner-approved successor, the Phase 1 native
+ -- deadline remains a hard fence. Only a validated append-only successor may
+ -- propose a new native grant after the historical native expiry.
+ if a.predecessor_id is null then
+  deadline:=least(bad.deadline,a.deadline,p.deadline);
+ else
+  deadline:=least(a.deadline,p.deadline);
+ end if;
  limits:=bad.developer_authority->'limits';
  if p.id is null or p.status<>'blocked' or p.phase<>'development'
   or p.approved_hash is null or p.approved_hash is distinct from p.approval_hash
