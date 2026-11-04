@@ -151,7 +151,13 @@ export function isExplicitMemoryCorrection(message: string): boolean {
   // merely because a generic change verb and "memory" appear nearby.
   const namedMemoryTarget =
     /\b(?:(?:your|katie(?:'s)?)\s+(?:(?:long[- ]term|short[- ]term|intermediate|saved|stored)\s+)*(?:memory|memories|recollections?)|(?:facts?|details?|statements?|information|entries?|records?)\s+you\s+(?:(?:have|had)\s+)?remember(?:ed)?|what\s+you\s+(?:(?:have|had)\s+)?(?:remember(?:ed)?|stored|saved)|(?:saved|stored)\s+(?:memory|memories|facts?|entries?|records?|details?))\b/i;
-  if (!namedMemoryTarget.test(message)) return false;
+  // Excluded targets do not authorize a write. Example: "fix the memory
+  // classifier bug, not Katie's stored memories" is a software request.
+  const affirmativeText = message.replace(
+    /\b(?:not|without|rather than|instead of)\s+(?:your|katie(?:'s)?)\s+(?:(?:long[- ]term|short[- ]term|intermediate|saved|stored|whole|entire)\s+)*(?:memory|memories)\b/gi,
+    "",
+  );
+  if (!namedMemoryTarget.test(affirmativeText)) return false;
   const explicitInstruction =
     /^\s*(?:(?:hey|hi)\s+)?(?:katie[,!:] ?\s*)?(?:(?:please|kindly)\s+)?(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|^\s*(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|\b(?:i\s+(?:want|need)\s+(?:you\s+)?to|we\s+(?:need|have)\s+to|you\s+(?:need|have|must|should)\s+to|please)\s+(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|[.!]\s*(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|^\s*(?:your|katie(?:'s)?)\s+(?:long[- ]term\s+|short[- ]term\s+|intermediate\s+)?memor(?:y|ies)\s+is\s+(?:wrong|incorrect|inaccurate|outdated)\b/i;
   if (!explicitInstruction.test(message)) return false;
