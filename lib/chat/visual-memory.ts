@@ -20,7 +20,8 @@ export interface KatieVisualEpisode {
 type Observation = Pick<
   ConversationAttachment,
   "observedSummary" | "summaryModel" | "summaryCoverage" |
-  "observationSourceHash" | "observationAt"
+  "observationSourceHash" | "observationAt" | "observationAgreement" |
+  "observationReports"
 >;
 
 const SOURCE_HASH = /^[0-9a-f]{64}$/i;
@@ -33,12 +34,18 @@ export function buildKatieVisualEpisode(
   sourceHash: string,
   fallbackTimestamp: string,
 ): KatieVisualEpisode | undefined {
+  // Fail closed unless the actual image-observation path bound its output to
+  // the same canonical bytes we are now saving. A hash of some available
+  // image alone does NOT prove the description came from that image.
   if (!SOURCE_HASH.test(sourceHash) ||
-      (observation.observationSourceHash && observation.observationSourceHash !== sourceHash) ||
+      observation.observationSourceHash !== sourceHash ||
       !observation.observedSummary?.trim() ||
       !observation.summaryModel?.trim() ||
-      observation.summaryModel === "source-excerpt" ||
-      (observation.summaryCoverage !== "full" && observation.summaryCoverage !== "sampled")) return;
+      ["source-excerpt", "qwen-unavailable"].includes(observation.summaryModel) ||
+      observation.observationAgreement === "policy-limited" ||
+      (observation.summaryCoverage !== "full" && observation.summaryCoverage !== "sampled") ||
+      observation.observationReports?.some(report =>
+        report.disposition === "policy-limited" || report.disposition === "unavailable")) return;
 
   const observedAt = observation.observationAt && !Number.isNaN(Date.parse(observation.observationAt))
     ? observation.observationAt : fallbackTimestamp;
@@ -63,7 +70,10 @@ export function verifiedKatieVisualEpisode(file: ConversationAttachment): KatieV
       episode?.version !== KATIE_VISUAL_EPISODE_VERSION ||
       episode.modality !== "vision" ||
       !SOURCE_HASH.test(episode.sourceHash) ||
-      (file.observationSourceHash && file.observationSourceHash !== episode.sourceHash) ||
+      file.observationSourceHash !== episode.sourceHash ||
+      file.observationAgreement === "policy-limited" ||
+      file.observationReports?.some(report =>
+        report.disposition === "policy-limited" || report.disposition === "unavailable") ||
       !file.observedSummary?.trim() ||
       file.summaryCoverage !== episode.coverage ||
       file.summaryModel !== episode.observedBy ||
