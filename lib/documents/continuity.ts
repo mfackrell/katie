@@ -29,7 +29,7 @@ export function resolveDurableDocumentRequest(
   const sameSelectedSource = Boolean(previous?.sourceMessageId && sourceMessageId &&
     previous.sourceMessageId === sourceMessageId);
   const explicitNew = /\b(?:new|different|unrelated)\s+(?:document|report|resume|résumé|contract|agreement|proposal)\b/i.test(message);
-  const continuation = /\b(?:again|same|retry|redo|re-?export|re-?generate|re-?create|revise|revision|update|final|reissue)\b/i.test(message);
+  const continuation = /\b(?:again|same|retry|redo|re-?export|re-?generate|re-?create|revise|revision|update|reissue)\b/i.test(message);
   const same = !explicitNew && Boolean(previous &&
     (sameSelectedSource || (identity && identity===previous.identity && continuation)));
   // A different explicit saved source cannot borrow the previous document's cap.
