@@ -5,7 +5,7 @@ import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { attachmentAccessContext } from "@/lib/chat/attachment-continuity";
 import {
   buildKatieVisualEpisode, verifiedKatieVisualEpisode,
-  katieVisualMemoryContext, KATIE_VISUAL_EPISODE_VERSION,
+  katieVisualMemoryContext, recalledKatieVisualMemoryContext, KATIE_VISUAL_EPISODE_VERSION,
 } from "@/lib/chat/visual-memory";
 
 const hash = createHash("sha256").update("data:image/png;base64,YWJj").digest("hex");
@@ -80,4 +80,18 @@ test("saved visual memory cannot follow a different attachment or an unrelated i
   assert.equal(matches.length, 1);
   assert.match(result, /screenshot.png/);
   assert.doesNotMatch(result, /other-file/);
+});
+
+test("media search reconstructs Katie's exact visual episode, not a free-standing excerpt", () => {
+  const source = { ...base, visualMemory: episode };
+  const hit = { source_chat_id: "original-chat", attachment_id: base.id };
+  const context = recalledKatieVisualMemoryContext("owner-actor", [source], [hit]);
+  assert.match(context, /KATIE_VISUAL_MEMORY/);
+  assert.match(context, /I cannot do that/);
+
+  assert.equal(recalledKatieVisualMemoryContext("other-actor", [source], [hit]), "");
+  assert.equal(recalledKatieVisualMemoryContext("owner-actor", [source], [{...hit, source_chat_id: "wrong-chat"}]), "");
+  assert.equal(recalledKatieVisualMemoryContext("owner-actor", [source], [{...hit, attachment_id: "wrong-source"}]), "");
+  assert.equal(recalledKatieVisualMemoryContext("owner-actor", [source], [hit], true), "");
+  assert.equal(recalledKatieVisualMemoryContext("owner-actor", [{...source, visualMemory:undefined}], [hit]), "");
 });
