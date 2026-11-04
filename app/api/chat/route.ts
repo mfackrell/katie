@@ -37,6 +37,7 @@ import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode"
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { recalledKatieVisualMemoryContext } from "@/lib/chat/visual-memory";
 import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest, currentTurnImageGroundingContext } from "@/lib/uploads/still-image-observations";
@@ -1017,6 +1018,18 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
+    // Exact source IDs let a saved media-search excerpt recover Katie's own
+    // recorded visual episode without falsely treating an arbitrary description
+    // as first-hand vision or reopening unrelated actor-owned attachments.
+    if (mediaMemory) {
+      const recalledEpisodes = recalledKatieVisualMemoryContext(
+        actorId, catalog, mediaMemory.hits, Boolean(mediaMemory.decision.clarification)
+      );
+      if (recalledEpisodes) mediaMemory = {
+        ...mediaMemory,
+        context: mediaMemory.context + "\n" + recalledEpisodes,
+      };
+    }
     const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
       : pdfMemoryDecision ?? (timelineActive
