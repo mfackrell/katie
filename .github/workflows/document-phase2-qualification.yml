@@ -61,3 +61,5 @@ jobs:
           name: document-phase2-office-evidence
           path: test-artifacts/documents/
           if-no-files-found: warn
+      - name: Require all eleven independent Phase 2 gates before approval
+        run: node scripts/document-phase2-release-gate.mjs
