@@ -19,8 +19,9 @@ function bbox(pdf) {
       const attr=w[1], v=n=>Number((new RegExp(n+'="([0-9.]+)"').exec(attr)||[])[1]);
       return {x0:v('xMin'),y0:v('yMin'),x1:v('xMax'),y1:v('yMax')};
     });
-    const top=words.length?Math.min(...words.map(w=>w.y0)):null;
-    const bottom=words.length?Math.max(...words.map(w=>w.y1)):null;
+    const actual=words.filter(w=>Number.isFinite(w.y0)&&Number.isFinite(w.y1));
+    const top=actual.length?Math.min(...actual.map(w=>w.y0)):null;
+    const bottom=actual.length?Math.max(...actual.map(w=>w.y1)):null;
     const height=get('height'),width=get('width');
     pages.push({page:pages.length+1,width_pt:width,height_pt:height,word_count:words.length,
       first_top_pt:top,last_bottom_pt:bottom,
@@ -49,6 +50,14 @@ try {
     if(existsSync(initialWordFile)){
       exec('soffice',['-env:UserInstallation=file://'+profile,'--headless','--convert-to','pdf','--outdir',output,initialWordFile]);
       initialOffice=bbox(join(output,name+'-initial.pdf'));
+    }
+    const compactPdf=join(root,name+'-compact.pdf');
+    const compactChromium=existsSync(compactPdf)?bbox(compactPdf):null;
+    const compactWord=join(root,name+'-compact.docx');
+    let compactOffice=null;
+    if(existsSync(compactWord)){
+      exec('soffice',['-env:UserInstallation=file://'+profile,'--headless','--convert-to','pdf','--outdir',output,compactWord]);
+      compactOffice=bbox(join(output,name+'-compact.pdf'));
     }
     const initialMeasuredPx=original.measured_total_block_heights_px ?? null;
     const initialInkSpanPx=initialChromium
@@ -106,6 +115,9 @@ try {
     const item={name,office_pages:office.length,browser_pages:chromium.length,word_pdf_page_parity:parity,
       office_geometry:office,browser_geometry:chromium,
       initial_chromium_geometry:initialChromium,initial_office_geometry:initialOffice,
+      compact_chromium_geometry:compactChromium,compact_office_geometry:compactOffice,
+      compact_word_pdf_page_parity:compactChromium&&compactOffice?
+        compactChromium.length===compactOffice.length:null,
       initial_measured_DOM_block_sum_px:initialMeasuredPx,
       initial_pdf_ink_extent_sum_px:initialInkSpanPx,
       // This difference is descriptive, not a block-height calibration:
