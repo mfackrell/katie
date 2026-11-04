@@ -79,6 +79,18 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     await db.query('set role service_role');
     assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,null,
       'Multiple eligible successors must fail closed rather than choose one');
+    await db.query('savepoint unmetered_attempt');
+    try{
+     await assert.rejects(
+      db.query("insert into mission_calls(id,job_id,lease,model,reserved_tokens) values($1,$2,$3,$4,$5)",
+       [randomUUID(),task,randomUUID(),'gpt-5.3-codex',1000]),
+      /TASK4A_NO_UNAMBIGUOUS_CURRENT_AUTHORITY/,
+      'No ambiguous continuation may create even an unmetered mission call'
+     );
+    }finally{
+     await db.query('rollback to savepoint unmetered_attempt');
+     await db.query('release savepoint unmetered_attempt');
+    }
    }finally{
     await db.query('reset role');
     await db.query('rollback to savepoint ambiguous_tips');
