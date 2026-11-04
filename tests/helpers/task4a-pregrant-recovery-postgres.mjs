@@ -104,6 +104,14 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    const opts=[300000,30,8000000,60000,60000,6,6,3600,['openai:gpt-5.3-codex']];
    const preview=async(args=opts)=>(await one(db,
     'select task4a_successor_proposal($1,$2,$3,$4,$5,$6,$7,$8,$9) x',args)).x;
+   await db.query('savepoint orphaned_native_approval');
+   await db.query('reset role');
+   await db.query("insert into benchmark_native_spending_approvals(id,owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority) select gen_random_uuid(),owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority from benchmark_native_spending_approvals where id=$1",[original]);
+   await db.query('set role service_role');
+   assert.equal((await preview()).ready,false,
+    'Unlinked duplicate native authority must block successor issuance');
+   await db.query('rollback to savepoint orphaned_native_approval');
+   await db.query('release savepoint orphaned_native_approval');
    const offer=await preview();
    assert.equal(offer.ready,true,JSON.stringify(offer));
    assert.equal(Number(offer.proposal.historicalActualTokens),76519);
