@@ -115,6 +115,22 @@ begin
   or acct.id is null or acct.arm<>'developer' or acct.frozen_at is not null
   or acct.developer_project_id is distinct from p.id
   or acct.developer_task_id is distinct from t.id
+  or bad.developer_authority->>'version' is distinct from 'ordinary-developer-v1'
+  or bad.developer_authority ? 'task4aContinuationId'
+  or bad.developer_authority->'binding' is distinct from r.binding
+  or bad.model is distinct from 'gpt-5.3-codex'
+  or acct.cap_tokens is distinct from 180000
+  -- A second unrelated approval/account is still a duplicate authority even
+  -- if it does not point back to the invalid original as its predecessor.
+  or exists(select 1 from public.benchmark_native_spending_approvals another
+     where another.project_id=p.id and another.id<>bad.id)
+  or exists(select 1 from public.benchmark_budget_accounts another
+     where another.developer_project_id=p.id and another.id<>acct.id)
+  or exists(select 1 from public.benchmark_execution_grants g
+     where g.project_id=p.id)
+  or exists(select 1 from public.mission_calls prior_call
+      join public.mission_assignments assignment on assignment.id=prior_call.job_id
+      where assignment.mission_id=m.id)
   or exists(select 1 from public.benchmark_native_spending_approvals
     where previous_developer_approval_id=bad.id)
   or exists(select 1 from public.benchmark_budget_calls where account_id=acct.id)
