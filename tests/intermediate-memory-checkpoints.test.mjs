@@ -13,11 +13,11 @@ test("two bounded model stages process 30 older conversational messages",()=>{
   assert.match(summary,/olderMessages\.slice\(after, after \+ SUMMARY_BATCH_MESSAGES\)/);
   assert.match(summary,/summarizeNewBatch\(batch\)/);
   assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
-  assert.match(summary,/assembleEpisodePlan\(episodes, plan\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
 
-test("semantic edit plans retain atomic source-cursor checkpoint",()=>{
+test("source-cited factual episodes retain atomic source-cursor checkpoint",()=>{
   assert.match(summary,/ITM_TARGET_CHARACTERS = 6500/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.match(summary,/if \(output\.length > ITM_TARGET_CHARACTERS\)/);
@@ -57,15 +57,22 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 
-test("v7 uses semantic reconciliation with bounded edit output, not full memory rewrite",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v7-semantic-edits"/);
+test("v9 uses Grok factual episodes and bounded index-only retention",()=>{
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v9-grok-grounded-factual-episodes"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
-  assert.equal((summary.match(/client\.post</g)||[]).length,2);
-  assert.match(summary,/parseEpisodePlan\(completedText\(response, "semantic plan"/);
+  assert.equal((summary.match(/client\.chat\.completions\.create\(/g)||[]).length,2);
+  assert.match(summary,/parseRetentionPlan\(completedText\(response, "retention plan"/);
   assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
   assert.match(summary,/p_state: "blocked"/);
   assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
-  assert.match(summary,/assembleEpisodePlan\(episodes, plan\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
+  assert.match(summary,/parseGroundedEpisodes\(completedText\(response, "factual episodes"/);
+  assert.match(summary,/!message\.content\.includes\(quote\)/);
+  assert.match(summary,/getMessages\(chatId\)/);
+  assert.doesNotMatch(summary,/getRecentMessages\(chatId, Number\.MAX_SAFE_INTEGER\)/);
+  assert.match(summary,/When a new episode corrects/);
+  assert.match(summary,/createActivityAccountingFetch\("grok", "memory-summary"\)/);
+  assert.doesNotMatch(summary,/api\.anthropic\.com|CLAUDE_API_KEY/);
 });
