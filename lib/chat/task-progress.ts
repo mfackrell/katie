@@ -537,6 +537,8 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
       objective: recent.objective ?? previous.objective,
       workProduct: changedProject ? recent.workProduct : previous.workProduct,
       projectContext,
+      // A bounded history window cannot erase a source-linked document contract.
+      documentContract: changedProject ? undefined : previous.documentContract,
       requirementsRevision: changedProject ? (recent.requirementsRevision ?? 1) : (previous.requirementsRevision ?? 1),
       pending: recent.pending.map(recoverProjectBinding),
       answered: [...(changedProject ? [] : previous.answered), ...recent.answered.map(recoverProjectBinding)]
