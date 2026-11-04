@@ -74,3 +74,25 @@ test("response policy production call requires a real project for answer-based p
   assert.match(route, /progress: reviewTaskProgress, responsePurpose: "deliverable"/);
   assert.match(route, /hasPendingDeliverable: sourceLinkedPendingWork \|\| Boolean\(pendingReviewClarification\)/);
 });
+
+
+test("Adult Katie image-only and short conversational turns never create a project", () => {
+  const turns = [
+    { id: "cu1", role: "user" as const, content: "Hi Katie" },
+    { id: "ca1", role: "assistant" as const, content: "What's up?" },
+    { id: "cu2", role: "user" as const, content: "Good. What's up?" },
+    { id: "ca2", role: "assistant" as const, content: "Want to show me?" },
+    { id: "cu3", role: "user" as const, content: "" }, // image-only turn; visual observation is not user work authority
+    { id: "ca3", role: "assistant" as const, content: "I can see the image." },
+    { id: "cu4", role: "user" as const, content: "yes" },
+  ];
+  const progress = rebuildTaskProgress(turns);
+  assert.equal(progress.projectContext ?? null, null);
+  assert.equal(progress.objective, null);
+  assert.deepEqual(progress.pending, []);
+  assert.deepEqual(taskProjectCatalog(progress), []);
+  const genuine = applyUserToTaskProgress(progress, {
+    messageId: "cu5", text: "Prepare a cash-flow forecast for my business.",
+  });
+  assert.equal(genuine.projectContext?.userMessageId, "cu5", "real work still creates a project");
+});
