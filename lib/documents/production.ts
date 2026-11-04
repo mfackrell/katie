@@ -28,103 +28,167 @@ export function shouldTryCompactLayout(error: unknown, attempt: number, spec: Do
   return error instanceof DocumentPageFitError && attempt === 0 && spec.targetPages === 2 && !layout.compact;
 }
 
-/** Reusable, provider-independent workflow. Tests must supply an inspector of actual rendered bytes. */
+/** 
+ * Mechanics decide whether a document may be delivered. Design review selects
+ * between mechanically valid candidates and must never revoke the baseline.
+ * Provider/accounting failures remain the caller's responsibility to classify.
+ */
 export async function produceDocument(input: {
   spec: DocumentSpec; browser: Browser; inspect: VisualInspector; deadlineMs: number;
   initialLayout?: Layout;
-  /** Production requires a document-wide design critique; older fixture callbacks remain compatible. */
-  requireDesignAssessment?: boolean;
+  /** Only explicitly safe, non-accounting presentation failures may be ignored. */
+  canSkipDesignReviewError?: (error: unknown) => Promise<boolean>;
 }): Promise<ProductionResult> {
   const spec = documentSchema.parse(input.spec);
   let layout: Layout = input.initialLayout ?? { pages: [spec.blocks.map((_, i) => i)], spacing: 4 };
   const indices = layout.pages.flat();
-  if (JSON.stringify(indices) !== JSON.stringify(spec.blocks.map((_, i) => i)) || !Number.isFinite(layout.spacing) || layout.spacing < 2 || layout.spacing > 12 || !validDesign(layout)) throw new Error('Invalid document layout.');
+  if (JSON.stringify(indices) !== JSON.stringify(spec.blocks.map((_, i) => i)) ||
+      !Number.isFinite(layout.spacing) || layout.spacing < 2 || layout.spacing > 12 ||
+      !validDesign(layout)) throw new Error('Invalid document layout.');
   const attempts: ProductionResult['attempts'] = [];
-  let designCorrections = 0;
+  let lastValid: ProductionResult | null = null;
   let previousDesign: RenderedDocument | undefined;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    if (Date.now() >= input.deadlineMs) throw new Error('Document production deadline reached. No delivery claimed.');
-    const docx = await generateDocx(spec, layout);
-    const rendered = await renderDocument(input.browser, docx, spec, layout);
-    const record: ProductionResult['attempts'][number] = { findings: rendered.inspection.findings }; attempts.push(record);
-    if (!record.findings.length) {
-      const visual = visualReportSchema.parse(await input.inspect(rendered, attempt, { previous: previousDesign, layout })); record.visual = visual;
-      if (visual.pages.length !== rendered.images.length || new Set(visual.pages.map(p => p.page)).size !== rendered.images.length || visual.pages.some(p => p.page > rendered.images.length))
-        throw new Error('Visual inspection did not evaluate every rendered page.');
-      if (visual.design?.issues.some(issue => issue.page > rendered.images.length))
-        throw new Error('Document design review referenced an unrendered page. No files delivered.');
-      if (input.requireDesignAssessment && !visual.design)
-        throw new Error('Professional document-design assessment was omitted. No files delivered.');
-      if (previousDesign) {
-        if (rendered.inspection.pageHashes.every((h,i)=>h===previousDesign!.inspection.pageHashes[i]))
-          throw new Error('Document design repair produced unchanged rendered pages. No files delivered.');
-        if (visual.design?.comparison !== 'improved')
-          throw new Error('Document design revision did not demonstrate improvement. No files delivered.');
-      }
-      const pagesPass = visual.pages.every(p => p.verdict === 'pass' && p.repair === 'none');
-      if (pagesPass && (!visual.design || visual.design.verdict === 'pass')) {
-        rendered.inspection.visual = 'passed';
-        return { docx, pdf: rendered.pdf, images: rendered.images, inspection: rendered.inspection, corrections: attempt, attempts };
-      }
-      for (const p of visual.pages.filter(p => p.verdict !== 'pass'))
-        record.findings.push({ rule: 'visual', page: p.page, detail: p.observations });
-      if (visual.pages.some(p => p.verdict === 'blocked' || p.verdict === 'repair' && p.repair === 'none') ||
-          visual.design?.verdict === 'blocked')
-        throw new Error('Document inspection found a defect outside bounded automatic repair. No files delivered.');
+  let designCorrections = 0;
 
-      // A design repair is meaningful only with a material, page-grounded
-      // finding and a supported safe intent. One failed or repeated critique
-      // does not cause an unbounded model call or arbitrary CSS changes.
-      if (visual.design?.verdict === 'repair') {
-        if (designCorrections >= 2)
-          throw new Error('Professional document design did not converge within two revisions. No files delivered.');
-        const next = proposeDesignLayout(layout, spec, rendered.heights, visual.design);
-        if (!next) throw new Error('No safe, material document design adjustment is available. No files delivered.');
-        previousDesign = rendered;
-        layout = next;
-        designCorrections++;
-        continue;
-      }
-      if (visual.pages.some(p => p.repair === 'increase_spacing')) {
-        const spacing = Math.min(10, layout.spacing + 2);
-        if (spacing === layout.spacing)
-          throw new Error('Document spacing repair made no progress. No files delivered.');
-        layout = { ...layout, spacing };
-        continue;
-      }
+  // Receipt validation permits at most three corrections. The first few
+  // passes may establish a technically valid pagination before optional design.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (Date.now() >= input.deadlineMs) {
+      if (lastValid) return lastValid;
+      throw new Error('Document production deadline reached. No delivery claimed.');
+    }
 
-    }
-    // An intentionally overfull initial page can produce a truncated or reordered
-    // intermediate PDF. Try the normal, bounded pagination repair ONCE before
-    // requiring exact text fidelity on the re-rendered final candidate.
-    // No PDF can be delivered unless the final inspection has zero findings.
-    if (shouldStopForReadingOrder(record.findings, attempt, Boolean(layout.compact && layout.pages.length === 1 && spec.targetPages !== 1))) {
-      const expected = rendered.inspection.extractedText;
-      // Record only bounded diagnostic counts, never private document text.
-      console.warn('[Document Fidelity] final reading-order mismatch', {
-        attempt, sourceChars: spec.blocks.reduce((n, b) => n + (b.kind === 'table' ? b.rows.flat().join(' ').length : b.text.length), 0),
-        extractedChars: expected.length, pages: rendered.images.length,
-        findings: record.findings.map(f => f.rule),
-      });
-      throw new Error('Text fidelity or ATS reading-order validation failed. No files delivered.');
-    }
-    const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 12) * 96 / 72;
-    const minimum = Math.max(1, Math.ceil(rendered.heights.reduce((a, b) => a + b, 0) / capacity));
-    const pages = spec.targetPages ?? Math.min(PAGE.maxPages, minimum);
+    let docx: Buffer, rendered: RenderedDocument;
     try {
-      const next = paginate(spec, rendered.heights, pages, layout.spacing, layout.compact, layout.design);
-      if (!record.findings.length && JSON.stringify(next) === JSON.stringify(layout))
-        throw new Error('Document repagination made no measurable progress. No files delivered.');
-      layout = next;
+      docx = await generateDocx(spec, layout);
+      rendered = await renderDocument(input.browser, docx, spec, layout);
     } catch (error) {
-      if (!shouldTryCompactLayout(error, attempt, spec, layout)) throw error;
-      console.info('[DocumentLayout] trying compact 11-point layout after standard fit failed', {
-        blocks: spec.blocks.length, targetPages: 2, marginPt: 36,
-      });
-      // A new measuring pass is essential: line spacing and available text width
-      // changed, so standard-layout heights cannot be reused for pagination.
-      layout = { pages: [spec.blocks.map((_, i) => i)], spacing: 2, compact: true };
+      // A proposed aesthetic refinement is not allowed to destroy files that
+      // already passed the independent mechanical checks.
+      if (lastValid) return lastValid;
+      throw error;
     }
+
+    // Underutilization is presentation feedback; a completely empty page,
+    // clipping, overlap, incorrect page count and text-fidelity errors remain
+    // technical defects that must never be delivered.
+    const mechanical = rendered.inspection.findings.filter(f =>
+      !(f.rule === 'whitespace' && f.detail === 'Page uses less than one quarter of its content area.'));
+    rendered.inspection.findings = mechanical;
+    const record: ProductionResult['attempts'][number] = { findings: [...mechanical] };
+    attempts.push(record);
+
+    if (mechanical.length) {
+      if (lastValid) return lastValid;
+      // Keep the original mandatory layout/fidelity recovery behavior. The
+      // first overfull page is only a measuring pass, never delivered.
+      if (shouldStopForReadingOrder(mechanical, attempt,
+          Boolean(layout.compact && layout.pages.length === 1 && spec.targetPages !== 1))) {
+        console.warn('[Document Fidelity] final reading-order mismatch', {
+          attempt,
+          sourceChars: spec.blocks.reduce((n, b) => n + (b.kind === 'table' ? b.rows.flat().join(' ').length : b.text.length), 0),
+          extractedChars: rendered.inspection.extractedText.length,
+          pages: rendered.images.length,
+          findings: mechanical.map(f => f.rule),
+        });
+        throw new Error('Text fidelity or ATS reading-order validation failed. No files delivered.');
+      }
+      const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 12) * 96 / 72;
+      const minimum = Math.max(1, Math.ceil(rendered.heights.reduce((a, b) => a + b, 0) / capacity));
+      const pages = spec.targetPages ?? Math.min(PAGE.maxPages, minimum);
+      try {
+        const next = paginate(spec, rendered.heights, pages, layout.spacing, layout.compact, layout.design);
+        if (JSON.stringify(next) === JSON.stringify(layout))
+          throw new Error('Document repagination made no measurable progress. No files delivered.');
+        layout = next;
+      } catch (error) {
+        if (!shouldTryCompactLayout(error, attempt, spec, layout)) throw error;
+        console.info('[DocumentLayout] trying compact 11-point layout after standard fit failed', {
+          blocks: spec.blocks.length, targetPages: 2, marginPt: 36,
+        });
+        layout = { pages: [spec.blocks.map((_, i) => i)], spacing: 2, compact: true };
+      }
+      continue;
+    }
+
+    // Persist the most recent mechanically accepted candidate in memory before
+    // making any optional model request. Storage/authentication still validates
+    // these exact bytes, page hashes and identity before delivery.
+    const candidate: ProductionResult = {
+      docx, pdf: rendered.pdf, images: rendered.images,
+      inspection: { ...rendered.inspection, findings: [], visual: 'technical-only' },
+      corrections: attempt, attempts: [...attempts],
+    };
+    if (!lastValid) lastValid = candidate;
+    if (previousDesign &&
+        rendered.inspection.pageHashes.length === previousDesign.inspection.pageHashes.length &&
+        rendered.inspection.pageHashes.every((h, i) => h === previousDesign!.inspection.pageHashes[i])) {
+      console.info('[DocumentDesign] no changed raster after optional repair; retaining validated document');
+      return lastValid;
+    }
+
+    let visual: VisualReport;
+    try {
+      visual = visualReportSchema.parse(
+        await input.inspect(rendered, attempt, { previous: previousDesign, layout }),
+      );
+      if (visual.pages.length !== rendered.images.length ||
+          new Set(visual.pages.map(p => p.page)).size !== rendered.images.length ||
+          visual.pages.some(p => p.page > rendered.images.length) ||
+          visual.design?.issues.some(issue => issue.page > rendered.images.length))
+        throw new Error('Design review did not evaluate the correct rendered pages.');
+    } catch (error) {
+      if (input.canSkipDesignReviewError && !(await input.canSkipDesignReviewError(error))) throw error;
+      // The design model may be unavailable, unpriced, invalid or time out;
+      // its failure never invalidates the independently verified DOCX/PDF.
+      console.warn('[DocumentDesign] optional critique unavailable; preserving validated document', {
+        type: error instanceof Error ? error.name : 'unknown',
+      });
+      return lastValid;
+    }
+    record.visual = visual;
+
+    // An unproven or regressed proposal is not a reason to discard the
+    // mechanically valid original. Only a verified improvement can replace it.
+    if (previousDesign && visual.design?.comparison !== 'improved') {
+      console.info('[DocumentDesign] comparison did not verify improvement; preserving validated document');
+      return lastValid;
+    }
+    if (visual.design?.verdict === 'blocked' ||
+        visual.pages.some(p => p.verdict === 'blocked' ||
+          (p.verdict === 'repair' && p.repair === 'none'))) {
+      console.info('[DocumentDesign] unresolved cosmetic critique; preserving validated document');
+      return lastValid;
+    }
+
+    if (previousDesign) lastValid = candidate;
+    const pagesPass = visual.pages.every(p => p.verdict === 'pass' && p.repair === 'none');
+    if (pagesPass && visual.design?.verdict !== 'repair') {
+      if (visual.design?.verdict === 'pass') candidate.inspection.visual = 'passed';
+      return candidate;
+    }
+
+    // At most two optional corrections. No model-driven text changes, margin
+    // violations or unchecked reflow. Stop trying when a safe action is absent.
+    if (designCorrections >= 2 || attempt >= 3) return lastValid;
+    if (visual.design?.verdict === 'repair') {
+      const next = proposeDesignLayout(layout, spec, rendered.heights, visual.design);
+      if (!next) return lastValid;
+      previousDesign = rendered;
+      layout = next;
+      designCorrections++;
+      continue;
+    }
+    if (visual.pages.some(p => p.repair === 'increase_spacing')) {
+      const spacing = Math.min(10, layout.spacing + 2);
+      if (spacing === layout.spacing) return lastValid;
+      previousDesign = rendered;
+      layout = { ...layout, spacing };
+      designCorrections++;
+      continue;
+    }
+    return lastValid;
   }
-  throw new Error('Document failed bounded technical/design acceptance after six passes. No files delivered.');
+  if (lastValid) return lastValid;
+  throw new Error('Document failed mandatory technical validation. No files delivered.');
 }

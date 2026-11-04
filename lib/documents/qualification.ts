@@ -22,7 +22,8 @@ export async function qualifyDocument(browser: Browser, deadlineMs: number) {
       if (rendered.images.length !== QUALIFIED_PAGES.length || rendered.images.some((image, i) => sha256(image) !== QUALIFIED_PAGES[i]))
         throw new Error('Qualification raster changed; independent visual review is required.');
       return { pages: rendered.images.map((_, i) => ({ page: i + 1, verdict: 'pass' as const, repair: 'none' as const,
-        observations: 'Actual PDF raster exactly matches the independently inspected fixed-fixture baseline, including text placement, margins and page balance.' })) };
+        observations: 'Actual PDF raster exactly matches the independently inspected fixed-fixture baseline, including text placement, margins and page balance.' })),
+        design: { verdict:'pass' as const, summary:'Independently reviewed fixed-fingerprint design baseline for all rendered pages.', issues:[], actions:[], comparison:'not_applicable' as const } };
     },
   });
 }
