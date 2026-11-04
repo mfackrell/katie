@@ -68,6 +68,8 @@ export async function chooseInitialComposition(
 export async function produceDocument(input: {
   spec: DocumentSpec; browser: Browser; inspect: VisualInspector; deadlineMs: number;
   initialLayout?: Layout;
+  /** Strict owner instruction: do not deliver technically valid but unapproved design. */
+  requireProfessionalAcceptance?: boolean;
   /** Only explicitly safe, non-accounting presentation failures may be ignored. */
   canSkipDesignReviewError?: (error: unknown) => Promise<boolean>;
 }): Promise<ProductionResult> {
@@ -81,12 +83,17 @@ export async function produceDocument(input: {
   let lastValid: ProductionResult | null = null;
   let previousDesign: RenderedDocument | undefined;
   let designCorrections = 0;
+  const accept = (result:ProductionResult):ProductionResult => {
+    if(input.requireProfessionalAcceptance && result.inspection.visual !== 'passed')
+      throw new Error('Professional visual design was not accepted. No files delivered.');
+    return result;
+  };
 
   // Receipt validation permits at most three corrections. The first few
   // passes may establish a technically valid pagination before optional design.
   for (let attempt = 0; attempt < 4; attempt++) {
     if (Date.now() >= input.deadlineMs) {
-      if (lastValid) return lastValid;
+      if (lastValid) return accept(lastValid);
       throw new Error('Document production deadline reached. No delivery claimed.');
     }
 
@@ -97,7 +104,7 @@ export async function produceDocument(input: {
     } catch (error) {
       // A proposed aesthetic refinement is not allowed to destroy files that
       // already passed the independent mechanical checks.
-      if (lastValid) return lastValid;
+      if (lastValid) return accept(lastValid);
       throw error;
     }
 
@@ -111,7 +118,7 @@ export async function produceDocument(input: {
     attempts.push(record);
 
     if (mechanical.length) {
-      if (lastValid) return lastValid;
+      if (lastValid) return accept(lastValid);
       // Keep the original mandatory layout/fidelity recovery behavior. The
       // first overfull page is only a measuring pass, never delivered.
       if (shouldStopForReadingOrder(mechanical, attempt,
@@ -156,7 +163,7 @@ export async function produceDocument(input: {
         rendered.inspection.pageHashes.length === previousDesign.inspection.pageHashes.length &&
         rendered.inspection.pageHashes.every((h, i) => h === previousDesign!.inspection.pageHashes[i])) {
       console.info('[DocumentDesign] no changed raster after optional repair; retaining validated document');
-      return lastValid;
+      return accept(lastValid);
     }
 
     let visual: VisualReport;
@@ -176,7 +183,7 @@ export async function produceDocument(input: {
       console.warn('[DocumentDesign] optional critique unavailable; preserving validated document', {
         type: error instanceof Error ? error.name : 'unknown',
       });
-      return lastValid;
+      return accept(lastValid);
     }
     record.visual = visual;
 
@@ -184,28 +191,28 @@ export async function produceDocument(input: {
     // mechanically valid original. Only a verified improvement can replace it.
     if (previousDesign && visual.design?.comparison !== 'improved') {
       console.info('[DocumentDesign] comparison did not verify improvement; preserving validated document');
-      return lastValid;
+      return accept(lastValid);
     }
     if (visual.design?.verdict === 'blocked' ||
         visual.pages.some(p => p.verdict === 'blocked' ||
           (p.verdict === 'repair' && p.repair === 'none'))) {
       console.info('[DocumentDesign] unresolved cosmetic critique; preserving validated document');
-      return lastValid;
+      return accept(lastValid);
     }
 
     if (previousDesign) lastValid = candidate;
     const pagesPass = visual.pages.every(p => p.verdict === 'pass' && p.repair === 'none');
     if (pagesPass && visual.design?.verdict !== 'repair') {
       if (visual.design?.verdict === 'pass') candidate.inspection.visual = 'passed';
-      return candidate;
+      return accept(candidate);
     }
 
     // At most two optional corrections. No model-driven text changes, margin
     // violations or unchecked reflow. Stop trying when a safe action is absent.
-    if (designCorrections >= 2 || attempt >= 3) return lastValid;
+    if (designCorrections >= 2 || attempt >= 3) return accept(lastValid);
     if (visual.design?.verdict === 'repair') {
       const next = proposeDesignLayout(layout, spec, rendered.heights, visual.design);
-      if (!next) return lastValid;
+      if (!next) return accept(lastValid);
       previousDesign = rendered;
       layout = next;
       designCorrections++;
@@ -213,14 +220,14 @@ export async function produceDocument(input: {
     }
     if (visual.pages.some(p => p.repair === 'increase_spacing')) {
       const spacing = Math.min(10, layout.spacing + 2);
-      if (spacing === layout.spacing) return lastValid;
+      if (spacing === layout.spacing) return accept(lastValid);
       previousDesign = rendered;
       layout = { ...layout, spacing };
       designCorrections++;
       continue;
     }
-    return lastValid;
+    return accept(lastValid);
   }
-  if (lastValid) return lastValid;
+  if (lastValid) return accept(lastValid);
   throw new Error('Document failed mandatory technical validation. No files delivered.');
 }
