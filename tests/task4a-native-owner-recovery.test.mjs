@@ -9,6 +9,8 @@ const continuation='405ea82c-6f52-49e5-babf-891ecac64d14';
 const digest='e'.repeat(64);
 
 test('pre-inference Task4A recovery requires authenticated owner and exact unchanged-limit proposal',async()=>{
+ const savedOwnerEnv=process.env.KATIE_OWNER_AUTH_USER_ID;
+ process.env.KATIE_OWNER_AUTH_USER_ID=owner;
  let signed=false,commits=0,eligible=true;
  const limits={cumulativeTokens:180000,developmentTokens:120000,
   developmentCalls:12,assessmentCalls:4,completionCalls:4,
@@ -49,10 +51,17 @@ test('pre-inference Task4A recovery requires authenticated owner and exact uncha
  assert.equal((await post({confirm:false,proposalDigest:digest})).status,400);
  assert.equal((await post({confirm:true,proposalDigest:'f'.repeat(64)})).status,409);
  assert.equal(commits,0);
+ process.env.KATIE_OWNER_AUTH_USER_ID='99999999-9999-4999-8999-999999999999';
+ assert.equal((await get()).status,403,'Native proposal must reject unrelated owner');
+ assert.equal((await post({confirm:true,proposalDigest:digest})).status,403,'Native owner mismatch blocks approval');
+ assert.equal(commits,0);
+ process.env.KATIE_OWNER_AUTH_USER_ID=owner;
  const approved=await post({confirm:true,proposalDigest:digest});
  assert.equal(approved.status,200);
  assert.equal((await approved.json()).sameAccountSameLimits,true);
  assert.equal(commits,1);
  assert.equal((await post({confirm:true,proposalDigest:digest})).status,409);
  assert.equal(commits,1,'No duplicate authority accepted');
+ if(savedOwnerEnv===undefined)delete process.env.KATIE_OWNER_AUTH_USER_ID;
+ else process.env.KATIE_OWNER_AUTH_USER_ID=savedOwnerEnv;
 });

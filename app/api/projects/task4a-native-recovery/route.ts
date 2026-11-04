@@ -19,6 +19,8 @@ export async function GET(request:NextRequest){
  if(error)return reply({error:'Recovery proposal unavailable'},503);
  if(!data||data.ready!==true)return reply({ready:false,
   error:'Existing authorization, original failed workflow, or continuation deadline is no longer eligible'},409);
+ if(data.proposal?.ownerId!==process.env.KATIE_OWNER_AUTH_USER_ID)
+  return reply({error:'Authenticated user is not the original Task 4A owner'},403);
  return reply({ready:true,digest:data.digest,proposal:data.proposal,
   existingProjectId:ORIGINAL,noNewProject:true,
   oldApprovalUnchangedUntilExplicitConsent:true,
@@ -33,6 +35,8 @@ export async function POST(request:NextRequest){
  const {data:proposal,error:proposalError}=await db.rpc<RecoveryProposal|null>('task4a_native_recovery_proposal',{});
  if(proposalError||!proposal||proposal.digest!==input.proposalDigest)
   return reply({error:'Saved proposal changed or expired. Refresh before approving.'},409);
+ if(proposal.proposal?.ownerId!==process.env.KATIE_OWNER_AUTH_USER_ID)
+  return reply({error:'Original native owner does not match authenticated session'},403);
  const {data:recovered,error}=await db.rpc<{recovered:boolean;receiptId:string;newApprovalId:string;nativeDeadline:string}>(
   'task4a_confirm_pregrant_recovery',{
    p_owner:proposal.proposal.ownerId,p_digest:input.proposalDigest

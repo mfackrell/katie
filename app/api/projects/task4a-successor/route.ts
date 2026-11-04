@@ -35,6 +35,10 @@ export async function GET(request:NextRequest){
   p_assess_calls:0,p_complete_calls:0,p_seconds:0,p_models:[]
  });
  if(error)return reply({error:'Successor-continuation qualification unavailable'},503);
+ // The authenticated Supabase user must also own the historical project.
+ // A generic installation-owner session is not sufficient for this consent.
+ if(!data?.ledger||data.ledger.ownerId!==process.env.KATIE_OWNER_AUTH_USER_ID)
+  return reply({error:'Authenticated user is not the original Task 4A owner'},403);
  return reply({projectId:ORIGINAL,readiness:data,noAuthorityCreated:true});
 }
 export async function POST(request:NextRequest){
@@ -48,6 +52,8 @@ export async function POST(request:NextRequest){
  if(!offer||offer.ready!==true||!offer.digest)
   return reply({ready:false,reason:offer?.reason??'Current source or financial state not eligible',
    ledger:offer?.ledger},409);
+ if(offer.proposal?.ownerId!==process.env.KATIE_OWNER_AUTH_USER_ID)
+  return reply({error:'Authenticated user is not the original Task 4A owner'},403);
  if(input.action==='propose')
   return reply({ready:true,digest:offer.digest,proposal:offer.proposal,
    originalProjectId:ORIGINAL,ownerConsentNotYetGranted:true,
@@ -60,7 +66,8 @@ export async function POST(request:NextRequest){
  const {data:owner,error:ownerError}=await db.rpc<string|null>('task4a_original_owner_id',{
   p_actor:project.actor_id,p_chat:project.chat_id
  });
- if(ownerError||!owner)return reply({error:'Original owner identity not verified'},403);
+ if(ownerError||!owner||owner!==process.env.KATIE_OWNER_AUTH_USER_ID)
+  return reply({error:'Original owner identity does not match authenticated session'},403);
  const {data:receipt,error:commitError}=await db.rpc<{authorized:boolean;authorizationId:string;receiptId:string}>(
   'task4a_authorize_successor',{p_owner:owner,p_digest:input.digest,...args}
  );

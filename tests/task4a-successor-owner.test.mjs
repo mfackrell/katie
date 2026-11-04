@@ -10,15 +10,17 @@ const limits={tokens:300000,calls:30,dollarsCents:800,assessmentTokens:60000,
  models:['openai:gpt-5.3-codex']};
 
 test('successor authorization uses separate preview, authenticated owner and exact digest',async()=>{
+ const savedOwnerEnv=process.env.KATIE_OWNER_AUTH_USER_ID;
+ process.env.KATIE_OWNER_AUTH_USER_ID=owner;
  let signed=false,created=0,valid=true,ownerAvailable=true;
- const proposal={ready:true,digest,proposal:{
+ const proposal={ready:true,digest,proposal:{ownerId:owner,
   predecessorId:'405ea82c-6f52-49e5-babf-891ecac64d14',
   incrementalTokens:300000,incrementalCalls:30,incrementalMicrousd:8000000}};
  const db={
   rpc:async(name,args)=>{
    if(name==='task4a_successor_proposal'){
     if(args.p_tokens===0)return {data:{ready:false,reason:'owner_limits_required',
-     ledger:{historicalCalls:25,historicalActualTokens:147102,
+     ledger:{ownerId:owner,historicalCalls:25,historicalActualTokens:147102,
       historicalCallReservedTokens:213764,historicalReservedExposureMicrousd:4086819,
       maximumNewTokens:386236}},error:null};
     assert.equal(args.p_tokens,300000);
@@ -70,10 +72,18 @@ test('successor authorization uses separate preview, authenticated owner and exa
  assert.equal((await post({action:'approve',limits,digest})).status,403);
  assert.equal(created,0,'Owner binding must be verified');
  ownerAvailable=true;
+ process.env.KATIE_OWNER_AUTH_USER_ID='99999999-9999-4999-8999-999999999999';
+ assert.equal((await get()).status,403,'Unrelated signed installation-owner session cannot see original ledger');
+ assert.equal((await post({action:'propose',limits})).status,403,'Cannot show grant to unrelated session owner');
+ assert.equal((await post({action:'approve',limits,digest})).status,403,'Cannot approve someone else’s original project');
+ assert.equal(created,0);
+ process.env.KATIE_OWNER_AUTH_USER_ID=owner;
  const approved=await post({action:'approve',limits,digest});
  assert.equal(approved.status,200);
  assert.equal((await approved.json()).originalTaskStillBlocked,true);
  assert.equal(created,1);
  assert.equal((await post({action:'approve',limits,digest})).status,409);
  assert.equal(created,1,'No replay or duplicate successor');
+ if(savedOwnerEnv===undefined)delete process.env.KATIE_OWNER_AUTH_USER_ID;
+ else process.env.KATIE_OWNER_AUTH_USER_ID=savedOwnerEnv;
 });
