@@ -324,13 +324,12 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     // Completed Qwen work retains an estimate, rather than fabricated actuals.
     fail = false; proposals=[]; running=[{...pending('qwen'),provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',category:'attachment-observation',state:'dispatched',reservedMicrousd:'20000',pollableRunpod:true}];
-    await usage.getByRole('button', {name:'Refresh',exact:true}).click();
-    await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).waitFor();
-    assert.equal(await active.getByRole('button',{name:'Accept exposure & continue',exact:true}).count(),0);
-    assert.match(await active.innerText(),/polls that existing job and will not submit another/);
     resumeMode='completed';
-    await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).click();
-    await usage.getByRole('status').filter({hasText:'Saved work completed.'}).waitFor();
+    await usage.getByRole('button', {name:'Refresh',exact:true}).click();
+    // Polling is automatic, never a second user approval or a second submission.
+    await usage.getByRole('status').filter({hasText:'Qwen recovery checked automatically'}).waitFor();
+    assert.equal(await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).count(),0);
+    assert.equal(await active.getByRole('button',{name:'Accept exposure & continue',exact:true}).count(),0);
     await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
     await usage.getByRole('button', { name: 'Show model usage for runpod' }).focus();
     await providerTooltip.waitFor();
