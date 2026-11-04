@@ -8,7 +8,7 @@ import sharp from 'sharp';
 import { launchWebsiteBrowser } from '../lib/research/website-evidence';
 import { qualifyDocument, QUALIFIED_PAGES } from '../lib/documents/qualification';
 import { contentText, documentSchema, normalizedText, parseDocument, pdfTextMatchesSource } from '../lib/documents/model';
-import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT } from '../lib/documents/intent';
+import { documentRequest, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT } from '../lib/documents/intent';
 import { savedDocumentContent } from '../lib/documents/saved-source';
 import { createDocumentStore, hash, documentLinks } from '../lib/documents/storage';
 import { createDocumentDownload } from '../lib/documents/download';
@@ -657,4 +657,44 @@ test('real renderer supports tables and fails closed on missing visual coverage'
     assert.equal(technicalOnly.inspection.pageCount, 1);
     await assert.rejects(produceDocument({ spec: { ...fixture, targetPages: 1 }, browser, deadlineMs: Date.now() + 45000, inspect: async () => { throw new Error('must never reach vision'); } }), /cannot fit/);
   } finally { await browser.close(); }
+});
+
+
+test('Nov 4 delivery-notice regression: false two-page receipts never become actual documents', async () => {
+  const fabricated = [
+    '[Message timestamp: 2026-11-04T16:18:30.751Z]',
+    'Created and inspected 2 pages.',
+    '[Download Word document](/api/documents/download?actorId=fixture&format=docx) · [Download PDF](/api/documents/download?actorId=fixture&format=pdf)',
+    'Both files are now available for download. The formatting has been refined.',
+  ].join('\\n');
+  assert.equal(isDocumentDeliveryNarrative(fabricated), true);
+  assert.equal(isDocumentDeliveryNarrative('Created and inspected two pages.'), true);
+  assert.equal(isDocumentDeliveryNarrative('Here are your final Word and PDF files.'), true);
+  assert.throws(() => parseDocument(fabricated, 2), /delivery notice rather than document content/);
+  assert.throws(() => savedDocumentContent({role:'assistant',content:fabricated}), /not a usable document source/);
+  const legitimate = '# Financial systems report\\n\\n## Findings\\n\\nThe secure portal provides PDF and Word downloads for financial reporting.';
+  assert.equal(isDocumentDeliveryNarrative(legitimate), false);
+  assert.equal(parseDocument(legitimate,1).targetPages,1);
+
+  // End to end: the delivery service must refuse the fake source before
+  // invoking either rendering or an additional paid visual inspection.
+  const context = {userId:scope.ownerId,actorId:scope.actorId,chatId:scope.chatId,requestId:'fixture-delivery-receipt'};
+  await assert.rejects(
+    runWithStandaloneAccounting(context, () => deliverDocument({
+      result:{provider:'anthropic',model:'synthetic',text:fabricated},
+      provider:{name:'anthropic',listModels:async()=>[],generate:async()=>{throw new Error('Unexpected paid inference');}},
+      params:{name:'Document',persona:'',summary:'',history:[],user:'Produce a two-page report',modelId:'synthetic'},
+      actorId:scope.actorId,chatId:scope.chatId,requestId:context.requestId,deadlineMs:Date.now()+15000,
+    })),
+    /delivery notice rather than document content/,
+  );
+});
+
+test('document routing retries a fabricated delivery claim and blocks invalid final content before review',()=>{
+  const route=readFileSync('app/api/chat/route.ts','utf8');
+  assert.match(route,/isDocumentDeliveryNarrative\(generationResult\.text \?\? ''\)/);
+  assert.match(route,/if \(documentProduction && !selectedDocumentSource &&\s*isDocumentDeliveryNarrative\(result\.text \?\? ""\)\)/);
+  const finalGuard=route.indexOf('delivery notice rejected before review and rendering');
+  const review=route.indexOf('const escalatedConversation = shouldEscalateConversationResponse({');
+  assert.ok(finalGuard>0 && review>finalGuard, 'source-validation failure must precede paid content review');
 });

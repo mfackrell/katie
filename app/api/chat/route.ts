@@ -1,5 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
@@ -3151,7 +3151,7 @@ ${chunkWorkflowSummary}`;
                     generationResult.provider === videoReplyTarget.provider &&
                     generationResult.model === videoReplyTarget.model
                     ? false // Video conversational model decisions remain final.
-                    : (Boolean(documentProduction) && isDocumentCapabilityDenial(generationResult.text ?? '')) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
+                    : (Boolean(documentProduction) && (isDocumentCapabilityDenial(generationResult.text ?? '') || isDocumentDeliveryNarrative(generationResult.text ?? ''))) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt, attemptedAttempts }) => {
                 if (hasVideoInput) return null;
                 // Standalone photo analysis: prefer a real Grok vision model when
@@ -3514,6 +3514,17 @@ ${chunkWorkflowSummary}`;
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
+
+            // The final candidate must be actual document content. A model's
+            // fabricated "created and inspected" response cannot become a
+            // mechanically valid Word/PDF or enter paid content review.
+            if (documentProduction && !selectedDocumentSource &&
+                isDocumentDeliveryNarrative(result.text ?? "")) {
+              console.warn("[DocumentDraft] delivery notice rejected before review and rendering", {
+                requestId, provider: result.provider, model: result.model,
+              });
+              throw new Error("The model returned a delivery notice instead of document content. No Word or PDF files were created.");
             }
 
             // On-demand capability escalation also returns live evidence. Save
