@@ -56,6 +56,11 @@ test('saved Qwen observations retain provenance and can be refined only for the 
   assert.equal(saved.visualMemory?.sourceHash,description.observationSourceHash);
   assert.equal(saved.visualMemory?.observedAt,description.observationAt);
   assert.ok(verifiedKatieVisualEpisode(saved),"Persisted actor entry must contain a source-bound visual episode");
+  const unbound=await service.persist(chatId,image,undefined,{source:new Blob(['image']),description:{
+    observedSummary:description.observedSummary,summaryModel:description.summaryModel,summaryCoverage:description.summaryCoverage,
+  },actorId});
+  assert.equal(unbound.visualMemory,undefined,
+    "An observation summary without source-bound evidence remains available but cannot impersonate Katie's own perception");
   await assert.rejects(
     service.persist(chatId,image,undefined,{description:{...description,observationSourceHash:'f'.repeat(64)},actorId}),
     /does not match its source image/,
