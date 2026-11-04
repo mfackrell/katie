@@ -1,0 +1,48 @@
+name: document-phase1-diagnostics
+
+on:
+  push:
+    branches:
+      - diagnostics/document-phase1-baseline-20261104
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-document-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compile existing test harness (no production mutations)
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.tests.json
+          mkdir -p .test-dist/node_modules
+          ln -s .. .test-dist/node_modules/@
+      - name: Exercise Katie's actual generator in Chromium with synthetic documents
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase1-qualification.test.js
+      - name: Install standard office renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+      - name: Verify actual DOCX/PDF pagination and page-by-page geometry
+        run: node scripts/document-phase1-word-acceptance.mjs
+      - name: Record pending Phase 2 design contracts
+        run: node scripts/document-phase1-contract.mjs
+      - name: Preserve rendered evidence, including on failed acceptance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-phase1-offline-evidence
+          path: test-artifacts/documents/phase1/
+          if-no-files-found: warn
