@@ -36,6 +36,16 @@ test('PHASE1: actual offline Katie DOCX, Chromium PDF, glyphs, pagination, and m
         writeFileSync(`${ROOT}/${fixture.name}-initial-page-${i + 1}.png`, first.images[i]);
       // renderDocument.heights is measured from actual docx-preview DOM blocks.
       // paginate() uses their simple sum; its capacity assumes a flat rectangle.
+      // Controlled counterfactual through the real generator, not XML surgery.
+      // Compactness uses the engine's approved 11pt body font, 36pt margins,
+      // and spacing=2; it is diagnostic only and never changes production output.
+      const compactLayout: Layout = { pages: [spec.blocks.map((_, i) => i)], spacing: 2, compact: true };
+      const compactDocx = await generateDocx(spec, compactLayout);
+      const compactRendered = await renderDocument(browser, compactDocx, spec, compactLayout);
+      writeFileSync(`${ROOT}/${fixture.name}-compact.docx`, compactDocx);
+      writeFileSync(`${ROOT}/${fixture.name}-compact.pdf`, compactRendered.pdf);
+      for (let i=0;i<compactRendered.images.length;i++)
+        writeFileSync(`${ROOT}/${fixture.name}-compact-page-${i+1}.png`,compactRendered.images[i]);
       const blockHeightPx = first.heights.reduce((a, b) => a + b, 0);
       const standardCapacityPx = (PAGE.height - 2 * documentPageStyle().margin - 12) * 96 / 72;
       const estimatedMinPages = Math.max(1, Math.ceil(blockHeightPx / standardCapacityPx));
@@ -88,6 +98,9 @@ test('PHASE1: actual offline Katie DOCX, Chromium PDF, glyphs, pagination, and m
         fixture: fixture.name, source_sha256: hash(source), source_character_count: contentText(spec).length,
         source_blocks: spec.blocks.map(b => b.kind), required_pages: spec.targetPages ?? null,
         initial_pdf_pages: first.inspection.pageCount,
+        compact_natural_browser_pages: compactRendered.inspection.pageCount,
+        compact_natural_findings: compactRendered.inspection.findings.map(f=>f.rule),
+        compact_natural_pdf_sha256: hash(compactRendered.pdf),
         initial_findings: first.inspection.findings.map(f => f.rule),
         per_block_measured_heights_px: first.heights.map(x => Number(x.toFixed(3))),
         measured_total_block_heights_px: Number(blockHeightPx.toFixed(3)),
