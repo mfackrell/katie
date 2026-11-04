@@ -1853,10 +1853,20 @@ async function executeChat(request: NextRequest) {
           taskProgress.documentContract, documentSourceMessageId)
       : { request: documentProduction, contract: undefined };
     documentProduction = documentBinding.request;
-    if (documentBinding.contract) taskProgress = { ...taskProgress,
-      documentContract: { ...documentBinding.contract,
-        sourceUserMessageId: documentBinding.contract.sourceUserMessageId || taskProgressUserMessageId },
-    };
+    if (documentBinding.contract) {
+      // Preserve the original firsthand user-message identifier. A missing
+      // provenance source may not be silently relabeled as the current user.
+      const inheritedSource = documentBinding.contract.provenance === 'inherited-user'
+        ? [...attachmentHistory].reverse().find(turn => turn.role === 'user' &&
+            documentRequest(turn.content)?.pages === documentBinding.request?.pages)?.id
+        : undefined;
+      const originalUserId = documentBinding.contract.sourceUserMessageId ||
+        inheritedSource ||
+        (documentBinding.contract.provenance === 'current-user' ? taskProgressUserMessageId : undefined);
+      if (originalUserId) taskProgress = { ...taskProgress,
+        documentContract: { ...documentBinding.contract, sourceUserMessageId: originalUserId },
+      };
+    }
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
