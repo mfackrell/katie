@@ -54,6 +54,14 @@ test("across model switches, old visual record remains her memory without claimi
 });
 
 test("metadata, legacy descriptions, mismatched sources and spoofed receipts never become first-person memories", () => {
+  assert.equal(buildKatieVisualEpisode({ ...base, observationSourceHash: undefined }, hash, "2026-11-03T23:01:30Z"), undefined,
+    "A picture hash does not prove an unbound description was generated from that picture");
+  assert.equal(buildKatieVisualEpisode({ ...base, observationAgreement: "policy-limited" }, hash, "2026-11-03T23:01:30Z"), undefined);
+  assert.equal(buildKatieVisualEpisode({ ...base, observationAgreement: "unverified" }, hash, "2026-11-03T23:01:30Z"), undefined);
+  assert.equal(buildKatieVisualEpisode({ ...base, observationReports: [{
+    model: "qwen-refusal", sourceHash: hash, text: "Cannot analyze", coverage: "sampled",
+    disposition: "policy-limited"
+  }] }, hash, "2026-11-03T23:01:30Z"), undefined);
   assert.equal(buildKatieVisualEpisode({ ...base, observationSourceHash: "f".repeat(64) }, hash, "2026-11-03T23:01:30Z"), undefined);
   assert.equal(buildKatieVisualEpisode({ ...base, summaryCoverage: "metadata" }, hash, "2026-11-03T23:01:30Z"), undefined);
   assert.equal(buildKatieVisualEpisode({ ...base, observedSummary: "" }, hash, "2026-11-03T23:01:30Z"), undefined);
@@ -65,6 +73,10 @@ test("metadata, legacy descriptions, mismatched sources and spoofed receipts nev
   assert.equal(katieVisualMemoryContext([legacy]), "");
   assert.doesNotMatch(attachmentAccessContext([], [legacy], [], new Set()), /^KATIE_VISUAL_MEMORY \(/);
 
+  assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, observationSourceHash: undefined }), undefined,
+    "A legacy or forged descriptor cannot borrow a hash from an existing receipt");
+  assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, observationAgreement: "policy-limited" }), undefined);
+  assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, observationAgreement: "unverified" }), undefined);
   assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, observationSourceHash: "e".repeat(64) }), undefined);
   assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, mimeType: "application/pdf" }), undefined);
   assert.equal(verifiedKatieVisualEpisode({ ...base, visualMemory: episode, summaryCoverage: "metadata" }), undefined);
@@ -94,4 +106,20 @@ test("media search reconstructs Katie's exact visual episode, not a free-standin
   assert.equal(recalledKatieVisualMemoryContext("owner-actor", [source], [{...hit, attachment_id: "wrong-source"}]), "");
   assert.equal(recalledKatieVisualMemoryContext("owner-actor", [source], [hit], true), "");
   assert.equal(recalledKatieVisualMemoryContext("owner-actor", [{...source, visualMemory:undefined}], [hit]), "");
+});
+
+test("legitimate first-person image memories remain owned by Katie through different dialogue engines", () => {
+  const observedByGemini = { ...base, summaryModel: "gemini-2.5-flash" };
+  const observedByGrok = { ...base, summaryModel: "grok-4.7" };
+  for (const observed of [observedByGemini, observedByGrok]) {
+    const receipt = buildKatieVisualEpisode(observed, hash, "2026-11-03T23:01:30Z");
+    assert.ok(receipt);
+    const saved = { ...observed, visualMemory: receipt };
+    const fromOtherEngine = recalledKatieVisualMemoryContext("owner-actor", [saved], [{
+      source_chat_id: "original-chat", attachment_id: saved.id,
+    }]);
+    assert.match(fromOtherEngine, /Katie's own recorded visual perception/);
+    assert.match(fromOtherEngine, /screenshot shows a message/);
+    assert.match(fromOtherEngine, /text-generation model independently re-inspected original pixels/);
+  }
 });
