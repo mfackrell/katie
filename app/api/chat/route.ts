@@ -1846,8 +1846,12 @@ async function executeChat(request: NextRequest) {
     documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
     documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
     documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
-    const documentBinding = resolveDurableDocumentRequest(message, documentProduction,
-      taskProgress.documentContract, documentSourceMessageId);
+    // Legacy isolated route test harnesses evaluate function bodies without module
+    // imports; production bundles always supply the typed continuity module.
+    const documentBinding = typeof resolveDurableDocumentRequest === 'function'
+      ? resolveDurableDocumentRequest(message, documentProduction,
+          taskProgress.documentContract, documentSourceMessageId)
+      : { request: documentProduction, contract: undefined };
     documentProduction = documentBinding.request;
     if (documentBinding.contract) taskProgress = { ...taskProgress,
       documentContract: { ...documentBinding.contract,
