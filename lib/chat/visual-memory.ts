@@ -42,7 +42,7 @@ export function buildKatieVisualEpisode(
       !observation.observedSummary?.trim() ||
       !observation.summaryModel?.trim() ||
       ["source-excerpt", "qwen-unavailable"].includes(observation.summaryModel) ||
-      observation.observationAgreement === "policy-limited" ||
+      ["policy-limited", "unverified"].includes(observation.observationAgreement ?? "") ||
       (observation.summaryCoverage !== "full" && observation.summaryCoverage !== "sampled") ||
       observation.observationReports?.some(report =>
         report.disposition === "policy-limited" || report.disposition === "unavailable")) return;
@@ -71,7 +71,7 @@ export function verifiedKatieVisualEpisode(file: ConversationAttachment): KatieV
       episode.modality !== "vision" ||
       !SOURCE_HASH.test(episode.sourceHash) ||
       file.observationSourceHash !== episode.sourceHash ||
-      file.observationAgreement === "policy-limited" ||
+      ["policy-limited", "unverified"].includes(file.observationAgreement ?? "") ||
       file.observationReports?.some(report =>
         report.disposition === "policy-limited" || report.disposition === "unavailable") ||
       !file.observedSummary?.trim() ||
