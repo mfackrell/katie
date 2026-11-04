@@ -84,5 +84,9 @@ export function documentStore() {
 }
 export function documentLinks(receipt: DocumentReceipt): string {
   const base = `/api/documents/download?actorId=${receipt.scope.actorId}&chatId=${receipt.scope.chatId}&id=${receipt.id}`;
-  return `Created and inspected ${receipt.pages} page${receipt.pages === 1 ? '' : 's'}.\n\n[Download Word document](${base}&format=docx) · [Download PDF](${base}&format=pdf)`;
+  const count = `${receipt.pages} page${receipt.pages === 1 ? '' : 's'}`;
+  const status = receipt.visualStatus === 'passed'
+    ? `Created and inspected ${count}. Professional design review passed.`
+    : `Created ${count}. Technical validation passed; professional design review remains unresolved.`;
+  return `${status}\n\n[Download Word document](${base}&format=docx) · [Download PDF](${base}&format=pdf)`;
 }
