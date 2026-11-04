@@ -35,16 +35,18 @@ export function resolveDurableDocumentRequest(
   // A different explicit saved source cannot borrow the previous document's cap.
   const changedSource = Boolean(sourceMessageId && previous?.sourceMessageId && sourceMessageId!==previous.sourceMessageId);
   const pages = request.pages ?? (same && !changedSource ? previous?.pages : undefined);
+  const explicitPageCount = /\\b(?:one|two|three|four|five|six|\\d+)\\s*[- ]pages?\\b/i.test(message);
+  const inherits = !changedSource && ((same && !explicitPageCount) || (request.pages!==undefined && !explicitPageCount));
   if (request.pages!==undefined && (!Number.isInteger(request.pages) || request.pages<1 || request.pages>8))
     throw Error('Invalid explicit document page constraint.');
   const contract = identity || (same && previous) || sourceMessageId
     ? {
         identity: identity ?? previous?.identity ?? 'selected-document',
         ...(pages!==undefined?{pages}:{}),
-        sourceUserMessageId: same && request.pages===undefined
-          ? previous!.sourceUserMessageId : '', // route replaces with actual current user ID
+        sourceUserMessageId: same && inherits && previous?.sourceUserMessageId
+          ? previous.sourceUserMessageId : '', // route binds actual source user message
         ...(sourceMessageId?{sourceMessageId}:same&&previous?.sourceMessageId?{sourceMessageId:previous.sourceMessageId}:{}),
-        provenance: same && request.pages===undefined ? 'inherited-user' as const : 'current-user' as const,
+        provenance: inherits ? 'inherited-user' as const : 'current-user' as const,
       }
     : undefined;
   return {request:{...request,...(pages===undefined?{}:{pages})},contract};
