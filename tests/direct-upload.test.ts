@@ -1354,3 +1354,124 @@ test("decoder timing survives private cache retries and owner reads, forged fiel
   fake.files.set(cachePath, new Blob([JSON.stringify({ actorId: actor, reference: { mimeType: 123 }, decoderTiming: timing })]));
   assert.equal(await service.readVideoTiming(chat, saved.id, actor), undefined);
 });
+
+
+test("mobile JPEG uploads the original through private 512 KiB same-origin chunks and finalizes once", async () => {
+  const bytes=new Uint8Array(2_635_407);
+  for(let index=0;index<bytes.length;index+=1)bytes[index]=index%251;
+  const file=new File([bytes],"phone-image.jpeg",{type:"image/jpeg"});
+  const fake=fakeStorage();
+  let processing=0;
+  const service=createStoredUploadService(fake.storage,"test-only-secret",{buildReferences:async files=>{
+    processing++;
+    assert.equal(files.length,1);
+    assert.equal(files[0].name,file.name);
+    assert.deepEqual(new Uint8Array(await files[0].arrayBuffer()),bytes);
+    return [{fileId:"mobile-photo-1",fileName:file.name,mimeType:file.type,attachmentKind:"image",preview:"Image retained privately"}];
+  }});
+  const calls:string[]=[];
+  const lengths:number[]=[];
+  let signedToken="",preparedId="";
+  const fetcher:typeof fetch=async(url,init)=>{
+    const path=String(url);calls.push(path);
+    if(path==="/api/upload/prepare"){
+      const payload=JSON.parse(String(init?.body));
+      assert.equal(payload.transport,"json-base64-v3");
+      const prepared=await service.prepare(payload);
+      signedToken=prepared.uploadToken;preparedId=prepared.uploadId;
+      return Response.json(prepared);
+    }
+    if(path==="/api/upload/chunk"){
+      const headers=init?.headers as Record<string,string>;
+      assert.equal(headers["x-katie-upload-token"],signedToken);
+      assert.equal(headers["Content-Type"],"application/octet-stream");
+      const chunk=new Uint8Array(await (init?.body as Blob).arrayBuffer());
+      lengths.push(chunk.length);
+      assert.ok(chunk.length<=512*1024);
+      const result=await service.uploadChunk(signedToken,Number(headers["x-katie-chunk-index"]),chunk);
+      return Response.json(result);
+    }
+    if(path==="/api/upload/status")
+      return Response.json(await service.chunkStatus(signedToken));
+    if(path==="/api/upload/complete"){
+      const payload=JSON.parse(String(init?.body));
+      assert.equal(payload.uploadToken,signedToken);
+      return Response.json({fileReference:await service.complete(signedToken)});
+    }
+    if(path==="/api/upload/telemetry")
+      return new Response(null,{status:204});
+    throw Error("Still-image bytes must never use the cross-origin Storage PUT");
+  };
+  const stages:string[]=[];
+  const saved=await uploadFilesDirect([file],message=>stages.push(message),fetcher);
+  assert.equal(saved.length,1);
+  assert.equal(saved[0].attachmentKind,"image");
+  assert.equal(processing,1);
+  assert.equal(lengths.length,Math.ceil(file.size/(512*1024)));
+  assert.equal(lengths.reduce((total,next)=>total+next,0),file.size);
+  assert.equal(calls.filter(x=>x==="/api/upload/complete").length,1);
+  assert.equal(calls.filter(x=>x==="/api/upload/prepare").length,1);
+  assert.ok(stages.some(x=>x.includes("100%")));
+  assert.deepEqual(new Uint8Array(await fake.files.get("incoming/"+preparedId)!.arrayBuffer()),bytes);
+  assert.ok(saved[0].storageToken,"Original private storage remains bound to its signed reference");
+});
+
+test("a lost mobile image chunk acknowledgement is verified before retrying its signed bytes",async()=>{
+  const file=new File([new Uint8Array(98_304)],"photo.png",{type:"image/png"});
+  const fake=fakeStorage();
+  const service=createStoredUploadService(fake.storage,"test-only-secret",{buildReferences:async()=>[
+    {fileId:"photo",fileName:file.name,mimeType:file.type,attachmentKind:"image",preview:"Photo"}]});
+  let token="",chunks=0,statuses=0;
+  const fetcher:typeof fetch=async(url,init)=>{
+    const path=String(url);
+    if(path==="/api/upload/prepare"){
+      const prepared=await service.prepare(JSON.parse(String(init?.body)));
+      token=prepared.uploadToken;return Response.json(prepared);
+    }
+    if(path==="/api/upload/chunk"){
+      chunks++;
+      const headers=init?.headers as Record<string,string>;
+      const bytes=new Uint8Array(await (init?.body as Blob).arrayBuffer());
+      await service.uploadChunk(token,Number(headers["x-katie-chunk-index"]),bytes);
+      throw new TypeError("Mobile HTTP acknowledgment lost after committed storage write");
+    }
+    if(path==="/api/upload/status"){statuses++;return Response.json(await service.chunkStatus(token));}
+    if(path==="/api/upload/complete")return Response.json({fileReference:await service.complete(token)});
+    if(path==="/api/upload/telemetry")return new Response(null,{status:204});
+    throw Error("unexpected route "+path);
+  };
+  const result=await uploadFilesDirect([file],()=>{},fetcher);
+  assert.equal(result.length,1);
+  assert.equal(chunks,1,"Never retransmit a chunk already verified in private storage");
+  assert.equal(statuses,1);
+});
+
+test("image transfer watchdog terminates an unresponsive browser request and never starts analysis",async()=>{
+  const file=new File([new Uint8Array(1_024)],"stalled.jpeg",{type:"image/jpeg"});
+  let attempts=0,completed=0,telemetry=0;
+  const id="11111111-1111-4111-8111-111111111111";
+  const fetcher:typeof fetch=async(url)=>{
+    const path=String(url);
+    if(path==="/api/upload/prepare")return Response.json({
+      uploadUrl:"https://storage.example/private",uploadToken:"signed-fixture-receipt",uploadId:id
+    });
+    if(path==="/api/upload/chunk"){
+      attempts++;
+      return new Promise<Response>(()=>{/* Deliberately ignores AbortSignal, like a stalled mobile request. */});
+    }
+    if(path==="/api/upload/status")return Response.json({
+      uploadId:id,chunkCount:1,chunkBytes:512*1024,transport:"json-base64-v3",
+      uploadedIndexes:[],uploadedSubIndexes:[],complete:false
+    });
+    if(path==="/api/upload/telemetry"){telemetry++;return new Response(null,{status:204});}
+    if(path==="/api/upload/complete"){completed++;throw Error("May not finalize missing image bytes");}
+    throw Error("Unexpected cross-origin upload: "+path);
+  };
+  await assert.rejects(
+    uploadFilesDirect([file],()=>{},fetcher,undefined,{chunkTimeoutMs:20,retryDelayMs:0}),
+    /Image upload stopped at part 1\/1.*timed out.*Nothing was sent for image analysis/s
+  );
+  assert.equal(attempts,3);
+  assert.equal(completed,0);
+  assert.equal(telemetry,1);
+});
