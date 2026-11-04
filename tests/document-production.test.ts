@@ -345,7 +345,8 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
           'no_qualified_document_design_vision','No qualified design model is available.');
         },
       }));
-    assert.match(fallback.text,/Created and inspected 2 pages/);
+    assert.match(fallback.text,/Technical validation passed; professional design review remains unresolved/);
+    assert.doesNotMatch(fallback.text,/Created and inspected 2 pages/);
     assert.match(fallback.text,/format=pdf/);
     assert.equal(visualCalls,2,'Unavailable reviewer must never dispatch a model.');
     assert.equal(uploads,6,'Independent scoped mechanical files remain deliverable.');
