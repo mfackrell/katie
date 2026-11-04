@@ -13,7 +13,7 @@ export function documentRequest(message: string): { pages?: number } | null {
   // the same action words, but is a status report, not a generation request.
   // Inspect each candidate: an actual instruction may follow a status report.
   const requestLead = /^(?:(?:hey\s+)?katie[,:]?\s+)?(?:(?:please|now|also|just|then|kindly|go\s+ahead\s+and)\s+|(?:can|could|would|will)\s+you(?:\s+please)?(?:\s+help\s+me(?:\s+to)?)?\s+|(?:i|we)\s+(?:want|need|would\s+like|would\s+appreciate)\s+(?:you\s+)?to\s+|(?:i['’]d|we['’]d)\s+like\s+(?:you\s+)?to\s+|let['’]s\s+|let\s+us\s+|help\s+me(?:\s+to)?\s+|you\s+(?:need\s+to|have\s+to|must|should)\s+)*$/i;
-  const requested = [...output.matchAll(/\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/gi)]
+  const requested = [...output.matchAll(/\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|revise|edit|redo|update|reissue|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/gi)]
     .some(production => {
       const preceding = output.slice(0, production.index);
       const boundary = Math.max(preceding.lastIndexOf('\n'), preceding.lastIndexOf('.'),
