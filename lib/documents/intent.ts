@@ -85,6 +85,23 @@ export function answeredDocumentRequest(progress: {
     ? documentRequest(progress.objective.text) : null;
 }
 
+/** A model-authored delivery notice is never document source content.
+ * This is a narrow shape check, not a résumé or document-format template.
+ * Timestamp wrappers and links must not turn fabricated file claims into PDFs. */
+export function isDocumentDeliveryNarrative(value: string): boolean {
+  let opening = value.trimStart();
+  for (let index = 0; index < 3; index++) {
+    const next = opening.replace(/^\[(?:message timestamp|timestamp|generated at):[^\]\r\n]{1,100}\]\s*/i, '').trimStart();
+    if (next === opening) break;
+    opening = next;
+  }
+  const first = opening.slice(0, 1600);
+  const statusLead = /^(?:(?:i(?:'ve| have)\s+)?(?:successfully\s+)?(?:created|generated|rendered|produced|prepared|formatted)(?:\s+and\s+(?:inspected|reviewed|validated))?\s+(?:\d{1,3}|one|two|three|four|five|six)\s+pages?\b|here (?:are|is)\s+(?:your|the)\s+(?:final\s+)?(?:word|pdf|downloads?|documents?|files?)\b|both files are (?:now\s+)?(?:available|ready) for download\b)/i;
+  const internalDownload = /\/api\/documents\/download\?/i.test(opening);
+  const downloadOffer = /\b(?:download\s+(?:word|pdf)(?:\s+document)?|both files? (?:are|now)|files? (?:are|now) available|links? (?:for|to) (?:word|pdf))\b/i.test(first);
+  return statusLead.test(first) || (internalDownload && downloadOffer);
+}
+
 /** Detect a model's false assertion that it cannot create files, rather than
  * treating that explanation as the user's requested document content.
  * Only examine the opening of the answer; actual document copy may discuss
