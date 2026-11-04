@@ -75,7 +75,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     // Exercise corrupted/ambiguous data in rolled-back isolated Postgres ONLY;
     // the production unique-root guard is restored by savepoint rollback.
     await db.query('drop index public.task4a_continuation_one_root');
-    await db.query("insert into project_continuation_authorizations(id,project_id,actor_id,chat_id,source_mission_id,approval_digest,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence) select gen_random_uuid(),project_id,actor_id,chat_id,source_mission_id,$2,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence from project_continuation_authorizations where id=$1",[continuation,'b'.repeat(64)]);
+    await db.query("insert into project_continuation_authorizations(id,project_id,actor_id,chat_id,source_mission_id,approval_digest,authorized_at,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence) select gen_random_uuid(),project_id,actor_id,chat_id,source_mission_id,$2,authorized_at,deadline,incremental_tokens,incremental_calls,incremental_microusd,assessment_reserve_tokens,completion_reserve_tokens,assessment_reserve_calls,completion_reserve_calls,allowed_models,historical_tokens,historical_calls,historical_mission_deadline,pricing_evidence from project_continuation_authorizations where id=$1",[continuation,'b'.repeat(64)]);
     await db.query('set role service_role');
     assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,null,
       'Multiple eligible successors must fail closed rather than choose one');
@@ -92,9 +92,10 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      await db.query('release savepoint unmetered_attempt');
     }
    }finally{
-    await db.query('reset role');
+    // A failed DML statement aborts the transaction until savepoint rollback.
     await db.query('rollback to savepoint ambiguous_tips');
     await db.query('release savepoint ambiguous_tips');
+    await db.query('reset role');
     await db.query('set role service_role');
    }
    assert.equal((await one(db,'select task4a_current_continuation_id($1) id',[project])).id,continuation,
