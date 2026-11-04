@@ -85,6 +85,9 @@ jobs:
       - name: Measure Phase 1 synthetic document regression in LibreOffice and Chromium
         run: node scripts/document-phase1-word-acceptance.mjs
 
+      - name: Keep unresolved professional-quality requirements visible in diagnostic CI
+        run: node scripts/document-phase1-contract.mjs
+
       - name: Upload document acceptance artifacts
         if: always()
         uses: actions/upload-artifact@v4
