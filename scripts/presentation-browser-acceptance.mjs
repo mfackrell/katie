@@ -86,15 +86,27 @@ try {
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   let historySize = 0;
+  let stalledRecoveryFixture = false;
   await page.route("**/api/**", route => {
     const url = new URL(route.request().url());
     const body = route.request().postDataJSON();
     const payload = url.pathname === "/api/models" ? { openai: ["fixture"] }
-      : url.pathname === "/api/messages" ? { messages: Array.from({ length: historySize }, (_, i) => ({
-        id: `fixture-message-${i}`, role: i % 2 === 0 ? "user" : "assistant",
-        content: i % 2 === 0 ? "Historical question "+i : "## Historical answer "+i+"\\n\\n".concat("Financial modeling and operations context. ".repeat(12)),
-        chatId: "22222222-2222-4222-8222-222222222222", createdAt: "2026-11-03T12:00:00.000Z"
-      })) }
+      : url.pathname === "/api/chat/status" && stalledRecoveryFixture ? {
+        requestId:url.searchParams.get("requestId"),
+        chatId:url.searchParams.get("chatId"),
+        status:"completed", assistantMessageId:"fixture-saved-reply", workflowStatus:"completed"
+      }
+      : url.pathname === "/api/messages" ? { messages: [
+        ...Array.from({ length: historySize }, (_, i) => ({
+          id: `fixture-message-${i}`, role: i % 2 === 0 ? "user" : "assistant",
+          content: i % 2 === 0 ? "Historical question "+i : "## Historical answer "+i+"\\n\\n".concat("Financial modeling and operations context. ".repeat(12)),
+          chatId: "22222222-2222-4222-8222-222222222222", createdAt: "2026-11-03T12:00:00.000Z"
+        })),
+        ...(stalledRecoveryFixture ? [
+          {id:"fixture-stalled-user",role:"user",content:"Recover a saved reply from stalled stream.",chatId:"22222222-2222-4222-8222-222222222222",createdAt:"2026-11-03T13:00:00.000Z"},
+          {id:"fixture-saved-reply",role:"assistant",content:"Recovered saved answer after the stream stopped.",model:"fixture",chatId:"22222222-2222-4222-8222-222222222222",createdAt:"2026-11-03T13:00:01.000Z"},
+        ] : []),
+      ] }
       : url.pathname === "/api/ui-state" ? { state: { key: body?.key ?? url.searchParams.get("key"), version: 1, value: body?.value ?? {} } }
       : url.pathname === "/api/version" ? { version: "fixture" } : {};
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
@@ -107,6 +119,16 @@ try {
       if (new URL(input instanceof Request ? input.url : String(input), location.href).pathname !== "/api/chat") return original(input, init);
       window.__lastChatPayload = JSON.parse(init.body);
       const encoder = new TextEncoder();
+      if (window.__forceStalledStream) {
+        window.__stalledChatCalls = (window.__stalledChatCalls ?? 0) + 1;
+        return new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(encoder.encode(JSON.stringify({type:"metadata",modelId:"fixture",provider:"openai"})+"\\n"));
+          controller.enqueue(encoder.encode(JSON.stringify({type:"delta",text:"A response began, then the transport stalled."})+"\\n"));
+          init?.signal?.addEventListener("abort",() =>
+            controller.error(new DOMException("Verified saved reply supersedes lost stream","AbortError")),{once:true});
+          // No close: server persistence and settlement occur independently.
+        }}), {headers:{"content-type":"application/x-ndjson"}});
+      }
       return new Response(new ReadableStream({ start(controller) {
         const emit = value => controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
         emit({ type: "metadata", provider: "openai", modelId: "fixture" });
@@ -248,7 +270,23 @@ try {
   if (sent !== "Quick Enter should send without waiting for draft debounce.") throw new Error("Enter submitted stale composer text: " + sent);
   await page.evaluate(() => window.__finishPresentationStream());
   await page.getByLabel("Katie response progress", { exact: true }).waitFor({state:"hidden"});
-  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, centralProgressStream: true, noRightRailDuplication: true, composerPerformance: { shortTyping, longTyping, persistedDraft: true, quickEnter: true } }));
+  // Regression: a lost in-flight response stream must recover the exact
+  // persisted answer and terminal workflow, without a duplicate paid request.
+  stalledRecoveryFixture = true;
+  await page.evaluate(() => {
+    window.__forceStalledStream = true;
+    window.__stalledChatCalls = 0;
+  });
+  await composer.fill("Recover a saved reply from stalled stream.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByLabel("Katie response progress", {exact:true}).waitFor();
+  await page.getByText("Recovered saved answer after the stream stopped.",{exact:true}).waitFor({timeout:30_000});
+  await page.getByLabel("Katie response progress", {exact:true}).waitFor({state:"hidden",timeout:10_000});
+  const recoveredCopies=await page.getByText("Recovered saved answer after the stream stopped.",{exact:true}).count();
+  const stalledCalls=await page.evaluate(() => window.__stalledChatCalls ?? 0);
+  if(recoveredCopies!==1 || stalledCalls!==1) throw Error("Stalled stream recovery duplicate/missing reply: "+JSON.stringify({recoveredCopies,stalledCalls}));
+  if(await page.getByRole("button",{name:"Cancel",exact:true}).count()) throw Error("Recovered request left a stuck spinner or Cancel control");
+  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, centralProgressStream: true, noRightRailDuplication: true, savedReplyRecovery:true, composerPerformance: { shortTyping, longTyping, persistedDraft: true, quickEnter: true } }));
 
 } finally {
   await cleanup();

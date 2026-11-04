@@ -66,6 +66,7 @@ export function ReasoningExplainerPanel({
   loading,
   state,
   statusMessage,
+  processingActivity = [],
   collaborationActive = false,
   collaborationActivity = [],
   collaborationSummary,
@@ -74,6 +75,7 @@ export function ReasoningExplainerPanel({
   loading: boolean;
   state: ReasoningUiState;
   statusMessage?: string;
+  processingActivity?: Array<{stage:string;message:string}>;
   collaborationActive?: boolean;
   collaborationActivity?: CollaborationActivityItem[];
   collaborationSummary?: CollaborationSummary | null;
@@ -100,12 +102,12 @@ export function ReasoningExplainerPanel({
     <div className="w-full max-w-none max-h-[52vh] overflow-hidden rounded-2xl border border-white/12 bg-zinc-950/90 p-3 shadow-[0_18px_48px_rgba(0,0,0,0.5)] backdrop-blur-md sm:p-3.5">
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="truncate text-[12px] font-medium text-zinc-100">Thinking</h3>
+          <h3 className="truncate text-[12px] font-medium text-zinc-100">Activity</h3>
           <p className="text-[11px] text-zinc-400">
             {collaborationActive
               ? "Multi-model collaboration"
               : loading
-                ? "Streaming updates"
+                ? "Live processing progress"
                 : hasFinalAnswer
                   ? "Done"
                   : "Idle"}
@@ -132,7 +134,7 @@ export function ReasoningExplainerPanel({
         ) : null}
 
         <section>
-          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Live status</p>
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Current status</p>
           <div className="max-h-28 overflow-y-auto rounded-md bg-white/[0.03] px-2.5 py-2 text-[12px] leading-5 text-zinc-200">
             {statusMessage ? (
               <p>{statusMessage}</p>
@@ -143,6 +145,20 @@ export function ReasoningExplainerPanel({
             )}
           </div>
         </section>
+
+        {processingActivity.length > 0 ? (
+          <section aria-label="Verified processing stages">
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Processing</p>
+            <ol className="max-h-44 space-y-1.5 overflow-y-auto text-xs text-zinc-300">
+              {processingActivity.map((entry,index) => (
+                <li key={index} className="flex gap-2">
+                  <span className="text-emerald-400" aria-hidden="true">•</span>
+                  <span>{entry.message}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
 
         {collaborationActivity.length > 0 ? (
           <section>
@@ -187,7 +203,7 @@ export function ReasoningExplainerPanel({
           </section>
         ) : null}
 
-        {compactCategories.length > 0 ? (
+        {compactCategories.some(category => Boolean(category.explanation?.trim())) ? (
           <section>
             <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Categories</p>
             <ul className="space-y-1.5">

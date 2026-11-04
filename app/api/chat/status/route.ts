@@ -66,8 +66,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  let isManagedChat = false;
   try {
     const agent = await managedActor(record.actorId);
+    isManagedChat = Boolean(agent);
     if (agent) {
       const { data, error } = await getSupabaseAdminClient().from("agent_tasks").select("agent_id,actor_id,snapshot").eq("chat_id", chatId).maybeSingle<{ agent_id: string; actor_id: string; snapshot: unknown }>();
       if (error || !data || data.agent_id !== agent.id || data.actor_id !== record.actorId) throw new Error("Task association invalid");
@@ -92,10 +94,22 @@ export async function GET(request: NextRequest) {
       }
     }
   }
+  // Status polling is read-only. Expose the authorized durable workflow state
+  // so a client that lost its NDJSON stream can distinguish an answer saved
+  // from an entire request that has finished memory/accounting settlement.
+  let workflowStatus: string | null = null;
+  if (!isManagedChat) {
+    try {
+      workflowStatus = (await savedWorkflow(record.actorId))?.status ?? null;
+    } catch {
+      // Do not fabricate a completed settlement when the ledger is unavailable.
+    }
+  }
   return NextResponse.json(
     {
       requestId: record.requestId,
       chatId: record.chatId,
+      workflowStatus,
       status: record.status,
       assistantMessageId: record.assistantMessageId ?? null,
       assistantModel: record.assistantModel ?? null,

@@ -1,4 +1,4 @@
-import {encodeDeveloperHandoff,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
+import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
@@ -699,7 +699,7 @@ async function dispatchOrdinaryNativeDevelopment(){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string}}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
@@ -709,15 +709,37 @@ async function dispatchOrdinaryNativeDevelopment(){
   try{
    task=await readTask(a.task_id);c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
    if(a.previous_developer_approval_id){
-    const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
-    if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+    // One pre-provider Task 4A gate failure has no WIP checkpoint to recover.
+    // Only the separately owner-consented, immutable replacement approval
+    // may use the original issue; ordinary successors retain the WIP gate.
+    const pregrant=c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+    if(pregrant){
+      const {data:ready,error}=await db.rpc<boolean>('task4a_pregrant_redispatch_ready',{
+        p_task:task.id,p_approval:a.id
+      });
+      if(error||ready!==true)continue;
+    }else{
+      const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
+      if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+    }
    }
   }catch{continue;} // Ineligible or unavailable evidence denies this row, not unrelated approvals.
   const client=github(),binding=await repository(task);
   const [user,repo,workflow]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.actions.getWorkflow({...binding,workflow_id:'autonomous-development.yml'})]);
   if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||binding.fullName!=='mfackrell/katie'||workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/autonomous-development.yml')continue;
-  const task4aId=typeof a.developer_authority?.task4aContinuationId==='string'?a.developer_authority.task4aContinuationId:null;
-  const proof:DeveloperDispatchPayload={authorityKind:task4aId?'task4a-developer':'ordinary-developer',...(task4aId?{task4aContinuationId:task4aId}:{}),taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
+  // The original Task 4A is never eligible for an ordinary grant, even
+  // when an older owner decision mistakenly omitted its continuation binding.
+  let authority:ReturnType<typeof classifyDeveloperDispatchAuthority>;
+  try{authority=classifyDeveloperDispatchAuthority(c.projectId,a.developer_authority);}
+  catch{continue;}
+  if(authority.authorityKind==='task4a-developer'){
+    const verified=await db.rpc<boolean>('task4a_native_authority_ready',{
+      p_project:c.projectId,p_task:task.id,p_authority:authority.task4aContinuationId
+    });
+    if(verified.error||verified.data!==true)continue;
+  }
+  const proof:DeveloperDispatchPayload={...authority,taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
   const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
   const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
@@ -727,7 +749,29 @@ async function dispatchOrdinaryNativeDevelopment(){
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
-   if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!unpackDevelopmentRequest(existing.data.body??'').startsWith(marker(task)+'\n'))continue;
+   const priorBody=unpackDevelopmentRequest(existing.data.body??'');
+   if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||
+     !priorBody.startsWith(marker(task)+'\n'))continue;
+   if(authority.authorityKind==='task4a-developer'&&
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
+     // Authenticate the old incorrect signed issue against the historical
+     // dispatch instant. It must never be replayed as a new grant.
+     let oldProof:ReturnType<typeof readDeveloperHandoff>;
+     try{oldProof=readDeveloperHandoff(priorBody,key,
+       Date.parse(String(task.external.dispatchStartedAt??'')));}catch{continue;}
+     const oldApproval=a.previous_developer_approval_id;
+     const failure=task.external.receipt as {outcome?:string;run_id?:number;pr_url?:string|null}|undefined;
+     if(oldProof.authorityKind!=='ordinary-developer'||
+       oldProof.projectId!==c.projectId||oldProof.taskId!==task.id||
+       oldProof.approvalId!==oldApproval||oldProof.scopeHash!==c.scopeHash||
+       oldProof.contractHash!==c.contractHash||oldProof.baselineSha!==c.baselineSha||
+       issue!==969||failure?.outcome!=='BLOCKED'||failure?.run_id!==41673059705||
+       failure?.pr_url!==null)continue;
+     const run=await client.actions.getWorkflowRun({...binding,run_id:41673059705});
+     if(run.data.conclusion!=='failure'||run.data.status!=='completed'||
+       run.data.head_sha!==task.external.developerReleaseSha||
+       run.data.event!=='issues')continue;
+   }
   }else if(task.external.attempted||task.external.issueNumber)continue;
   const claim=await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});if(claim.error||claim.data!==true)continue;
   const claimed=await readTask(task.id);
