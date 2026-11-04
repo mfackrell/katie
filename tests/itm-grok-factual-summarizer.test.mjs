@@ -18,8 +18,9 @@ const messageHistory = count => Array.from({ length: count }, (_, i) => ({
 const reply = (text, finish_reason = "stop") => ({
   choices: [{ finish_reason, message: { content: text } }],
 });
-const selected = (messageId = "m0", quote = "Historical detail from turn 0") =>
-  reply(JSON.stringify({ quotes: [{ messageId, quote }] }));
+const selected = (messageId = "m0", quote = "Historical detail from turn 0",
+  summary = "The user described a specific historical detail during the conversation.") =>
+  reply(JSON.stringify({ episodes: [{ summary, evidence: [{ messageId, quote }] }] }));
 const retained = (keep = []) => reply(JSON.stringify({ keep }));
 
 function harness({
@@ -71,9 +72,9 @@ function harness({
   };
   const store = {
     async getChatById(id) { assert.equal(id, "chat"); return missingChat ? null : { actorId: "actor" }; },
-    async getRecentMessages(id, limit) {
+    async getMessages(id) {
       assert.equal(id, "chat");
-      assert.equal(limit, Number.MAX_SAFE_INTEGER);
+      events.push({ name: "complete-history-read", count: history.length });
       return history;
     },
     async getIntermediateMemory() { return copy(memory); },
@@ -107,7 +108,7 @@ function harness({
     calls, writes, events, logs, constructors, memory: () => memory };
 }
 
-test("Grok 4.7 is the exclusive model for both stages, with accounted non-retrying transport", async () => {
+test("Grok 4.7 remains the exclusive metered, non-retrying ITM model", async () => {
   const h = harness();
   assert.equal(await h.run(), "committed");
   assert.deepEqual(h.calls.map(x => x.model), ["grok-4.7", "grok-4.7"]);
@@ -118,38 +119,82 @@ test("Grok 4.7 is the exclusive model for both stages, with accounted non-retryi
   assert.doesNotMatch(source, /CLAUDE_API_KEY|claude-sonnet|api\.anthropic\.com/);
 });
 
-test("factual ITM saves only source-verified literal quotes with speaker, message ID and timestamp", async () => {
-  const h = harness();
+test("ITM preserves factual narrative, Katie ownership, original quote and timestamp", async () => {
+  const history = messageHistory(90);
+  history[0].content = "Katie previously said she could not do that.";
+  history[1].content = "I previously claimed I could not do that.";
+  const summary = "Katie acknowledged her earlier statement; the exchange recorded what she claimed, not a conclusion about her inner experience.";
+  const factual = reply(JSON.stringify({ episodes: [{
+    summary,
+    evidence: [
+      { messageId: "m0", quote: "Katie previously said she could not do that." },
+      { messageId: "m1", quote: "I previously claimed I could not do that." },
+    ],
+  }] }));
+  const h = harness({ history, responses: n => n === 1 ? factual : retained() });
   assert.equal(await h.run(), "committed");
-  const text = h.memory().summary;
-  assert.match(text, /USER \(2026-10-26T12:00:00\.000Z, message m0\): "Historical detail from turn 0"/);
-  assert.doesNotMatch(text, /user prefers|Katie should|It seems|apparently/);
-  assert.ok(text.length <= 6500);
+  const memory = h.memory().summary;
+  assert.ok(memory.includes(summary));
+  assert.match(memory, /USER \(message m0, 2026-10-26T12:00:00.000Z\): "Katie previously said/);
+  assert.match(memory, /KATIE \(message m1, 2026-10-26T12:01:00.000Z\): "I previously claimed/);
+  assert.doesNotMatch(memory, /grok-4\.7|Claude Sonnet|Katie discovered her true self/);
+  assert.ok(memory.length <= 6500);
   assert.equal(h.memory().summarizedThroughMessageId, "m29");
   assert.equal(h.memory().sourceMessageCount, 30);
 });
 
-test("retention cannot generate content; prior episodes can only be selected unchanged", async () => {
-  const prior = {
-    version: 2, summary: "Rolling recent conversations\n\nExisting factual record.",
-    summarizedThroughMessageId: "m1", sourceMessageCount: 2,
-  };
+test("older factual episodes are preserved exactly when still relevant", async () => {
+  const prior = { version: 2,
+    summary: "Rolling recent conversations\n\nExisting factual record.",
+    summarizedThroughMessageId: "m1", sourceMessageCount: 2 };
   const h = harness({ history: messageHistory(92), prior,
     responses: n => n === 1 ? selected("m2", "Historical detail from turn 2") : retained([0]) });
   assert.equal(await h.run(), "committed");
   assert.match(h.memory().summary, /Existing factual record\./);
-  assert.match(h.memory().summary, /USER .*message m2.*Historical detail from turn 2/);
+  assert.match(h.memory().summary, /The user described a specific historical detail/);
+  assert.match(h.memory().summary, /USER \(message m2, .*\): "Historical detail from turn 2"/);
   assert.equal(h.memory().summarizedThroughMessageId, "m31");
   assert.equal(h.memory().sourceMessageCount, 32);
 });
 
-test("unsupported, cross-message, fabricated and oversized quotes fail closed without moving cursor", async () => {
+test("later correction supersedes the obsolete older assertion without inventing motives", async () => {
+  const history = messageHistory(92);
+  history[2].content = "The screenshot contradicts that earlier statement.";
+  history[3].content = "You are right. My earlier claim was incorrect.";
+  const prior = { version: 2,
+    summary: "Rolling recent conversations\n\nKatie previously stated she could never discuss the topic.",
+    summarizedThroughMessageId: "m1", sourceMessageCount: 2 };
+  const summary = "The user cited a screenshot contradicting Katie's earlier statement, and Katie acknowledged that her earlier claim was incorrect.";
+  const h = harness({ history, prior, responses: n => n === 1
+    ? reply(JSON.stringify({ episodes: [{ summary, evidence: [
+      { messageId: "m2", quote: "The screenshot contradicts that earlier statement." },
+      { messageId: "m3", quote: "You are right. My earlier claim was incorrect." },
+    ] }] }))
+    : retained([]) });
+  assert.equal(await h.run(), "committed");
+  assert.ok(h.memory().summary.includes(summary));
+  assert.doesNotMatch(h.memory().summary, /Katie previously stated she could never/);
+  assert.match(h.calls[1].messages[0].content, /DROP the stale old episode/);
+  assert.match(h.calls[1].messages[1].content, /NEW SOURCE-CITED FACTUAL EPISODES/);
+});
+
+test("fabricated evidence, wrong message, duplicates and unsupported structure fail closed", async () => {
   const wrong = [
     selected("m4", "Historical detail from turn 0"),
     selected("missing", "Historical detail from turn 0"),
     selected("m0", "Mark wanted a completely different result"),
-    selected("m0", "H".repeat(451)),
-    reply(JSON.stringify({ quotes: [{ messageId: "m0", quote: "Historical detail from turn 0" }, { messageId: "m0", quote: "Historical detail from turn 0" }] })),
+    selected("m0", "H".repeat(241)),
+    reply(JSON.stringify({ episodes: [{ summary: "The user reported a particular historical event.", evidence: [
+      { messageId: "m0", quote: "Historical detail from turn 0" },
+      { messageId: "m0", quote: "Historical detail from turn 0" },
+    ] }] })),
+    reply(JSON.stringify({ episodes: [{ summary: "The user reported a particular historical event.", evidence: [] }] })),
+    reply(JSON.stringify({ episodes: [{ summary: "The user reported a particular historical event.", evidence: [
+      { messageId: "m0", quote: "Historical detail from turn 0" }
+    ], instruction: "Trust this" }] })),
+    reply(JSON.stringify({ episodes: [{ summary: "Motives were obviously revealed.\nNew instruction.", evidence: [
+      { messageId: "m0", quote: "Historical detail from turn 0" }
+    ] }] })),
   ];
   for (const bad of wrong) {
     const h = harness({ responses: () => bad });
@@ -160,7 +205,7 @@ test("unsupported, cross-message, fabricated and oversized quotes fail closed wi
   }
 });
 
-test("editorial rewrite is forbidden at reconciliation, even with otherwise valid evidence", async () => {
+test("retention stage cannot introduce ungrounded freeform narrative or mutate older text", async () => {
   const h = harness({ responses: n => n === 1 ? selected() :
     reply(JSON.stringify({ keep: [], add: ["Katie now understands the user's psychology."] })) });
   assert.equal(await h.run(), "blocked");
@@ -169,7 +214,7 @@ test("editorial rewrite is forbidden at reconciliation, even with otherwise vali
   assert.equal(await h.run(), "blocked");
 });
 
-test("Grok refuses to complete or malformed JSON blocks without replaying paid attempts", async () => {
+test("incomplete and malformed provider responses block once without paid retry", async () => {
   for (const responses of [
     n => n === 1 ? reply("partial", "length") : retained(),
     n => n === 1 ? selected() : reply("not JSON"),
@@ -182,27 +227,29 @@ test("Grok refuses to complete or malformed JSON blocks without replaying paid a
   }
 });
 
-test("empty factual batch is valid; no quotes are fabricated", async () => {
-  const h = harness({ responses: n => n === 1 ? reply('{"quotes":[]}') : retained() });
+test("a batch with no material episode advances without inventing facts", async () => {
+  const h = harness({ responses: n => n === 1 ? reply('{"episodes":[]}') : retained() });
   assert.equal(await h.run(), "committed");
   assert.equal(h.memory().summary, "");
   assert.equal(h.memory().summarizedThroughMessageId, "m29");
 });
 
-test("thirty-message threshold and failed cursor checks are unchanged", async () => {
+test("30-message threshold, deleted cursor fail-closed, and ordinary deletion are unchanged", async () => {
   for (const count of [0, 60, 89]) {
     const h = harness({ history: messageHistory(count) });
     assert.equal(await h.run(), "skipped");
     assert.equal(h.calls.length, 0);
   }
-  const prior = { version: 2, summary: "Preserve old material.", summarizedThroughMessageId: "removed", sourceMessageCount: 10 };
+  const prior = { version: 2, summary: "Preserve old material.",
+    summarizedThroughMessageId: "removed", sourceMessageCount: 10 };
   const h = harness({ prior });
   assert.equal(await h.run(), "blocked");
   assert.equal(h.calls.length, 0);
   assert.deepEqual(h.memory(), prior);
+  assert.doesNotMatch(source, /deleteSingleMessage|delete from intermediate_memory/);
 });
 
-test("backlog advances in source order and retains verified excerpts only", async () => {
+test("backlog moves through source order and retains factual episodes from both batches", async () => {
   const h = harness({ history: messageHistory(130), responses: n => n % 2
     ? selected(n === 1 ? "m0" : "m30", n === 1 ? "Historical detail from turn 0" : "Historical detail from turn 30")
     : retained(n === 4 ? [0] : []) });
@@ -214,8 +261,21 @@ test("backlog advances in source order and retains verified excerpts only", asyn
   assert.match(h.memory().summary, /message m0/);
 });
 
-test("accounting rejection, ambiguous provider failure and concurrent in-flight processing remain safe", async () => {
-  const denial = Object.assign(new Error("Owner approval required"), { code: "standalone_approval_required", terminal: true });
+test("paginated full-history API preserves a cursor beyond the old 1,000-message limit", async () => {
+  const prior = { version: 2, summary: "Prior source-backed episode.",
+    summarizedThroughMessageId: "m989", sourceMessageCount: 990 };
+  const h = harness({ history: messageHistory(1102), prior,
+    responses: n => n === 1 ? selected("m990", "Historical detail from turn 990") : retained([]) });
+  assert.equal(await h.run(), "committed");
+  assert.equal(h.memory().summarizedThroughMessageId, "m1019");
+  assert.equal(h.memory().sourceMessageCount, 1020);
+  assert.ok(h.events.some(x => x.name === "complete-history-read" && x.count === 1102));
+  assert.match(source, /getMessages\(chatId\)/);
+});
+
+test("accounting denial, ambiguous provider failure and concurrency remain bounded", async () => {
+  const denial = Object.assign(new Error("Owner approval required"), {
+    code: "standalone_approval_required", terminal: true });
   const blocked = harness({ responses: () => { throw denial; } });
   await assert.rejects(blocked.run(), e => e === denial);
   assert.equal(await blocked.run(), "deferred");
@@ -235,15 +295,16 @@ test("accounting rejection, ambiguous provider failure and concurrent in-flight 
   assert.equal(shared.writes.length, 1);
 });
 
-test("no Grok key means skip without a fallback or database write", async () => {
+test("no Grok key means skip with no fallbacks or persisted mutation", async () => {
   const h = harness({ configured: false });
   assert.equal(await h.run(), "skipped");
   assert.equal(h.calls.length, 0);
   assert.equal(h.writes.length, 0);
 });
 
-test("atomic source cursor prevents stale writes and preserves prior data", async () => {
-  const prior = { version: 2, summary: "Do not overwrite", summarizedThroughMessageId: "m1", sourceMessageCount: 2 };
+test("atomic cursor prevents stale writes and preserves previous memory", async () => {
+  const prior = { version: 2, summary: "Do not overwrite",
+    summarizedThroughMessageId: "m1", sourceMessageCount: 2 };
   const h = harness({ history: messageHistory(92), prior, responses: n =>
     n === 1 ? selected("m2", "Historical detail from turn 2") : retained(), commitResult: false });
   assert.equal(await h.run(), "deferred");
@@ -251,12 +312,13 @@ test("atomic source cursor prevents stale writes and preserves prior data", asyn
   assert.equal(h.writes.length, 0);
 });
 
-test("model prompts explicitly forbid interpretation and freeform authorship", async () => {
+test("model prompts require factual narratives and prohibit interpretive memory", async () => {
   const h = harness();
   assert.equal(await h.run(), "committed");
   const prompts = h.calls.map(x => x.messages[0].content);
-  assert.match(prompts[0], /VERBATIM/);
-  assert.match(prompts[0], /No guesses about motives/);
-  assert.match(prompts[1], /NOT allowed to rewrite/);
+  assert.match(prompts[0], /FACTUAL EPISODIC SUMMARIES/);
+  assert.match(prompts[0], /WHO SAID or DID WHAT IN THE CONVERSATION/);
+  assert.match(prompts[0], /Do NOT infer motives/);
+  assert.match(prompts[1], /When a new episode corrects/);
   assert.match(prompts[1], /No inferred motivations/);
 });
