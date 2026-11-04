@@ -37,6 +37,7 @@ import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode"
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { recalledKatieVisualMemoryContext } from "@/lib/chat/visual-memory";
 import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest, currentTurnImageGroundingContext } from "@/lib/uploads/still-image-observations";
@@ -1017,6 +1018,18 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
+    // Exact source IDs let a saved media-search excerpt recover Katie's own
+    // recorded visual episode without falsely treating an arbitrary description
+    // as first-hand vision or reopening unrelated actor-owned attachments.
+    if (mediaMemory) {
+      const recalledEpisodes = recalledKatieVisualMemoryContext(
+        actorId, catalog, mediaMemory.hits, Boolean(mediaMemory.decision.clarification)
+      );
+      if (recalledEpisodes) mediaMemory = {
+        ...mediaMemory,
+        context: mediaMemory.context + "\n" + recalledEpisodes,
+      };
+    }
     const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
       : pdfMemoryDecision ?? (timelineActive
@@ -1131,7 +1144,6 @@ async function executeChat(request: NextRequest) {
       ? currentTurnImageGroundingContext(requestAttachments,freshTaskDescriptions,new Set(newAttachments.map(ref=>ref.fileId)))
       : '';
     const selectionContext = () => currentImageGrounding + '\n' + timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
-      + (standaloneImageObservation&&requestAttachments.some(file=>file.mimeType.startsWith('image/'))?'\nImage source retained privately; the current response model receives labelled textual visual observations. It has not directly inspected raw pixels.':'')
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -3516,9 +3528,8 @@ ${chunkWorkflowSummary}`;
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
             }
 
-            // The final candidate must be actual document content. A model's
-            // fabricated "created and inspected" response cannot become a
-            // mechanically valid Word/PDF or enter paid content review.
+            // Final document output must be source content, not a fabricated
+            // "files ready" notice. Reject before any paid content review.
             if (documentProduction && !selectedDocumentSource &&
                 isDocumentDeliveryNarrative(result.text ?? "")) {
               console.warn("[DocumentDraft] delivery notice rejected before review and rendering", {
