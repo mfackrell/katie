@@ -12,6 +12,7 @@ export const receiptSchema = z.object({ version: z.literal(1), id: z.string().re
   files: z.object({ docx: fileSchema, pdf: fileSchema }).strict(), pages: z.number().int().min(1).max(8),
   inspectedPageHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(8),
   correctionCount: z.number().int().min(0).max(3), createdAt: z.string(),
+  visualStatus: z.enum(['passed','technical-only']).optional(),
 }).strict();
 export type DocumentReceipt = z.infer<typeof receiptSchema>;
 type Storage = ReturnType<typeof createClient>['storage'];
@@ -54,7 +55,7 @@ export function createDocumentStore(storage: Storage) {
       }
       const receipt = receiptSchema.parse({ version: 1, id, scope,
         files: Object.fromEntries((['docx', 'pdf'] as const).map(ext => [ext, { filename: `document.${ext}`, mime: MIME[ext], sha256: hash(files[ext]), size: files[ext].length }])),
-        pages: inspection.pageCount, inspectedPageHashes: inspection.pageHashes, correctionCount, createdAt: new Date().toISOString(),
+        pages: inspection.pageCount, inspectedPageHashes: inspection.pageHashes, correctionCount, visualStatus: inspection.visual, createdAt: new Date().toISOString(),
       });
       for (const ext of ['docx', 'pdf'] as const) await writeVerified(path(scope.chatId, id, ext), files[ext], MIME[ext]);
       await writeVerified(path(scope.chatId, id, 'json'), Buffer.from(JSON.stringify(receipt)), 'application/json');
