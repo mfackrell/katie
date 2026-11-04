@@ -44,13 +44,13 @@ create trigger task4a_successor_insert_guard before insert
 -- Audit receipts must be append-only even if a privileged operator later
 -- acquires UPDATE or DELETE. Do not alter Phase 1 receipt history.
 create or replace function public.task4a_successor_audit_immutable()
-returns trigger language plpgsql set search_path=public as $
+returns trigger language plpgsql set search_path=public as $task4a_audit$
 begin
  if old.event in ('task4a_successor_continuation_authorized','task4a_native_pregrant_recovered') then
   raise exception 'TASK4A_SUCCESSOR_AUDIT_IMMUTABLE';
  end if;
  return case when tg_op='DELETE' then old else new end;
-end $;
+end $task4a_audit$;
 revoke all on function public.task4a_successor_audit_immutable() from public,anon,authenticated;
 drop trigger if exists task4a_successor_audit_immutable on public.project_events;
 create trigger task4a_successor_audit_immutable
