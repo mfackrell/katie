@@ -184,7 +184,7 @@ test("network failure keeps the chat open without clearing its active pointer", 
 test("authorization errors do not navigate or claim deletion", async () => {
   for (const status of [401, 403]) {
     const h = harness({ reply: async () => ({ ok: false, status }) });
-    deleteButton(h.render()).props.onClick();
+    startDelete(h).props.onConfirm();
     await flush();
     assert.ok(alert(h.render()));
     assert.equal(h.routes.length, 0);
