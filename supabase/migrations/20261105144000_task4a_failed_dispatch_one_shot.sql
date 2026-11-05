@@ -40,7 +40,7 @@ begin
  select * into m from public.agent_missions where id='d3fd3d95-7287-4bfc-8c97-c105fde46c36'::uuid and project_id=p.id;
  select * into j from public.mission_assignments where id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid and mission_id=m.id;
  select * into t from public.agent_tasks where id=j.id;
- select * into a from public.benchmark_native_spending_approvals where id='c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid and task_id=t.id;
+ select * into a from public.benchmark_native_spending_approvals where previous_developer_approval_id='ddccc7a1-743f-4031-8ecd-a6926568ca98'::uuid and task_id=t.id;
  select * into root from public.benchmark_native_spending_approvals where id='ddccc7a1-743f-4031-8ecd-a6926568ca98'::uuid;
  select * into acct from public.benchmark_budget_accounts where id=a.account_id;
  select * into s from public.project_continuation_authorizations
@@ -69,6 +69,15 @@ begin
   or a.owner_id is distinct from owner or owner is null
   or a.previous_developer_approval_id is distinct from root.id
   or a.consumed_at is not null or a.revoked_at is not null
+  or not exists(select 1 from public.project_events e
+       where e.project_id=p.id and e.event='task4a_native_pregrant_recovered'
+        and e.data->>'previousApprovalId'=root.id::text
+        and e.data->>'replacementApprovalId'=a.id::text
+        and e.data->>'continuationId'=s.id::text
+        and e.data->>'ownerId'=owner::text
+        and e.data->>'limitsNotIncreased'='true'
+        and e.data->>'accountReused'='true'
+        and e.data->>'paidCallsCreated'='0')
   or a.developer_authority->>'task4aContinuationId' is distinct from s.id::text
   or a.developer_authority->>'scopeHash' is distinct from p.approved_hash
   or root.id is null or root.consumed_at is not null or root.revoked_at is null
