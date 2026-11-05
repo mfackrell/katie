@@ -693,21 +693,27 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const hash=createHash('sha256').update(image).digest('hex');
       const latestEpisode=buildKatieVisualEpisode(merged,hash,new Date(now()).toISOString());
       const priorEpisode=verifiedKatieVisualEpisode(previous);
-      // A refused, metadata-only, or otherwise unverified reinspection must NOT
-      // erase an earlier successful observation of these exact same pixels.
-      // Keep the prior perception as Katie's active memory; preserve the newer
-      // unsuccessful report in observationHistory for diagnostic provenance.
-      const keepPrior=Boolean(!latestEpisode && priorEpisode?.sourceHash===hash);
-      const descriptor:ConversationAttachment=latestEpisode
-        ? {...merged,visualMemory:latestEpisode}
-        : keepPrior
-          ? {...previous,id:attachment.id,chatId,actorId,fileName:previous.fileName,
-              mimeType:previous.mimeType,visualMemory:priorEpisode}
+      // A model rerun is never authority to overwrite an approved correction.
+      // Keep Qwen's new report in history; only another explicit owner-approved
+      // correction may replace the active manual scene for the same image.
+      const priorManual=previous.manualCorrection?.approvedByUser===true &&
+        previous.summaryModel?.startsWith('manual:') && priorEpisode?.sourceHash===hash;
+      const incomingManual=description.manualCorrection?.approvedByUser===true &&
+        description.summaryModel?.startsWith('manual:');
+      // A refused, metadata-only, or unverified reinspection also cannot erase
+      // an earlier verified perception of the same pixels.
+      const keepPrior=Boolean((priorManual&&!incomingManual)||
+        (!latestEpisode&&priorEpisode?.sourceHash===hash));
+      const descriptor:ConversationAttachment=keepPrior
+        ? {...previous,id:attachment.id,chatId,actorId,fileName:previous.fileName,
+            mimeType:previous.mimeType,visualMemory:priorEpisode}
+        : latestEpisode
+          ? {...merged,visualMemory:latestEpisode}
           : {...merged,visualMemory:undefined};
       const history=[
         ...(Array.isArray(record.observationHistory)?record.observationHistory:[]),
         previous,
-        ...(!latestEpisode ? [{...merged,visualMemory:undefined}] : []),
+        ...(!latestEpisode||keepPrior ? [{...merged,visualMemory:undefined}] : []),
       ];
       const saved=await objects.upload(`${path}.json`,JSON.stringify({...record,evidenceDescriptor:descriptor,observationHistory:history}),{contentType:'application/json',upsert:true});
       if(saved.error)throw new Error('Unable to retain the new image observation.');
