@@ -27,11 +27,14 @@ export async function GET(request:NextRequest){
    .eq('previous_developer_approval_id',ORIGINAL_APPROVAL)
    .eq('project_id',ORIGINAL).eq('task_id',ORIGINAL_TASK).maybeSingle();
   if(savedError)return reply({error:'Saved recovery status unavailable'},503);
-  const recovery=saved?.developer_authority?.task4aRecovery;
-  if(saved&&recovery?.version==='preinference-invalid-handoff-v1'
+  const record=saved as null|{created_at:string;developer_authority?:{
+   task4aRecovery?:{version?:string;oldApprovalId?:string;issueNumber?:number;ownerConsentDigest?:string}
+  }};
+  const recovery=record?.developer_authority?.task4aRecovery;
+  if(record&&recovery?.version==='preinference-invalid-handoff-v1'
    &&recovery?.oldApprovalId===ORIGINAL_APPROVAL&&recovery?.issueNumber===969
    &&typeof recovery?.ownerConsentDigest==='string')
-   return reply({ready:false,recovered:true,recordedAt:saved.created_at,
+   return reply({ready:false,recovered:true,recordedAt:record.created_at,
     originalIssueNumber:969,noNewSpendingAuthorized:true});
   return reply({ready:false,
    error:'Existing authorization, original failed workflow, or continuation deadline is no longer eligible'},409);
