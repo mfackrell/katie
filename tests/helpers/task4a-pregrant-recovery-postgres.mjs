@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {verifyTask4aPostpaidPostgres} from './task4a-postpaid-postgres.mjs';
 
 const project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const mission='d3fd3d95-7287-4bfc-8c97-c105fde46c36';
@@ -13,7 +14,7 @@ const contract='e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e
 const baseline='49c8a5f791e66c351436bb97839193b53d7a1cd1';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 
-export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false,ownerGovernedPaidMode=false}={}){
+export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false,ownerGovernedPaidMode=false,postpaidMode=false}={}){
  await db.query('reset role');
  await db.query('begin');
  let committedForConcurrency=false;
@@ -549,6 +550,10 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
     console.log('TASK4A_TWO_DISTINCT_OWNER_CONSENTS_REPLAY_IMMUTABILITY_AND_ACK_POSTGRES_PASS');
     console.log('TASK4A_FAILED_DISPATCH_CONSENT_REPLAY_IMMUTABILITY_AND_ACK_POSTGRES_PASS');
+    if(postpaidMode){
+     await verifyTask4aPostpaidPostgres(db,{connect,owner,account:id,approval:activeForFailedDispatch});
+     committedForConcurrency=true;
+    }
     return;
    }
    console.log('TASK4A_PHASE2_SUCCESSOR_POSTGRES_PASS');
