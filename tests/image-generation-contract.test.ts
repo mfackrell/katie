@@ -65,4 +65,5 @@ test("text-only response never satisfies image delivery even when its wording cl
   assert.match(route,/!imageGenerationCapableModel\(candidate\.provider\.name, candidate\.modelId\)/);
   assert.match(route,/imageGenerationRequested && !containsGeneratedImage\(result\)/);
   assert.match(route,/if \(!imageGenerationRequested\) enqueueDelta\(delta\)/);
+  assert.match(route,/reviewMode === "always" \|\| documentProduction \|\| imageGenerationRequested/);
 });
