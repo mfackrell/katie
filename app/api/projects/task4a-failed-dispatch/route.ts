@@ -22,7 +22,7 @@ async function savedState(){
   .in('event',['task4a_failed_dispatch_owner_authorized',
    'task4a_failed_dispatch_recovery_claimed','task4a_failed_dispatch_recovery_submitted'])
   .order('created_at',{ascending:true})
-  .returns<{id:string;event:string;created_at:string}[]>();
+  .returns<{id:string;event:string;created_at:string}>();
  if(error)throw Error('Immutable Task 4A recovery history unavailable');
  return {ownerAuthorizationReceiptId:data?.find(e=>e.event==='task4a_failed_dispatch_owner_authorized')?.id??null,
   claimReceiptId:data?.find(e=>e.event==='task4a_failed_dispatch_recovery_claimed')?.id??null,
@@ -49,7 +49,7 @@ export async function POST(request:NextRequest){
  const release=releaseSha();if(!release)return reply({error:'Production release not qualified'},503);
  const db=getSupabaseAdminClient();
  const {data:offer,error}=await db.rpc<Offer>('task4a_failed_dispatch_proposal',{p_release:release});
- if(error||!offer?.ready||offer.digest!==input.digest)return reply({error:'Failed dispatch evidence or owner consent digest is stale'},409);
+ if(error||!offer?.ready||!offer.proposal||offer.digest!==input.digest)return reply({error:'Failed dispatch evidence or owner consent digest is stale'},409);
  if(offer.proposal?.ownerId!==process.env.KATIE_OWNER_AUTH_USER_ID)return reply({error:'Original owner identity mismatch'},403);
  const {data:receipt,error:commitError}=await db.rpc<{authorized:boolean;receiptId:string}>('task4a_authorize_failed_dispatch',{
   p_owner:offer.proposal.ownerId,p_digest:input.digest,p_release:release
