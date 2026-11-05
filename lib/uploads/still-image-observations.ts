@@ -63,7 +63,12 @@ export function reusableImageObservation(reference:FileReference,saved:Conversat
   // "Look again" after an owner-approved correction is a request to consult
   // corrected memory, not an instruction to spend money re-running Qwen.
   // An explicit request for new analysis of original pixels still opts in.
-  if(corrected&&!/\b(?:run|use|ask)\s+qwen\b|\b(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|\b(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b/i.test(question))return prior;
+  if(corrected){
+    const explicitNewInspection=/\b(?:run|use|ask)\s+qwen\b|\b(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|\b(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b/i.test(question);
+    // Explicit new inspection MUST bypass the cache; a generic challenge must not.
+    if(explicitNewInspection)return;
+    return prior;
+  }
   if(insufficient(prior.observedSummary!,'full'))return;
   if(prior.observationQuestion!==question&&/\b(?:reinspect|reopen|inspect.{0,50}again|look.{0,50}(?:again|closer)|(?:not|never) observed|(?:does not|doesn't|did not|didn't) cover)\b/i.test(question))return;
   if(prior.summaryCoverage==='sampled'&&prior.observationQuestion!==question)return;
