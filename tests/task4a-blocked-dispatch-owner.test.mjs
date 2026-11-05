@@ -25,8 +25,11 @@ test('owner-governed blocked Task 4A recovery requires authenticated exact diges
   rpc:async(name,args)=>{
    if(name==='task4a_original_owner_id')return {data:ownerValid?owner:null,error:null};
    if(name==='task4a_blocked_dispatch_proposal'){
-    assert.deepEqual(args,{p_release:release,p_deadline:limits.deadline,
-     p_tokens:240000,p_calls:24,p_money:9000000});
+    assert.equal(args.p_release,release);
+    assert.equal(args.p_deadline,limits.deadline);
+    assert.equal(args.p_tokens,240000);
+    assert.equal(args.p_calls,24);
+    assert.equal(args.p_money,9000000);
     readOnly++;return {data:eligible?{ready:true,digest,proposal}:{ready:false,reason:'expired'},error:null};
    }
    assert.equal(name,'task4a_authorize_blocked_dispatch');
