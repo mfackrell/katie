@@ -725,7 +725,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
       const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
       if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
         if(evidence.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
-          digest(evidence.checkpoint)!==a.developer_authority.checkpoint?.digest)continue;
+          digest(evidence.checkpoint)!==(a.developer_authority.checkpoint as {digest?:string}|undefined)?.digest)continue;
       }else if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
     }
    }
@@ -781,7 +781,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
        .select('id,event,data,created_at').eq('project_id',c.projectId)
        .in('event',['task4a_postpaid_owner_authorized',
          'task4a_postpaid_redispatch_authorized','task4a_postpaid_paid_authorized'])
-       .returns<Array<{id:string;event:string;created_at:string;data:{
+       .returns<{id:string;event:string;created_at:string;data:{
          ownerId:string;consentDigest:string;newApprovalId?:string;
          redispatchReceiptId?:string;proposal?:unknown
        }}>>();
