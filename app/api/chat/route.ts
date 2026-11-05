@@ -1837,7 +1837,7 @@ async function executeChat(request: NextRequest) {
     if(resolvedRequestIntent==="image-generation" && !overrideModel && !overrideProvider) {
       const googleImage=providers.find(candidate=>candidate.name==="google");
       if(googleImage){
-        const available=new Set((await googleImage.listModels()).map(model=>model.replace(/^models\\//,"").toLowerCase()));
+        const available=new Set((await googleImage.listModels()).map(model=>model.replace(/^models[/]/,"").toLowerCase()));
         const eligible=["gemini-3.1-flash-image","gemini-3.1-flash-lite-image"].filter(id=>
           available.has(id) && Boolean(getModelPrice("google",id,PRICING_SNAPSHOT)?.imageOutputNanoUsd));
         if(eligible.length){
