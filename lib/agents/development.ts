@@ -793,7 +793,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
      if(!authorityReceipt||!redispatchReceipt||!paidReceipt||
        authorityReceipt.id!==offer.proposal.authorityReceiptId||
        authorityReceipt.data.newApprovalId!==a.id||
-       authorityReceipt.data.consentDigest!==a.developer_authority.task4aPostpaid.ownerDigest||
+       authorityReceipt.data.consentDigest!==a.developer_authority.task4aPostpaid?.ownerDigest||
        redispatchReceipt.id!==offer.proposal.redispatchReceiptId||
        redispatchReceipt.data.ownerId!==authorityReceipt.data.ownerId||
        paidReceipt.data.ownerId!==authorityReceipt.data.ownerId||
