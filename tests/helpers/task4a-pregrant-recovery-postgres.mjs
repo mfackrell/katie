@@ -13,7 +13,7 @@ const contract='e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e
 const baseline='49c8a5f791e66c351436bb97839193b53d7a1cd1';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 
-export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false}={}){
+export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false,ownerGovernedPaidMode=false}={}){
  await db.query('reset role');
  await db.query('begin');
  let committedForConcurrency=false;
@@ -79,6 +79,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    await db.query("create constraint trigger developer_approval_decision after insert on public.benchmark_native_spending_approvals deferrable initially deferred for each row execute function public.developer_approval_decision_guard()");
    // Exercise the deployed successor migration in BOTH legacy and new owner paths.
    await db.query(readFileSync('supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql','utf8'));
+    await db.query(readFileSync('supabase/migrations/20261105210000_task4a_separate_dispatch_paid_execution.sql','utf8'));
    await db.query('set role service_role');
   }
   const before=await one(db,'select count(*)::int approvals from benchmark_native_spending_approvals where project_id=$1',[project]);
@@ -284,6 +285,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     const oldRelease='d52306d493de492458919614ee13a2da6fcf5bcf';
     const currentRelease='f'.repeat(40);
     const claimId=ownerGovernedMode?'283dd2c4-5bac-4804-b8ed-3358c22896b0':randomUUID();
+    let activeForFailedDispatch=recovered.newApprovalId;
     await db.query("update agent_tasks set external=external||jsonb_build_object('developerApprovalId',$2::text,'developerReleaseSha',$3::text,'issueNumber',969,'dispatchStartedAt','2026-11-05T13:43:41.829245Z','developerDispatchSince','2026-11-05T13:43:41.829245Z') where id=$1",[
      task,recovered.newApprovalId,oldRelease
     ]);
@@ -358,6 +360,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      assert.ok(receipt?.id);
      assert.equal(receipt.data.originalFailedClaimId,claimId);
      assert.equal(receipt.data.newNativeApprovalId,state.active_approval);
+     activeForFailedDispatch=state.active_approval;
      assert.equal(receipt.data.previousProgressSignature,'old-stalled-signature');
      assert.equal(receipt.data.previousErrorSignature,'old-error');
      assert.equal(receipt.data.previousRepeatedErrors,2);
@@ -392,13 +395,13 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      await db.query('release savepoint immutable_owner_record');
      await db.query('set role service_role');
      console.log('TASK4A_BLOCKED_OWNER_DEADLINE_SPENDING_AND_STATE_RECOVERY_POSTGRES_PASS');
-     return;
+     if(!ownerGovernedPaidMode)return;
     }
     const p=async release=>(await one(db,'select task4a_failed_dispatch_proposal($1) offer',[release])).offer;
     const offer=await p(currentRelease);
     assert.equal(offer.ready,true,JSON.stringify(offer));
     assert.equal(offer.proposal.originalClaimId,claimId);
-    assert.equal(offer.proposal.approvalId,recovered.newApprovalId);
+    assert.equal(offer.proposal.approvalId,activeForFailedDispatch);
     assert.equal(offer.proposal.issueNumber,969);
     assert.equal(offer.proposal.nativeLimits.ceilingMicrousd,2520000);
     assert.equal((await p('g'.repeat(40))).ready,false,'Invalid release SHA must be denied');
