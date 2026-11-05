@@ -6,6 +6,7 @@ import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, curren
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { imageGenerationCapableModel, containsGeneratedImage } from "@/lib/chat/image-generation-contract";
 import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
@@ -2341,6 +2342,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
       subjects: visualContinuity?.references.map(item => item.key) ?? [],
     });
 
+    const imageGenerationRequested = resolvedRequestIntent === "image-generation";
     let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -2455,7 +2457,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
-              if (reviewMode === "always" || documentProduction) return;
+              if (reviewMode === "always" || documentProduction || imageGenerationRequested) return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -2595,6 +2597,7 @@ ${chunkWorkflowSummary}`;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
             const stillImageVisionRequest = resolvedRequestIntent === "vision-analysis" && rerouteHasVisualInput && !hasVideoInput;
+            // Image-generation intent remains bound to the original request through reroutes.
             const rerouteRoutingContext = [
               controlPlaneConversationContext,
               `Refusal reroute has visual input: ${rerouteHasVisualInput}`
@@ -2757,6 +2760,12 @@ ${chunkWorkflowSummary}`;
                       throw new Error("Gemini and Qwen video analysis failed. Grok cannot inspect the saved video: " + reason);
                     }
                   }
+                }
+                if (imageGenerationRequested && !candidate.runpodImageFallback &&
+                    !imageGenerationCapableModel(candidate.provider.name, candidate.modelId)) {
+                  throw Object.assign(new Error("The proposed fallback cannot generate images. No text model was dispatched."), {
+                    code: "standalone_unsupported_image_capability", terminal: true,
+                  });
                 }
                 provider = candidate.provider;
                 modelId = candidate.modelId;
@@ -2990,7 +2999,7 @@ ${chunkWorkflowSummary}`;
                         // not an opportunity to launch helper orchestration.
                         const direct = provider.generateStream
                           ? await provider.generateStream(finalParams, {
-                              onTextDelta: async delta => enqueueDelta(delta),
+                              onTextDelta: async delta => { if (!imageGenerationRequested) enqueueDelta(delta); },
                             })
                           : await provider.generate(finalParams);
                         return { result: direct, streamedText: direct.text };
@@ -3357,7 +3366,7 @@ ${chunkWorkflowSummary}`;
                       .filter(item => item.provider.name === attempt.provider.name)
                       .map(item => item.modelId.toLowerCase())),
                   });
-                  if (!upgrade) {
+                  if (!upgrade || imageGenerationRequested && !imageGenerationCapableModel(attempt.provider.name, upgrade)) {
                     console.warn('[Context Upgrade] No reviewed capability-preserving model fits the unchanged request', {
                       requestId, provider: attempt.provider.name, model: attempt.modelId,
                       inputTokens: accounting.inputTokens, outputAllowance: accounting.outputAllowance,
@@ -3554,6 +3563,11 @@ ${chunkWorkflowSummary}`;
             modelId = generationAttempt.attempt.runpodImageFallback || generationAttempt.attempt.runpodStillVisionFallback
               ? generationAttempt.result.model : generationAttempt.attempt.modelId;
 
+            // Image generation succeeds only when the provider returned real image
+            // media. A text clarification or refusal cannot silently satisfy it.
+            if (imageGenerationRequested && !containsGeneratedImage(result)) {
+              throw new Error("Image generation returned no image. Katie did not substitute a text-only answer.");
+            }
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
             }
