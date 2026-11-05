@@ -533,6 +533,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     await assert.rejects(db.query("delete from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project]),/TASK4A_FAILED_DISPATCH_AUDIT_IMMUTABLE/);
     await db.query('rollback to savepoint immutable_recovery_receipt');
     await db.query('release savepoint immutable_recovery_receipt');
+    await db.query('reset role');
     await db.query('savepoint immutable_paid_receipt');
     await db.query('reset role');
     await assert.rejects(db.query("delete from project_events where project_id=$1 and event='task4a_failed_dispatch_paid_execution_authorized'",[project]),/TASK4A_PAID_EXECUTION_RECEIPT_IMMUTABLE/);
