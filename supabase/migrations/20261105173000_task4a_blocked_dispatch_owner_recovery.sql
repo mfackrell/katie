@@ -356,12 +356,12 @@ declare previous_definition text; anchor text;
 begin
  previous_definition:=pg_get_functiondef('public.developer_approval_decision_guard()'::regprocedure);
  anchor:=' raise exception ''Ordinary authority requires its committed exact owner decision'';';
- if position('task4a_blocked_dispatch_native_decision_allowed(new)' in previous_definition)>0
+ if position('task4a_blocked_dispatch_native_decision_allowed(new::public.benchmark_native_spending_approvals)' in previous_definition)>0
  then return;end if;
  if position(anchor in previous_definition)=0
  then raise exception 'TASK4A_OWNER_RECOVERY_UNEXPECTED_DEVELOPER_GUARD';end if;
  execute replace(previous_definition,anchor,
-  ' if public.task4a_blocked_dispatch_native_decision_allowed(new) then return new;end if;'||
+  ' if public.task4a_blocked_dispatch_native_decision_allowed(new::public.benchmark_native_spending_approvals) then return new;end if;'||
   E'\n'||anchor);
 end $patch_guard$;
 
