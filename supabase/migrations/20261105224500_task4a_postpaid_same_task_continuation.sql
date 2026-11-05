@@ -458,3 +458,141 @@ begin
    updated_at=clock_timestamp() where id=t.id;
  return true;
 end $$;
+
+-- The existing native grant remains fenced by the paid-consent chain.
+-- Replacing only the trigger function preserves the old pre-provider rule.
+create or replace function public.task4a_postpaid_grant_ready(
+ p_approval uuid,p_release text
+) returns boolean language plpgsql stable set search_path=public as $$
+declare a public.benchmark_native_spending_approvals;p public.work_projects;
+ t public.agent_tasks;m public.agent_missions;j public.mission_assignments;
+ claim public.project_events;paid public.project_events;
+ price public.model_registry;s public.project_continuation_authorizations;
+begin
+ select * into a from public.benchmark_native_spending_approvals where id=p_approval;
+ select * into p from public.work_projects where id=a.project_id;
+ select * into t from public.agent_tasks where id=a.task_id;
+ select * into m from public.agent_missions where id=p.active_mission_id;
+ select * into j from public.mission_assignments where id=a.task_id;
+ select * into claim from public.project_events where project_id=p.id
+  and event='task4a_postpaid_dispatch_claimed';
+ select * into paid from public.project_events where project_id=p.id
+  and event='task4a_postpaid_paid_authorized';
+ select * into s from public.project_continuation_authorizations
+  where id=public.task4a_current_continuation_id(p.id);
+ select * into price from public.model_registry
+  where provider_name='openai' and model_id='gpt-5.3-codex';
+ return coalesce(
+  p.id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
+  and p.status='running' and p.phase='development'
+  and p.deadline>clock_timestamp() and m.status='running'
+  and j.id=a.task_id and j.status='waiting_external' and j.role='development'
+  and t.id=a.task_id and t.status in ('dispatching','submitted')
+  and t.external->>'issueNumber'='969'
+  and t.external->>'developerApprovalId'=a.id::text
+  and t.external->>'developerReleaseSha'=p_release
+  and t.external->>'task4aPostpaidDispatchClaimId'=claim.id::text
+  and a.consumed_at is null and a.revoked_at is null and a.deadline>clock_timestamp()
+  and a.owner_id=public.task4a_original_owner_id(p.actor_id,p.chat_id)
+  and a.model='gpt-5.3-codex'
+  and a.developer_authority->'task4aPostpaid'->>'version'='postpaid-same-task-v1'
+  and a.developer_authority->>'task4aContinuationId'=s.id::text
+  and s.revoked_at is null and s.deadline>clock_timestamp()
+  and s.assessment_reserve_tokens=60000 and s.completion_reserve_tokens=60000
+  and s.assessment_reserve_calls=6 and s.completion_reserve_calls=6
+  and claim.id is not null and claim.data->>'approvalId'=a.id::text
+  and claim.data->>'paidReceiptId'=paid.id::text
+  and claim.data->>'releaseSha'=p_release
+  and paid.id is not null and paid.data->>'ownerId'=a.owner_id::text
+  and paid.data->>'consentDigest'=claim.data->>'paidDigest'
+  and paid.data->'proposal'->>'approvalId'=a.id::text
+  and exists(select 1 from public.benchmark_budget_accounts acct
+    where acct.id=a.account_id and acct.developer_project_id=p.id
+      and acct.developer_task_id=t.id and acct.frozen_at is null and acct.spent_tokens=49620)
+  and price.is_active=true and price.pricing_status='verified'
+  and price.pricing_verified_at between clock_timestamp()-interval '24 hours' and clock_timestamp()
+  and price.pricing_input_per_1m=1.75 and price.pricing_output_per_1m=14
+  and price.source_metadata->>'pricing_verification_source'
+   ='https://developers.openai.com/api/docs/models/gpt-5.3-codex'
+  and (select count(*) from public.benchmark_execution_grants where project_id=p.id)=1
+  and (select count(*) from public.benchmark_budget_calls where account_id=a.account_id)=4
+  and (select count(*) from public.benchmark_budget_calls
+    where account_id=a.account_id and state<>'settled')=0
+ ,false);
+end $$;
+create or replace function public.task4a_distinct_paid_grant_guard()
+returns trigger language plpgsql set search_path=public as $$
+declare a public.benchmark_native_spending_approvals;release text;
+begin
+ if new.project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
+  and new.mission_assignment_id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid
+ then
+  select * into a from public.benchmark_native_spending_approvals
+   where id=new.developer_approval_id;
+  select external->>'developerReleaseSha' into release
+   from public.agent_tasks where id=new.mission_assignment_id;
+  if a.developer_authority->'task4aPostpaid'->>'version'='postpaid-same-task-v1' then
+   if not public.task4a_postpaid_grant_ready(new.developer_approval_id,release)
+   then raise exception 'TASK4A_POSTPAID_SEPARATE_PAID_OWNER_CONSENT_REQUIRED';end if;
+   return new;
+  end if;
+  if exists(select 1 from public.project_events where project_id=new.project_id
+    and event in ('task4a_failed_dispatch_owner_authorized',
+                  'task4a_blocked_dispatch_owner_recovered'))
+    and (new.developer_approval_id is null
+      or not public.task4a_paid_dispatch_grant_ready(new.developer_approval_id,release))
+   then raise exception 'TASK4A_SEPARATE_PAID_AUTH_REQUIRED_BEFORE_GRANT';end if;
+ end if;
+ return new;
+end $$;
+create or replace function public.task4a_postpaid_record_submitted(
+ p_release text
+) returns boolean language plpgsql security invoker set search_path=public as $$
+declare p public.work_projects;t public.agent_tasks;c public.project_events;receipt uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from public.work_projects
+  where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid for update;
+ select * into t from public.agent_tasks
+  where id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid for update;
+ select * into c from public.project_events where project_id=p.id
+  and event='task4a_postpaid_dispatch_claimed';
+ if c.id is null or t.status<>'dispatching'
+  or t.external->>'task4aPostpaidDispatchClaimId' is distinct from c.id::text
+  or c.data->>'releaseSha' is distinct from p_release
+  or exists(select 1 from public.project_events where project_id=p.id
+   and event='task4a_postpaid_dispatch_submitted') then return false;end if;
+ insert into public.project_events(project_id,event,data)
+ values(p.id,'task4a_postpaid_dispatch_submitted',
+  jsonb_build_object('claimReceiptId',c.id,'releaseSha',p_release,
+   'issueNumber',969,'acceptedByGithubApi',true,'runIdPending',true))
+ returning id into receipt;
+ update public.agent_tasks set status='submitted',
+  external=external||jsonb_build_object('attempted',true,'developerDispatchRunPending',true),
+  details='Original Task 4A issue #969 resubmitted after three independent owner decisions.',
+  updated_at=clock_timestamp() where id=t.id;
+ return true;
+end $$;
+revoke all on function
+ public.task4a_postpaid_immutable(),
+ public.task4a_postpaid_proposal(text,text,text,jsonb),
+ public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb),
+ public.task4a_postpaid_redispatch_proposal(text),
+ public.task4a_postpaid_authorize_redispatch(uuid,text,text),
+ public.task4a_postpaid_paid_proposal(text),
+ public.task4a_postpaid_authorize_paid(uuid,text,text),
+ public.task4a_postpaid_claim(text),
+ public.task4a_postpaid_grant_ready(uuid,text),
+ public.task4a_postpaid_record_submitted(text)
+ from public,anon,authenticated,service_role;
+grant execute on function
+ public.task4a_postpaid_proposal(text,text,text,jsonb),
+ public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb),
+ public.task4a_postpaid_redispatch_proposal(text),
+ public.task4a_postpaid_authorize_redispatch(uuid,text,text),
+ public.task4a_postpaid_paid_proposal(text),
+ public.task4a_postpaid_authorize_paid(uuid,text,text),
+ public.task4a_postpaid_claim(text),
+ public.task4a_postpaid_grant_ready(uuid,text),
+ public.task4a_postpaid_record_submitted(text)
+ to service_role;
