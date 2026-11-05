@@ -274,3 +274,187 @@ begin
   'deadline',new_deadline,'dispatchAuthorized',false,
   'paidInferenceAuthorized',false,'newPaidCalls',0);
 end $$;
+
+-- Owner approval #1: permission to REDISPATCH, not to spend.
+create or replace function public.task4a_postpaid_redispatch_proposal(p_release text)
+returns jsonb language plpgsql stable set search_path=public as $$
+declare e public.project_events;p public.work_projects;t public.agent_tasks;
+ a public.benchmark_native_spending_approvals;candidate jsonb;
+begin
+ select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid;
+ select * into t from public.agent_tasks where id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid;
+ select * into e from public.project_events where project_id=p.id and event='task4a_postpaid_owner_authorized';
+ select * into a from public.benchmark_native_spending_approvals
+  where id=(e.data->>'newApprovalId')::uuid;
+ if e.id is null or p.status<>'blocked' or t.status<>'blocked'
+  or t.external->>'developerApprovalId' is distinct from a.id::text
+  or a.revoked_at is not null or a.consumed_at is not null
+  or a.deadline<=clock_timestamp() or coalesce(p_release,'')!~'^[a-f0-9]{40}$'
+  or exists(select 1 from public.project_events where project_id=p.id
+   and event in ('task4a_postpaid_redispatch_authorized','task4a_postpaid_dispatch_claimed'))
+ then return jsonb_build_object('ready',false,'reason','postpaid_redispatch_unavailable');end if;
+ candidate:=jsonb_build_object('kind','task4a_postpaid_redispatch_v1',
+  'ownerId',a.owner_id,'projectId',p.id,'taskId',t.id,'originalIssue',969,
+  'ownerAuthorityReceiptId',e.id,'ownerDigest',e.data->>'consentDigest',
+  'approvalId',a.id,'releaseSha',p_release,
+  'checkpointSha','8e53ce01693303fc50daf5da1567e93e725f9b2d',
+  'noPaidInference',true,'noDispatchOnConsent',true);
+ return jsonb_build_object('ready',true,'proposal',candidate,
+  'digest',encode(sha256(convert_to(public.project_canonical(candidate),'UTF8')),'hex'));
+end $$;
+create or replace function public.task4a_postpaid_authorize_redispatch(
+ p_owner uuid,p_digest text,p_release text
+) returns jsonb language plpgsql security invoker set search_path=public as $$
+declare p public.work_projects;offer jsonb;receipt uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid for update;
+ offer:=public.task4a_postpaid_redispatch_proposal(p_release);
+ if p_owner is null or p_owner is distinct from public.task4a_original_owner_id(p.actor_id,p.chat_id)
+  or offer->>'ready' is distinct from 'true' or offer->>'digest' is distinct from p_digest
+ then raise exception 'TASK4A_POSTPAID_REDISPATCH_DENIED';end if;
+ insert into public.project_events(project_id,event,data)
+ values(p.id,'task4a_postpaid_redispatch_authorized',
+  jsonb_build_object('ownerId',p_owner,'consentDigest',p_digest,
+   'proposal',offer->'proposal','paidInferenceAuthorized',false,
+   'noGitHubRequestOnConsent',true,'newPaidCalls',0))
+ returning id into receipt;
+ return jsonb_build_object('authorized',true,'receiptId',receipt,
+  'paidInferenceAuthorized',false,'dispatched',false,'newPaidCalls',0);
+end $$;
+
+-- Owner approval #2: BOUNDED PAID EXECUTION. Pricing is checked anew.
+-- This receipt STILL does not start a workflow or create an execution grant.
+create or replace function public.task4a_postpaid_paid_proposal(p_release text)
+returns jsonb language plpgsql stable set search_path=public as $$
+declare p public.work_projects;t public.agent_tasks;a public.benchmark_native_spending_approvals;
+ authority public.project_events;redispatch public.project_events;
+ price public.model_registry;candidate jsonb;
+begin
+ select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid;
+ select * into t from public.agent_tasks where id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid;
+ select * into authority from public.project_events where project_id=p.id and event='task4a_postpaid_owner_authorized';
+ select * into redispatch from public.project_events where project_id=p.id and event='task4a_postpaid_redispatch_authorized';
+ select * into a from public.benchmark_native_spending_approvals
+  where id=(authority.data->>'newApprovalId')::uuid;
+ select * into price from public.model_registry where provider_name='openai' and model_id='gpt-5.3-codex';
+ if authority.id is null or redispatch.id is null
+  or p.status<>'blocked' or t.status<>'blocked'
+  or t.external->>'developerApprovalId' is distinct from a.id::text
+  or a.revoked_at is not null or a.consumed_at is not null
+  or a.deadline<=clock_timestamp() or p.deadline<=clock_timestamp()
+  or redispatch.data->>'ownerId' is distinct from a.owner_id::text
+  or redispatch.data->>'paidInferenceAuthorized' is distinct from 'false'
+  or redispatch.data->'proposal'->>'releaseSha' is distinct from p_release
+  or coalesce(p_release,'')!~'^[a-f0-9]{40}$'
+  or exists(select 1 from public.project_events where project_id=p.id
+    and event='task4a_postpaid_dispatch_claimed')
+  or price.is_active is distinct from true or price.pricing_status is distinct from 'verified'
+  or price.pricing_verified_at not between clock_timestamp()-interval '24 hours' and clock_timestamp()
+  or price.pricing_input_per_1m<>1.75 or price.pricing_output_per_1m<>14
+  or price.source_metadata->>'pricing_verification_source'
+    is distinct from 'https://developers.openai.com/api/docs/models/gpt-5.3-codex'
+  or (select count(*) from public.benchmark_execution_grants where project_id=p.id)<>1
+  or (select count(*) from public.benchmark_budget_calls where account_id=a.account_id)<>4
+  or exists(select 1 from public.benchmark_budget_calls
+    where account_id=a.account_id and state<>'settled')
+ then return jsonb_build_object('ready',false,'reason','fresh_paid_admission_evidence_required');end if;
+ candidate:=jsonb_build_object('kind','task4a_postpaid_paid_v1',
+  'ownerId',a.owner_id,'projectId',p.id,'taskId',t.id,'originalIssue',969,
+  'releaseSha',p_release,'approvalId',a.id,
+  'continuationId',a.developer_authority->>'task4aContinuationId',
+  'nativeLimits',a.developer_authority->'limits',
+  'authorityReceiptId',authority.id,'redispatchReceiptId',redispatch.id,
+  'redispatchDigest',redispatch.data->>'consentDigest',
+  'checkpointSha','8e53ce01693303fc50daf5da1567e93e725f9b2d',
+  'pricingVerifiedAt',price.pricing_verified_at,
+  'pricingSource',price.source_metadata->>'pricing_verification_source',
+  'oneOriginalIssueDispatch',true,'noNewFinancialAuthority',true);
+ return jsonb_build_object('ready',true,'proposal',candidate,
+  'digest',encode(sha256(convert_to(public.project_canonical(candidate),'UTF8')),'hex'));
+end $$;
+create or replace function public.task4a_postpaid_authorize_paid(
+ p_owner uuid,p_digest text,p_release text
+) returns jsonb language plpgsql security invoker set search_path=public as $$
+declare p public.work_projects;offer jsonb;receipt uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid for update;
+ offer:=public.task4a_postpaid_paid_proposal(p_release);
+ if p_owner is null or p_owner is distinct from public.task4a_original_owner_id(p.actor_id,p.chat_id)
+  or offer->>'ready' is distinct from 'true' or offer->>'digest' is distinct from p_digest
+  or exists(select 1 from public.project_events where project_id=p.id
+    and event='task4a_postpaid_paid_authorized')
+ then raise exception 'TASK4A_POSTPAID_PAID_INFERENCE_DENIED';end if;
+ insert into public.project_events(project_id,event,data)
+ values(p.id,'task4a_postpaid_paid_authorized',
+  jsonb_build_object('ownerId',p_owner,'consentDigest',p_digest,
+   'proposal',offer->'proposal',
+   'redispatchReceiptId',offer->'proposal'->>'redispatchReceiptId',
+   'distinctOwnerConsent',true,'noNewFinancialAuthority',true,'newPaidCalls',0))
+ returning id into receipt;
+ return jsonb_build_object('authorized',true,'receiptId',receipt,
+  'paidExecutionAuthorized',true,'newPaidCalls',0);
+end $$;
+
+-- A one-time claim, following BOTH distinct owner receipts. It is the only
+-- transition of the original blocked task into the existing native dispatcher.
+create or replace function public.task4a_postpaid_claim(p_release text)
+returns boolean language plpgsql security invoker set search_path=public as $$
+declare p public.work_projects;m public.agent_missions;j public.mission_assignments;
+ t public.agent_tasks;a public.benchmark_native_spending_approvals;
+ authority public.project_events;redispatch public.project_events;
+ paid public.project_events;offer jsonb;claim uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid for update;
+ select * into m from public.agent_missions where id='d3fd3d95-7287-4bfc-8c97-c105fde46c36'::uuid for update;
+ select * into j from public.mission_assignments where id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid for update;
+ select * into t from public.agent_tasks where id=j.id for update;
+ select * into authority from public.project_events where project_id=p.id and event='task4a_postpaid_owner_authorized';
+ select * into redispatch from public.project_events where project_id=p.id and event='task4a_postpaid_redispatch_authorized';
+ select * into paid from public.project_events where project_id=p.id and event='task4a_postpaid_paid_authorized';
+ select * into a from public.benchmark_native_spending_approvals where id=(authority.data->>'newApprovalId')::uuid for update;
+ offer:=public.task4a_postpaid_paid_proposal(p_release);
+ if offer->>'ready' is distinct from 'true'
+  or p.status<>'blocked' or m.status<>'blocked' or j.status<>'failed' or t.status<>'blocked'
+  or a.id is null or t.external->>'developerApprovalId' is distinct from a.id::text
+  or authority.id is null or redispatch.id is null or paid.id is null
+  or paid.data->>'ownerId' is distinct from a.owner_id::text
+  or paid.data->>'redispatchReceiptId' is distinct from redispatch.id::text
+  or paid.data->>'consentDigest' is distinct from offer->>'digest'
+  or paid.data->'proposal' is distinct from offer->'proposal'
+  or redispatch.data->>'paidInferenceAuthorized' is distinct from 'false'
+  or exists(select 1 from public.project_events where project_id=p.id
+    and event='task4a_postpaid_dispatch_claimed')
+ then return false;end if;
+ update public.work_projects set status='running',lease=null,lease_until=null,
+   progress_signature=null,progress_since=clock_timestamp(),
+   error_signature=null,repeated_errors=0,impediment=null,
+   detail='Original Task 4A checkpoint continuation authorized for one dispatch.',
+   updated_at=clock_timestamp() where id=p.id;
+ update public.agent_missions set status='running',updated_at=clock_timestamp() where id=m.id;
+ update public.mission_assignments set status='waiting_external',lease=null,lease_until=null,
+   available_at=clock_timestamp(),updated_at=clock_timestamp() where id=j.id;
+ update public.agent_tasks set status='dispatching',
+   external=external||jsonb_build_object('developerReleaseSha',p_release,
+    'developerDispatchSince',clock_timestamp(),'dispatchStartedAt',clock_timestamp()),
+   updated_at=clock_timestamp() where id=t.id;
+ insert into public.project_events(project_id,event,data)
+ values(p.id,'task4a_postpaid_dispatch_claimed',
+  jsonb_build_object('ownerAuthorityReceiptId',authority.id,
+   'redispatchReceiptId',redispatch.id,'paidReceiptId',paid.id,
+   'paidDigest',paid.data->>'consentDigest','approvalId',a.id,
+   'priorRunId',42102615797,
+   'checkpointSha','8e53ce01693303fc50daf5da1567e93e725f9b2d',
+   'releaseSha',p_release,'issueNumber',969,'noPaidCallYet',true))
+ returning id into claim;
+ insert into public.project_events(project_id,event,data)
+ values(p.id,'developer_native_dispatch_claimed',
+  jsonb_build_object('approvalId',a.id,'taskId',t.id,
+   'releaseSha',p_release,'postpaidClaimId',claim,'originalIssueNumber',969));
+ update public.agent_tasks set external=external||jsonb_build_object(
+   'task4aPostpaidDispatchClaimId',claim,'task4aPostpaidPaidReceiptId',paid.id),
+   updated_at=clock_timestamp() where id=t.id;
+ return true;
+end $$;
