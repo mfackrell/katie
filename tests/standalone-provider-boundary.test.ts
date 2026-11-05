@@ -1110,3 +1110,43 @@ test('Anthropic 400 without exact nonbillable proof remains uncertain',async()=>
   assert.equal(f.attempts[0].actual_microusd,undefined);
  }
 });
+
+test('1K Gemini image output reserves reviewed image charges and settles actual output modalities',async()=>{
+ const f=fakeLedger();let paid=0;
+ const send=createAccountingFetch('google',async()=>{
+  paid++;
+  const response={
+   responseId:'gemini-image-receipt',modelVersion:'gemini-3.1-flash-image',
+   candidates:[{finishReason:'STOP',content:{parts:[{text:'Generated image'},{inlineData:{mimeType:'image/png',data:'aW1hZ2U='}}]}}],
+   usageMetadata:{promptTokenCount:100,candidatesTokenCount:1150,thoughtsTokenCount:0,
+    candidatesTokensDetails:[{modality:'IMAGE',tokenCount:1120},{modality:'TEXT',tokenCount:30}]}
+  };
+  return new Response('data: '+JSON.stringify(response)+'\\n\\n',{headers:{'content-type':'text/event-stream'}});
+ },f.factory);
+ const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:streamGenerateContent?alt=sse';
+ const payload={contents:[{role:'user',parts:[{text:'Generate a photorealistic portrait'}]}],
+  generationConfig:{maxOutputTokens:1024,responseModalities:['TEXT','IMAGE'],imageConfig:{imageSize:'1K'}}};
+ const result=await runWithStandaloneAccounting({...context,requestId:'reviewed-image-generation'},()=>send(url,{method:'POST',body:JSON.stringify(payload)}));
+ assert.equal(result.status,200);
+ assert.equal(paid,1);
+ const attempt=f.attempts[0];
+ assert.equal(attempt.state,'settled');
+ assert.equal(attempt.usage?.imageOutputTokens,1120);
+ assert.equal(attempt.actual_microusd,'67340'); // 100 input at 500 nano + 30 text at 3000 nano +1120 image at 60000 nano
+ assert.ok(Number(attempt.reserved_microusd)>=Number(attempt.actual_microusd));
+ const replay=await runWithStandaloneAccounting({...context,requestId:'reviewed-image-generation',resumed:true},()=>send(url,{method:'POST',body:JSON.stringify(payload)}));
+ assert.equal(replay.status,200);assert.equal(paid,1,'replay never incurs duplicate image charges');
+});
+
+test('Gemini image quote refuses unreviewed model or resolution before provider transmission',async()=>{
+ const f=fakeLedger();let paid=0;
+ const send=createAccountingFetch('google',async()=>{paid++;return Response.json({})},f.factory);
+ for(const [index,model,imageSize] of [['unpriced','nano-banana-pro-preview','1K'],['wrong-size','gemini-3.1-flash-image','2K']] as const){
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'image-'+index},()=>send(
+   'https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent',
+   {method:'POST',body:JSON.stringify({contents:[{role:'user',parts:[{text:'draw portrait'}]}],
+    generationConfig:{maxOutputTokens:256,responseModalities:['TEXT','IMAGE'],imageConfig:{imageSize}}})}
+  )),isStandaloneAccountingError);
+ }
+ assert.equal(paid,0);assert.equal(f.attempts.length,0);
+});
