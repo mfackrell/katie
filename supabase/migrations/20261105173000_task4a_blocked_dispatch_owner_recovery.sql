@@ -294,7 +294,7 @@ create or replace function public.task4a_blocked_dispatch_native_decision_allowe
 declare old public.benchmark_native_spending_approvals;
  prev public.project_continuation_authorizations;
  current_auth public.project_continuation_authorizations;
- e public.project_events; original_claim public.project_events;
+ renewal_receipt public.project_events; original_claim public.project_events;
 begin
  if a.project_id is distinct from '6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
   or a.task_id is distinct from 'd0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid
@@ -308,7 +308,7 @@ begin
  select * into current_auth from public.project_continuation_authorizations
   where id=public.task4a_current_continuation_id(a.project_id);
  select * into prev from public.project_continuation_authorizations where id=current_auth.predecessor_id;
- select * into e from public.project_events
+ select * into renewal_receipt from public.project_events
   where project_id=a.project_id and event='task4a_blocked_dispatch_owner_recovered';
  select * into original_claim from public.project_events
   where id='283dd2c4-5bac-4804-b8ed-3358c22896b0'::uuid
@@ -331,15 +331,15 @@ begin
   and a.developer_authority->'task4aOwnerRenewal'->>'previousApprovalId'=old.id::text
   and a.developer_authority->'task4aOwnerRenewal'->>'previousContinuationId'=prev.id::text
   and a.developer_authority->'task4aOwnerRenewal'->>'originalClaimId'=original_claim.id::text
-  and e.id is not null and e.data->>'newNativeApprovalId'=a.id::text
-  and e.data->>'newContinuationId'=current_auth.id::text
-  and e.data->>'previousNativeApprovalId'=old.id::text
-  and e.data->>'ownerId'=a.owner_id::text
-  and e.data->>'consentDigest'=a.developer_authority->'task4aOwnerRenewal'->>'consentDigest'
-  and e.data->>'originalFailedClaimId'=original_claim.id::text
-  and e.data->>'nativeAccountReused'='true'
-  and e.data->>'nativeLimitsNotIncreased'='true'
-  and e.data->>'newPaidCalls'='0'
+  and renewal_receipt.id is not null and renewal_receipt.data->>'newNativeApprovalId'=a.id::text
+  and renewal_receipt.data->>'newContinuationId'=current_auth.id::text
+  and renewal_receipt.data->>'previousNativeApprovalId'=old.id::text
+  and renewal_receipt.data->>'ownerId'=a.owner_id::text
+  and renewal_receipt.data->>'consentDigest'=a.developer_authority->'task4aOwnerRenewal'->>'consentDigest'
+  and renewal_receipt.data->>'originalFailedClaimId'=original_claim.id::text
+  and renewal_receipt.data->>'nativeAccountReused'='true'
+  and renewal_receipt.data->>'nativeLimitsNotIncreased'='true'
+  and renewal_receipt.data->>'newPaidCalls'='0'
   and original_claim.data->>'approvalId'=old.id::text
   and not exists(select 1 from public.benchmark_budget_calls c where c.account_id=a.account_id)
   and not exists(select 1 from public.benchmark_execution_grants g where g.project_id=a.project_id)
