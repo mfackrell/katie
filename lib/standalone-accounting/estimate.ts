@@ -293,7 +293,7 @@ export function actualCostFromUsage(request:FrozenPreparedRequest,usage:Billable
   if(usage.cachedInputTokens!==undefined&&usage.cacheReadInputTokens!==undefined&&usage.cachedInputTokens!==usage.cacheReadInputTokens)throw new Error("Conflicting cache-read usage counts");
   if(usage.cacheWriteInputTokens!==undefined&&usage.cacheCreationInputTokens!==undefined&&usage.cacheWriteInputTokens!==usage.cacheCreationInputTokens)throw new Error("Conflicting cache-write usage counts");
   const imageOutputTokens=usage.imageOutputTokens??0;
-  if(!Number.isSafeInteger(imageOutputTokens)||Number(imageOutputTokens)<0)throw new Error("Invalid image output usage");
+  if(typeof imageOutputTokens!=="number"||!Number.isSafeInteger(imageOutputTokens)||imageOutputTokens<0)throw new Error("Invalid image output usage");
   if(estimate.imageOutputAllowance && (!imageOutputTokens||imageOutputTokens>estimate.imageOutputAllowance))
     throw new Error("Generated image output usage is missing or exceeds the reviewed reservation");
   if(!estimate.imageOutputAllowance&&imageOutputTokens)throw new Error("Image usage outside an authorized image request");
