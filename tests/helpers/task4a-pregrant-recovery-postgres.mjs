@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 
 const project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const mission='d3fd3d95-7287-4bfc-8c97-c105fde46c36';
@@ -67,6 +68,17 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    {version:'ordinary-developer-v1',scopeHash:scope,binding,limits,originalTaskId:task,completionContract:null}
   ]);
   await db.query('set role service_role');
+  if(successorMode){
+   // Production runs the deferred exact-decision guard. Previous isolated
+   // tests omitted it and incorrectly accepted transactions rolled back at COMMIT.
+   await db.query('reset role');
+   await db.query('alter table public.benchmark_native_spending_approvals add column if not exists developer_proposal_id text');
+   await db.query('create table if not exists public.benchmark_lifecycle_proposals(id text primary key,owner_id uuid,task_id uuid,project_id uuid)');
+   await db.query('create table if not exists public.benchmark_lifecycle_decisions(id uuid primary key default gen_random_uuid(),developer_approval_id uuid,proposal_id text,decision text,owner_id uuid)');
+   await db.query(readFileSync('supabase/migrations/20261105130000_task4a_recovery_decision_receipt_guard.sql','utf8'));
+   await db.query("create constraint trigger developer_approval_decision after insert on public.benchmark_native_spending_approvals deferrable initially deferred for each row execute function public.developer_approval_decision_guard()");
+   await db.query('set role service_role');
+  }
   const before=await one(db,'select count(*)::int approvals from benchmark_native_spending_approvals where project_id=$1',[project]);
   if(successorMode){
    // The actual function must deny zero and ambiguous terminal authorities.
@@ -230,6 +242,18 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    await db.query('rollback to savepoint revoked');await db.query('release savepoint revoked');
    const recovered=(await one(db,'select task4a_confirm_pregrant_recovery($1,$2) x',[owner,nativeOffer.digest])).x;
    assert.equal(recovered.recovered,true);
+   // Execute the same deferred constraint used by production COMMIT.
+   await db.query('set constraints developer_approval_decision immediate');
+   await db.query('savepoint unapproved_ordinary_authority');
+   try{
+    await assert.rejects(
+     db.query("insert into benchmark_native_spending_approvals(id,owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority) select gen_random_uuid(),owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority from benchmark_native_spending_approvals where id=$1",[original]),
+     /Ordinary authority requires its committed exact owner decision/,
+     'An unapproved ordinary Developer grant must still fail');
+   }finally{
+    await db.query('rollback to savepoint unapproved_ordinary_authority');
+    await db.query('release savepoint unapproved_ordinary_authority');
+   }
    // Attempt to forge a canonical prebound financial receipt. Only the
    // signed native execution-grant path may admit the original development task.
    await db.query('savepoint prebound_bypass');
