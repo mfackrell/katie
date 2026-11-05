@@ -76,7 +76,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  try{
   await Promise.all(rivals.map(c=>c.query('set role service_role')));
   const answers=await Promise.allSettled(rivals.map(c=>rpc(c,'task4a_postpaid_authorize',auth)));
-  console.log('TASK4A_POSTPAID_CONSENT_RACE_DIAGNOSTICS',JSON.stringify(answers.map(x=>x.status==='rejected'?{status:x.status,sqlstate:x.reason?.code,error:String(x.reason?.message).slice(0,350)}:{status:x.status,authorized:x.value?.authorized}))));
+  console.log('TASK4A_POSTPAID_CONSENT_RACE_DIAGNOSTICS',JSON.stringify(answers.map(x=>x.status==='rejected'?{status:x.status,sqlstate:x.reason?.code,error:String(x.reason?.message).slice(0,350)}:{status:x.status,authorized:x.value?.authorized})));
   assert.equal(answers.filter(x=>x.status==='fulfilled'&&x.value.authorized===true).length,1,
    'One and only one successor may survive two concurrent approvals');
   assert.equal(answers.filter(x=>x.status==='rejected').length,1);
