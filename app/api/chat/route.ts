@@ -3375,7 +3375,6 @@ ${chunkWorkflowSummary}`;
                     routingSource: 'deterministic-fallback' as const };
                 }
                 if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.
-                if (resolvedRequestIntent === "image-generation") return null; // The prequalified priceable fallback chain is authoritative.
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
                 if (attempt.runpodStillVisionFallback) return null;
@@ -3404,6 +3403,7 @@ ${chunkWorkflowSummary}`;
                     routingSource: "deterministic-fallback" as const,
                   };
                 }
+                if (resolvedRequestIntent === "image-generation") return null; // Keep prequalified priceable fallback chain authoritative.
                 if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
                     !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
