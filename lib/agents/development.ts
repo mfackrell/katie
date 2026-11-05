@@ -699,7 +699,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string}}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string};task4aPostpaid?:{version?:string;ownerDigest?:string;priorApprovalId?:string;priorGrantId?:string}}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
@@ -734,7 +734,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   let authority:ReturnType<typeof classifyDeveloperDispatchAuthority>;
   try{authority=classifyDeveloperDispatchAuthority(c.projectId,a.developer_authority);}
   catch{continue;}
-  if(authority.authorityKind==='task4a-developer'){
+  const postpaid=authority.authorityKind==='task4a-developer'&&a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1';
+  if(authority.authorityKind==='task4a-developer'&&!postpaid){
     const verified=await db.rpc<boolean>('task4a_native_authority_ready',{
       p_project:c.projectId,p_task:task.id,p_authority:authority.task4aContinuationId
     });
@@ -747,7 +748,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
-  let recoveredClaimedDispatch=false;
+  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false;
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
@@ -841,7 +842,9 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
 
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
-  const claim=recoveredClaimedDispatch
+  const claim=postpaidClaimedDispatch
+   ?await db.rpc('task4a_postpaid_claim',{p_release:release})
+   :recoveredClaimedDispatch
    ?await db.rpc('task4a_claim_failed_dispatch',{p_release:release})
    :await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});
   if(claim.error||claim.data!==true)continue;
@@ -850,7 +853,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
-   if(recoveredClaimedDispatch){
+   if(postpaidClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_postpaid_record_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('GitHub accepted same-task dispatch but audit failed; no retry allowed');
+   }else if(recoveredClaimedDispatch){
     const sent=await db.rpc<boolean>('task4a_record_failed_dispatch_submitted',{p_release:release});
     if(sent.error||sent.data!==true)throw Error('GitHub accepted recovered dispatch; immutable receipt storage failed; no retry permitted');
    }else{
@@ -868,6 +874,9 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
 // Invoked only after a digest-bound original-owner consent. This is Katie's
 // existing native dispatcher scoped to one exact saved development task.
 export async function dispatchTask4aFailedDispatchOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
+}
+export async function dispatchTask4aPostpaidOnce(){
  return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
 }
 export async function dispatchOwnerRenewedNativeDevelopment() {
