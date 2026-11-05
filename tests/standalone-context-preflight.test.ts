@@ -153,7 +153,8 @@ test('pre-dispatch context codes do not masquerade as paid provider failures, in
 });
 
 test('Gemini image counting preserves exact visual inputs but excludes uncountable output settings',async()=>{
-  const inline={inlineData:{mimeType:'image/png',data:'aW1hZ2UtZml4dHVyZQ=='}};
+  const png=Buffer.alloc(24);Buffer.from([137,80,78,71,13,10,26,10]).copy(png);png.writeUInt32BE(1,16);png.writeUInt32BE(1,20);
+  const inline={inlineData:{mimeType:'image/png',data:png.toString('base64')}};
   const system={role:'user',parts:[{text:'Keep this character visually consistent.'}]};
   const contents=[{role:'user',parts:[{text:'Create a portrait'},inline]}];
   const prepared=freezePreparedRequest('google','gemini-3.1-flash-image',
