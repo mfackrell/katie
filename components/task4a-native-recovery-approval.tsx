@@ -41,6 +41,7 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
   try{
    const token=await ownerSessionBearer();
    if(!token)throw Error('Owner sign-in required');
+   if(!offer?.digest)throw Error('Recovery proposal is no longer available; refresh before approving.');
    const response=await fetch('/api/projects/task4a-native-recovery',{
     method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
     body:JSON.stringify({confirm:true,proposalDigest:offer.digest})
