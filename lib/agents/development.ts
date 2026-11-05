@@ -699,7 +699,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string}}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string}}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
@@ -769,10 +769,32 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
        priorProof.taskId!==task.id||priorProof.scopeHash!==c.scopeHash||
        priorProof.contractHash!==c.contractHash||priorProof.baselineSha!==c.baselineSha)continue;
      if(priorProof.authorityKind==='task4a-developer'){
-       if(priorProof.approvalId!==a.id||
-          priorProof.task4aContinuationId!==authority.task4aContinuationId||
-          priorProof.releaseSha!==task.external.developerReleaseSha||
-          priorProof.accountId!==a.account_id)continue;
+       // The exact prior signed handoff remains on issue #969 after the
+       // original dispatch failed. Owner-governed authority succession MUST
+       // authenticate that signed old approval and the immutable renewal.
+       const renewal=a.developer_authority?.task4aOwnerRenewal;
+       if(renewal?.version==='blocked-dispatch-owner-v1'){
+         if(priorProof.approvalId!==renewal.previousApprovalId||
+            priorProof.task4aContinuationId!==renewal.previousContinuationId||
+            priorProof.releaseSha!==task.external.developerReleaseSha||
+            priorProof.accountId!==a.account_id||
+            a.previous_developer_approval_id!==renewal.previousApprovalId||
+            renewal.originalClaimId!=='283dd2c4-5bac-4804-b8ed-3358c22896b0')continue;
+         const {data:ownerRecovery,error:ownerRecoveryError}=await db.from('project_events')
+           .select('id,data').eq('project_id',c.projectId)
+           .eq('event','task4a_blocked_dispatch_owner_recovered')
+           .maybeSingle<{id:string;data:{newNativeApprovalId:string;newContinuationId:string;previousNativeApprovalId:string;originalFailedClaimId:string;consentDigest:string;proposal:{productionReleaseSha:string}}}>();
+         if(ownerRecoveryError||!ownerRecovery||
+            ownerRecovery.data.newNativeApprovalId!==a.id||
+            ownerRecovery.data.newContinuationId!==authority.task4aContinuationId||
+            ownerRecovery.data.previousNativeApprovalId!==renewal.previousApprovalId||
+            ownerRecovery.data.originalFailedClaimId!==renewal.originalClaimId||
+            ownerRecovery.data.consentDigest!==renewal.consentDigest||
+            ownerRecovery.data.proposal.productionReleaseSha!==renewal.productionReleaseSha)continue;
+       }else if(priorProof.approvalId!==a.id||
+                priorProof.task4aContinuationId!==authority.task4aContinuationId||
+                priorProof.releaseSha!==task.external.developerReleaseSha||
+                priorProof.accountId!==a.account_id)continue;
        const {data:offer,error:offerError}=await db.rpc<{
          ready:boolean;digest?:string;proposal?:{originalClaimId:string;approvalId:string}
        }>('task4a_failed_dispatch_proposal',{p_release:release});
