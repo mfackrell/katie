@@ -64,6 +64,7 @@ function estimateVision(price:ModelPrice,url:string,detail:string,issues:string[
   // Require image bytes in the hashed body before applying any billing shortcut.
   const dimensions=inlineImageDimensions(url);
   if(!dimensions){issues.push("Image content and dimensions must be available from immutable inline image bytes; external image URLs are unsupported");return 0;}
+  if(price.vision.kind==="geminiImage"){assumptions.push("Gemini 3.1 Image input reserves the published fixed 1,120 tokens per image");return price.vision.maximum;}
   if(price.vision.kind==="claude") {assumptions.push("Claude image allowance uses documented per-image visual-token maximum");return price.vision.maximum;}
   if(price.vision.kind==="tiles"&&detail==="low")return price.vision.base;
   let {width,height}=dimensions;
