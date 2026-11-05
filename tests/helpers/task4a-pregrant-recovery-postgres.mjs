@@ -296,7 +296,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      // historical deadline-immutability trigger ONLY to construct this state.
      await db.query('reset role');
      await db.query('alter table public.project_continuation_authorizations disable trigger user');
-     await db.query("update project_continuation_authorizations set deadline=now()-interval '10 minutes' where id=$1",[saved.authorizationId]);
+     await db.query("update project_continuation_authorizations set authorized_at=now()-interval '2 hours',deadline=now()-interval '10 minutes' where id=$1",[saved.authorizationId]);
      await db.query('alter table public.project_continuation_authorizations enable trigger user');
      await db.query("update benchmark_native_spending_approvals set deadline=now()-interval '10 minutes' where id=$1",[recovered.newApprovalId]);
      await db.query("update work_projects set status='blocked',deadline=now()-interval '10 minutes' where id=$1",[project]);
