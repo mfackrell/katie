@@ -21,7 +21,8 @@ async function savedState(){
   .eq('project_id',PROJECT)
   .in('event',['task4a_failed_dispatch_owner_authorized',
    'task4a_failed_dispatch_recovery_claimed','task4a_failed_dispatch_recovery_submitted'])
-  .order('created_at',{ascending:true});
+  .order('created_at',{ascending:true})
+  .returns<{id:string;event:string;created_at:string}[]>();
  if(error)throw Error('Immutable Task 4A recovery history unavailable');
  return {ownerAuthorizationReceiptId:data?.find(e=>e.event==='task4a_failed_dispatch_owner_authorized')?.id??null,
   claimReceiptId:data?.find(e=>e.event==='task4a_failed_dispatch_recovery_claimed')?.id??null,
