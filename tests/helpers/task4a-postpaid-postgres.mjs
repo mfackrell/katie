@@ -97,6 +97,9 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal(successor.assessment_reserve_calls,6);
   assert.equal(successor.completion_reserve_calls,6);
   assert.equal((await rpc(db,'task4a_postpaid_proposal',args)).ready,false,'No second successor');
+  // Savepoints require an explicit transaction; make prior owner receipts
+  // visible to both fresh PostgreSQL clients before their one-shot claim race.
+  await db.query('begin');
   const dispatch=await rpc(db,'task4a_postpaid_redispatch_proposal',[release]);
   assert.equal(dispatch.ready,true,JSON.stringify(dispatch));
   await negative(db,()=>rpc(db,'task4a_postpaid_authorize_redispatch',[randomUUID(),dispatch.digest,release]),/TASK4A_POSTPAID_REDISPATCH_DENIED/);
@@ -109,6 +112,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   await negative(db,()=>rpc(db,'task4a_postpaid_authorize_paid',[owner,'a'.repeat(64),release]),/TASK4A_POSTPAID_PAID_INFERENCE_DENIED/);
   assert.equal(await rpc(db,'task4a_postpaid_claim',[release]),false,'Paid approval missing');
   assert.equal((await rpc(db,'task4a_postpaid_authorize_paid',[owner,paid.digest,release])).authorized,true);
+  await db.query('commit');
   const claims=await Promise.all(rivals.map(c=>rpc(c,'task4a_postpaid_claim',[release])));
   assert.equal(claims.filter(Boolean).length,1,'Only one one-shot claim');
   assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[release])),true);
