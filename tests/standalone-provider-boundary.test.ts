@@ -1114,7 +1114,8 @@ test('Anthropic 400 without exact nonbillable proof remains uncertain',async()=>
 
 test('1K Gemini image output reserves reviewed image charges and settles actual output modalities',async()=>{
  const f=fakeLedger();let paid=0;
- const send=createAccountingFetch('google',async()=>{
+ const send=createAccountingFetch('google',async(url)=>{
+  if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});
   paid++;
   const response={
    responseId:'gemini-image-receipt',modelVersion:'gemini-3.1-flash-image',
