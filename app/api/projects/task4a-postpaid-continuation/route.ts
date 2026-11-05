@@ -72,7 +72,7 @@ async function offerForStage(releaseSha:string,stage:'redispatch'|'paid'){
 }
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return reply({error:'Original owner sign-in required'},401);
- if(request.nextUrl.searchParams.get('chatId')!==CHAT)return reply({state:'not_for_this_chat'});
+ if(new URL(request.url).searchParams.get('chatId')!==CHAT)return reply({state:'not_for_this_chat'});
  const sha=release();if(!sha)return reply({error:'Qualified production release SHA unavailable'},503);
  try{
   const saved=await receipts();
