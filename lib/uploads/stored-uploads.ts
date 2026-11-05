@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { buildKatieVisualEpisode, verifiedKatieVisualEpisode } from "@/lib/chat/visual-memory";
-import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { getSupabaseAdminClient } from "../data/supabase/admin";
 import { applyTrustedVisualCorrection, type TrustedVisualCorrection } from "./verified-visual-corrections";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
