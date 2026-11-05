@@ -203,6 +203,7 @@ export class GoogleProvider implements LlmProvider {
           abortSignal: params.signal,
           systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
+          ...(isImageTask ? { imageConfig: { imageSize: "1K" as const } } : {}),
           ...(thinkingLevelInput
             ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
             : {})
@@ -285,6 +286,7 @@ export class GoogleProvider implements LlmProvider {
           abortSignal: params.signal,
           systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
+          ...(isImageTask ? { imageConfig: { imageSize: "1K" as const } } : {}),
           ...(thinkingLevelInput
             ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
             : {})

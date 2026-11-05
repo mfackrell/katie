@@ -9,6 +9,7 @@ import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/contex
 import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
+import { getModelPrice, PRICING_SNAPSHOT } from "@/lib/standalone-accounting/pricing";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
@@ -1830,6 +1831,32 @@ async function executeChat(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
+    // The router's capability heuristics may select an image model with only
+    // unreviewed text pricing. Auto-route exclusively to an actually available
+    // Google model with a first-party, immutable image-output tariff.
+    if(resolvedRequestIntent==="image-generation" && !overrideModel && !overrideProvider) {
+      const googleImage=providers.find(candidate=>candidate.name==="google");
+      if(googleImage){
+        const available=new Set((await googleImage.listModels()).map(model=>model.replace(/^models[/]/,"").toLowerCase()));
+        const eligible=["gemini-3.1-flash-image","gemini-3.1-flash-lite-image"].filter(id=>
+          available.has(id) && Boolean(getModelPrice("google",id,PRICING_SNAPSHOT)?.imageOutputNanoUsd));
+        if(eligible.length){
+          const previousProvider=provider.name,previousModel=modelId;
+          const selected=eligible.includes(modelId)&&provider.name==="google"?modelId:eligible[0];
+          provider=googleImage;
+          modelId=selected;
+          fallbackChain=eligible.filter(id=>id!==selected).map((id,index)=>({provider:googleImage,modelId:id,score:1-index}));
+          if(previousProvider!==provider.name||previousModel!==modelId){
+            selectionExplainer={...selectionExplainer,selected_provider:"google",selected_model:modelId,
+              selected_source:"deterministic-fallback",fallback_used:true,
+              fallback_reason:"Original image model had no reviewed image-output tariff"};
+            console.info("[Image Routing] Selected reviewed, available image generation model",{
+              requestId,previousProvider,previousModel,provider:provider.name,model:modelId});
+          }
+        }else console.warn("[Image Routing] No available model with reviewed image-output pricing",{requestId});
+      }
+    }
+
     // Select continuity only after classifying the literal current turn. The
     // existence of an unresolved audit in this chat is never enough to resume it.
     // Routing selects execution capabilities, not a different parent task.
@@ -3376,6 +3403,7 @@ ${chunkWorkflowSummary}`;
                     routingSource: "deterministic-fallback" as const,
                   };
                 }
+                if (resolvedRequestIntent === "image-generation") return null; // Keep prequalified priceable fallback chain authoritative.
                 if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
                     !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
@@ -3906,7 +3934,7 @@ ${chunkWorkflowSummary}`;
             if (isStandaloneAccountingError(error)) {
               const cause = standaloneAccountingCause(error) ?? error;
               const code = standaloneAccountingCause(error)?.code ?? "standalone_approval_or_accounting_required";
-              if (standaloneTechnicalBlocker(code)) {
+              if (standaloneTechnicalBlocker(code) || resolvedRequestIntent === "image-generation" && code === "standalone_unsupported_billing") {
                 const message = cause instanceof Error ? cause.message : String(cause);
                 // A context window is a physical model constraint, not an
                 // approvable charge. Persist an actionable terminal outcome and
