@@ -34,8 +34,8 @@ declare
  acct public.benchmark_budget_accounts; claim public.project_events;
  pregrant public.project_events; owner uuid; candidate jsonb;
  hist_actual bigint; hist_reserved bigint; hist_calls bigint;
- settled_actual bigint; settled_reserved bigint; settled_calls bigint;
- unsettled bigint; price public.model_registry;
+ settled_actual bigint; settled_reserved bigint; settled_conservative bigint; settled_calls bigint;
+ unsettled bigint; reserved_exposure numeric; unpriced_exposure numeric; price public.model_registry;
 begin
  select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid;
  select * into m from public.agent_missions where id='d3fd3d95-7287-4bfc-8c97-c105fde46c36'::uuid and project_id=p.id;
@@ -137,14 +137,20 @@ begin
   into hist_actual,hist_reserved,hist_calls
   from public.agent_missions where project_id=p.id;
  select coalesce(sum(c.actual_tokens),0),coalesce(sum(c.reserved_tokens),0),
+  coalesce(sum(greatest(c.actual_tokens,c.reserved_tokens)),0),
   count(*),count(*) filter(where c.status<>'completed' or c.actual_tokens is null
-     or (c.project_continuation_id is not null and c.project_actual_microusd is null))
-  into settled_actual,settled_reserved,settled_calls,unsettled
+     or (c.project_actual_microusd is not null and
+         c.project_actual_microusd>coalesce(c.project_reserved_microusd,0))),
+  coalesce(sum(c.project_reserved_microusd),0),
+  coalesce(sum(case when c.project_continuation_id is not null and c.project_actual_microusd is null
+       then c.project_reserved_microusd else 0 end),0)
+  into settled_actual,settled_reserved,settled_conservative,settled_calls,unsettled,
+    reserved_exposure,unpriced_exposure
   from public.mission_calls c join public.mission_assignments ja on ja.id=c.job_id
   join public.agent_missions ma on ma.id=ja.mission_id where ma.project_id=p.id;
  if hist_actual is distinct from settled_actual or hist_calls is distinct from settled_calls
-  or hist_reserved<settled_reserved or unsettled<>0
-  or greatest(hist_actual,hist_reserved)+p_tokens>p.token_allowance
+  or hist_reserved<hist_actual or unsettled<>0
+  or greatest(hist_actual,hist_reserved,settled_conservative)+p_tokens>p.token_allowance
  then return jsonb_build_object('ready',false,'reason','historical_accounting_unreconciled'); end if;
  candidate:=jsonb_build_object(
   'version',1,'kind','task4a_blocked_dispatch_owner_governed_recovery',
@@ -168,6 +174,9 @@ begin
     'inputPerMillionUsd',price.pricing_input_per_1m,'outputPerMillionUsd',price.pricing_output_per_1m),
   'nativeLimits',old_native.developer_authority->'limits',
   'historicalActualTokens',hist_actual,'historicalReservedTokens',hist_reserved,
+  'historicalConservativeTokens',greatest(hist_actual,hist_reserved,settled_conservative),
+  'historicalReservedExposureMicrousd',reserved_exposure,
+  'historicalUnpricedExposureMicrousd',unpriced_exposure,
   'historicalCalls',hist_calls,'historicalSettledTokens',settled_actual,
   'historicalSettledCalls',settled_calls,
   'requiresSeparatePaidDispatchConsent',true,
