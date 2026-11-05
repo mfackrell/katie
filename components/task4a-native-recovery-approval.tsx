@@ -1,5 +1,5 @@
 'use client';
-import {useCallback,useEffect,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 
 const ORIGINAL_CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
@@ -11,7 +11,10 @@ type Proposal={ready?:boolean;digest?:string;proposal?:{
 };error?:string};
 export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
  const [offer,setOffer]=useState<Proposal|null>(null);
- const [busy,setBusy]=useState(false),[result,setResult]=useState('');
+ const [busy,setBusy]=useState(false);
+ const [result,setResult]=useState<{kind:'success'|'error';message:string}|null>(null);
+ const resultRef=useRef<HTMLParagraphElement|null>(null);
+ useEffect(()=>{if(result)resultRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[result]);
  const enabled=chatId===ORIGINAL_CHAT;
  const refresh=useCallback(async()=>{
   if(!enabled)return;
@@ -26,11 +29,12 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
   }catch{setOffer(null);}
  },[enabled]);
  useEffect(()=>{void refresh();},[refresh]);
- if(!enabled||!offer?.ready||!offer.proposal||!offer.digest)return null;
- const p=offer.proposal;
+ if(!enabled)return null;
+ const p=offer?.ready&&offer.proposal&&offer.digest?offer.proposal:null;
+ if(!p&&!result)return null;
  const approve=async()=>{
   if(busy)return;
-  setBusy(true);setResult('');
+  setBusy(true);setResult(null);
   try{
    const token=await ownerSessionBearer();
    if(!token)throw Error('Owner sign-in required');
@@ -40,19 +44,22 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
    });
    const data=await response.json() as {accepted?:boolean;error?:string};
    if(!response.ok||data.accepted!==true)throw Error(data.error??'Owner confirmation rejected');
-   setResult('Original issue #969 recovered under a new, continuation-bound approval; no new spending has been recorded.');
+   setResult({kind:'success',message:'Native recovery approved and saved for original issue #969. No paid execution has started. A separate owner authorization is required before spending.'});
+   setOffer(null);
    await refresh();
-  }catch(e){setResult(e instanceof Error?e.message:'Recovery unavailable');}
+  }catch(e){setResult({kind:'error',message:e instanceof Error?e.message:'Recovery unavailable'});}
   finally{setBusy(false);}
  };
- return <section className="rounded-xl border p-4 space-y-2 text-sm" aria-label="Task 4A native authority recovery">
+ return <section className="max-w-full break-words rounded-xl border p-4 space-y-3 text-sm" aria-label="Task 4A native authority recovery">
   <h3 className="font-semibold">Task 4A — Original native authorization recovery</h3>
+  {result?<p ref={resultRef} role={result.kind==='error'?'alert':'status'} className="scroll-mt-3 whitespace-normal break-words" tabIndex={-1}>{result.message}</p>:null}
+  {p&&result?.kind!=='success'?<>
   <p>The prior native handoff failed before inference. This action explicitly revokes the unusable approval and records a new continuation-bound approval for the <strong>same original task and account</strong>, with no increase in limits.</p>
   <p>Limit: {p.limits.cumulativeTokens.toLocaleString()} tokens, {p.limits.developmentCalls} development calls, {p.limits.assessmentCalls} assessment and {p.limits.completionCalls} completion calls, ${(p.limits.ceilingMicrousd/1_000_000).toFixed(2)} maximum. New authority expires no later than {new Date(p.replacementDeadline).toLocaleString()}.</p>
   <p className="text-xs opacity-80">Separate owner consent required. Confirmation permits the original development issue to be redispatched through native admission. It does not publish the application to production.</p>
-  {result?<p role="status">{result}</p>:null}
   <button type="button" disabled={busy} className="rounded-md border px-3 py-2 font-semibold disabled:opacity-50" onClick={()=>{void approve();}}>
    {busy?'Verifying…':'Approve exact bounded Task 4A native recovery'}
   </button>
+  </>:null}
  </section>;
 }
