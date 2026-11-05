@@ -82,6 +82,14 @@ begin
   'uncertainties',jsonb_build_array('future_context_growth','repair_count',
    'missing_comparable_completed_phases','review_and_assessment_usage',
    'browser_delivery_cost'),'guaranteedCompletion',false);
+ -- Immutable predecessor authorization cannot be silently reduced or revoked.
+ -- The existing chain guard requires expiration before an owner can add a
+ -- successor. Surface this dependency before showing a commit-ready quote.
+ if prior.id is not null and prior.deadline>clock_timestamp()
+   and prior.revoked_at is null
+ then return jsonb_build_object('ready',false,
+   'reason','existing_continuation_must_expire_before_successor',
+   'predecessorExpiresAt',prior.deadline,'evidence',evidence);end if;
  if p.id is null or m.id is null or j.id is null or t.id is null or a.id is null
   or g.id is null or prior.id is null or owner_id is null or r.id is null
   or p.status<>'blocked' or p.phase<>'development'
