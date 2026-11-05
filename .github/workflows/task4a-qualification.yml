@@ -1,6 +1,9 @@
 name: Task 4A protected Preview nonbillable qualification
 
 on:
+  push:
+    branches:
+      - fix/task4a-separate-dispatch-paid-approval-20261105
   pull_request:
     paths:
       - 'lib/agents/development.ts'
