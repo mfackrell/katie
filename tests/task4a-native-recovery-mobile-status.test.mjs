@@ -38,16 +38,21 @@ test("Task 4A native approval keeps its success visible after the proposal disap
     posts++;recovered=true;
     return route.fulfill({contentType:"application/json",body:JSON.stringify({accepted:true,receiptId:"verified-receipt"})});
    }
-   return route.fulfill({status:recovered?409:200,contentType:"application/json",
-    body:JSON.stringify(recovered?{ready:false,error:"Already recovered"}:proposal)});
+   return route.fulfill({contentType:"application/json",
+    body:JSON.stringify(recovered?{ready:false,recovered:true,recordedAt:"2026-11-05T13:43:04Z"}:proposal)});
   });
   await page.goto("http://localhost/");
   const button=page.getByRole("button",{name:"Approve exact bounded Task 4A native recovery"});await button.waitFor();await button.click();
   const message=page.getByRole("status");await message.waitFor();
-  assert.match(await message.innerText(),/Native recovery approved and saved/);
-  assert.match(await message.innerText(),/No paid execution has started/);
+  assert.match(await message.innerText(),/Native recovery was approved and saved/);
+  assert.match(await message.innerText(),/does not authorize paid execution/);
   assert.equal(await button.count(),0,"approval button disappears after consent saved");
   assert.equal(posts,1,"only one owner action");
+  await page.reload();
+  await page.getByRole("status").waitFor();
+  assert.match(await page.getByRole("status").innerText(),/Native recovery was approved and saved/);
+  assert.equal(await button.count(),0,"reload cannot offer the saved approval again");
+  assert.equal(posts,1,"reload must not create duplicate approval");
   await page.waitForFunction(()=>{
    const m=document.querySelector('[role="status"]'),c=document.querySelector("#approval-stack");
    if(!m||!c)return false;
