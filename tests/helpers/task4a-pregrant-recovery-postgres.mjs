@@ -342,6 +342,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
       await db.query('rollback to savepoint repeated_renewal');
       await db.query('release savepoint repeated_renewal');
      }
+     if(ownerGovernedConcurrent)await db.query('begin');
      const state=await one(db,`select p.status p_status,m.status m_status,j.status j_status,
       t.status t_status,t.external->>'issueNumber' issue,
       t.external->>'developerApprovalId' active_approval
