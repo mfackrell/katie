@@ -3,7 +3,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 
 const ORIGINAL_CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
-type Proposal={ready?:boolean;digest?:string;proposal?:{
+type Proposal={ready?:boolean;recovered?:boolean;recordedAt?:string;digest?:string;proposal?:{
  taskId:string;oldApprovalId:string;continuationId:string;model:string;
  limits:{cumulativeTokens:number;developmentCalls:number;assessmentCalls:number;
  completionCalls:number;ceilingMicrousd:number};
@@ -25,7 +25,10 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
     headers:{Authorization:'Bearer '+token},cache:'no-store'
    });
    const data=await response.json() as Proposal;
-   setOffer(response.ok?data:null);
+   if(response.ok&&data.recovered){
+    setOffer(null);
+    setResult({kind:'success',message:'Native recovery was approved and saved for original issue #969. This approval alone does not authorize paid execution.'});
+   }else setOffer(response.ok?data:null);
   }catch{setOffer(null);}
  },[enabled]);
  useEffect(()=>{void refresh();},[refresh]);
@@ -44,7 +47,7 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
    });
    const data=await response.json() as {accepted?:boolean;error?:string};
    if(!response.ok||data.accepted!==true)throw Error(data.error??'Owner confirmation rejected');
-   setResult({kind:'success',message:'Native recovery approved and saved for original issue #969. No paid execution has started. A separate owner authorization is required before spending.'});
+   setResult({kind:'success',message:'Native recovery was approved and saved for original issue #969. This approval alone does not authorize paid execution.'});
    setOffer(null);
    await refresh();
   }catch(e){setResult({kind:'error',message:e instanceof Error?e.message:'Recovery unavailable'});}
