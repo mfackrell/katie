@@ -334,9 +334,14 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,true);
     assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,false,'Claim can never be repeated');
     await db.query('savepoint immutable_recovery_receipt');
-    await assert.rejects(db.query("delete from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project]),/TASK4A_FAILED_DISPATCH_AUDIT_IMMUTABLE/);
-    await db.query('rollback to savepoint immutable_recovery_receipt');
-    await db.query('release savepoint immutable_recovery_receipt');
+    await db.query('reset role');
+    try{
+     await assert.rejects(db.query("delete from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project]),/TASK4A_FAILED_DISPATCH_AUDIT_IMMUTABLE/);
+    }finally{
+     await db.query('rollback to savepoint immutable_recovery_receipt');
+     await db.query('release savepoint immutable_recovery_receipt');
+     await db.query('set role service_role');
+    }
     assert.equal((await one(db,'select task4a_record_failed_dispatch_submitted($1) ok',[currentRelease])).ok,true);
     assert.equal((await one(db,'select task4a_record_failed_dispatch_submitted($1) ok',[currentRelease])).ok,false);
     assert.equal((await one(db,'select status from agent_tasks where id=$1',[task])).status,'submitted');
