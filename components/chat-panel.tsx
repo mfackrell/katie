@@ -3048,25 +3048,33 @@ export function ChatPanel({
 
       {attachmentSaveError&&<p role="alert" className="px-5 text-xs text-amber-200">Attachments are retained for this session; browser storage could not save them for refresh.</p>}
       {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
-      {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
-      {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
-      {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
-      {chatId && !managedAgentId ? <Task4aSuccessorOwnerApproval key={'task4a-successor:'+chatId} chatId={chatId} /> : null}
-      {chatId && !managedAgentId ? <Task4aNativeRecoveryApproval key={'task4a-native:'+chatId} chatId={chatId} /> : null}
-      {resourceRecovery?.chatId===chatId && !managedAgentId ? (
-        <DeveloperResourceCard proposal={resourceRecovery.proposal}
-         pending={projectApprovalPending||loading} error={projectApprovalError}
-         onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
-      ):null}
-      {projectApproval?.chatId===chatId && !managedAgentId ? (
-        <ProjectApprovalCard
-          approval={projectApproval.approval}
-          pending={projectApprovalPending || loading}
-          error={projectApprovalError}
-          onApprove={(hash)=>{void approveProject(hash);}}
-          onRequestChanges={requestProjectChanges}
-        />
-      ) : null}
+      <section
+        role="region"
+        aria-label="Project approvals and recovery"
+        tabIndex={0}
+        className="min-h-0 max-h-[45dvh] shrink overflow-y-auto overscroll-contain touch-pan-y px-3 py-2 empty:hidden sm:max-h-[55dvh] sm:px-6"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
+        {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aSuccessorOwnerApproval key={'task4a-successor:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aNativeRecoveryApproval key={'task4a-native:'+chatId} chatId={chatId} /> : null}
+        {resourceRecovery?.chatId===chatId && !managedAgentId ? (
+          <DeveloperResourceCard proposal={resourceRecovery.proposal}
+           pending={projectApprovalPending||loading} error={projectApprovalError}
+           onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
+        ):null}
+        {projectApproval?.chatId===chatId && !managedAgentId ? (
+          <ProjectApprovalCard
+            approval={projectApproval.approval}
+            pending={projectApprovalPending || loading}
+            error={projectApprovalError}
+            onApprove={(hash)=>{void approveProject(hash);}}
+            onRequestChanges={requestProjectChanges}
+          />
+        ) : null}
+      </section>
 
       {statusRailOpen && statusMount ? createPortal(
         <div className="space-y-2 text-xs" aria-live="polite">
