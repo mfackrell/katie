@@ -691,7 +691,7 @@ export async function qualifiedOrdinaryDevelopmentRelease(){
  const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
  return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
 }
-async function dispatchOrdinaryNativeDevelopment(){
+async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
@@ -704,6 +704,7 @@ async function dispatchOrdinaryNativeDevelopment(){
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
  for(const a of rows.data){
+  if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
   let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;
   try{
@@ -824,6 +825,11 @@ async function dispatchOrdinaryNativeDevelopment(){
  }
  if(rows.data.length<8)return false;
  }
+}
+// Invoked only after a digest-bound original-owner consent. This is Katie's
+// existing native dispatcher scoped to one exact saved development task.
+export async function dispatchTask4aFailedDispatchOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
 }
 export async function dispatchOwnerRenewedNativeDevelopment() {
  if(await dispatchOrdinaryNativeDevelopment())return true;
