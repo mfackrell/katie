@@ -97,6 +97,51 @@ test('saved Qwen observations retain provenance and can be refined only for the 
   assert.equal(canonical.observationHistory.at(-1).summaryCoverage,'metadata');
 });
 
+test("a subsequent model rerun cannot supersede an approved correction of the same picture", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "test-only-secret");
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const actorId = "22222222-2222-4222-8222-222222222222";
+  const picture: FileReference = {
+    fileId: "visual-correction-pixels", fileName: "image.png", mimeType: "image/png",
+    preview: "retained original", imageDataUrl: "data:image/png;base64,c2FtZS1pbWFnZQ==",
+  };
+  const sourceHash = imageObservationHash(picture.imageDataUrl!);
+  const baseline = {
+    observedSummary: "A model misidentified the object in the picture.",
+    summaryModel: "runpod:Qwen/Qwen3-VL-8B-Instruct",
+    summaryCoverage: "full" as const, observationVersion: STILL_IMAGE_OBSERVATION_VERSION,
+    observationSourceHash: sourceHash, observationAt: "2026-11-04T19:53:32Z",
+  };
+  const saved = await service.persist(chatId, picture, undefined, {
+    source: new Blob(["original-picture"]), description: baseline, actorId,
+  });
+  const manual = {
+    ...baseline,
+    observedSummary: "The corrected, owner-approved picture description is the authoritative account.",
+    summaryModel: "manual:ChatGPT-verified-visual-correction",
+    observationAt: "2026-11-05T12:53:17Z",
+    manualCorrection: {
+      approvedByUser: true, correctedAt: "2026-11-05T12:53:17Z",
+      correctedBy: "manual:ChatGPT-verified-visual-correction",
+      originalSummaryModel: baseline.summaryModel, sourceMessageId: "source-message",
+    },
+  };
+  const corrected = await service.updateImageObservation(chatId, saved, actorId, manual);
+  assert.equal(corrected.observedSummary, manual.observedSummary);
+  assert.ok(verifiedKatieVisualEpisode(corrected));
+  const afterRerun = await service.updateImageObservation(chatId, corrected, actorId, {
+    ...baseline, observedSummary: "A newer Qwen output is inconsistent with the owner-approved correction.",
+    observationAt: "2026-11-05T13:03:00Z",
+  });
+  assert.equal(afterRerun.observedSummary, manual.observedSummary);
+  assert.equal(afterRerun.summaryModel, manual.summaryModel);
+  const canonical = JSON.parse(await fake.files.get(`chats/${chatId}/${saved.id}.json`)!.text());
+  assert.equal(canonical.evidenceDescriptor.observedSummary, manual.observedSummary);
+  assert.match(canonical.observationHistory.at(-1).observedSummary,
+    /newer Qwen output is inconsistent/, "The latest unapproved rerun survives only as history");
+});
+
 test("large binary uploads use private signed storage and full extraction hydrates from a compact reference", async () => {
   const fake = fakeStorage();
   const bytes = new Uint8Array(6 * 1024 * 1024); bytes[0] = 80; bytes[bytes.length - 1] = 90;
