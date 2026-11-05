@@ -512,8 +512,7 @@ begin
        and event='developer_native_dispatch_claimed'
        and data->>'approvalId'=signed_approval::text)<>1
   or exists(select 1 from public.project_events where project_id=p.id
-       and event in ('task4a_failed_dispatch_owner_authorized',
-          'task4a_failed_dispatch_recovery_claimed','task4a_failed_dispatch_recovery_submitted'))
+       and event in ('task4a_failed_dispatch_recovery_claimed','task4a_failed_dispatch_recovery_submitted'))
   or exists(select 1 from public.benchmark_execution_grants where project_id=p.id)
   or exists(select 1 from public.benchmark_budget_calls where account_id=acct.id)
   or exists(select 1 from public.mission_calls where job_id=t.id)
