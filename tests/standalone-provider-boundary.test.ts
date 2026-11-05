@@ -1122,7 +1122,7 @@ test('1K Gemini image output reserves reviewed image charges and settles actual 
    usageMetadata:{promptTokenCount:100,candidatesTokenCount:1150,thoughtsTokenCount:0,
     candidatesTokensDetails:[{modality:'IMAGE',tokenCount:1120},{modality:'TEXT',tokenCount:30}]}
   };
-  return new Response('data: '+JSON.stringify(response)+'\\n\\n',{headers:{'content-type':'text/event-stream'}});
+  return new Response('data: '+JSON.stringify(response)+'\n\n',{headers:{'content-type':'text/event-stream'}});
  },f.factory);
  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:streamGenerateContent?alt=sse';
  const payload={contents:[{role:'user',parts:[{text:'Generate a photorealistic portrait'}]}],
