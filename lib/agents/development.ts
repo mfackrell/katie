@@ -714,7 +714,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
     // Only the separately owner-consented, immutable replacement approval
     // may use the original issue; ordinary successors retain the WIP gate.
     const pregrant=c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
-      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'&&
+      a.developer_authority?.task4aPostpaid?.version!=='postpaid-same-task-v1';
     if(pregrant){
       const {data:ready,error}=await db.rpc<boolean>('task4a_pregrant_redispatch_ready',{
         p_task:task.id,p_approval:a.id
