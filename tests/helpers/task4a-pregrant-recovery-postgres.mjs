@@ -250,7 +250,8 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    try{
     await assert.rejects(
      db.query("insert into benchmark_native_spending_approvals(id,owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority) select gen_random_uuid(),owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority from benchmark_native_spending_approvals where id=$1",[original]),
-     /Ordinary authority requires its committed exact owner decision/,
+     error => {console.log('TASK4A_UNAPPROVED_GRANT_DENIAL_DIAGNOSTIC',error.message,'SQLSTATE',error.code);
+       return /Ordinary authority requires its committed exact owner decision/.test(error.message);},
      'An unapproved ordinary Developer grant must still fail');
    }finally{
     await db.query('rollback to savepoint unapproved_ordinary_authority');
