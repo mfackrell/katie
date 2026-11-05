@@ -746,6 +746,7 @@ async function dispatchOrdinaryNativeDevelopment(){
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
+  let recoveredClaimedDispatch=false;
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
@@ -754,32 +755,67 @@ async function dispatchOrdinaryNativeDevelopment(){
      !priorBody.startsWith(marker(task)+'\n'))continue;
    if(authority.authorityKind==='task4a-developer'&&
       a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
-     // Authenticate the old incorrect signed issue against the historical
-     // dispatch instant. It must never be replayed as a new grant.
-     let oldProof:ReturnType<typeof readDeveloperHandoff>;
-     try{oldProof=readDeveloperHandoff(priorBody,key,
+     // The first issue rewrite succeeded, but GitHub rejected the malformed
+     // workflow_dispatch *after* the existing SQL claim was consumed. The
+     // currently signed issue is Task4A-bound, not the historical ordinary
+     // approval. Never reset that claim or trust an unsigned retry.
+     let priorProof:ReturnType<typeof readDeveloperHandoff>;
+     try{priorProof=readDeveloperHandoff(priorBody,key,
        Date.parse(String(task.external.dispatchStartedAt??'')));}catch{continue;}
-     const oldApproval=a.previous_developer_approval_id;
      const failure=task.external.receipt as {outcome?:string;run_id?:number;pr_url?:string|null}|undefined;
-     if(oldProof.authorityKind!=='ordinary-developer'||
-       oldProof.projectId!==c.projectId||oldProof.taskId!==task.id||
-       oldProof.approvalId!==oldApproval||oldProof.scopeHash!==c.scopeHash||
-       oldProof.contractHash!==c.contractHash||oldProof.baselineSha!==c.baselineSha||
-       issue!==969||failure?.outcome!=='BLOCKED'||failure?.run_id!==41673059705||
-       failure?.pr_url!==null)continue;
-     const run=await client.actions.getWorkflowRun({...binding,run_id:41673059705});
-     if(run.data.conclusion!=='failure'||run.data.status!=='completed'||
-       run.data.head_sha!==task.external.developerReleaseSha||
-       run.data.event!=='issues')continue;
+     if(issue!==969||failure?.outcome!=='BLOCKED'||failure?.run_id!==41673059705||
+       failure?.pr_url!==null||priorProof.projectId!==c.projectId||
+       priorProof.taskId!==task.id||priorProof.scopeHash!==c.scopeHash||
+       priorProof.contractHash!==c.contractHash||priorProof.baselineSha!==c.baselineSha)continue;
+     if(priorProof.authorityKind==='task4a-developer'){
+       if(priorProof.approvalId!==a.id||
+          priorProof.task4aContinuationId!==authority.task4aContinuationId||
+          priorProof.releaseSha!==task.external.developerReleaseSha||
+          priorProof.accountId!==a.account_id)continue;
+       const {data:offer,error:offerError}=await db.rpc<{
+         ready:boolean;digest?:string;proposal?:{originalClaimId:string;approvalId:string}
+       }>('task4a_failed_dispatch_proposal',{p_release:release});
+       if(offerError||offer?.ready!==true||!offer.digest||offer.proposal?.approvalId!==a.id)continue;
+       const {data:consent,error:consentError}=await db.from('project_events')
+        .select('id,data').eq('project_id',c.projectId)
+        .eq('event','task4a_failed_dispatch_owner_authorized')
+        .maybeSingle<{id:string;data:{consentDigest:string;originalClaimId:string}}>();
+       if(consentError||!consent||consent.data.consentDigest!==offer.digest||
+          consent.data.originalClaimId!==offer.proposal.originalClaimId)continue;
+       // GitHub acceptance is external to Postgres. A missing/partial run
+       // inventory is uncertainty, NOT evidence permitting another dispatch.
+       const runs=await client.actions.listWorkflowRunsForRepo({
+        owner:binding.owner,repo:binding.repo,event:'workflow_dispatch',
+        created:'>=2026-11-05T13:43:41Z',per_page:100
+       });
+       if(runs.data.total_count>100||runs.data.workflow_runs.some(run=>
+          run.path==='.github/workflows/autonomous-development.yml'))continue;
+       recoveredClaimedDispatch=true;
+     }else if(priorProof.authorityKind==='ordinary-developer'){
+       if(priorProof.approvalId!==a.previous_developer_approval_id)continue;
+       const run=await client.actions.getWorkflowRun({...binding,run_id:41673059705});
+       if(run.data.conclusion!=='failure'||run.data.status!=='completed'||
+          run.data.head_sha!==task.external.developerReleaseSha||
+          run.data.event!=='issues')continue;
+     }else continue;
+
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
-  const claim=await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});if(claim.error||claim.data!==true)continue;
+  const claim=recoveredClaimedDispatch
+   ?await db.rpc('task4a_claim_failed_dispatch',{p_release:release})
+   :await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});
+  if(claim.error||claim.data!==true)continue;
   const claimed=await readTask(task.id);
   // An uncertain external acceptance retains the single dispatch claim. Never retry creation automatically.
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
-   await save(claimed,'submitted','Owner-authorized original task continuation dispatched.',{...claimed.external,attempted:true,developerDispatchRunPending:true});
+   if(recoveredClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_record_failed_dispatch_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('GitHub accepted recovered dispatch; immutable receipt storage failed; no retry permitted');
+   }else{
+    await save(claimed,'submitted','Owner-authorized original task continuation dispatched.',{...claimed.external,attempted:true,developerDispatchRunPending:true});
+   }
   }else{
    const created=await client.issues.create({...binding,title:'[agent] '+task.input.split('\n')[0].slice(0,180),body});
    await save(claimed,'submitted','Original owner-authorized Developer task dispatched.',{...claimed.external,attempted:true,issueNumber:created.data.number,issueUrl:created.data.html_url,repository:binding.fullName});
