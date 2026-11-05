@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { buildKatieVisualEpisode, verifiedKatieVisualEpisode } from "@/lib/chat/visual-memory";
-import { getSupabaseAdminClient } from "../data/supabase/admin";
+
 import { applyTrustedVisualCorrection, type TrustedVisualCorrection } from "./verified-visual-corrections";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
@@ -1176,6 +1176,9 @@ export async function reconcileActorVisualCorrections(
 }
 
 async function trustedVisualCorrections(actorId: string): Promise<TrustedVisualCorrection[]> {
+  // Lazy-load only on actor-catalog queries. Plain-node upload/recovery fixtures
+  // import the storage module from a temp bundle with no application DB tree.
+  const { getSupabaseAdminClient } = await import("@/lib/data/supabase/admin");
   const { data, error } = await getSupabaseAdminClient()
     .from("visual_observation_corrections")
     .select("actor_id,source_chat_id,attachment_id,source_hash,description,correction_model,corrected_at,original_model,source_message_id,approved_by_user")
