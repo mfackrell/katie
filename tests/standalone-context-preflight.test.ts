@@ -163,7 +163,7 @@ test('Gemini image counting preserves exact visual inputs but excludes uncountab
       responseModalities:['TEXT','IMAGE'],imageConfig:{imageSize:'1K'},maxOutputTokens:4096,
     }});
   const unchanged=prepared.serializedBody;
-  let counts=0,paid=0;
+  let counts=0;
   const result=await countNativePreparedInput(prepared,async(url,init)=>{
     counts++;
     assert.equal(String(url),'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:countTokens');
@@ -174,7 +174,7 @@ test('Gemini image counting preserves exact visual inputs but excludes uncountab
     return Response.json({totalTokens:74004});
   },{'x-goog-api-key':'fixture-not-a-real-key'});
   assert.equal(result,74004);
-  assert.equal(counts,1);assert.equal(paid,0);
+  assert.equal(counts,1,'only the free countTokens request was sent');
   assert.equal(prepared.serializedBody,unchanged,'counting must not mutate the frozen paid request');
   assert.equal(estimatePreparedRequest(prepared,PRICING_SNAPSHOT,{requestHash:prepared.hash,inputTokens:result!}).status,'estimated');
 });
