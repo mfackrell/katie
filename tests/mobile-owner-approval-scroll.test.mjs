@@ -9,11 +9,9 @@ const sectionEnd = panel.indexOf("</section>", sectionStart);
 test("mobile approvals are inside their own height-bounded, touch-scrollable region", () => {
   assert.ok(sectionStart >= 0 && sectionEnd > sectionStart, "approval region exists");
   const block = panel.slice(sectionStart, sectionEnd);
-  assert.match(block, /max-h-\\[45dvh\\]/);
-  assert.match(block, /min-h-0/);
-  assert.match(block, /overflow-y-auto/);
-  assert.match(block, /touch-pan-y/);
-  assert.match(block, /WebkitOverflowScrolling:\\s*"touch"/);
+  for (const css of ["min-h-0", "max-h-[45dvh]", "sm:max-h-[55dvh]", "overflow-y-auto", "touch-pan-y", 'WebkitOverflowScrolling: "touch"']) {
+    assert.ok(block.includes(css), "missing mobile approval scroll contract: " + css);
+  }
   for (const component of [
     "LifecycleOwnerApproval",
     "Task4aContinuationOwnerApproval",
@@ -28,8 +26,8 @@ test("mobile approvals are inside their own height-bounded, touch-scrollable reg
 });
 
 test("the separate conversation scroll region and composer are preserved", () => {
-  assert.ok(sectionEnd < panel.indexOf('ref={messagesContainerRef}', sectionEnd),
-    "owner approval region remains separate from the message history");
-  assert.match(panel, /ref=\\{messagesContainerRef\\}[\\s\\S]*?overflow-y-auto/);
-  assert.match(panel, /<ChatComposerInput/);
+  const messageRef = panel.indexOf('ref={messagesContainerRef}', sectionEnd);
+  assert.ok(messageRef > sectionEnd, "approval region remains separate from the message history");
+  assert.ok(panel.slice(messageRef, messageRef + 500).includes("overflow-y-auto"), "message history stays scrollable");
+  assert.ok(panel.includes("<ChatComposerInput"), "chat composer remains mounted");
 });
