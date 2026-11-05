@@ -39,7 +39,7 @@ async function receipts(){
   .in('event',['task4a_postpaid_owner_authorized','task4a_postpaid_redispatch_authorized',
    'task4a_postpaid_paid_authorized','task4a_postpaid_dispatch_claimed',
    'task4a_postpaid_dispatch_submitted'])
-  .returns<Array<{id:string;event:string;data:Record<string,unknown>}>>();
+  .returns<{id:string;event:string;data:Record<string,unknown>}>();
  if(error)throw Error('Immutable Task 4A authority history unavailable');
  const get=(kind:string)=>data?.find(x=>x.event===kind);
  return {authority:get('task4a_postpaid_owner_authorized'),
