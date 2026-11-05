@@ -28,6 +28,7 @@ function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT)
   const service = {
     async uncertainExposureAccepted() { return false; },
     async loadPricing() { return {snapshot:pricing,retrievedAt:new Date().toISOString()}; },
+    async publishPricing() { return true; },
     async registerPricing() { events.push('pricing'); return true; },
     async lookupAttempt(_owner: string, _request: string, key: string) { return attempts.find(item => item.attempt_key === key) ?? null; },
     async admit(input: AdmitAttemptInput) {
