@@ -559,11 +559,17 @@ test('explicit project intake inspects fresh image and PDF evidence before bindi
     context.message = mimeType === 'application/pdf' ? 'Help me apply to this attached PDF' : 'Start a new project using the attached image brief.';
     context.startProjectIntent = text => text.startsWith('Start a new project') || text.startsWith('Help me apply');
     const result = await vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}
-      return {pdfProgress, freshDescriptionCount:freshTaskDescriptions.size};})()`), context);
+      return {pdfProgress, freshDescriptionCount:freshTaskDescriptions.size,
+        taskIdentityText};})()`), context);
     assert.deepEqual(events, ['inspect','resolve']);
     assert.equal(result.freshDescriptionCount, 1);
     assert.equal(result.pdfProgress.projectContext.userMessageId, 'fresh-task');
-    assert.ok(result.pdfProgress.projectContext.text.includes('Final requirement: WIP and job costing.'));
+    assert.ok(result.taskIdentityText.includes('Final requirement: WIP and job costing.'),
+      'attachment evidence remains available to the project classifier');
+    assert.equal(result.pdfProgress.projectContext.text, context.message,
+      'durable project identity must contain only the original user request');
+    assert.ok(!result.pdfProgress.projectContext.text.includes('fresh user upload'),
+      'attachment observations cannot become project authority');
     assert.notEqual(result.pdfProgress.projectContext.userMessageId, POSTING_ID);
   }
 });
