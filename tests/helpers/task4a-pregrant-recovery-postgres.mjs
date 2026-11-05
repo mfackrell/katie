@@ -303,7 +303,8 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      await db.query('set role service_role');
      await db.query('set constraints developer_approval_decision deferred');
      const newDeadline=new Date(Date.now()+4*3600000).toISOString();
-     const args=[currentRelease,newDeadline,240000,24,9000000];
+     // The existing synthetic successor is $8.00; owner renewal must NOT increase it.
+     const args=[currentRelease,newDeadline,240000,24,8000000];
      const readProposal=async()=>(await one(db,'select task4a_blocked_dispatch_proposal($1,$2,$3,$4,$5) proposal',args)).proposal;
      const offer=await readProposal();
      assert.equal(offer.ready,true,JSON.stringify(offer));
