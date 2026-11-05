@@ -145,6 +145,23 @@ jobs:
             throw Error('Actual two-connection successor race qualification failed');
           console.log('Distinct PostgreSQL connections: exactly one successor grant and one audit event');
           NODE
+      - name: Exercise original Task 4A failed-dispatch consent race in actual isolated PostgreSQL
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_FAILED_DISPATCH_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-failed-dispatch-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-failed-dispatch-race-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+           throw Error('Actual two-connection Task 4A failed GitHub dispatch recovery race did not pass');
+          console.log('Original failure recovery: one consent, one claim, two real PostgreSQL connections, zero paid calls');
+          NODE
+
       - name: Retain independently inspectable machine evidence
         if: always()
         uses: actions/upload-artifact@v4

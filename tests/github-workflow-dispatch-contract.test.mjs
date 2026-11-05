@@ -51,4 +51,3 @@ test('GitHub reject fullName then accept the exact owner-bound workflow_dispatch
  await assert.rejects(github.actions.createWorkflowDispatch({owner:internal.owner,repo:internal.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:'969'}}),/Duplicate external acceptance denied/);
 });
 
-});
