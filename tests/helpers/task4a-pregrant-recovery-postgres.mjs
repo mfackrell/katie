@@ -405,58 +405,143 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     assert.equal(offer.proposal.issueNumber,969);
     assert.equal(offer.proposal.nativeLimits.ceilingMicrousd,2520000);
     assert.equal((await p('g'.repeat(40))).ready,false,'Invalid release SHA must be denied');
-    const consent=async (who=owner,digest=offer.digest)=>
-      (await one(db,'select task4a_authorize_failed_dispatch($1,$2,$3) receipt',[who,digest,currentRelease])).receipt;
-    for(const [who,digest] of [[randomUUID(),offer.digest],[owner,'0'.repeat(64)]]){
+    const consent=async (who=owner,hash=offer.digest)=>
+     (await one(db,'select task4a_authorize_failed_dispatch($1,$2,$3) receipt',
+      [who,hash,currentRelease])).receipt;
+    for(const [who,hash] of [[randomUUID(),offer.digest],[owner,'0'.repeat(64)]]){
      await db.query('savepoint rejected_consent');
-     await assert.rejects(consent(who,digest),/TASK4A_FAILED_DISPATCH_OWNER_CONSENT_DENIED/);
+     await assert.rejects(consent(who,hash),/TASK4A_FAILED_DISPATCH_OWNER_CONSENT_DENIED/);
      await db.query('rollback to savepoint rejected_consent');
      await db.query('release savepoint rejected_consent');
     }
     const approved=await consent();
     assert.equal(approved.authorized,true);
+    assert.equal(approved.recoveryOnly,true);
+    assert.equal(approved.dispatchAuthorized,false);
+    assert.equal(approved.paidExecutionAuthorized,false);
+    assert.equal(approved.newExecutionGrants,0);
+    assert.equal(approved.newPaidCalls,0);
     await db.query('savepoint duplicate_owner_consent');
     await assert.rejects(consent(),/TASK4A_FAILED_DISPATCH_OWNER_CONSENT_DENIED/);
     await db.query('rollback to savepoint duplicate_owner_consent');
     await db.query('release savepoint duplicate_owner_consent');
+    assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,false,
+     'Recovery consent must never permit a GitHub claim');
     assert.equal((await one(db,'select status from agent_tasks where id=$1',[task])).status,'dispatching');
     assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
     assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
+    assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_failed_dispatch_paid_execution_authorized'",[project])).n,0);
+
+    // Even an alternative native gateway cannot grant inference under ONLY
+    // the first approval. The SQL trigger is independent of the HTTP route.
+    await db.query('savepoint unauthorized_paid_grant');
+    await assert.rejects(db.query(
+     "insert into benchmark_execution_grants(id,developer_approval_id,project_id,mission_assignment_id,execution_epoch,deadline) values($1,$2,$3,$4,1,now()+interval '1 hour')",
+     [randomUUID(),activeForFailedDispatch,project,task]),
+     /TASK4A_SEPARATE_PAID_AUTH_REQUIRED_BEFORE_GRANT/);
+    await db.query('rollback to savepoint unauthorized_paid_grant');
+    await db.query('release savepoint unauthorized_paid_grant');
+
+    const paidProposal=async()=>(await one(db,
+     'select task4a_paid_execution_proposal($1) offer',[currentRelease])).offer;
+    const payOffer=await paidProposal();
+    assert.equal(payOffer.ready,true,JSON.stringify(payOffer));
+    assert.notEqual(payOffer.digest,offer.digest,'Paid decision must have a different digest');
+    assert.equal(payOffer.proposal.recoveryReceiptId,approved.receiptId);
+    assert.equal(payOffer.proposal.approvalId,activeForFailedDispatch);
+    assert.equal(payOffer.proposal.originalClaimId,claimId);
+    const pay=async (who=owner,hash=payOffer.digest,conn=db)=>
+     (await one(conn,'select task4a_authorize_paid_execution($1,$2,$3) receipt',
+      [who,hash,currentRelease])).receipt;
+    for(const [who,hash] of [[randomUUID(),payOffer.digest],[owner,'0'.repeat(64)]]){
+     await db.query('savepoint rejected_paid_consent');
+     await assert.rejects(pay(who,hash),/TASK4A_SEPARATE_PAID_EXECUTION_CONSENT_DENIED/);
+     await db.query('rollback to savepoint rejected_paid_consent');
+     await db.query('release savepoint rejected_paid_consent');
+    }
+
+    // Model-price evidence and available money are rechecked between decisions.
+    await db.query('savepoint stale_paid_pricing');
+    await db.query('reset role');
+    await db.query("update model_registry set pricing_verified_at=now()-interval '25 hours' where provider_name='openai' and model_id='gpt-5.3-codex'");
+    await db.query('set role service_role');
+    assert.equal((await paidProposal()).ready,false);
+    assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,false);
+    await db.query('rollback to savepoint stale_paid_pricing');
+    await db.query('release savepoint stale_paid_pricing');
+    await db.query('set role service_role');
+
+    await db.query('savepoint exhausted_paid_capacity');
+    await db.query('reset role');
+    await db.query('update benchmark_budget_accounts set spent_tokens=180000 where id=$1',[id]);
+    await db.query('set role service_role');
+    assert.equal((await paidProposal()).ready,false);
+    assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,false);
+    await db.query('rollback to savepoint exhausted_paid_capacity');
+    await db.query('release savepoint exhausted_paid_capacity');
+    await db.query('set role service_role');
+
     if(failedDispatchConcurrent){
-     assert.equal(typeof connect,'function','Real separate PostgreSQL clients required');
-     await db.query('commit');
-     committedForConcurrency=true;
+     assert.equal(typeof connect,'function','Two real PostgreSQL clients required');
+     await db.query('commit');committedForConcurrency=true;
      const contenders=await Promise.all([connect(),connect()]);
      try{
       await Promise.all(contenders.map(x=>x.query('set role service_role')));
-      const calls=await Promise.all(contenders.map(x=>x.query('select task4a_claim_failed_dispatch($1) ok',[currentRelease])));
-      assert.equal(calls.filter(x=>x.rows[0].ok===true).length,1,'Exactly one worker can claim the owner-approved dispatch');
-      assert.equal(calls.filter(x=>x.rows[0].ok===false).length,1,'Concurrent duplicate must be denied');
+      const decisions=await Promise.allSettled(contenders.map(x=>pay(owner,payOffer.digest,x)));
+      assert.equal(decisions.filter(x=>x.status==='fulfilled'&&x.value.authorized===true).length,1,
+       'Concurrent second owner decisions cannot create two paid receipts');
+      assert.equal(decisions.filter(x=>x.status==='rejected').length,1,
+       'The second concurrent paid decision must fail closed');
+      assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project])).n,1);
+      assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_failed_dispatch_paid_execution_authorized'",[project])).n,1);
+      const claims=await Promise.all(contenders.map(x=>
+       x.query('select task4a_claim_failed_dispatch($1) ok',[currentRelease])));
+      assert.equal(claims.filter(x=>x.rows[0].ok===true).length,1,'One paid-authorized dispatch claim only');
+      assert.equal(claims.filter(x=>x.rows[0].ok===false).length,1,'Concurrent dispatch duplicate denied');
       assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_failed_dispatch_recovery_claimed'",[project])).n,1);
-      assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='developer_native_dispatch_claimed' and data->>'approvalId'=$2",[project,recovered.newApprovalId])).n,2,'Historical claim and recovered claim must both remain');
+      assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='developer_native_dispatch_claimed' and data->>'releaseSha'=$2",[project,currentRelease])).n,1);
       assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
       assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
       assert.equal((await one(db,'select status from agent_tasks where id=$1',[task])).status,'dispatching');
+      console.log('TASK4A_TWO_DISTINCT_OWNER_DECISIONS_AND_ONE_CLAIM_TWO_CONNECTION_POSTGRES_PASS');
       console.log('TASK4A_FAILED_DISPATCH_TWO_CONNECTION_RACE_POSTGRES_PASS');
      }finally{await Promise.allSettled(contenders.map(x=>x.end()));}
      return;
     }
+
+    const paidAuthorization=await pay();
+    assert.equal(paidAuthorization.authorized,true);
+    assert.equal(paidAuthorization.paidExecutionAuthorized,true);
+    assert.equal(paidAuthorization.recoveryReceiptId,approved.receiptId);
+    await db.query('savepoint duplicate_paid_consent');
+    await assert.rejects(pay(),/TASK4A_SEPARATE_PAID_EXECUTION_CONSENT_DENIED/);
+    await db.query('rollback to savepoint duplicate_paid_consent');
+    await db.query('release savepoint duplicate_paid_consent');
     assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,true);
-    assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,false,'Claim can never be repeated');
+    assert.equal((await one(db,'select task4a_claim_failed_dispatch($1) ok',[currentRelease])).ok,false,
+     'Paid and recovery approvals cannot authorize a second dispatch claim');
+    const claim=await one(db,"select id,data from project_events where project_id=$1 and event='task4a_failed_dispatch_recovery_claimed'",[project]);
+    assert.equal(claim.data.ownerConsentReceiptId,approved.receiptId);
+    assert.equal(claim.data.paidExecutionReceiptId,paidAuthorization.receiptId);
+    assert.equal(claim.data.originalClaimId,claimId);
     await db.query('savepoint immutable_recovery_receipt');
     await db.query('reset role');
-    try{
-     await assert.rejects(db.query("delete from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project]),/TASK4A_FAILED_DISPATCH_AUDIT_IMMUTABLE/);
-    }finally{
-     await db.query('rollback to savepoint immutable_recovery_receipt');
-     await db.query('release savepoint immutable_recovery_receipt');
-     await db.query('set role service_role');
-    }
+    await assert.rejects(db.query("delete from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project]),/TASK4A_FAILED_DISPATCH_AUDIT_IMMUTABLE/);
+    await db.query('rollback to savepoint immutable_recovery_receipt');
+    await db.query('release savepoint immutable_recovery_receipt');
+    await db.query('savepoint immutable_paid_receipt');
+    await assert.rejects(db.query("update project_events set data='{}'::jsonb where project_id=$1 and event='task4a_failed_dispatch_paid_execution_authorized'",[project]),/TASK4A_PAID_EXECUTION_RECEIPT_IMMUTABLE/);
+    await db.query('rollback to savepoint immutable_paid_receipt');
+    await db.query('release savepoint immutable_paid_receipt');
+    await db.query('set role service_role');
     assert.equal((await one(db,'select task4a_record_failed_dispatch_submitted($1) ok',[currentRelease])).ok,true);
     assert.equal((await one(db,'select task4a_record_failed_dispatch_submitted($1) ok',[currentRelease])).ok,false);
+    const submitted=await one(db,"select data from project_events where project_id=$1 and event='task4a_failed_dispatch_recovery_submitted'",[project]);
+    assert.equal(submitted.data.paidExecutionReceiptId,paidAuthorization.receiptId);
     assert.equal((await one(db,'select status from agent_tasks where id=$1',[task])).status,'submitted');
     assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
     assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
+    console.log('TASK4A_TWO_DISTINCT_OWNER_CONSENTS_REPLAY_IMMUTABILITY_AND_ACK_POSTGRES_PASS');
     console.log('TASK4A_FAILED_DISPATCH_CONSENT_REPLAY_IMMUTABILITY_AND_ACK_POSTGRES_PASS');
     return;
    }
