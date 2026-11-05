@@ -299,7 +299,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      await db.query("update project_continuation_authorizations set authorized_at=now()-interval '2 hours',deadline=now()-interval '10 minutes' where id=$1",[saved.authorizationId]);
      await db.query('alter table public.project_continuation_authorizations enable trigger user');
      await db.query("update benchmark_native_spending_approvals set deadline=now()-interval '10 minutes' where id=$1",[recovered.newApprovalId]);
-     await db.query("update work_projects set status='blocked',deadline=now()-interval '10 minutes' where id=$1",[project]);
+     await db.query("update work_projects set status='blocked',deadline=now()-interval '10 minutes',progress_signature='old-stalled-signature',progress_since=now()-interval '3 hours',error_signature='old-error',repeated_errors=2 where id=$1",[project]);
      await db.query("update agent_missions set status='blocked',deadline=now()-interval '10 minutes' where id=$1",[mission]);
      await db.query("update mission_assignments set status='failed' where id=$1",[task]);
      await db.query('set role service_role');
@@ -358,6 +358,16 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
      assert.ok(receipt?.id);
      assert.equal(receipt.data.originalFailedClaimId,claimId);
      assert.equal(receipt.data.newNativeApprovalId,state.active_approval);
+     assert.equal(receipt.data.previousProgressSignature,'old-stalled-signature');
+     assert.equal(receipt.data.previousErrorSignature,'old-error');
+     assert.equal(receipt.data.previousRepeatedErrors,2);
+     assert.equal(receipt.data.watchdogRestartedByExplicitOwnerRecovery,true);
+     assert.equal(receipt.data.noArtificialCodingProgress,true);
+     const watchdog=await one(db,'select progress_signature,progress_since,error_signature,repeated_errors from work_projects where id=$1',[project]);
+     assert.equal(watchdog.progress_signature,null,'Next reconciliation must establish genuine task progress signature');
+     assert.equal(watchdog.error_signature,null);
+     assert.equal(watchdog.repeated_errors,0);
+     assert.ok(new Date(watchdog.progress_since).getTime()>Date.now()-60000,'Owner renewal cannot instantly reblock on stale watchdog time');
      assert.equal((await one(db,'select id from project_events where id=$1',[claimId])).id,claimId);
      assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
      assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
