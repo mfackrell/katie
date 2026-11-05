@@ -795,16 +795,33 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
                 priorProof.task4aContinuationId!==authority.task4aContinuationId||
                 priorProof.releaseSha!==task.external.developerReleaseSha||
                 priorProof.accountId!==a.account_id)continue;
+       // Recovery-only consent cannot authorize the native workflow. Require
+       // the independent exact paid consent, with a freshly qualified digest.
        const {data:offer,error:offerError}=await db.rpc<{
-         ready:boolean;digest?:string;proposal?:{originalClaimId:string;approvalId:string}
-       }>('task4a_failed_dispatch_proposal',{p_release:release});
+        ready:boolean;digest?:string;proposal?:{originalClaimId:string;approvalId:string;
+         recoveryReceiptId:string;recoveryDigest:string}
+       }>('task4a_paid_execution_proposal',{p_release:release});
        if(offerError||offer?.ready!==true||!offer.digest||offer.proposal?.approvalId!==a.id)continue;
-       const {data:consent,error:consentError}=await db.from('project_events')
-        .select('id,data').eq('project_id',c.projectId)
-        .eq('event','task4a_failed_dispatch_owner_authorized')
-        .maybeSingle<{id:string;data:{consentDigest:string;originalClaimId:string}}>();
-       if(consentError||!consent||consent.data.consentDigest!==offer.digest||
-          consent.data.originalClaimId!==offer.proposal.originalClaimId)continue;
+       const [{data:recovery,error:recoveryError},{data:paid,error:paidError}]=await Promise.all([
+        db.from('project_events').select('id,data').eq('project_id',c.projectId)
+         .eq('event','task4a_failed_dispatch_owner_authorized')
+         .maybeSingle<{id:string;data:{consentDigest:string;originalClaimId:string;
+          recoveryOnly:boolean;dispatchAuthorized:boolean}}>(),
+        db.from('project_events').select('id,data').eq('project_id',c.projectId)
+         .eq('event','task4a_failed_dispatch_paid_execution_authorized')
+         .maybeSingle<{id:string;data:{consentDigest:string;recoveryReceiptId:string;
+          recoveryConsentDigest:string;originalClaimId:string;proposal:unknown}}>()
+       ]);
+       if(recoveryError||paidError||!recovery||!paid||
+          recovery.id!==offer.proposal.recoveryReceiptId||
+          recovery.data.recoveryOnly!==true||recovery.data.dispatchAuthorized!==false||
+          recovery.data.consentDigest!==offer.proposal.recoveryDigest||
+          recovery.data.originalClaimId!==offer.proposal.originalClaimId||
+          paid.data.recoveryReceiptId!==recovery.id||
+          paid.data.recoveryConsentDigest!==recovery.data.consentDigest||
+          paid.data.originalClaimId!==offer.proposal.originalClaimId||
+          paid.data.consentDigest!==offer.digest||
+          JSON.stringify(paid.data.proposal)!==JSON.stringify(offer.proposal))continue;
        // GitHub acceptance is external to Postgres. A missing/partial run
        // inventory is uncertainty, NOT evidence permitting another dispatch.
        const runs=await client.actions.listWorkflowRunsForRepo({
