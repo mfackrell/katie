@@ -419,7 +419,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
             providerRequestId:rejectedId,rejectionReason:'insufficient_prepaid_balance'}});
         return;
       }
-      const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload, getModelPrice(provider,prepared.model,pricing)?.imageOutputTokensPerImage??0);
+      const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || /:streamGenerateContent(?:\\?|$)/.test(prepared.endpoint), prepared.payload, getModelPrice(provider,prepared.model,pricing)?.imageOutputTokensPerImage??0);
       if (!receipt) {
         await ledger.markUncertain(context.userId, attemptId, 'Response received without supported complete provider usage and receipt; reservation remains held.');
         if(await ledger.uncertainExposureAccepted(context.userId,attemptId))return;
