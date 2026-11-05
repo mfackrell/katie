@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { buildKatieVisualEpisode, verifiedKatieVisualEpisode } from "@/lib/chat/visual-memory";
 
-import { applyTrustedVisualCorrection, type TrustedVisualCorrection } from "./verified-visual-corrections";
+import type { TrustedVisualCorrection } from "./verified-visual-corrections";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
@@ -1145,6 +1145,9 @@ export async function reconcileActorVisualCorrections(
   listCorrections: (actorId: string) => Promise<TrustedVisualCorrection[]>,
 ): Promise<ConversationAttachment[]> {
   if (!attachments.some(file => file.mimeType.startsWith("image/"))) return attachments;
+  // Load the correction helper only for actor-wide visual reconciliation;
+  // video-only fixtures load stored-uploads without this separate module.
+  const { applyTrustedVisualCorrection } = await import("./verified-visual-corrections");
   const corrections = await listCorrections(actorId);
   const byId = new Map(corrections.map(row => [row.attachment_id, row]));
   const updated = [...attachments];
