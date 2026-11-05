@@ -32,3 +32,23 @@ test('every production Octokit workflow dispatch uses GitHub-permitted fields on
  }
  assert.ok(total>=3,'must exercise original Task 4A dispatch and independent recovery workflow routes');
 });
+test('GitHub reject fullName then accept the exact owner-bound workflow_dispatch once (no inference)',async()=>{
+ const accepted=[];
+ const github={actions:{async createWorkflowDispatch(args){
+  const permitted=new Set(['owner','repo','workflow_id','ref','inputs']);
+  const extra=Object.keys(args).find(k=>!permitted.has(k));
+  if(extra)throw Error('"'+extra+'" is not a permitted key');
+  if(args.workflow_id!=='autonomous-development.yml'||args.inputs?.issue_number!=='969')throw Error('Original issue binding denied');
+  if(accepted.length)throw Error('Duplicate external acceptance denied');
+  accepted.push(args);return{status:204};
+ }}};
+ const internal={owner:'mfackrell',repo:'katie',fullName:'mfackrell/katie'};
+ await assert.rejects(github.actions.createWorkflowDispatch({...internal,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:'969'}}),/"fullName" is not a permitted key/);
+ assert.equal(accepted.length,0,'The failed GitHub request must not start execution');
+ const confirmed=await github.actions.createWorkflowDispatch({owner:internal.owner,repo:internal.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:'969'}});
+ assert.equal(confirmed.status,204);
+ assert.equal(accepted.length,1,'Exactly one original-issue workflow was accepted');
+ await assert.rejects(github.actions.createWorkflowDispatch({owner:internal.owner,repo:internal.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:'969'}}),/Duplicate external acceptance denied/);
+});
+
+});
