@@ -13,7 +13,7 @@ const contract='e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e
 const baseline='49c8a5f791e66c351436bb97839193b53d7a1cd1';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 
-export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false}={}){
+export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false}={}){
  await db.query('reset role');
  await db.query('begin');
  let committedForConcurrency=false;
@@ -77,6 +77,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    await db.query('create table if not exists public.benchmark_lifecycle_decisions(id uuid primary key default gen_random_uuid(),developer_approval_id uuid,proposal_id text,decision text,owner_id uuid)');
    await db.query(readFileSync('supabase/migrations/20261105130000_task4a_recovery_decision_receipt_guard.sql','utf8'));
    await db.query("create constraint trigger developer_approval_decision after insert on public.benchmark_native_spending_approvals deferrable initially deferred for each row execute function public.developer_approval_decision_guard()");
+   if(ownerGovernedMode)await db.query(readFileSync('supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql','utf8'));
    await db.query('set role service_role');
   }
   const before=await one(db,'select count(*)::int approvals from benchmark_native_spending_approvals where project_id=$1',[project]);
@@ -280,13 +281,105 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     // No GitHub network request and no real inference are made.
     const oldRelease='d52306d493de492458919614ee13a2da6fcf5bcf';
     const currentRelease='f'.repeat(40);
-    const claimId=randomUUID();
+    const claimId=ownerGovernedMode?'283dd2c4-5bac-4804-b8ed-3358c22896b0':randomUUID();
     await db.query("update agent_tasks set external=external||jsonb_build_object('developerApprovalId',$2::text,'developerReleaseSha',$3::text,'issueNumber',969,'dispatchStartedAt','2026-11-05T13:43:41.829245Z','developerDispatchSince','2026-11-05T13:43:41.829245Z') where id=$1",[
      task,recovered.newApprovalId,oldRelease
     ]);
     await db.query("insert into project_events(id,project_id,event,created_at,data) values($1,$2,'developer_native_dispatch_claimed','2026-11-05T13:43:41.820983Z',jsonb_build_object('taskId',$3::uuid,'approvalId',$4::uuid,'releaseSha',$5::text))",[
      claimId,project,task,recovered.newApprovalId,oldRelease
     ]);
+    if(ownerGovernedMode){
+     // Simulate the production watchdog + naturally expired approvals in an
+     // isolated synthetic PostgreSQL database. Temporarily bypass the fixture's
+     // historical deadline-immutability trigger ONLY to construct this state.
+     await db.query('reset role');
+     await db.query('alter table public.project_continuation_authorizations disable trigger user');
+     await db.query("update project_continuation_authorizations set deadline=now()-interval '10 minutes' where id=$1",[saved.authorizationId]);
+     await db.query('alter table public.project_continuation_authorizations enable trigger user');
+     await db.query("update benchmark_native_spending_approvals set deadline=now()-interval '10 minutes' where id=$1",[recovered.newApprovalId]);
+     await db.query("update work_projects set status='blocked',deadline=now()-interval '10 minutes' where id=$1",[project]);
+     await db.query("update agent_missions set status='blocked',deadline=now()-interval '10 minutes' where id=$1",[mission]);
+     await db.query("update mission_assignments set status='failed' where id=$1",[task]);
+     await db.query('set role service_role');
+     await db.query('set constraints developer_approval_decision deferred');
+     const newDeadline=new Date(Date.now()+4*3600000).toISOString();
+     const args=[currentRelease,newDeadline,240000,24,9000000];
+     const readProposal=async()=>(await one(db,'select task4a_blocked_dispatch_proposal($1,$2,$3,$4,$5) proposal',args)).proposal;
+     const offer=await readProposal();
+     assert.equal(offer.ready,true,JSON.stringify(offer));
+     assert.equal(offer.proposal.originalFailedClaimId,claimId);
+     assert.equal(offer.proposal.previousNativeApprovalId,recovered.newApprovalId);
+     assert.equal(offer.proposal.previousContinuationId,saved.authorizationId);
+     assert.equal((await one(db,'select task4a_failed_dispatch_proposal($1) x',[currentRelease])).x.ready,false,
+      'Expired grant and blocked mission cannot dispatch before new owner consent');
+     const grant=async(who=owner,consentDigest=offer.digest,conn=db)=>
+      (await one(conn,'select task4a_authorize_blocked_dispatch($1,$2,$3,$4,$5,$6,$7) saved',
+       [who,consentDigest,...args])).saved;
+     for(const [who,hash] of [[randomUUID(),offer.digest],[owner,'f'.repeat(64)]]){
+      await db.query('savepoint wrong_owner_digest');
+      await assert.rejects(grant(who,hash),/TASK4A_BLOCKED_DISPATCH_OWNER_CONSENT_DENIED/);
+      await db.query('rollback to savepoint wrong_owner_digest');
+      await db.query('release savepoint wrong_owner_digest');
+     }
+     if(ownerGovernedConcurrent){
+      assert.equal(typeof connect,'function');
+      await db.query('commit');committedForConcurrency=true;
+      const contenders=await Promise.all([connect(),connect()]);
+      try{
+       await Promise.all(contenders.map(c=>c.query('set role service_role')));
+       const results=await Promise.allSettled(contenders.map(c=>grant(owner,offer.digest,c)));
+       assert.equal(results.filter(x=>x.status==='fulfilled'&&x.value.authorized===true).length,1,
+        'Exactly one real connection may renew the original project');
+       assert.equal(results.filter(x=>x.status==='rejected').length,1,
+        'The second owner grant must be rejected, not repeated');
+      }finally{await Promise.allSettled(contenders.map(c=>c.end()));}
+     }else{
+      const result=await grant();
+      assert.equal(result.authorized,true);
+      await db.query('set constraints developer_approval_decision immediate');
+      await db.query('savepoint repeated_renewal');
+      await assert.rejects(grant(),/TASK4A_BLOCKED_DISPATCH_OWNER_CONSENT_DENIED/);
+      await db.query('rollback to savepoint repeated_renewal');
+      await db.query('release savepoint repeated_renewal');
+     }
+     const state=await one(db,`select p.status p_status,m.status m_status,j.status j_status,
+      t.status t_status,t.external->>'issueNumber' issue,
+      t.external->>'developerApprovalId' active_approval
+      from work_projects p join agent_missions m on m.id=p.active_mission_id
+      join mission_assignments j on j.mission_id=m.id and j.id=$1
+      join agent_tasks t on t.id=j.id where p.id=$2`,[task,project]);
+     assert.deepEqual([state.p_status,state.m_status,state.j_status,state.t_status,state.issue],
+      ['running','running','waiting_external','dispatching','969']);
+     const receipt=await one(db,"select id,data from project_events where project_id=$1 and event='task4a_blocked_dispatch_owner_recovered'",[project]);
+     assert.ok(receipt?.id);
+     assert.equal(receipt.data.originalFailedClaimId,claimId);
+     assert.equal(receipt.data.newNativeApprovalId,state.active_approval);
+     assert.equal((await one(db,'select id from project_events where id=$1',[claimId])).id,claimId);
+     assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[id])).n,0);
+     assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,0);
+     assert.equal((await one(db,'select spent_tokens from benchmark_budget_accounts where id=$1',[id])).spent_tokens.toString(),'0');
+     const currentTip=await one(db,'select task4a_current_continuation_id($1) id',[project]);
+     assert.equal(currentTip.id,receipt.data.newContinuationId);
+     const previous=await one(db,'select id,revoked_at from benchmark_native_spending_approvals where id=$1',[recovered.newApprovalId]);
+     assert.equal(previous.id,recovered.newApprovalId);
+     assert.ok(previous.revoked_at,'The expired predecessor is preserved but not reusable');
+     assert.equal((await one(db,'select task4a_native_authority_ready($1,$2,$3) ok',[project,task,currentTip.id])).ok,true);
+     assert.equal((await one(db,'select task4a_pregrant_redispatch_ready($1,$2) ok',[task,state.active_approval])).ok,true);
+     const dispatchOffer=(await one(db,'select task4a_failed_dispatch_proposal($1) x',[currentRelease])).x;
+     assert.equal(dispatchOffer.ready,true,JSON.stringify(dispatchOffer));
+     assert.equal(dispatchOffer.proposal.originalClaimId,claimId);
+     assert.equal(dispatchOffer.proposal.approvalId,state.active_approval);
+     assert.equal((await one(db,"select count(*)::int n from project_events where project_id=$1 and event='task4a_failed_dispatch_owner_authorized'",[project])).n,0,
+      'Restore authority is NOT distinct paid-dispatch owner consent');
+     await db.query('savepoint immutable_owner_record');
+     await db.query('reset role');
+     await assert.rejects(db.query("delete from project_events where id=$1",[receipt.id]),/TASK4A_BLOCKED_DISPATCH_AUDIT_IMMUTABLE/);
+     await db.query('rollback to savepoint immutable_owner_record');
+     await db.query('release savepoint immutable_owner_record');
+     await db.query('set role service_role');
+     console.log('TASK4A_BLOCKED_OWNER_DEADLINE_SPENDING_AND_STATE_RECOVERY_POSTGRES_PASS');
+     return;
+    }
     const p=async release=>(await one(db,'select task4a_failed_dispatch_proposal($1) offer',[release])).offer;
     const offer=await p(currentRelease);
     assert.equal(offer.ready,true,JSON.stringify(offer));
