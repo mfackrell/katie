@@ -45,7 +45,8 @@ begin
  select * into prev from public.project_continuation_authorizations
   where id=public.task4a_current_continuation_id(p.id) and project_id=p.id;
  select * into old_native from public.benchmark_native_spending_approvals
-  where id='c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid and project_id=p.id;
+  where id=(select (e.data->>'replacementApprovalId')::uuid from public.project_events e
+   where e.project_id=p.id and e.event='task4a_native_pregrant_recovered') and project_id=p.id;
  select * into acct from public.benchmark_budget_accounts where id=old_native.account_id;
  select * into claim from public.project_events
   where id='283dd2c4-5bac-4804-b8ed-3358c22896b0'::uuid and project_id=p.id
@@ -94,7 +95,10 @@ begin
   or acct.id is null or acct.arm<>'developer' or acct.cap_tokens<>180000
   or acct.spent_tokens<>0 or acct.frozen_at is not null
   or acct.developer_project_id is distinct from p.id or acct.developer_task_id is distinct from t.id
-  or prev.id is distinct from '02951ce8-e502-4fe0-852c-95a69c877b78'::uuid
+  or prev.predecessor_id is distinct from '405ea82c-6f52-49e5-babf-891ecac64d14'::uuid
+  or not exists(select 1 from public.project_events e where e.project_id=p.id
+     and e.event='task4a_successor_continuation_authorized'
+     and e.data->>'newAuthorityId'=prev.id::text)
   or prev.predecessor_id is distinct from '405ea82c-6f52-49e5-babf-891ecac64d14'::uuid
   or prev.deadline>clock_timestamp() or prev.revoked_at is not null
   or prev.incremental_tokens<180000 or prev.incremental_calls<20 or prev.incremental_microusd<2520000
@@ -195,7 +199,8 @@ begin
  select * into prior from public.project_continuation_authorizations
   where id=public.task4a_current_continuation_id(p.id) for update;
  select * into old_native from public.benchmark_native_spending_approvals
-  where id='c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid for update;
+  where id=(select (e.data->>'replacementApprovalId')::uuid from public.project_events e
+   where e.project_id=p.id and e.event='task4a_native_pregrant_recovered') for update;
  offer:=public.task4a_blocked_dispatch_proposal(p_release,p_deadline,p_tokens,p_calls,p_money);
  if p_owner is null or p_owner is distinct from public.task4a_original_owner_id(p.actor_id,p.chat_id)
   or offer->>'ready' is distinct from 'true' or offer->>'digest' is distinct from p_digest
@@ -284,7 +289,9 @@ declare old public.benchmark_native_spending_approvals;
 begin
  if a.project_id is distinct from '6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid
   or a.task_id is distinct from 'd0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid
-  or a.previous_developer_approval_id is distinct from 'c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid
+  or a.previous_developer_approval_id is distinct from
+     (select (e.data->>'replacementApprovalId')::uuid from public.project_events e
+      where e.project_id=a.project_id and e.event='task4a_native_pregrant_recovered')
   or a.developer_authority->'task4aOwnerRenewal'->>'version' is distinct from 'blocked-dispatch-owner-v1'
   or a.developer_proposal_id is not null or a.revoked_at is not null or a.consumed_at is not null
   or a.trial_id is not null then return false;end if;
@@ -300,7 +307,7 @@ begin
  return coalesce(
   old.id is not null and old.revoked_at is not null and old.consumed_at is null
   and old.previous_developer_approval_id='ddccc7a1-743f-4031-8ecd-a6926568ca98'::uuid
-  and prev.id='02951ce8-e502-4fe0-852c-95a69c877b78'::uuid
+  and prev.predecessor_id='405ea82c-6f52-49e5-babf-891ecac64d14'::uuid
   and current_auth.revoked_at is null and current_auth.deadline>clock_timestamp()
   and a.deadline>clock_timestamp() and a.deadline<=current_auth.deadline
   and a.owner_id=old.owner_id and a.actor_id=old.actor_id and a.chat_id=old.chat_id
@@ -384,7 +391,9 @@ begin
      and e.data->>'replacementApprovalId'=a.id::text
      and e.data->>'consentDigest'=a.developer_authority->'task4aRecovery'->>'ownerConsentDigest'),false);
  end if;
- if a.previous_developer_approval_id='c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid
+ if a.previous_developer_approval_id=(
+     select (e.data->>'replacementApprovalId')::uuid from public.project_events e
+      where e.project_id=a.project_id and e.event='task4a_native_pregrant_recovered')
  then
   return coalesce(old.revoked_at is not null and old.consumed_at is null
    and t.external->>'developerApprovalId'=a.id::text
@@ -431,7 +440,8 @@ begin
  select * into root from public.benchmark_native_spending_approvals
   where id='ddccc7a1-743f-4031-8ecd-a6926568ca98'::uuid;
  select * into legacy from public.benchmark_native_spending_approvals
-  where id='c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid;
+  where id=(select (e.data->>'replacementApprovalId')::uuid from public.project_events e
+   where e.project_id=p.id and e.event='task4a_native_pregrant_recovered');
  select * into acct from public.benchmark_budget_accounts where id=a.account_id;
  select * into pregrant from public.project_events where project_id=p.id and event='task4a_native_pregrant_recovered';
  select * into renewed_event from public.project_events where project_id=p.id and event='task4a_blocked_dispatch_owner_recovered';
@@ -506,7 +516,7 @@ begin
  if renewed then
   if a.previous_developer_approval_id is distinct from legacy.id
    or legacy.revoked_at is null or legacy.consumed_at is not null
-   or s.predecessor_id is distinct from '02951ce8-e502-4fe0-852c-95a69c877b78'::uuid
+   or s.predecessor_id is distinct from (renewed_event.data->>'previousContinuationId')::uuid
    or renewed_event.id is null
    or renewed_event.data->>'newNativeApprovalId' is distinct from a.id::text
    or renewed_event.data->>'newContinuationId' is distinct from s.id::text
