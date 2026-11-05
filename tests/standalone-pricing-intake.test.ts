@@ -65,6 +65,6 @@ test('image-generation catalog is exact, immutable, and has independent image-ou
  assert.equal(image.imageOutputTokensPerImage,1120);
  assert.ok(Object.isFrozen(image));
  assert.equal(priceTokenUsage(image,1000,1120,0,0,'5m',1120),'67700');
- assert.throws(()=>priceTokenUsage(image,1000,1121,0,0,'5m',1121),/image output/);
+ assert.throws(()=>priceTokenUsage(image,1000,1120,0,0,'5m',1121),/image output/);
  assert.equal(snapshot.version,normalizePricingCatalog(catalog()).snapshot.version);
 });
