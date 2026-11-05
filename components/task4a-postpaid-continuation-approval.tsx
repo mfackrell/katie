@@ -82,7 +82,6 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
   finally{setBusy(false);}
  };
  if(!enabled||!status||status.state==='not_for_this_chat')return null;
- const e=status.evidence;
  return <section aria-label="Task 4A postpaid same-task continuation" className="my-3 rounded-xl border p-4 text-sm space-y-3">
   <h3 className="font-semibold">Task 4A — continue the original task after paid inference</h3>
   <p>Original issue <strong>#969</strong>. Checkpoint <code className="break-all">8e53ce016933</code>.
