@@ -140,7 +140,8 @@ export async function observeStandaloneStillImages(references:FileReference[],op
     }
     const previouslyObserved=[...(options.saved??[]),...references.filter(ref=>observations.has(ref.fileId)).map(ref=>({...observations.get(ref.fileId),id:ref.fileId,fileName:ref.fileName,mimeType:ref.mimeType}))];
     const prior=reusableImageObservation(reference,previouslyObserved,question,setHash);
-    if(prior){observations.set(reference.fileId,prior);if(prior.observationQuestion===question)reusedForQuestion++;options.onStatus?.('Using saved Qwen observation');continue;}
+    if(prior){observations.set(reference.fileId,prior);if(prior.observationQuestion===question)reusedForQuestion++;
+      options.onStatus?.(prior.manualCorrection?.approvedByUser===true?'Using corrected visual memory':'Using saved Qwen observation');continue;}
     const metadata={observationSourceHash:imageObservationHash(image),observationSetHash:setHash,observationQuestion:question,observationVersion:STILL_IMAGE_OBSERVATION_VERSION,observationAt:(options.now??(()=>new Date().toISOString()))()};
     try{
       options.onStatus?.('Analyzing image with Qwen…');
