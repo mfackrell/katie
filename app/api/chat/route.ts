@@ -2342,6 +2342,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
       subjects: visualContinuity?.references.map(item => item.key) ?? [],
     });
 
+    const imageGenerationRequested = resolvedRequestIntent === "image-generation";
     let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -2456,7 +2457,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
-              if (reviewMode === "always" || documentProduction) return;
+              if (reviewMode === "always" || documentProduction || imageGenerationRequested) return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -2596,8 +2597,7 @@ ${chunkWorkflowSummary}`;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
             const stillImageVisionRequest = resolvedRequestIntent === "vision-analysis" && rerouteHasVisualInput && !hasVideoInput;
-            // Keep the original task invariant even if a later routing fallback rewrites intent metadata.
-            const imageGenerationRequested = resolvedRequestIntent === "image-generation";
+            // Image-generation intent remains bound to the original request through reroutes.
             const rerouteRoutingContext = [
               controlPlaneConversationContext,
               `Refusal reroute has visual input: ${rerouteHasVisualInput}`
