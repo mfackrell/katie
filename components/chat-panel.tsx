@@ -45,6 +45,7 @@ import { Task4aContinuationOwnerApproval } from "@/components/task4a-continuatio
 import { Task4aSavedSpecificationRecovery } from "@/components/task4a-saved-specification-recovery";
 import { Task4aNativeRecoveryApproval } from "@/components/task4a-native-recovery-approval";
 import { Task4aFailedDispatchRecoveryApproval } from "@/components/task4a-failed-dispatch-recovery-approval";
+import { Task4aPostpaidContinuationApproval } from "@/components/task4a-postpaid-continuation-approval";
 import { Task4aBlockedDispatchOwnerApproval } from "@/components/task4a-blocked-dispatch-owner-approval";
 import { Task4aSuccessorOwnerApproval } from "@/components/task4a-successor-owner-approval";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
@@ -3064,6 +3065,7 @@ export function ChatPanel({
         {chatId && !managedAgentId ? <Task4aNativeRecoveryApproval key={'task4a-native:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aBlockedDispatchOwnerApproval key={'task4a-blocked-dispatch:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aFailedDispatchRecoveryApproval key={'task4a-failed-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aPostpaidContinuationApproval key={'task4a-postpaid:'+chatId} chatId={chatId} /> : null}
         {resourceRecovery?.chatId===chatId && !managedAgentId ? (
           <DeveloperResourceCard proposal={resourceRecovery.proposal}
            pending={projectApprovalPending||loading} error={projectApprovalError}
