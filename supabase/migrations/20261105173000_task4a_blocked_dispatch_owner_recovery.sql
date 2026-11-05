@@ -402,3 +402,148 @@ begin
 end $ready$;
 revoke all on function public.task4a_pregrant_redispatch_ready(uuid,uuid) from public,anon,authenticated;
 grant execute on function public.task4a_pregrant_redispatch_ready(uuid,uuid) to service_role;
+
+-- The pre-existing one-shot dispatch operation remains a SECOND owner gate.
+-- Its proposal now recognizes a renewed, signed child approval while requiring
+-- the SAME immutable failed claim and zero prior external/native acceptance.
+create or replace function public.task4a_failed_dispatch_proposal(p_release text)
+returns jsonb language plpgsql stable set search_path=public as $one_shot$
+declare
+ p public.work_projects; m public.agent_missions; j public.mission_assignments;
+ t public.agent_tasks; r public.project_runs;
+ a public.benchmark_native_spending_approvals; root public.benchmark_native_spending_approvals;
+ legacy public.benchmark_native_spending_approvals;
+ acct public.benchmark_budget_accounts; s public.project_continuation_authorizations;
+ old_claim public.project_events; pregrant public.project_events;
+ renewed_event public.project_events; price public.model_registry;
+ owner uuid; renewed boolean; signed_approval uuid; proposal jsonb;
+begin
+ select * into p from public.work_projects where id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid;
+ select * into m from public.agent_missions where id='d3fd3d95-7287-4bfc-8c97-c105fde46c36'::uuid and project_id=p.id;
+ select * into j from public.mission_assignments where id='d0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid and mission_id=m.id;
+ select * into t from public.agent_tasks where id=j.id;
+ select * into r from public.project_runs where project_id=p.id and mission_id=m.id;
+ select * into s from public.project_continuation_authorizations
+  where id=public.task4a_current_continuation_id(p.id) and project_id=p.id;
+ select * into a from public.benchmark_native_spending_approvals
+  where project_id=p.id and task_id=t.id and revoked_at is null and consumed_at is null
+   and developer_authority->>'task4aContinuationId'=s.id::text;
+ select * into root from public.benchmark_native_spending_approvals
+  where id='ddccc7a1-743f-4031-8ecd-a6926568ca98'::uuid;
+ select * into legacy from public.benchmark_native_spending_approvals
+  where id='c8dfdbf2-56e2-474d-a8b4-82267001fb47'::uuid;
+ select * into acct from public.benchmark_budget_accounts where id=a.account_id;
+ select * into pregrant from public.project_events where project_id=p.id and event='task4a_native_pregrant_recovered';
+ select * into renewed_event from public.project_events where project_id=p.id and event='task4a_blocked_dispatch_owner_recovered';
+ select * into price from public.model_registry where provider_name='openai' and model_id='gpt-5.3-codex';
+ owner:=public.task4a_original_owner_id(p.actor_id,p.chat_id);
+ renewed:=coalesce(a.developer_authority->'task4aOwnerRenewal'->>'version'='blocked-dispatch-owner-v1',false);
+ signed_approval:=case when renewed then legacy.id else a.id end;
+ select * into old_claim from public.project_events where project_id=p.id
+  and event='developer_native_dispatch_claimed'
+  and data->>'approvalId'=signed_approval::text
+  and created_at between '2026-11-05T13:40:00Z'::timestamptz and '2026-11-05T14:00:00Z'::timestamptz;
+ if coalesce(p_release,'')!~'^[a-f0-9]{40}$'
+  or p.id is null or p.status<>'running' or p.phase<>'development'
+  or p.deadline<=clock_timestamp()+interval '5 minutes'
+  or p.repository_full_name is distinct from 'mfackrell/katie'
+  or p.approved_hash is null or p.approved_hash is distinct from p.approval_hash
+  or p.active_mission_id is distinct from m.id or m.status<>'running'
+  or m.project_kind<>'development' or j.id is null or j.role<>'development'
+  or j.status<>'waiting_external'
+  or t.status<>'dispatching' or t.repository_full_name is distinct from 'mfackrell/katie'
+  or t.external->>'issueNumber' is distinct from '969'
+  or t.external->>'developerApprovalId' is distinct from a.id::text
+  or t.external->'receipt'->>'outcome' is distinct from 'BLOCKED'
+  or t.external->'receipt'->>'run_id' is distinct from '41673059705'
+  or t.external->'receipt'->>'pr_url' is not null
+  or t.external->>'developerReleaseSha' is distinct from old_claim.data->>'releaseSha'
+  or r.binding->>'projectId' is distinct from p.id::text
+  or r.binding->>'scopeHash' is distinct from p.approved_hash
+  or r.binding->>'baselineSha' is distinct from p.baseline_sha
+  or r.binding->>'contractHash' is distinct from 'e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e'
+  or a.id is null or a.model is distinct from 'gpt-5.3-codex'
+  or a.owner_id is distinct from owner or owner is null
+  or a.deadline<=clock_timestamp()+interval '5 minutes'
+  or a.developer_authority->'task4aRecovery'->>'version' is distinct from 'preinference-invalid-handoff-v1'
+  or a.developer_authority->>'scopeHash' is distinct from p.approved_hash
+  or a.developer_authority->'binding' is distinct from r.binding
+  or a.developer_authority->'limits'->>'cumulativeTokens' is distinct from '180000'
+  or a.developer_authority->'limits'->>'ceilingMicrousd' is distinct from '2520000'
+  or root.id is null or root.revoked_at is null or root.consumed_at is not null
+  or legacy.id is null or legacy.owner_id is distinct from owner
+  or legacy.account_id is distinct from a.account_id
+  or legacy.previous_developer_approval_id is distinct from root.id
+  or pregrant.id is null or pregrant.data->>'replacementApprovalId' is distinct from legacy.id::text
+  or pregrant.data->>'ownerId' is distinct from owner::text
+  or pregrant.data->>'paidCallsCreated' is distinct from '0'
+  or pregrant.data->>'accountReused' is distinct from 'true'
+  or pregrant.data->>'limitsNotIncreased' is distinct from 'true'
+  or acct.id is null or acct.arm<>'developer' or acct.frozen_at is not null
+  or acct.developer_project_id is distinct from p.id or acct.developer_task_id is distinct from t.id
+  or acct.cap_tokens<>180000 or acct.spent_tokens<>0
+  or s.id is null or s.revoked_at is not null or s.deadline<=clock_timestamp()+interval '5 minutes'
+  or 'openai:gpt-5.3-codex'<>all(s.allowed_models)
+  or price.pricing_status is distinct from 'verified' or price.is_active is distinct from true
+  or price.pricing_verified_at not between clock_timestamp()-interval '24 hours' and clock_timestamp()
+  or price.source_metadata->>'pricing_verification_source'
+   is distinct from 'https://developers.openai.com/api/docs/models/gpt-5.3-codex'
+  or old_claim.id is null or old_claim.data->>'taskId' is distinct from t.id::text
+  or (select count(*) from public.project_events where project_id=p.id
+       and event='developer_native_dispatch_claimed'
+       and data->>'approvalId'=signed_approval::text)<>1
+  or exists(select 1 from public.project_events where project_id=p.id
+       and event in ('task4a_failed_dispatch_owner_authorized',
+          'task4a_failed_dispatch_recovery_claimed','task4a_failed_dispatch_recovery_submitted'))
+  or exists(select 1 from public.benchmark_execution_grants where project_id=p.id)
+  or exists(select 1 from public.benchmark_budget_calls where account_id=acct.id)
+  or exists(select 1 from public.mission_calls where job_id=t.id)
+  or exists(select 1 from public.benchmark_native_spending_approvals
+       where previous_developer_approval_id=a.id)
+  or not public.task4a_native_authority_ready(p.id,t.id,s.id)
+  or not public.task4a_pregrant_redispatch_ready(t.id,a.id)
+ then return jsonb_build_object('ready',false,'reason','original_claim_or_authority_ineligible');end if;
+ if renewed then
+  if a.previous_developer_approval_id is distinct from legacy.id
+   or legacy.revoked_at is null or legacy.consumed_at is not null
+   or s.predecessor_id is distinct from '02951ce8-e502-4fe0-852c-95a69c877b78'::uuid
+   or renewed_event.id is null
+   or renewed_event.data->>'newNativeApprovalId' is distinct from a.id::text
+   or renewed_event.data->>'newContinuationId' is distinct from s.id::text
+   or renewed_event.data->>'previousNativeApprovalId' is distinct from legacy.id::text
+   or renewed_event.data->>'originalFailedClaimId' is distinct from old_claim.id::text
+   or renewed_event.data->>'nativeLimitsNotIncreased' is distinct from 'true'
+   or renewed_event.data->>'newPaidCalls' is distinct from '0'
+   or a.developer_authority->'task4aOwnerRenewal'->>'consentDigest'
+      is distinct from renewed_event.data->>'consentDigest'
+  then return jsonb_build_object('ready',false,'reason','renewal_owner_receipt_ineligible');end if;
+ else
+  if a.id is distinct from legacy.id
+   or a.previous_developer_approval_id is distinct from root.id
+   or s.predecessor_id is distinct from '405ea82c-6f52-49e5-babf-891ecac64d14'::uuid
+   or renewed_event.id is not null
+  then return jsonb_build_object('ready',false,'reason','original_pregrant_path_ineligible');end if;
+ end if;
+ proposal:=jsonb_build_object(
+  'version',2,'kind','task4a_one_time_failed_github_dispatch',
+  'projectId',p.id,'missionId',m.id,'taskId',t.id,'issueNumber',969,
+  'ownerId',owner,'originalClaimId',old_claim.id,'originalClaimAt',old_claim.created_at,
+  'originalReleaseSha',old_claim.data->>'releaseSha',
+  'newProductionReleaseSha',p_release,'approvalId',a.id,
+  'previousApprovalId',a.previous_developer_approval_id,
+  'originalSignedApprovalId',signed_approval,
+  'continuationId',s.id,'accountId',acct.id,
+  'scopeHash',p.approved_hash,'baselineSha',p.baseline_sha,
+  'model','openai:gpt-5.3-codex',
+  'nativeLimits',a.developer_authority->'limits',
+  'projectDeadline',p.deadline,'expiresAt',least(p.deadline,a.deadline,s.deadline),
+  'ownerRenewalReceiptId',case when renewed then renewed_event.id else null end,
+  'singleGithubWorkflowDispatch',true,
+  'mayUseExistingPaidNativeAccount',true,
+  'noAdditionalTokenCallOrDollarGrant',true,
+  'noProductionAppPublication',true);
+ return jsonb_build_object('ready',true,'proposal',proposal,
+  'digest',encode(sha256(convert_to(public.project_canonical(proposal),'UTF8')),'hex'));
+end $one_shot$;
+revoke all on function public.task4a_failed_dispatch_proposal(text) from public,anon,authenticated;
+grant execute on function public.task4a_failed_dispatch_proposal(text) to service_role;
