@@ -864,7 +864,7 @@ test('short valid requests count provider-native input before admission; resume 
   const send=createAccountingFetch(item.provider,async(url,init)=>{
    if(String(url)===item.native){
     counts++;const counted=JSON.parse(String(init?.body));
-    if(item.provider==='google')assert.deepEqual(counted,{generateContentRequest:initial.payload});
+    if(item.provider==='google')assert.deepEqual(counted,{generateContentRequest:{model:'models/'+item.model,contents:initial.payload.contents}});
     else assert.equal(counted.model,item.model);
     assert.equal(counted.max_output_tokens,undefined);assert.equal(counted.max_tokens,undefined);
     return Response.json(item.count);
