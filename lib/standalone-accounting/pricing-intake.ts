@@ -91,6 +91,9 @@ export async function refreshStandalonePricing(ledger:ReturnType<typeof createSt
 /** Upgrade the saved text-only catalog without altering historical snapshots.
  * The resulting catalog is persisted before any image dispatch can use it. */
 export function withReviewedImagePrices(snapshot:PricingSnapshot):PricingSnapshot {
+  // Only upgrade snapshots published by our reviewed catalog ingestion. Fixtures
+  // and historical/manual price versions must retain their original identity.
+  if(!snapshot.version.startsWith('standalone-catalog-v1-'))return snapshot;
   const reviewed=PRICING_SNAPSHOT.models.filter(m=>m.imageOutputNanoUsd&&m.imageOutputTokensPerImage);
   const missing=reviewed.some(row=>!snapshot.models.some(existing=>existing.provider===row.provider&&existing.model===row.model&&canonicalJson(existing)===canonicalJson(row)));
   if(!missing)return snapshot;
