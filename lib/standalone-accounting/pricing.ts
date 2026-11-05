@@ -8,7 +8,7 @@ export type ModelPrice = {
   responsesOnly?: boolean; supportsStreaming?: boolean;
   /** Reviewed Google 1K image-output rate; never infer this from text pricing. */
   imageOutputNanoUsd?: string; imageOutputTokensPerImage?: number;
-  vision?: { kind: "tiles"; base: number; tile: number } | { kind: "claude"; maximum: number } | { kind: "gemini25" };
+  vision?: { kind: "tiles"; base: number; tile: number } | { kind: "claude"; maximum: number } | { kind: "gemini25" } | {kind:"geminiImage";maximum:number};
   tiers?: PriceTier[]; source: string;
 };
 export function deepFreeze<T>(value: T): T {
@@ -32,8 +32,8 @@ const models: ModelPrice[] = [
   ...([ ["claude-sonnet-4-5","3000","15000","300","3750"], ["claude-haiku-4-5","1000","5000","100","1250"], ["claude-sonnet-4-6","3000","15000","300","3750"], ["claude-opus-4-6","5000","25000","500","6250"], ["claude-sonnet-5-5","2000","10000","100","2500"], ["claude-opus-5-5","4000","20000","200","5000"] ]).map(([model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd]):ModelPrice => ({provider:"anthropic",model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd,maxContextTokens:model.endsWith("4-5")?200000:1000000,maxOutputTokens:64000,vision:{kind:"claude",maximum:model.endsWith("5-5")?4784:1568},source:claude})),
   // First-party Google Standard prices, 1K image output only (2026-11-05).
   // Image output is billed separately from text/thinking output.
-  {provider:"google",model:"gemini-3.1-flash-image",inputNanoUsd:"500",outputNanoUsd:"3000",imageOutputNanoUsd:"60000",imageOutputTokensPerImage:1120,maxContextTokens:131072,maxOutputTokens:32768,source:google},
-  {provider:"google",model:"gemini-3.1-flash-lite-image",inputNanoUsd:"250",outputNanoUsd:"1500",imageOutputNanoUsd:"30000",imageOutputTokensPerImage:1120,maxContextTokens:131072,maxOutputTokens:32768,source:google},
+  {provider:"google",model:"gemini-3.1-flash-image",inputNanoUsd:"500",outputNanoUsd:"3000",imageOutputNanoUsd:"60000",imageOutputTokensPerImage:1120,vision:{kind:"geminiImage",maximum:1120},maxContextTokens:131072,maxOutputTokens:32768,source:google},
+  {provider:"google",model:"gemini-3.1-flash-lite-image",inputNanoUsd:"250",outputNanoUsd:"1500",imageOutputNanoUsd:"30000",imageOutputTokensPerImage:1120,vision:{kind:"geminiImage",maximum:1120},maxContextTokens:131072,maxOutputTokens:32768,source:google},
   {provider:"google",model:"gemini-2.5-pro",inputNanoUsd:"1250",outputNanoUsd:"10000",cachedInputNanoUsd:"125",maxContextTokens:1048576,maxOutputTokens:65536,vision:{kind:"gemini25"},tiers:[{aboveInputTokens:200000,inputNanoUsd:"2500",outputNanoUsd:"15000",cachedInputNanoUsd:"250"}],source:google},
   {provider:"google",model:"gemini-2.5-flash",inputNanoUsd:"300",outputNanoUsd:"2500",cachedInputNanoUsd:"30",maxContextTokens:1048576,maxOutputTokens:65536,vision:{kind:"gemini25"},source:google},
   ...["grok-4.7","grok-4.6"].map((model):ModelPrice=>({provider:"grok",model,inputNanoUsd:"2000",outputNanoUsd:"6000",cachedInputNanoUsd:"500",maxContextTokens:500000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"4000",outputNanoUsd:"12000",cachedInputNanoUsd:"1000"}],source:grok})),
