@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - fix/task4a-separate-dispatch-paid-approval-20261105
 
 jobs:
   gate:
