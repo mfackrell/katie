@@ -202,7 +202,7 @@ describe("verified Claude five-minute cache writes",()=>{
     for(const [model,write,expected] of [["claude-sonnet-4-5","3750","4065"],["claude-haiku-4-5","1250","1355"],["claude-sonnet-4-6","3750","4065"],["claude-opus-4-6","6250","6775"],["claude-sonnet-5-5","2500","2680"],["claude-opus-5-5","5000","5360"]]) {
       const price=getModelPrice("anthropic",model)!;expect(price.cacheWrite5mNanoUsd).toBe(write);expect(priceTokenUsage(price,1000,100,300,500)).toBe(expected);expect(estimatePreparedRequest(prepare(model)).status).toBe("estimated");
     }
-    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-10-28-v3");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
+    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-11-05-v4");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
   });
   it("reserves the full-input write allowance plus output without assuming a hit",()=>{
     const request=prepare(),quote=estimatePreparedRequest(request);const body=JSON.parse(JSON.stringify(request.payload));delete body.system[0].cache_control;const uncached=freezePreparedRequest(request.provider,request.model,request.endpoint,body),baseline=estimatePreparedRequest(uncached);
@@ -212,7 +212,7 @@ describe("verified Claude five-minute cache writes",()=>{
     const changed=JSON.parse(JSON.stringify(request.payload));changed.system[0].text+="Changed exact cache prefix";expect(freezePreparedRequest(request.provider,request.model,request.endpoint,changed).hash).not.toBe(request.hash);
   });
   it("settles disjoint uncached/read/write counts once using verified TTL evidence",()=>{
-    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-10-28-v3"});
+    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-11-05-v4"});
     expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
     expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cacheReadInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
     expect(priceTokenUsage(getModelPrice("anthropic","claude-haiku-4-5")!,2,0,1,1)).toBe("2");
