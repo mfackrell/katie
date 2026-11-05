@@ -69,6 +69,7 @@ export function normalizePricingCatalog(raw: unknown): { snapshot: PricingSnapsh
       if(rejected[id])continue;accepted.set(id,price);
     } catch(error){const id=provider+':'+model;accepted.delete(id);rejected[id]=String(error instanceof Error?error.message:error);}
   }
+  if(!accepted.size)throw Error('Catalog contains no validated first-party text prices');
   // Non-text prices are reviewed from the provider, never inherited from
   // LiteLLM text-only fields or model discovery heuristics.
   for(const reviewed of PRICING_SNAPSHOT.models.filter(model=>model.imageOutputNanoUsd&&model.imageOutputTokensPerImage))
