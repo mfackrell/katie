@@ -778,7 +778,7 @@ async function dispatchOrdinaryNativeDevelopment(){
   // An uncertain external acceptance retains the single dispatch claim. Never retry creation automatically.
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
-   await client.actions.createWorkflowDispatch({...binding,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
+   await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
    await save(claimed,'submitted','Owner-authorized original task continuation dispatched.',{...claimed.external,attempted:true,developerDispatchRunPending:true});
   }else{
    const created=await client.issues.create({...binding,title:'[agent] '+task.input.split('\n')[0].slice(0,180),body});
