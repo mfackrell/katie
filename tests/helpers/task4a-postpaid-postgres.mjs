@@ -48,7 +48,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  // Simulate natural expiration ONLY in disposable PostgreSQL by constructing
  // the fixture before installing the new read/consent code.
  await db.query('alter table project_continuation_authorizations disable trigger user');
- await db.query("update project_continuation_authorizations set deadline=now()-interval '5 minutes' where id=task4a_current_continuation_id($1)",[project]);
+ await db.query("update project_continuation_authorizations set authorized_at=now()-interval '2 hours',deadline=now()-interval '5 minutes' where id=task4a_current_continuation_id($1)",[project]);
  await db.query('alter table project_continuation_authorizations enable trigger user');
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
  await db.query('set role service_role');
