@@ -77,7 +77,8 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    await db.query('create table if not exists public.benchmark_lifecycle_decisions(id uuid primary key default gen_random_uuid(),developer_approval_id uuid,proposal_id text,decision text,owner_id uuid)');
    await db.query(readFileSync('supabase/migrations/20261105130000_task4a_recovery_decision_receipt_guard.sql','utf8'));
    await db.query("create constraint trigger developer_approval_decision after insert on public.benchmark_native_spending_approvals deferrable initially deferred for each row execute function public.developer_approval_decision_guard()");
-   if(ownerGovernedMode)await db.query(readFileSync('supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql','utf8'));
+   // Exercise the deployed successor migration in BOTH legacy and new owner paths.
+   await db.query(readFileSync('supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql','utf8'));
    await db.query('set role service_role');
   }
   const before=await one(db,'select count(*)::int approvals from benchmark_native_spending_approvals where project_id=$1',[project]);
