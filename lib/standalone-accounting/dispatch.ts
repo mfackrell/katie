@@ -78,7 +78,7 @@ function safeUncertainCheckpoint(checkpoint: ResponseCheckpoint, provider: Accou
     return Array.isArray(body.choices)&&body.choices.length>0&&body.choices.every((choice:{finish_reason?:string;message?:unknown})=>Boolean(choice.message)&&['stop','tool_calls','function_call'].includes(choice.finish_reason??''));
   }catch{return false;}
 }
-type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | '30m' | '12h' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; raw: Record<string, unknown> };
+type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | '30m' | '12h' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; imageOutputTokens: number; raw: Record<string, unknown> };
 /** Only actual Anthropic breakpoint locations establish TTL. Arbitrary JSON in
  * tool arguments, schemas or results cannot prove a provider cache policy. */
 function hasOnlyFiveMinuteClaudeCache(payload: Record<string, unknown>): boolean {
@@ -102,7 +102,7 @@ function hasOnlyFiveMinuteClaudeCache(payload: Record<string, unknown>): boolean
     return value.type === 'ephemeral' && (value.ttl === undefined || value.ttl === '5m') && Object.keys(value).every(key => key === 'type' || key === 'ttl');
   });
 }
-function receiptFromResponse(body: string, headers: Headers, provider: AccountingProvider, endpoint: string, streaming: boolean, payload: Record<string, unknown>): Receipt | undefined {
+function receiptFromResponse(body: string, headers: Headers, provider: AccountingProvider, endpoint: string, streaming: boolean, payload: Record<string, unknown>, reviewedImageTokens=0): Receipt | undefined {
   let id = headers.get('x-request-id') ?? headers.get('request-id') ?? headers.get('x-goog-request-id') ?? '';
   let input: number | undefined, output: number | undefined, cached = 0, written = 0;
   let cacheWriteTtl: '5m' | '30m' | '12h' | null = null, cacheWriteUnpriced = false;
@@ -111,6 +111,7 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
   let unsupportedUsage = false;
   let anthropicDelta = false, anthropicStop = false, responseTerminal = false, chatFinish = false, done = false, googleTerminal = false, googleFinalUsage = false, malformed = false;
   let raw: Record<string, unknown> = {};
+  let imageOutputTokens=0, imagePartCount=0, imageDetailVerified=false;
   function inspect(candidate: unknown) {
     if (!candidate || typeof candidate !== 'object') return;
     const item = candidate as Record<string, unknown>;
@@ -147,11 +148,31 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
     if (typeof item.responseId === 'string') id = responseId = item.responseId;
     if (typeof item.model === 'string') resolvedModel = item.model;
     if (typeof item.modelVersion === 'string') resolvedModel = item.modelVersion;
+    if (provider === 'google' && reviewedImageTokens) {
+      const candidates=Array.isArray(item.candidates)?item.candidates:[];
+      for(const candidate of candidates){
+        const parts=(candidate as {content?:{parts?:unknown[]}})?.content?.parts;
+        if(Array.isArray(parts))for(const part of parts){
+          const inline=(part as {inlineData?:{mimeType?:string}})?.inlineData;
+          if(inline?.mimeType?.startsWith('image/'))imagePartCount++;
+        }
+      }
+    }
     if (item.response) inspect(item.response);
     if (item.message) inspect(item.message);
     const usage = (item.usage ?? item.usageMetadata) as Record<string, unknown> | undefined;
     if (!usage) return;
     raw = { ...raw, ...usage };
+    if(provider==='google' && reviewedImageTokens){
+      const parts=usage.candidatesTokensDetails;
+      if(Array.isArray(parts)){
+        const counts=parts.filter(v=>v&&typeof v==='object'&&(v as {modality?:unknown}).modality==='IMAGE').map(v=>(v as {tokenCount?:unknown}).tokenCount);
+        if(counts.length && counts.every(n=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0)){
+          imageOutputTokens=counts.reduce<number>((sum,n)=>sum+(n as number),0);
+          imageDetailVerified=true;
+        }else if(counts.length)unsupportedUsage=true;
+      }
+    }
     const nonzero = (value: unknown): boolean => typeof value === 'number' ? value !== 0
       : !!value && typeof value === 'object' ? Object.values(value).some(nonzero) : false;
     for (const key of ['server_tool_use', 'audio_tokens', 'audioTokenCount', 'image_output_tokens']) {
@@ -223,8 +244,16 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
       else cacheWriteUnpriced = true;
     }
   }
+  if(reviewedImageTokens){
+    const imageConfigured=(payload.generationConfig as {imageConfig?:{imageSize?:string}}|undefined)?.imageConfig?.imageSize==='1K';
+    if(!imageConfigured||imagePartCount>1)return undefined;
+    if(!imageDetailVerified && imagePartCount===1)imageOutputTokens=reviewedImageTokens;
+    if(imagePartCount===1 && imageOutputTokens===0)return undefined;
+    if(imagePartCount===0 && imageOutputTokens!==0)return undefined;
+    if(imageOutputTokens>reviewedImageTokens||imageOutputTokens>(output??0))return undefined;
+  }
   if (!terminal || malformed || unsupportedUsage || !id || ![input, output, cached].every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)) return undefined;
-  return { id, responseId, input: input!, output: output!, cached, written, cacheWriteTtl, cacheWriteUnpriced, resolvedModel, raw };
+  return { id, responseId, input: input!, output: output!, cached, written, cacheWriteTtl, cacheWriteUnpriced, resolvedModel, imageOutputTokens, raw };
 }
 
 /** Every actual paid HTTP transmission passes here, after SDK serialization.
@@ -301,7 +330,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       prepared.payload.prompt_cache_key !== undefined || prepared.payload.prompt_cache_retention !== undefined)) {
       throw failure('replay_mismatch', 'Owner-approved uncached preparation must not include unreviewed cache metadata.');
     }
-    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, 'standalone-estimator-v6', PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
     // Persisted native counts are immutable evidence for the exact hash and model.
     // Resume must not silently recalculate or substitute a different reservation.
     const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
@@ -390,7 +419,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
             providerRequestId:rejectedId,rejectionReason:'insufficient_prepaid_balance'}});
         return;
       }
-      const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload);
+      const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload, getModelPrice(provider,prepared.model,pricing)?.imageOutputTokensPerImage??0);
       if (!receipt) {
         await ledger.markUncertain(context.userId, attemptId, 'Response received without supported complete provider usage and receipt; reservation remains held.');
         if(await ledger.uncertainExposureAccepted(context.userId,attemptId))return;
@@ -398,7 +427,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       }
       const receiptHeaders = new Headers(checkpoint.headers);
       await ledger.recordProviderIdentifiers(context.userId, attemptId, receiptHeaders.get('request-id') ?? receiptHeaders.get('x-request-id') ?? receiptHeaders.get('x-goog-request-id'), receipt.responseId);
-      const usage:Record<string,unknown> = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, cachedInputTokens: receipt.cached,
+      const usage:Record<string,unknown> = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, imageOutputTokens: receipt.imageOutputTokens, cachedInputTokens: receipt.cached,
         ...(['anthropic','openai'].includes(provider) ? { cacheReadInputTokens: receipt.cached, cacheCreationInputTokens: receipt.written, cacheWriteInputTokens: receipt.written, cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
       // A returned dated alias is a distinct billing identity. Missing exact
       // reviewed applicability leaves actual cost unknown, even with full tokens.
@@ -422,7 +451,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         throw failure('resolved_model_unpriced', 'The provider returned a model without an exact reviewed price. Known usage is saved; spending exposure remains reserved.');
       }
       let actualMicrousd: string;
-      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written,receipt.cacheWriteTtl??'5m'); }
+      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written,receipt.cacheWriteTtl??'5m',receipt.imageOutputTokens); }
       catch {
         await ledger.recordPartialUsage(context.userId, attemptId, usage, { ...evidence, pricedModel: null, pricingUnknown: true });
         throw failure('usage_unpriced', 'The provider returned an unsupported billing dimension. Known usage is saved; spending exposure remains reserved.');
