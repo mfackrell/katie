@@ -17,13 +17,15 @@ type Envelope={readiness?:{ready?:boolean;reason?:string;ledger?:{
   assessmentReserveTokens:number;completionReserveTokens:number;
   assessmentReserveCalls:number;completionReserveCalls:number;
  };error?:string;reason?:string;accepted?:boolean};
-const blank={tokens:'',calls:'',dollars:'',assessmentTokens:'',
- completionTokens:'',assessmentCalls:'',completionCalls:'',hours:''};
-type NumericKey=keyof typeof blank;
+// Prepopulate only the already-qualified Task 4A proposal. These are editable
+// display defaults, never owner consent or authority to dispatch paid work.
+const suggested={tokens:'240000',calls:'24',dollars:'9.00',assessmentTokens:'60000',
+ completionTokens:'60000',assessmentCalls:'6',completionCalls:'6',hours:'4'};
+type NumericKey=keyof typeof suggested;
 export function Task4aSuccessorOwnerApproval({chatId}:{chatId:string}){
  const enabled=chatId===CHAT;
  const [readiness,setReadiness]=useState<Envelope|null>(null);
- const [entry,setEntry]=useState(blank),[includeResearch,setIncludeResearch]=useState(false);
+ const [entry,setEntry]=useState(suggested),[includeResearch,setIncludeResearch]=useState(true);
  const [offer,setOffer]=useState<Envelope|null>(null);
  const [busy,setBusy]=useState(false),[status,setStatus]=useState('');
  const refresh=useCallback(async()=>{
@@ -92,7 +94,7 @@ export function Task4aSuccessorOwnerApproval({chatId}:{chatId:string}){
    historical overrun: {Number(ledger.historicalOverrunCalls??0).toLocaleString()} call(s),
    {Number(ledger.historicalOverrunTokens??0).toLocaleString()} excess tokens included in the encumbrance.
    Maximum conservatively available project tokens: {Number(ledger.maximumNewTokens??0).toLocaleString()}.</p>
-  <p>Enter new limits; none of the expired balance is automatically renewed. Pricing must be freshly verified before any owner proposal can be approved.</p>
+  <p>Suggested limits are prefilled for review and remain editable. No authority has been granted. Preview the current proposal and verify its digest before any explicit approval; eligibility also depends on the project deadline and fresh pricing.</p>
   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
    {fields.map(f=><label key={f.key} className="block">{f.label}
     <input className="mt-1 w-full rounded-md border bg-transparent px-2 py-1" type={f.key==='dollars'?'text':'number'}
