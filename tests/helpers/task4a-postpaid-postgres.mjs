@@ -44,6 +44,12 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query("update mission_assignments set status='failed' where id=$1",[task]);
  await db.query("update work_projects set status='blocked' where id=$1",[project]);
  await db.query("update agent_tasks set status='blocked',external=external||jsonb_build_object('receipt',jsonb_build_object('run_id',42102615797,'outcome','BLOCKED','pr_url',null)) where id=$1",[task]);
+ // Existing Task4A chain requires predecessor expiry before a new successor.
+ // Simulate natural expiration ONLY in disposable PostgreSQL by constructing
+ // the fixture before installing the new read/consent code.
+ await db.query('alter table project_continuation_authorizations disable trigger user');
+ await db.query("update project_continuation_authorizations set deadline=now()-interval '5 minutes' where id=task4a_current_continuation_id($1)",[project]);
+ await db.query('alter table project_continuation_authorizations enable trigger user');
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
  await db.query('set role service_role');
  const limits={cumulativeTokens:240000,developmentTokens:180000,developmentCalls:24,
