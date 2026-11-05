@@ -79,6 +79,10 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
    await db.query("create constraint trigger developer_approval_decision after insert on public.benchmark_native_spending_approvals deferrable initially deferred for each row execute function public.developer_approval_decision_guard()");
    // Exercise the deployed successor migration in BOTH legacy and new owner paths.
    await db.query(readFileSync('supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql','utf8'));
+    // Production owns the full financial-exposure ledger. This disposable
+    // fixture needs only the account-presence check; no paid rows are seeded.
+    await db.query('create table if not exists public.benchmark_dollar_exposures(account_id uuid)');
+    await db.query('grant select on public.benchmark_dollar_exposures to service_role');
     await db.query(readFileSync('supabase/migrations/20261105210000_task4a_separate_dispatch_paid_execution.sql','utf8'));
    await db.query('set role service_role');
   }
