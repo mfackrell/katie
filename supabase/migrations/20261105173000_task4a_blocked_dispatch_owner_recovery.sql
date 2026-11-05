@@ -229,7 +229,11 @@ begin
   (plan->>'historicalActualTokens')::bigint,(plan->>'historicalCalls')::integer,
   prior.historical_mission_deadline,jsonb_build_array(plan->'priceEvidence'),prior.id)
  returning id into successor;
+ -- A restored project must not inherit the four-hour-old watchdog timepoint.
+ -- This is an explicit owner-authorized recovery window, not fabricated external progress.
+ -- Preserve the original watchdog markers in the immutable receipt below.
  update public.work_projects set status='running',deadline=p_deadline,lease=null,lease_until=null,
+  progress_signature=null,progress_since=clock_timestamp(),error_signature=null,repeated_errors=0,
   impediment=null,detail='Owner-authorized exact failed-dispatch recovery; separate dispatch approval required.',
   updated_at=clock_timestamp() where id=p.id;
  update public.agent_missions set status='running',deadline=p_deadline,
@@ -266,6 +270,9 @@ begin
    'previousNativeApprovalId',old_native.id,'newNativeApprovalId',child,
    'originalFailedClaimId',plan->>'originalFailedClaimId',
    'originalTaskExternal',old_external,'previousProjectDeadline',p.deadline,
+   'previousProgressSignature',p.progress_signature,'previousProgressSince',p.progress_since,
+   'previousErrorSignature',p.error_signature,'previousRepeatedErrors',p.repeated_errors,
+   'watchdogRestartedByExplicitOwnerRecovery',true,'noArtificialCodingProgress',true,
    'previousMissionDeadline',m.deadline,'previousAssignmentStatus',j.status,
    'previousProjectStatus',p.status,'previousMissionStatus',m.status,
    'historicalActualTokens',plan->'historicalActualTokens',
