@@ -784,7 +784,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
        .returns<{id:string;event:string;created_at:string;data:{
          ownerId:string;consentDigest:string;newApprovalId?:string;
          redispatchReceiptId?:string;proposal?:unknown
-       }}>>();
+       }}>();
      if(eventsError||!events||events.length!==3)continue;
      const by=(event:string)=>events.find(e=>e.event===event);
      const authorityReceipt=by('task4a_postpaid_owner_authorized');
