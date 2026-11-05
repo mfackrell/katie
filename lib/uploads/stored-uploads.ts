@@ -7,6 +7,8 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { buildKatieVisualEpisode, verifiedKatieVisualEpisode } from "@/lib/chat/visual-memory";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { applyTrustedVisualCorrection, type TrustedVisualCorrection } from "./verified-visual-corrections";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
@@ -1124,13 +1126,73 @@ function honestPdfSummary(file: ConversationAttachment): ConversationAttachment 
   } : file;
 }
 
+/** The correction ledger is private and service-authored. Apply it BEFORE any
+ * image-selection or Qwen cache reuse. Write through to the canonical source
+ * and both Storage catalogs so subsequent conversations get the same scene.
+ * If that write fails, keep the verified override in this request and retry
+ * reconciliation on the next catalog load.
+ */
+export async function reconcileActorVisualCorrections(
+  actorId: string,
+  attachments: ConversationAttachment[],
+  updateCanonical: (original: ConversationAttachment, corrected: ConversationAttachment) => Promise<unknown>,
+  listCorrections: (actorId: string) => Promise<TrustedVisualCorrection[]>,
+): Promise<ConversationAttachment[]> {
+  if (!attachments.some(file => file.mimeType.startsWith("image/"))) return attachments;
+  const corrections = await listCorrections(actorId);
+  const byId = new Map(corrections.map(row => [row.attachment_id, row]));
+  const updated = [...attachments];
+  for (let index = 0; index < updated.length; index++) {
+    const original = updated[index];
+    const candidate = byId.get(original.id);
+    if (!candidate) continue;
+    const corrected = applyTrustedVisualCorrection(original, candidate);
+    if (!corrected) {
+      console.warn("[VisualCorrection] source identity mismatch", { actorId, attachmentId: original.id });
+      continue;
+    }
+    updated[index] = corrected;
+    if (original.observedSummary === corrected.observedSummary &&
+        original.summaryModel === corrected.summaryModel &&
+        original.visualMemory?.observedBy === corrected.visualMemory?.observedBy) continue;
+    try {
+      await updateCanonical(original, corrected);
+    } catch (error) {
+      // This turn remains corrected, but the private canonical catalog must
+      // be repaired before a future request can rely on storage alone.
+      console.error("[VisualCorrection] canonical sync pending", {
+        actorId, attachmentId: original.id,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+  return updated;
+}
+
+async function trustedVisualCorrections(actorId: string): Promise<TrustedVisualCorrection[]> {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("visual_observation_corrections")
+    .select("actor_id,source_chat_id,attachment_id,source_hash,description,correction_model,corrected_at,original_model,source_message_id,approved_by_user")
+    .eq("actor_id", actorId)
+    .limit(100)
+    .returns<TrustedVisualCorrection>();
+  if (error) throw new Error("Trusted visual correction ledger unavailable.");
+  return data ?? [];
+}
+
 export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: () => Promise<ConversationAttachment[]>): Promise<ConversationAttachment[]> {
   const service = getUploadService();
   const catalog = await service.catalog(actorId, "actor");
-  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId).map(honestPdfSummary);
-  const combined = [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
-  await service.initializeCatalog(actorId, combined, "actor");
-  return combined.map(honestPdfSummary);
+  const attachments = catalog.initialized
+    ? catalog.attachments.filter(file => file.actorId === actorId)
+    : [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
+  if (!catalog.initialized) await service.initializeCatalog(actorId, attachments, "actor");
+  const corrected = await reconcileActorVisualCorrections(
+    actorId, attachments,
+    (original, replacement) => service.updateImageObservation(original.chatId!, original, actorId, replacement),
+    trustedVisualCorrections,
+  );
+  return corrected.map(honestPdfSummary);
 }
 
 export const readSavedVideoTiming = (chatId: string, id: string, actorId: string) => getUploadService().readVideoTiming(chatId, id, actorId);
