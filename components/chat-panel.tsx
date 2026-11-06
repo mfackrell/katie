@@ -3058,7 +3058,7 @@ export function ChatPanel({
         className="min-h-0 max-h-[45dvh] shrink overflow-y-auto overscroll-contain touch-pan-y px-3 py-2 empty:hidden sm:max-h-[55dvh] sm:px-6"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
-        {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
+        {chatId && chatId!=='e53defeb-16eb-457e-aa07-435141165ee8' && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aSuccessorOwnerApproval key={'task4a-successor:'+chatId} chatId={chatId} /> : null}

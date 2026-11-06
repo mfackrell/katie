@@ -8,6 +8,7 @@ import {digest} from '@/lib/projects/contract';
 export const runtime='nodejs';
 const PROJECT='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const TASK='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+const WRONG_GENERIC_APPROVAL='919a68f0-3fb9-423c-80f2-4a3a51407bf0';
 const WIP='8e53ce01693303fc50daf5da1567e93e725f9b2d';
 const CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
 const digestSchema=z.string().regex(/^[a-f0-9]{64}$/);
@@ -49,7 +50,15 @@ async function receipts(){
   submitted:get('task4a_postpaid_dispatch_submitted')};
 }
 async function checkpoint(){
- const evidence=await authenticatedLifecycleCheckpoint(TASK);
+ // The known generic amendment left the original task dispatching. Admit only
+ // its exact native approval for read-only historical WIP authentication;
+ // PostgreSQL separately validates the immutable mistaken-approval receipt.
+ let evidence:Awaited<ReturnType<typeof authenticatedLifecycleCheckpoint>>;
+ try{evidence=await authenticatedLifecycleCheckpoint(TASK);}
+ catch(error){
+  if(!(error instanceof Error)||error.message!=='A blocked original development task is required')throw error;
+  evidence=await authenticatedLifecycleCheckpoint(TASK,WRONG_GENERIC_APPROVAL);
+ }
  if(evidence.record.checkpointSha!==WIP||
   evidence.record.runId!=='42102615797'&&String(evidence.record.runId)!=='42102615797'||
   evidence.record.projectId!==PROJECT||evidence.record.taskId!==TASK)

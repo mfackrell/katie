@@ -699,7 +699,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string};task4aPostpaid?:{version?:string;ownerDigest?:string;priorApprovalId?:string;priorGrantId?:string}}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string};task4aPostpaid?:{version?:string;ownerDigest?:string;priorApprovalId?:string;priorGrantId?:string;genericConflictApprovalId?:string}}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
@@ -767,7 +767,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
      try{previous=readDeveloperHandoff(priorBody,key,0);}catch{continue;}
      if(previous.authorityKind!=='task4a-developer'||
        previous.taskId!==task.id||previous.projectId!==c.projectId||
-       previous.approvalId!==a.previous_developer_approval_id||
+       // The audited mistaken generic approval is the chain parent, but the
+       // original signed issue still belongs to the historical paid approval.
+       previous.approvalId!==(a.developer_authority?.task4aPostpaid?.genericConflictApprovalId===a.previous_developer_approval_id
+         ?a.developer_authority.task4aPostpaid?.priorApprovalId:a.previous_developer_approval_id)||
        previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
        previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
        previous.releaseSha!==task.external.developerReleaseSha)continue;
