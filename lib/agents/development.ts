@@ -699,7 +699,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string}}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string};task4aPostpaid?:{version?:string;ownerDigest?:string;priorApprovalId?:string;priorGrantId?:string}}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
@@ -714,7 +714,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
     // Only the separately owner-consented, immutable replacement approval
     // may use the original issue; ordinary successors retain the WIP gate.
     const pregrant=c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
-      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'&&
+      a.developer_authority?.task4aPostpaid?.version!=='postpaid-same-task-v1';
     if(pregrant){
       const {data:ready,error}=await db.rpc<boolean>('task4a_pregrant_redispatch_ready',{
         p_task:task.id,p_approval:a.id
@@ -722,7 +723,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
       if(error||ready!==true)continue;
     }else{
       const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
-      if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+      if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
+        if(evidence.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
+          digest(evidence.checkpoint)!==(a.developer_authority.checkpoint as {digest?:string}|undefined)?.digest)continue;
+      }else if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
     }
    }
   }catch{continue;} // Ineligible or unavailable evidence denies this row, not unrelated approvals.
@@ -734,7 +738,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   let authority:ReturnType<typeof classifyDeveloperDispatchAuthority>;
   try{authority=classifyDeveloperDispatchAuthority(c.projectId,a.developer_authority);}
   catch{continue;}
-  if(authority.authorityKind==='task4a-developer'){
+  const postpaid=authority.authorityKind==='task4a-developer'&&a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1';
+  if(authority.authorityKind==='task4a-developer'&&!postpaid){
     const verified=await db.rpc<boolean>('task4a_native_authority_ready',{
       p_project:c.projectId,p_task:task.id,p_authority:authority.task4aContinuationId
     });
@@ -747,14 +752,70 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
-  let recoveredClaimedDispatch=false;
+  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false;
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
    const priorBody=unpackDevelopmentRequest(existing.data.body??'');
    if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||
      !priorBody.startsWith(marker(task)+'\n'))continue;
-   if(authority.authorityKind==='task4a-developer'&&
+   if(postpaid){
+     const priorReceipt=task.external.receipt as {outcome?:string;run_id?:number;pr_url?:string|null}|undefined;
+     if(issue!==969||priorReceipt?.outcome!=='BLOCKED'||priorReceipt.run_id!==42102615797||
+       priorReceipt.pr_url!==null)continue;
+     let previous:ReturnType<typeof readDeveloperHandoff>;
+     try{previous=readDeveloperHandoff(priorBody,key,0);}catch{continue;}
+     if(previous.authorityKind!=='task4a-developer'||
+       previous.taskId!==task.id||previous.projectId!==c.projectId||
+       previous.approvalId!==a.previous_developer_approval_id||
+       previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
+       previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
+       previous.releaseSha!==task.external.developerReleaseSha)continue;
+     const {data:offer,error:offerError}=await db.rpc<{
+       ready:boolean;digest?:string;proposal?:{approvalId:string;
+         authorityReceiptId:string;redispatchReceiptId:string}
+     }>('task4a_postpaid_paid_proposal',{p_release:release});
+     if(offerError||offer?.ready!==true||!offer.digest||
+       offer.proposal?.approvalId!==a.id)continue;
+     const {data:events,error:eventsError}=await db.from('project_events')
+       .select('id,event,data,created_at').eq('project_id',c.projectId)
+       .in('event',['task4a_postpaid_owner_authorized',
+         'task4a_postpaid_redispatch_authorized','task4a_postpaid_paid_authorized'])
+       .returns<{id:string;event:string;created_at:string;data:{
+         ownerId:string;consentDigest:string;newApprovalId?:string;
+         redispatchReceiptId?:string;proposal?:unknown
+       }}>();
+     if(eventsError||!events||events.length!==3)continue;
+     const by=(event:string)=>events.find(e=>e.event===event);
+     const authorityReceipt=by('task4a_postpaid_owner_authorized');
+     const redispatchReceipt=by('task4a_postpaid_redispatch_authorized');
+     const paidReceipt=by('task4a_postpaid_paid_authorized');
+     if(!authorityReceipt||!redispatchReceipt||!paidReceipt||
+       authorityReceipt.id!==offer.proposal.authorityReceiptId||
+       authorityReceipt.data.newApprovalId!==a.id||
+       authorityReceipt.data.consentDigest!==a.developer_authority.task4aPostpaid?.ownerDigest||
+       redispatchReceipt.id!==offer.proposal.redispatchReceiptId||
+       redispatchReceipt.data.ownerId!==authorityReceipt.data.ownerId||
+       paidReceipt.data.ownerId!==authorityReceipt.data.ownerId||
+       paidReceipt.data.redispatchReceiptId!==redispatchReceipt.id||
+       paidReceipt.data.consentDigest!==offer.digest||
+       JSON.stringify(paidReceipt.data.proposal)!==JSON.stringify(offer.proposal))continue;
+     const failedRun=await client.actions.getWorkflowRun({
+       owner:binding.owner,repo:binding.repo,run_id:42102615797
+     });
+     if(failedRun.data.status!=='completed'||failedRun.data.conclusion!=='failure'||
+       failedRun.data.path!=='.github/workflows/autonomous-development.yml'||
+       failedRun.data.head_branch!=='main')continue;
+     // A cross-repository or truncated inventory can never permit another run.
+     // Later genuine original-issue dispatches are a permanent single-claim stop.
+     const runs=await client.actions.listWorkflowRunsForRepo({
+       owner:binding.owner,repo:binding.repo,event:'workflow_dispatch',
+       created:'>='+authorityReceipt.created_at,per_page:100
+     });
+     if(runs.data.total_count>100||runs.data.workflow_runs.some(run=>
+       run.path==='.github/workflows/autonomous-development.yml'))continue;
+     postpaidClaimedDispatch=true;
+   }else if(authority.authorityKind==='task4a-developer'&&
       a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
      // The first issue rewrite succeeded, but GitHub rejected the malformed
      // workflow_dispatch *after* the existing SQL claim was consumed. The
@@ -841,7 +902,9 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
 
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
-  const claim=recoveredClaimedDispatch
+  const claim=postpaidClaimedDispatch
+   ?await db.rpc('task4a_postpaid_claim',{p_release:release})
+   :recoveredClaimedDispatch
    ?await db.rpc('task4a_claim_failed_dispatch',{p_release:release})
    :await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});
   if(claim.error||claim.data!==true)continue;
@@ -850,7 +913,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
-   if(recoveredClaimedDispatch){
+   if(postpaidClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_postpaid_record_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('GitHub accepted same-task dispatch but audit failed; no retry allowed');
+   }else if(recoveredClaimedDispatch){
     const sent=await db.rpc<boolean>('task4a_record_failed_dispatch_submitted',{p_release:release});
     if(sent.error||sent.data!==true)throw Error('GitHub accepted recovered dispatch; immutable receipt storage failed; no retry permitted');
    }else{
@@ -868,6 +934,9 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
 // Invoked only after a digest-bound original-owner consent. This is Katie's
 // existing native dispatcher scoped to one exact saved development task.
 export async function dispatchTask4aFailedDispatchOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
+}
+export async function dispatchTask4aPostpaidOnce(){
  return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
 }
 export async function dispatchOwnerRenewedNativeDevelopment() {
