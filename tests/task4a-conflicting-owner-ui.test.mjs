@@ -87,7 +87,11 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
   });
   await page.goto('http://localhost/owner-ui?chatId='+originalChat);
   const region=page.getByRole('region',{name:'Task 4A postpaid same-task continuation'});
-  await region.waitFor({timeout:15000});
+  try{await region.waitFor({timeout:12000});}
+  catch(e){assert.fail('Task 4A owner panel not mounted: '+JSON.stringify({
+   errors,body:await page.locator('body').innerText().catch(()=>null),
+   requests,pageUrl:page.url(),root:await page.locator('#root').innerHTML().catch(()=>null)
+  })+'; original error: '+String(e));}
   assert.equal(await page.getByTestId('generic-owner-approval').count(),0);
   assert.equal(await page.getByRole('button',{name:'Approve exactly this amendment'}).count(),0);
   await page.getByLabel('Total cumulative tokens').fill('289620');
