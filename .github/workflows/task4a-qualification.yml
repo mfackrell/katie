@@ -17,6 +17,7 @@ on:
       - 'supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql'
       - 'supabase/migrations/20261105210000_task4a_separate_dispatch_paid_execution.sql'
       - 'supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql'
+      - 'supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql'
       - 'app/api/projects/task4a-postpaid-continuation/route.ts'
       - 'components/task4a-postpaid-continuation-approval.tsx'
       - 'tests/helpers/task4a-postpaid-postgres.mjs'
