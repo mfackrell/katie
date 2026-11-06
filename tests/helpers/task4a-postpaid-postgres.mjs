@@ -114,6 +114,10 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  // Recreate November 6's incorrect GENERIC lifecycle approval in this
  // disposable Postgres fixture, preserving the prior paid grant and four calls.
  // This is not a production repair and makes no provider/GitHub request.
+ // The existing approval-decision trigger is deferred: write the synthetic
+ // approval, exact owner decision and audit receipt in ONE transaction.
+ // No constraint triggers are disabled or bypassed.
+ await db.query('begin');
  await db.query('reset role');
  const genericLimits={...limits,cumulativeTokens:180000,developmentTokens:120000,
   developmentCalls:16,ceilingMicrousd:2520000,durationSeconds:86400};
