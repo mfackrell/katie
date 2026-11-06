@@ -167,7 +167,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   const newApproval=(await one(db,"select (data->>'newApprovalId')::uuid as id from project_events where project_id=$1 and event='task4a_postpaid_owner_authorized'",[project])).id;
   assert.equal((await one(db,'select previous_developer_approval_id from benchmark_native_spending_approvals where id=$1',[newApproval])).previous_developer_approval_id,wrong);
   assert.ok((await one(db,'select revoked_at from benchmark_native_spending_approvals where id=$1',[wrong])).revoked_at,
-   'Generic approval remains auditable but is revoked by the owner's exact successor');
+   "Generic approval remains auditable but is revoked by the owner\'s exact successor");
   assert.equal((await one(db,'select count(*)::int n from project_events where id=$1',[wrongReceipt])).n,1);
   assert.equal((await one(db,'select count(*)::int n from benchmark_lifecycle_decisions where proposal_id=$1 and decision=\'approved\'',[wrongProposal])).n,1);
   const dates=await one(db,'select p.deadline project_deadline,m.deadline mission_deadline from work_projects p join agent_missions m on m.id=p.active_mission_id where p.id=$1',[project]);
