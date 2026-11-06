@@ -22,55 +22,6 @@ create trigger task4a_postpaid_immutable before update or delete on public.proje
 -- The API independently authenticates the latest WIP tag, commit/tree,
 -- failed workflow, and last settled provider operation before calling this.
 -- Every PostgreSQL source row is also validated, not inferred from UI inputs.
--- Fail closed until an independently authenticated, credential-bound,
--- nonbillable model retrieval has been recorded. No positive receipt is
--- created by installing this migration or by catalog pricing discovery.
-create or replace function public.task4a_postpaid_model_eligible(p_release text)
-returns boolean language plpgsql stable set search_path=public as $eligibility$
-declare m public.model_registry;e jsonb;observed timestamptz;expires timestamptz;
-begin
- if coalesce(p_release,'')!~'^[a-f0-9]{40}$' then return false;end if;
- select * into m from public.model_registry where provider_name='openai' and model_id='gpt-5.3-codex';
- if m.model_id is null or m.is_active is distinct from true
-  or m.routing_eligibility is distinct from 'verified'
-  or m.capability_status is distinct from 'verified'
-  or m.capability_verified_at not between clock_timestamp()-interval '15 minutes' and clock_timestamp()
-  or m.pricing_status is distinct from 'verified'
-  or m.pricing_verified_at not between clock_timestamp()-interval '24 hours' and clock_timestamp()
-  or m.pricing_input_per_1m<>1.75 or m.pricing_output_per_1m<>14
-  or m.source_metadata->>'pricing_verification_source'
-    is distinct from 'https://developers.openai.com/api/docs/models/gpt-5.3-codex'
- then return false;end if;
- e:=m.source_metadata->'task4a_credential_lookup';
- if jsonb_typeof(e) is distinct from 'object'
-  or e->>'version' is distinct from 'task4a-native-model-lookup-v1'
-  or e->>'source' is distinct from 'openai.models.retrieve'
-  or e->>'method' is distinct from 'GET'
-  or e->>'endpoint' is distinct from 'https://api.openai.com/v1/models/gpt-5.3-codex'
-  or e->>'model' is distinct from 'gpt-5.3-codex'
-  or e->>'responseObject' is distinct from 'model'
-  or e->>'httpStatus' is distinct from '200'
-  or e->>'credentialSource' is distinct from 'github-actions:OPENAI_API_KEY'
-  or e->>'organizationContext' is distinct from 'key-default'
-  or e->>'projectContext' is distinct from 'key-default'
-  or e->>'proofLevel' is distinct from 'credential_scoped_model_visibility_not_responses_create'
-  or e->>'releaseSha' is distinct from p_release
-  or e->>'githubRepository' is distinct from 'mfackrell/katie'
-  or e->>'githubWorkflow' is distinct from '.github/workflows/autonomous-development.yml'
-  or e->>'trustedProducer' is distinct from 'protected-main-read-only-model-lookup'
-  or coalesce(e->>'credentialBinding','')!~'^[a-f0-9]{64}$'
- then return false;end if;
- observed:=(e->>'observedAt')::timestamptz;
- expires:=(e->>'expiresAt')::timestamptz;
- return coalesce(observed between clock_timestamp()-interval '15 minutes' and clock_timestamp()
-  and expires>clock_timestamp() and expires<=observed+interval '15 minutes'
-  and m.capability_verified_at>=observed-interval '15 minutes',false);
-exception when others then return false;
-end $eligibility$;
-revoke all on function public.task4a_postpaid_model_eligible(text)
- from public,anon,authenticated,service_role;
-grant execute on function public.task4a_postpaid_model_eligible(text) to service_role;
-
 create or replace function public.task4a_postpaid_proposal(
  p_release text,p_checkpoint text,p_checkpoint_digest text,p_limits jsonb default null
 ) returns jsonb language plpgsql stable set search_path=public as $$
@@ -179,10 +130,6 @@ begin
   or p_checkpoint is distinct from '8e53ce01693303fc50daf5da1567e93e725f9b2d'
   or coalesce(p_checkpoint_digest,'')!~'^[a-f0-9]{64}$'
  then return jsonb_build_object('ready',false,'reason','original_postpaid_evidence_unavailable','evidence',evidence);end if;
- if not public.task4a_postpaid_model_eligible(p_release)
- then return jsonb_build_object('ready',false,
-  'reason','same_github_credential_model_eligibility_required',
-  'evidence',evidence);end if;
  if price.is_active is distinct from true or price.pricing_status is distinct from 'verified'
   or price.pricing_verified_at not between clock_timestamp()-interval '24 hours' and clock_timestamp()
   or price.pricing_input_per_1m<>1.75 or price.pricing_output_per_1m<>14
@@ -223,6 +170,12 @@ begin
      'source',price.source_metadata->>'pricing_verification_source',
      'inputPerMillionUsd',price.pricing_input_per_1m,
      'outputPerMillionUsd',price.pricing_output_per_1m),
+  'modelAuthorizationPolicy',jsonb_build_object(
+    'mode','provider_enforced_at_responses_execution',
+    'pinnedModel','gpt-5.3-codex',
+    'modelLookupProvesInferencePermission',false,
+    'financialAdmissionBeforeProvider',true,
+    'providerDenialPolicy','fail_closed_hold_unresolved_no_automatic_retry'),
   'separateRedispatchConsent',true,'separatePaidInferenceConsent',true,
   'noNewProject',true,'noProviderCallsOnApproval',true);
  return jsonb_build_object('ready',true,'proposal',proposal,
@@ -410,7 +363,6 @@ begin
   or coalesce(p_release,'')!~'^[a-f0-9]{40}$'
   or exists(select 1 from public.project_events where project_id=p.id
     and event='task4a_postpaid_dispatch_claimed')
-  or not public.task4a_postpaid_model_eligible(p_release)
   or price.is_active is distinct from true or price.pricing_status is distinct from 'verified'
   or price.pricing_verified_at not between clock_timestamp()-interval '24 hours' and clock_timestamp()
   or price.pricing_input_per_1m<>1.75 or price.pricing_output_per_1m<>14
@@ -431,6 +383,8 @@ begin
   'checkpointSha','8e53ce01693303fc50daf5da1567e93e725f9b2d',
   'pricingVerifiedAt',price.pricing_verified_at,
   'pricingSource',price.source_metadata->>'pricing_verification_source',
+  'providerAuthorizationMode','provider_enforced_at_responses_execution',
+  'modelLookupProvesInferencePermission',false,
   'oneOriginalIssueDispatch',true,'noNewFinancialAuthority',true);
  return jsonb_build_object('ready',true,'proposal',candidate,
   'digest',encode(sha256(convert_to(public.project_canonical(candidate),'UTF8')),'hex'));
@@ -571,7 +525,6 @@ begin
   and exists(select 1 from public.benchmark_budget_accounts acct
     where acct.id=a.account_id and acct.developer_project_id=p.id
       and acct.developer_task_id=t.id and acct.frozen_at is null and acct.spent_tokens=49620)
-  and public.task4a_postpaid_model_eligible(p_release)
   and price.is_active=true and price.pricing_status='verified'
   and price.pricing_verified_at between clock_timestamp()-interval '24 hours' and clock_timestamp()
   and price.pricing_input_per_1m=1.75 and price.pricing_output_per_1m=14
@@ -636,31 +589,6 @@ begin
   updated_at=clock_timestamp() where id=t.id;
  return true;
 end $$;
--- Recheck the postpaid credential receipt for EACH native request. Older
--- Task 4A grants retain their original checks without widening permissions.
-alter function public.task4a_native_live(text,uuid,bigint)
- rename to task4a_native_live_pre_postpaid_eligibility;
-create or replace function public.task4a_native_live(
- p_digest text,p_project uuid,p_epoch bigint
-) returns boolean language plpgsql stable set search_path=public as $live_gate$
-declare g public.benchmark_execution_grants;a public.benchmark_native_spending_approvals;
- t public.agent_tasks;
-begin
- if p_project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'::uuid then
-  select * into g from public.benchmark_execution_grants
-   where token_digest=p_digest and project_id=p_project and execution_epoch=p_epoch;
-  select * into a from public.benchmark_native_spending_approvals where id=g.developer_approval_id;
-  if a.developer_authority->'task4aPostpaid'->>'version'='postpaid-same-task-v1' then
-   select * into t from public.agent_tasks where id=a.task_id;
-   if not public.task4a_postpaid_model_eligible(t.external->>'developerReleaseSha') then return false;end if;
-  end if;
- end if;
- return public.task4a_native_live_pre_postpaid_eligibility(p_digest,p_project,p_epoch);
-end $live_gate$;
-revoke all on function public.task4a_native_live(text,uuid,bigint)
- from public,anon,authenticated,service_role;
-grant execute on function public.task4a_native_live(text,uuid,bigint) to service_role;
-
 revoke all on function
  public.task4a_postpaid_immutable(),
  public.task4a_postpaid_proposal(text,text,text,jsonb),
@@ -671,8 +599,7 @@ revoke all on function
  public.task4a_postpaid_authorize_paid(uuid,text,text),
  public.task4a_postpaid_claim(text),
  public.task4a_postpaid_grant_ready(uuid,text),
- public.task4a_postpaid_record_submitted(text),
- public.task4a_native_live_pre_postpaid_eligibility(text,uuid,bigint)
+ public.task4a_postpaid_record_submitted(text)
  from public,anon,authenticated,service_role;
 grant execute on function
  public.task4a_postpaid_proposal(text,text,text,jsonb),
@@ -683,6 +610,5 @@ grant execute on function
  public.task4a_postpaid_authorize_paid(uuid,text,text),
  public.task4a_postpaid_claim(text),
  public.task4a_postpaid_grant_ready(uuid,text),
- public.task4a_postpaid_record_submitted(text),
- public.task4a_native_live_pre_postpaid_eligibility(text,uuid,bigint)
+ public.task4a_postpaid_record_submitted(text)
  to service_role;

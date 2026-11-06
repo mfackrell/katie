@@ -126,6 +126,9 @@ test('no SQL owner path can bypass the two distinct consents and original settle
  assert.match(sql,/60000/);
  assert.match(sql,/pricing_status.*'verified'/s);
  assert.match(sql,/TASK4A_POSTPAID_SEPARATE_PAID_OWNER_CONSENT_REQUIRED/);
+ assert.match(sql,/'mode','provider_enforced_at_responses_execution'/);
+ assert.match(sql,/'modelLookupProvesInferencePermission',false/);
+ assert.doesNotMatch(sql,/task4a_postpaid_model_eligible|task4a_credential_lookup/);
  assert.match(route,/authenticatedLifecycleCheckpoint/);
  assert.match(route,/qualifiedOrdinaryDevelopmentRelease/);
  assert.match(worker,/dispatchTask4aPostpaidOnce/);

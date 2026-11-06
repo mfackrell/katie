@@ -50,52 +50,12 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query('alter table project_continuation_authorizations disable trigger user');
  await db.query("update project_continuation_authorizations set authorized_at=now()-interval '2 hours',deadline=now()-interval '5 minutes' where id=task4a_current_continuation_id($1)",[project]);
  await db.query('alter table project_continuation_authorizations enable trigger user');
- // Synthetic fixture ONLY: a provider GET attestation, never a real call.
- await db.query('alter table model_registry add column if not exists capability_status text, add column if not exists capability_verified_at timestamptz, add column if not exists routing_eligibility text');
- const observed=new Date(),expiry=new Date(observed.getTime()+15*60*1000);
- const proof={version:'task4a-native-model-lookup-v1',source:'openai.models.retrieve',
-  method:'GET',endpoint:'https://api.openai.com/v1/models/gpt-5.3-codex',
-  model:'gpt-5.3-codex',responseObject:'model',httpStatus:200,
-  credentialSource:'github-actions:OPENAI_API_KEY',
-  organizationContext:'key-default',projectContext:'key-default',
-  proofLevel:'credential_scoped_model_visibility_not_responses_create',
-  releaseSha:release,githubRepository:'mfackrell/katie',
-  githubWorkflow:'.github/workflows/autonomous-development.yml',
-  trustedProducer:'protected-main-read-only-model-lookup',
-  credentialBinding:'a'.repeat(64),
-  observedAt:observed.toISOString(),expiresAt:expiry.toISOString()};
- await db.query("update model_registry set routing_eligibility='verified',capability_status='verified',capability_verified_at=now(),source_metadata=coalesce(source_metadata,'{}'::jsonb)||jsonb_build_object('task4a_credential_lookup',$1::jsonb) where provider_name='openai' and model_id='gpt-5.3-codex'",[JSON.stringify(proof)]);
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
  await db.query('set role service_role');
  const limits={cumulativeTokens:240000,developmentTokens:180000,developmentCalls:24,
   assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
   perCallMicrousd:1680000,ceilingMicrousd:6000000,durationSeconds:14400};
  const args=[release,checkpoint,snapshot,limits];
- // Even if public pricing is fresh and model is active, the trusted
- // original-owner quote must deny each independently invalid eligibility.
- const cases=[
-  ["restricted","routing_eligibility='restricted'"],
-  ["heuristic","capability_status='heuristic'"],
-  ["stale capability","capability_verified_at=now()-interval '16 minutes'"],
-  ["missing capability","capability_verified_at=null"],
-  ["missing proof","source_metadata=source_metadata-'task4a_credential_lookup'"],
-  ["wrong organization/project","source_metadata=jsonb_set(source_metadata,'{task4a_credential_lookup,projectContext}','\"other\"'::jsonb)"],
-  ["wrong credential","source_metadata=jsonb_set(source_metadata,'{task4a_credential_lookup,credentialSource}','\"vercel:OPENAI_API_KEY\"'::jsonb)"],
-  ["wrong model","source_metadata=jsonb_set(source_metadata,'{task4a_credential_lookup,model}','\"gpt-6-sol\"'::jsonb)"],
-  ["wrong release","source_metadata=jsonb_set(source_metadata,'{task4a_credential_lookup,releaseSha}','\"1111111111111111111111111111111111111111\"'::jsonb)"],
-  ["stale proof","source_metadata=jsonb_set(source_metadata,'{task4a_credential_lookup,observedAt}',to_jsonb((now()-interval '16 minutes')::text))"]
- ];
- for(const [label,change] of cases){
-  await db.query('savepoint negative_eligibility');
-  await db.query('reset role');
-  await db.query("update model_registry set "+change+" where provider_name='openai' and model_id='gpt-5.3-codex'");
-  await db.query('set role service_role');
-  assert.equal((await rpc(db,'task4a_postpaid_proposal',args)).ready,false,label);
-  await db.query('rollback to savepoint negative_eligibility');
-  await db.query('release savepoint negative_eligibility');
-  await db.query('set role service_role');
- }
- console.log('TASK4A_POSTPAID_MODEL_ELIGIBILITY_NEGATIVE_POSTGRES_PASS');
  const offer=await rpc(db,'task4a_postpaid_proposal',args);
  assert.equal(offer.ready,true,JSON.stringify(offer));
  assert.equal(offer.proposal.settledCalls,4);
@@ -160,14 +120,6 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal((await rpc(db,'task4a_postpaid_paid_proposal',[release])).ready,false,'Unavailable Codex must fail closed');
   await db.query('rollback to savepoint postpaid_unavailable_model');
   await db.query('release savepoint postpaid_unavailable_model');
-  await db.query('set role service_role');
-  await db.query('savepoint negative_paid_eligibility');
-  await db.query('reset role');
-  await db.query("update model_registry set routing_eligibility='restricted' where provider_name='openai' and model_id='gpt-5.3-codex'");
-  await db.query('set role service_role');
-  assert.equal((await rpc(db,'task4a_postpaid_paid_proposal',[release])).ready,false);
-  await db.query('rollback to savepoint negative_paid_eligibility');
-  await db.query('release savepoint negative_paid_eligibility');
   await db.query('set role service_role');
   const paid=await rpc(db,'task4a_postpaid_paid_proposal',[release]);
   assert.equal(paid.ready,true,JSON.stringify(paid));
