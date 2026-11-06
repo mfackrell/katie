@@ -683,5 +683,6 @@ grant execute on function
  public.task4a_postpaid_authorize_paid(uuid,text,text),
  public.task4a_postpaid_claim(text),
  public.task4a_postpaid_grant_ready(uuid,text),
- public.task4a_postpaid_record_submitted(text)
+ public.task4a_postpaid_record_submitted(text),
+ public.task4a_native_live_pre_postpaid_eligibility(text,uuid,bigint)
  to service_role;
