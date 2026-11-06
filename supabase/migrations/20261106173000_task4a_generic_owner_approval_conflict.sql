@@ -132,7 +132,12 @@ begin
       or g.stopped_at is null
       or submitted.id is null
       or submitted.data->>'issueNumber' is distinct from '969'
-      or coalesce(submitted.data->>'releaseSha','')!~'^[a-f0-9]{40}
+      or coalesce(submitted.data->>'releaseSha','')!~'^[a-f0-9]{40}$'
+      or exists(select 1 from public.benchmark_native_spending_approvals child
+        where child.previous_developer_approval_id=wrong.id)
+      or exists(select 1 from public.benchmark_execution_grants new_grant
+        where new_grant.developer_approval_id=wrong.id)
+     ))
   or p.active_mission_id is distinct from m.id or p.approved_hash is null
   or p.approved_hash is distinct from p.approval_hash
   or p.baseline_sha is distinct from '49c8a5f791e66c351436bb97839193b53d7a1cd1'
