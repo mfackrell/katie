@@ -112,6 +112,20 @@ test('Task 4A postpaid owner HTTP route: three independent decisions and no infe
    if(v===undefined)delete process.env[k];else process.env[k]=v;
  }
 });
+test('known incorrect Task 4A generic owner path is removed without affecting unrelated tasks',()=>{
+ const api=readFileSync('app/api/projects/lifecycle-approval/route.ts','utf8');
+ const chat=readFileSync('components/chat-panel.tsx','utf8');
+ const recovery=readFileSync('app/api/projects/task4a-postpaid-continuation/route.ts','utf8');
+ const sql=readFileSync('supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql','utf8');
+ assert.match(api,/taskId===TASK4A/);
+ assert.match(chat,/chatId!==\'e53defeb-16eb-457e-aa07-435141165ee8\'/);
+ assert.match(recovery,/authenticatedLifecycleCheckpoint\(TASK,WRONG_GENERIC_APPROVAL\)/);
+ assert.match(sql,/TASK4A_GENERIC_LIFECYCLE_FORBIDDEN/);
+ assert.match(sql,/mistakenGenericApproval/);
+ assert.match(sql,/coalesce\(wrong.id,a.id\)/);
+ assert.match(sql,/TASK4A_POSTPAID_OWNER_CONSENT_DENIED/);
+ assert.doesNotMatch(sql,/delete from public.project_events/i);
+});
 test('no SQL owner path can bypass the two distinct consents and original settled ledger',()=>{
  const sql=readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8');
  const route=readFileSync('app/api/projects/task4a-postpaid-continuation/route.ts','utf8');
