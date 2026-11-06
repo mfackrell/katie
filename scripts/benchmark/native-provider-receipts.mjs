@@ -163,6 +163,11 @@ export function assertNativeModelEligibility({
     evidence?.organizationContext!=='key-default'||evidence?.projectContext!=='key-default'||
     evidence?.proofLevel!=='credential_scoped_model_visibility_not_responses_create'||
     evidence?.releaseSha!==releaseSha||
+    evidence?.githubRepository!=='mfackrell/katie'||
+    evidence?.githubWorkflow!=='.github/workflows/autonomous-development.yml'||
+    evidence?.trustedProducer!=='protected-main-read-only-model-lookup'||
+    !registry?.source_metadata?.task4a_credential_lookup||
+    JSON.stringify(registry.source_metadata.task4a_credential_lookup)!==JSON.stringify(evidence)||
     !timingSafeEqual(Buffer.from(evidence.credentialBinding,'hex'),Buffer.from(expected,'hex'))||
     registry?.provider_name!=='openai'||registry?.model_id!==TASK4A_MODEL||
     registry?.is_active!==true||registry?.capability_status!=='verified'||
