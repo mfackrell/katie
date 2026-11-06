@@ -55,6 +55,37 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query('alter table project_continuation_authorizations enable trigger user');
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql','utf8'));
+ // Validate the ENTIRE install-only migration on a disposable PostgreSQL
+ // instance, independently of owner-recovery and concurrency qualification.
+ if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE==='1'){
+  const compiled=(await db.query(`select p.proname,pg_get_functiondef(p.oid) body
+    from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname in
+    ('task4a_postpaid_proposal','task4a_postpaid_authorize','benchmark_lifecycle_decide')
+    order by p.proname`)).rows;
+  assert.deepEqual(compiled.map(x=>x.proname),[
+   'benchmark_lifecycle_decide','task4a_postpaid_authorize','task4a_postpaid_proposal']);
+  const named=name=>compiled.find(x=>x.proname===name).body;
+  assert.match(named('benchmark_lifecycle_decide'),/TASK4A_GENERIC_LIFECYCLE_FORBIDDEN/);
+  assert.match(named('task4a_postpaid_proposal'),/mistakenGenericApproval/);
+  assert.match(named('task4a_postpaid_proposal'),/wrong\.previous_developer_approval_id/);
+  assert.match(named('task4a_postpaid_authorize'),/coalesce\(wrong\.id,a\.id\)/);
+  assert.match(named('task4a_postpaid_authorize'),/pg_advisory_xact_lock/);
+  await db.query('set role service_role');
+  const preview=await rpc(db,'task4a_postpaid_proposal',[
+   release,checkpoint,snapshot,{
+    cumulativeTokens:289620,developmentTokens:229620,developmentCalls:16,
+    assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
+    perCallMicrousd:1680000,ceilingMicrousd:9000000,durationSeconds:14400
+   }]);
+  assert.equal(preview.ready,true,JSON.stringify(preview));
+  assert.equal(preview.proposal.settledTokens,49620);
+  assert.equal(preview.proposal.newContinuationTokenCap,240000);
+  assert.equal(preview.proposal.newContinuationCallCap,24);
+  await db.query('commit');
+  console.log('TASK4A_FULL_CONFLICT_MIGRATION_POSTGRES_VALIDATED_NO_RECOVERY_OR_DISPATCH');
+  return;
+ }
  await db.query('set role service_role');
  const limits={cumulativeTokens:240000,developmentTokens:180000,developmentCalls:24,
   assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
