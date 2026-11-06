@@ -39,7 +39,6 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
  const code='const exports={};\n'
   +'const require=name=>name==="react"?React:name==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=>"synthetic-owner"};\n'
   +realPostpaid+'\n'
-  +'const Task4aPostpaidContinuationApproval=exports.Task4aPostpaidContinuationApproval;\n'
   +'const LifecycleOwnerApproval=()=>React.createElement("p",{"data-testid":"generic-owner-approval"},"Generic resource approval");\n'
   +'const ApprovalHarness=(function(){'+harness+';return ApprovalHarness;})();\n'
   +'ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(ApprovalHarness,{chatId:new URLSearchParams(location.search).get("chatId"),managedAgentId:null}));';
