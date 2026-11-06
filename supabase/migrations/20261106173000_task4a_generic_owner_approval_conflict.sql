@@ -419,7 +419,7 @@ begin
  update public.work_projects set status='blocked',deadline=new_deadline,
   lease=null,lease_until=null,updated_at=clock_timestamp() where id=p.id;
  update public.agent_missions set status='blocked',deadline=new_deadline,
-  lease=null,lease_until=null,updated_at=clock_timestamp() where id=m.id;
+  updated_at=clock_timestamp() where id=m.id;
  update public.mission_assignments set status='failed',lease=null,lease_until=null,
   updated_at=clock_timestamp() where id=j.id;
  update public.agent_tasks set status='blocked',
