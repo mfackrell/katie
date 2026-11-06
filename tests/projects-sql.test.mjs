@@ -151,7 +151,8 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query(readFileSync('supabase/migrations/20261103225000_task4a_successor_continuation.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261105144000_task4a_failed_dispatch_one_shot.sql','utf8'));
   await db.query('set role service_role');
-  if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_RACE==='1'){
+  if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_RACE==='1'||
+     process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE==='1'){
    await verifyTask4aPregrantRecoveryPostgres(db,{
     successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
     ownerGovernedPaidMode:true,postpaidMode:true,connect
