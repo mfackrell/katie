@@ -18,7 +18,7 @@ import {randomBytes} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createNativeHttpBridge,nativeChildInterruptionRetryable} from './native-http-bridge.mjs';
-import {createResponsesProvider,NATIVE_INPUT_COUNT_VERSION} from './native-provider-receipts.mjs';
+import {createResponsesProvider,NATIVE_INPUT_COUNT_VERSION,retrieveNativeModelNonbillable,assertNativeModelEligibility} from './native-provider-receipts.mjs';
 import {assertBenchmarkDollarCeiling,readVerifiedBenchmarkPricing} from './paid-dollar-ceiling.mjs';
 import {tokenDigest} from './authenticated-native-gateway.mjs';
 import {readNativeHandoff} from './native-dispatch-contract.mjs';
@@ -219,6 +219,30 @@ const forecastCapacity=async phase=>{
 const recoveredAction=recovery?.lastCompleted?.adaptiveRepair?.nextAction;
 await forecastCapacity(recoveredAction==='complete'?'do_completion':recoveredAction??recovery?.phase??'implementation');
 
+// Task 4A post-paid only: the *same GitHub Actions secret* that later sends
+// Responses must obtain a nonbillable model-specific GET before grant creation.
+// No lookup from Vercel or a different project key can substitute. This GET
+// establishes credential-scoped visibility, not guaranteed inference success.
+if(ordinary&&approval.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
+ try{
+  const observed=await retrieveNativeModelNonbillable({
+   apiKey:providerKey,signingKey
+  });
+  const {data:modelRow,error:modelError}=await db.from('model_registry')
+   .select('provider_name,model_id,is_active,capability_status,capability_verified_at,routing_eligibility,pricing_status,pricing_verified_at,pricing_input_per_1m,pricing_output_per_1m,source_metadata')
+   .eq('provider_name','openai').eq('model_id','gpt-5.3-codex').maybeSingle();
+  if(modelError||!modelRow||observed.credentialBinding!==
+      modelRow.source_metadata?.task4a_credential_lookup?.credentialBinding)
+    denied('postpaid model identity or eligibility not independently established');
+  assertNativeModelEligibility({
+   evidence:modelRow.source_metadata.task4a_credential_lookup,
+   registry:modelRow,releaseSha:process.env.GITHUB_SHA,
+   apiKey:providerKey,signingKey
+  });
+ }catch{
+  denied('postpaid same-GitHub-credential model eligibility unavailable; no grant or paid call');
+ }
+}
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
 const {data:grantResult,error:issueError}=ordinary
