@@ -7,6 +7,9 @@ const task='d0e41ff5-149e-4319-9e65-dcc605fb75da';
 const checkpoint='8e53ce01693303fc50daf5da1567e93e725f9b2d';
 const release='d530aa94dd8d9c2bc442b43b324ace312d0d62b9';
 const snapshot='f'.repeat(64);
+const wrong='919a68f0-3fb9-423c-80f2-4a3a51407bf0';
+const wrongReceipt='3120cdbf-ec74-4f1a-b314-8ec3e0f0d0c1';
+const wrongProposal='337de31bffd378298086f0fcdc66a13ea5033c2f4676a26af2cefaa17be9c914';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 const rpc=async(db,name,args)=>(await one(db,'select '+name+'('+args.map((_,i)=>'$'+(i+1)).join(',')+') val',args)).val;
 const negative=async(db,fn,pattern)=>{
@@ -51,6 +54,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query("update project_continuation_authorizations set authorized_at=now()-interval '2 hours',deadline=now()-interval '5 minutes' where id=task4a_current_continuation_id($1)",[project]);
  await db.query('alter table project_continuation_authorizations enable trigger user');
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql','utf8'));
  await db.query('set role service_role');
  const limits={cumulativeTokens:240000,developmentTokens:180000,developmentCalls:24,
   assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
@@ -64,7 +68,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  assert.equal(offer.proposal.protectedCompletionTokens,60000);
  assert.equal(offer.proposal.checkpointSha,checkpoint);
  assert.ok(offer.digest);
- const auth=[owner,offer.digest,...args];
+ let auth=[owner,offer.digest,...args];
  await negative(db,()=>rpc(db,'task4a_postpaid_authorize',[randomUUID(),offer.digest,...args]),/TASK4A_POSTPAID_OWNER_CONSENT_DENIED/);
  await negative(db,()=>rpc(db,'task4a_postpaid_authorize',[owner,'0'.repeat(64),...args]),/TASK4A_POSTPAID_OWNER_CONSENT_DENIED/);
  await db.query('savepoint unverified_price');
@@ -76,6 +80,72 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query('release savepoint unverified_price');
  await db.query('set role service_role');
  assert.equal((await rpc(db,'task4a_postpaid_proposal',[release,checkpoint,snapshot,{...limits,cumulativeTokens:180000}])).ready,false);
+ // Recreate November 6's incorrect GENERIC lifecycle approval in this
+ // disposable Postgres fixture, preserving the prior paid grant and four calls.
+ // This is not a production repair and makes no provider/GitHub request.
+ await db.query('reset role');
+ const genericLimits={...limits,cumulativeTokens:180000,developmentTokens:120000,
+  developmentCalls:16,ceilingMicrousd:2520000,durationSeconds:86400};
+ await db.query(`insert into benchmark_lifecycle_proposals
+  (id,owner_id,task_id,project_id,snapshot_hash,fingerprint,proposal,checkpoint,expires_at)
+  values($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '1 hour')`,
+  [wrongProposal,owner,task,project,'e'.repeat(64),wrongProposal,
+   JSON.stringify({version:'lifecycle-owner-proposal-v1',proposed:genericLimits}),
+   JSON.stringify({approvalId:approval,runId:'42102615797'})]);
+ await db.query(`insert into benchmark_native_spending_approvals(
+  id,owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,
+  max_tokens,deadline,project_id,mission_assignment_id,task_id,developer_authority,
+  previous_developer_approval_id,developer_proposal_id)
+  select $1,owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,
+   180000,now()+interval '24 hours',project_id,mission_assignment_id,task_id,
+   developer_authority||jsonb_build_object('limits',$2::jsonb,
+    'checkpoint',jsonb_build_object('approvalId',id,'runId','42102615797')),
+   id,$3 from benchmark_native_spending_approvals where id=$4`,
+  [wrong,JSON.stringify(genericLimits),wrongProposal,approval]);
+ await db.query(`insert into benchmark_lifecycle_decisions(
+   proposal_id,owner_id,decision,developer_approval_id)
+   values($1,$2,'approved',$3)`,[wrongProposal,owner,wrong]);
+ await db.query(`insert into project_events(id,project_id,event,data)
+   values($1,$2,'lifecycle_amendment_authorized',
+    jsonb_build_object('taskId',$3::uuid,'ownerId',$4::uuid,'approvalId',$5::uuid,
+     'previousApprovalId',$6::uuid,'proposalId',$7::text,'limits',$8::jsonb))`,
+   [wrongReceipt,project,task,owner,wrong,approval,wrongProposal,JSON.stringify(genericLimits)]);
+ await db.query("update benchmark_execution_grants set stopped_at=clock_timestamp() where developer_approval_id=$1",[approval]);
+ await db.query(`update work_projects set status='running',
+    deadline=(select deadline from benchmark_native_spending_approvals where id=$2)
+    where id=$1`,[project,wrong]);
+ await db.query(`update agent_missions set status='running',
+    deadline=(select deadline from project_continuation_authorizations
+      where id=task4a_current_continuation_id($1))
+    where id=$2`,[project,mission]);
+ await db.query("update mission_assignments set status='waiting_external' where id=$1",[task]);
+ await db.query(`update agent_tasks set status='dispatching',
+    external=(external-'developerReleaseSha')||
+     jsonb_build_object('developerApprovalId',$2::text,'lifecycleProposalId',$3::text)
+    where id=$1`,[task,wrong,wrongProposal]);
+ await db.query('set role service_role');
+ const conflict=await rpc(db,'task4a_postpaid_proposal',args);
+ assert.equal(conflict.ready,true,JSON.stringify(conflict));
+ assert.equal(conflict.proposal.mistakenGenericApproval.approvalId,wrong);
+ assert.equal(conflict.proposal.mistakenGenericApproval.receiptId,wrongReceipt);
+ assert.equal(conflict.proposal.settledTokens,49620);
+ assert.notEqual(conflict.digest,offer.digest,'Mistaken lifecycle record changes owner consent digest');
+ auth=[owner,conflict.digest,...args];
+ await negative(db,()=>rpc(db,'benchmark_lifecycle_decide',
+  [owner,task,wrongProposal,'approved',release]),/TASK4A_GENERIC_LIFECYCLE_FORBIDDEN/);
+ await negative(db,()=>rpc(db,'task4a_postpaid_authorize',
+  [randomUUID(),conflict.digest,...args]),/TASK4A_POSTPAID_OWNER_CONSENT_DENIED/);
+ await negative(db,()=>rpc(db,'task4a_postpaid_authorize',
+  [owner,offer.digest,...args]),/TASK4A_POSTPAID_OWNER_CONSENT_DENIED/);
+ await db.query('savepoint generic_expired');
+ await db.query('reset role');
+ await db.query("update benchmark_native_spending_approvals set deadline=now()-interval '1 second' where id=$1",[wrong]);
+ await db.query('set role service_role');
+ assert.equal((await rpc(db,'task4a_postpaid_proposal',args)).ready,false,
+  'Expired generic authority must never qualify for correction');
+ await db.query('rollback to savepoint generic_expired');
+ await db.query('release savepoint generic_expired');
+ await db.query('set role service_role');
  // Synthetic fixture is committed ONLY to the ephemeral isolated test server.
  await db.query('commit');
  const rivals=await Promise.all([connect(),connect()]);
@@ -91,6 +161,17 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal((await one(db,'select spent_tokens from benchmark_budget_accounts where id=$1',[account])).spent_tokens.toString(),'49620');
   assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,1);
   assert.equal((await one(db,'select status from agent_tasks where id=$1',[task])).status,'blocked');
+  assert.equal((await one(db,'select status from work_projects where id=$1',[project])).status,'blocked');
+  assert.equal((await one(db,'select status from agent_missions where id=$1',[mission])).status,'blocked');
+  assert.equal((await one(db,'select status from mission_assignments where id=$1',[task])).status,'failed');
+  const newApproval=(await one(db,"select (data->>'newApprovalId')::uuid as id from project_events where project_id=$1 and event='task4a_postpaid_owner_authorized'",[project])).id;
+  assert.equal((await one(db,'select previous_developer_approval_id from benchmark_native_spending_approvals where id=$1',[newApproval])).previous_developer_approval_id,wrong);
+  assert.ok((await one(db,'select revoked_at from benchmark_native_spending_approvals where id=$1',[wrong])).revoked_at,
+   'Generic approval remains auditable but is revoked by the owner's exact successor');
+  assert.equal((await one(db,'select count(*)::int n from project_events where id=$1',[wrongReceipt])).n,1);
+  assert.equal((await one(db,'select count(*)::int n from benchmark_lifecycle_decisions where proposal_id=$1 and decision=\'approved\'',[wrongProposal])).n,1);
+  const dates=await one(db,'select p.deadline project_deadline,m.deadline mission_deadline from work_projects p join agent_missions m on m.id=p.active_mission_id where p.id=$1',[project]);
+  assert.equal(String(dates.project_deadline),String(dates.mission_deadline));
   const successor=await one(db,'select a.* from project_continuation_authorizations a where a.id=task4a_current_continuation_id($1)',[project]);
   assert.equal(Number(successor.assessment_reserve_tokens),60000);
   assert.equal(Number(successor.completion_reserve_tokens),60000);
