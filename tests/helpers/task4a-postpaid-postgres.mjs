@@ -114,10 +114,12 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  // Recreate November 6's incorrect GENERIC lifecycle approval in this
  // disposable Postgres fixture, preserving the prior paid grant and four calls.
  // This is not a production repair and makes no provider/GitHub request.
- // The existing approval-decision trigger is deferred: write the synthetic
- // approval, exact owner decision and audit receipt in ONE transaction.
+ // The parent disposable fixture is already inside a transaction, and a
+ // previous negative test explicitly switched this constraint to IMMEDIATE.
+ // Restore DEFERRABLE mode for the historical approval+owner decision pair;
+ // force it IMMEDIATE after all evidence is written to prove the real guard.
  // No constraint triggers are disabled or bypassed.
- await db.query('begin');
+ await db.query('set constraints developer_approval_decision deferred');
  await db.query('reset role');
  const genericLimits={...limits,cumulativeTokens:180000,developmentTokens:120000,
   developmentCalls:16,ceilingMicrousd:2520000,durationSeconds:86400};
@@ -145,6 +147,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
     jsonb_build_object('taskId',$3::uuid,'ownerId',$4::uuid,'approvalId',$5::uuid,
      'previousApprovalId',$6::uuid,'proposalId',$7::text,'limits',$8::jsonb))`,
    [wrongReceipt,project,task,owner,wrong,approval,wrongProposal,JSON.stringify(genericLimits)]);
+ await db.query('set constraints developer_approval_decision immediate');
  await db.query("update benchmark_execution_grants set stopped_at=clock_timestamp() where developer_approval_id=$1",[approval]);
  await db.query(`update work_projects set status='running',
     deadline=(select deadline from benchmark_native_spending_approvals where id=$2)
