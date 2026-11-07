@@ -112,8 +112,8 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
    No automatic retry is permitted.</p>:null}
   {status.state==='paid_authorized_pending_dispatch'?<p role="alert">
    The bounded PAID execution consent is already recorded. Original issue #969 has NOT been dispatched.
-   No further owner approval or duplicate dispatch request is needed. The existing one-shot claim requires
-   reconciliation; do not click paid approval again.</p>:null}
+   Do not repeat the recorded paid approval. The one-shot dispatch claim must be reconciled
+   without an automatic retry. A changed production release SHA requires new explicit release-bound consent.</p>:null}
   {!status.authorityReceiptId?<div className="space-y-2">
    <p>Before a new owner approval, **both protected token reserves remain 60,000 each**.
     Native protected calls stay 4 assessment / 4 completion; project-level reserves stay 6 / 6.</p>
