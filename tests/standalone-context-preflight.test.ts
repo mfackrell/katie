@@ -64,7 +64,7 @@ test('native OpenAI Responses and Gemini counts operate on input and reject malf
   });
   const geminiCount=await countNativePreparedInput(google,async(url,init)=>{
     assert.equal(String(url),'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:countTokens');
-    assert.deepEqual(JSON.parse(String(init?.body)),{generateContentRequest:google.payload});
+    assert.deepEqual(JSON.parse(String(init?.body)),{generateContentRequest:{model:'models/gemini-2.5-pro',contents:google.payload.contents}});
     return Response.json({totalTokens:71});
   },{});
   assert.equal(geminiCount,71);
@@ -150,4 +150,47 @@ test('pre-dispatch context codes do not masquerade as paid provider failures, in
   const actualProviderError=Object.assign(new Error('provider rate limit'),{status:429,code:'rate_limit'});
   assert.equal(classifyGenerationFailure(actualProviderError),'provider');
   assert.equal(describeGenerationFailure(actualProviderError),'the provider rate-limited the request');
+});
+
+test('Gemini image counting preserves exact visual inputs but excludes uncountable output settings',async()=>{
+  const png=Buffer.alloc(24);Buffer.from([137,80,78,71,13,10,26,10]).copy(png);png.writeUInt32BE(1,16);png.writeUInt32BE(1,20);
+  const inline={inlineData:{mimeType:'image/png',data:png.toString('base64')}};
+  const system={role:'user',parts:[{text:'Keep this character visually consistent.'}]};
+  const contents=[{role:'user',parts:[{text:'Create a portrait'},inline]}];
+  const prepared=freezePreparedRequest('google','gemini-3.1-flash-image',
+    '/v1beta/models/gemini-3.1-flash-image:streamGenerateContent',
+    {contents,systemInstruction:system,generationConfig:{
+      responseModalities:['TEXT','IMAGE'],imageConfig:{imageSize:'1K'},maxOutputTokens:4096,
+    }});
+  const unchanged=prepared.serializedBody;
+  let counts=0;
+  const result=await countNativePreparedInput(prepared,async(url,init)=>{
+    counts++;
+    assert.equal(String(url),'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:countTokens');
+    const body=JSON.parse(String(init?.body));
+    assert.deepEqual(body,{generateContentRequest:{model:'models/gemini-3.1-flash-image',contents,systemInstruction:system}});
+    assert.equal('generationConfig' in body.generateContentRequest,false,'output settings cannot poison the input count');
+    assert.equal(new Headers(init?.headers).get('x-goog-api-key'),'fixture-not-a-real-key');
+    return Response.json({totalTokens:74004});
+  },{'x-goog-api-key':'fixture-not-a-real-key'});
+  assert.equal(result,74004);
+  assert.equal(counts,1,'only the free countTokens request was sent');
+  assert.equal(prepared.serializedBody,unchanged,'counting must not mutate the frozen paid request');
+  assert.equal(estimatePreparedRequest(prepared,PRICING_SNAPSHOT,{requestHash:prepared.hash,inputTokens:result!}).status,'estimated');
+});
+
+test('image context escalation rejects larger text models and permits only reviewed image-generation upgrades',()=>{
+  const image=getModelPrice('google','gemini-3.1-flash-image')!;
+  const biggerText={...image,model:'gemini-3.8-flash',maxContextTokens:1000000,
+    imageOutputNanoUsd:undefined,imageOutputTokensPerImage:undefined};
+  const biggerImage={...image,model:'gemini-3.2-pro-image',maxContextTokens:260000};
+  const pricing={...PRICING_SNAPSHOT,models:[...PRICING_SNAPSHOT.models,biggerText,biggerImage]};
+  const original={provider:'google' as const,model:image.model,pricing,inputTokens:155000,
+    outputAllowance:5216};
+  assert.equal(selectContextCapacityUpgrade({...original,availableModels:['gemini-3.8-flash']}),null,
+    'the November 5 context bug must not select Gemini text in place of image generation');
+  assert.equal(selectContextCapacityUpgrade({...original,availableModels:['gemini-3.8-flash','gemini-3.2-pro-image']}),
+    'gemini-3.2-pro-image','a genuinely image-priced, larger-capacity model can be selected');
+  assert.equal(selectContextCapacityUpgrade({...original,availableModels:['gemini-3.2-pro-image'],inputTokens:259000}),null,
+    'a genuine image model must still fit full context');
 });

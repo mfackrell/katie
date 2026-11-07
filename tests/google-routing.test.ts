@@ -63,6 +63,9 @@ test("google thinking support is opt-in per model", async () => {
 
 test("google model capability helpers separate generation from analysis", async () => {
   assert.equal(isImageGenerationModel("nano-banana-pro-preview"), true);
+  assert.equal(isImageGenerationModel("gemini-3.1-flash-image"), true);
+  assert.equal(isImageGenerationModel("gemini-3.1-flash-lite-image"), true);
+  assert.equal(isVisionAnalysisModel("gemini-3.1-flash-image"), false);
   assert.equal(isImageGenerationModel("gemini-3-pro-image-preview"), false);
   assert.equal(isVisionAnalysisModel("gemini-3.1-pro"), true);
   assert.equal(isVisionAnalysisModel("gemini-3-pro-image-preview"), false);

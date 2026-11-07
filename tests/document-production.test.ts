@@ -296,7 +296,7 @@ test('document routing is explicit and ordinary text requests remain inert', () 
   for (const value of ['Hello Katie', 'Explain how PDF works', 'Review this PDF', "Don't create a PDF", 'Create a cash forecast in chat',
     'Summarize this PDF and give me the key risks', 'Review the attached PDF and make recommendations', 'Explain how to create a PDF', 'Make recommendations about the PDF']) assert.equal(documentRequest(value), null, value);
   const route = readFileSync('app/api/chat/route.ts', 'utf8');
-  assert.match(route, /if \(reviewMode === "always" \|\| documentProduction\) return/);
+  assert.match(route, /if \(reviewMode === "always" \|\| documentProduction \|\| imageGenerationRequested\) return/);
   assert.match(route, /if \(documentProduction && !reviewHasPendingClarification\)/);
   assert.match(route, /await import\('@\/lib\/documents\/service'\)/);
   assert.match(route, /documentProduction \? DOCUMENT_REVIEW_GUIDANCE/);

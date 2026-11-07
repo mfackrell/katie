@@ -13,6 +13,28 @@ on:
       - 'tests/helpers/task4a-pregrant-recovery-postgres.mjs'
       - 'supabase/migrations/20261103181500_task4a_pregrant_recovery.sql'
       - 'supabase/migrations/20261103225000_task4a_successor_continuation.sql'
+      - 'supabase/migrations/20261105144000_task4a_failed_dispatch_one_shot.sql'
+      - 'supabase/migrations/20261105173000_task4a_blocked_dispatch_owner_recovery.sql'
+      - 'supabase/migrations/20261105210000_task4a_separate_dispatch_paid_execution.sql'
+      - 'supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql'
+      - 'supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql'
+      - 'supabase/migrations/20261107035500_task4a_exact_watchdog_blocked_proposal.sql'
+      - 'supabase/migrations/20261107150000_task4a_owner_quote_validator_access.sql'
+      - 'supabase/migrations/20261107170000_task4a_exact_release_handoff.sql'
+      - 'tests/helpers/task4a-watchdog-state.mjs'
+      - 'app/api/projects/task4a-postpaid-continuation/route.ts'
+      - 'components/task4a-postpaid-continuation-approval.tsx'
+      - 'tests/helpers/task4a-postpaid-postgres.mjs'
+      - 'tests/task4a-postpaid-owner.test.mjs'
+      - 'tests/task4a-postpaid-dispatch-preclaim.test.mjs'
+      - 'tests/task4a-release-handoff-owner.test.mjs'
+      - 'tests/task4a-conflicting-owner-ui.test.mjs'
+      - 'app/api/projects/task4a-blocked-dispatch/route.ts'
+      - 'components/task4a-blocked-dispatch-owner-approval.tsx'
+      - 'tests/task4a-blocked-dispatch-owner.test.mjs'
+      - 'app/api/projects/task4a-failed-dispatch/route.ts'
+      - 'components/task4a-failed-dispatch-recovery-approval.tsx'
+      - 'tests/task4a-separated-paid-owner.test.mjs'
       - 'app/api/projects/task4a-successor/route.ts'
       - 'components/task4a-successor-owner-approval.tsx'
       - 'tests/task4a-successor-owner.test.mjs'
@@ -58,7 +80,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
-      QUALIFICATION_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      QUALIFICATION_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,6 +121,18 @@ jobs:
         run: node --experimental-test-isolation=none --test tests/task4a-native-owner-recovery.test.mjs
       - name: Verify successor preview and affirmative owner consent endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-successor-owner.test.mjs
+      - name: Verify owner-governed blocked dispatch endpoint and distinct paid consent
+        run: node --experimental-test-isolation=none --test tests/task4a-blocked-dispatch-owner.test.mjs
+      - name: Verify two independent Task 4A owner decisions and negative API contract
+        run: node --experimental-test-isolation=none --test tests/task4a-separated-paid-owner.test.mjs
+      - name: Verify three separate same-task owner decisions and no unauthorized execution
+        run: node --experimental-test-isolation=none --test tests/task4a-postpaid-owner.test.mjs
+      - name: Verify Task 4A blocked paid preclaim, explicit pending state and no consent replay
+        run: node --experimental-test-isolation=none --test tests/task4a-postpaid-dispatch-preclaim.test.mjs
+      - name: Verify release-bound owner handoff without second spending grant or dispatch replay
+        run: node --experimental-test-isolation=none --test tests/task4a-release-handoff-owner.test.mjs
+      - name: Task 4A actual owner approval UI acceptance in headless Chromium
+        run: node --experimental-test-isolation=none --test tests/task4a-conflicting-owner-ui.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
@@ -108,6 +142,22 @@ jobs:
             sudo apt-get install -y postgresql-16
           fi
           test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Compile and validate FULL Task 4A conflict-recovery migration on isolated PostgreSQL BEFORE concurrency
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/conflict-migration-validation-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/conflict-migration-validation-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+            throw Error('Full conflict-recovery migration did not validate against disposable PostgreSQL');
+          console.log('Conflict migration full SQL validation: actual isolated PostgreSQL PASS, before concurrency tests');
+          NODE
       - name: Verify actual PostgreSQL lifecycle against fake Vercel edge
         env:
           KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
@@ -142,6 +192,91 @@ jobs:
             throw Error('Actual two-connection successor race qualification failed');
           console.log('Distinct PostgreSQL connections: exactly one successor grant and one audit event');
           NODE
+      - name: Exercise original Task 4A failed-dispatch consent race in actual isolated PostgreSQL
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_FAILED_DISPATCH_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-failed-dispatch-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-failed-dispatch-race-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+           throw Error('Actual two-connection Task 4A failed GitHub dispatch recovery race did not pass');
+          console.log('Original failure recovery: one consent, one claim, two real PostgreSQL connections, zero paid calls');
+          NODE
+
+      - name: Verify two independent paid/recovery owner decisions under real PostgreSQL concurrency
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_TWO_CONSENT_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-two-consent-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const report=JSON.parse(readFileSync('task4a-qualification/postgres-two-consent-race-report.json','utf8'));
+          if(!report.success||report.counts.tests!==1||report.counts.passed!==1||report.counts.failed||report.counts.cancelled||report.counts.skipped||report.counts.todo)
+            throw Error('Task 4A distinct recovery/paid authorization PostgreSQL qualification failed');
+          console.log('Independent recovery and paid owner consents: two real PostgreSQL connections, one dispatch claim, zero calls/grants');
+          NODE
+
+      - name: Exercise blocked original Task 4A owner renewal under two real PostgreSQL connections
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_BLOCKED_OWNER_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-owner-renewal-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-owner-renewal-race-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+           throw Error('Owner-governed blocked original Task 4A qualification did not pass');
+          console.log('Task 4A blocked recovery: one owner decision, one native successor, original claims unchanged, zero paid calls');
+          NODE
+
+      - name: Prove postpaid same-task succession and one-shot claim on two real PostgreSQL connections
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_POSTPAID_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-postpaid-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-postpaid-race-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+            throw Error('Task 4A postpaid same-task two-connection security qualification did not pass');
+          console.log('Task 4A postpaid owner and one-shot claim: real PostgreSQL PASS; synthetic calls only');
+          NODE
+
+      - name: Prove exact production watchdog-blocked owner proposal and two-connection recovery
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_WATCHDOG_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-watchdog-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-watchdog-race-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+            throw Error('Exact production watchdog-blocked Task 4A recovery / concurrency failed');
+          console.log('Exact watchdog events, blocked status, strict pricing and expiry, historical 49,620 tokens, two-connection owner consent: PASS');
+          NODE
+
       - name: Retain independently inspectable machine evidence
         if: always()
         uses: actions/upload-artifact@v4

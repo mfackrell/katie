@@ -17,7 +17,7 @@ function isGemini3Model(modelId: string): boolean {
 // Do not guess from the family name. Image-preview models are not image-analysis models.
 export function isImageGenerationModel(modelId: string): boolean {
   const normalizedModel = normalizeGoogleModelId(modelId).toLowerCase();
-  return normalizedModel.includes("banana") || normalizedModel === "gpt-image-1";
+  return normalizedModel.includes("banana") || normalizedModel === "gpt-image-1" || new Set(["gemini-3.1-flash-image","gemini-3.1-flash-lite-image","gemini-3-pro-image"]).has(normalizedModel);
 }
 
 // Vision analysis means the model can accept image input and answer about it.

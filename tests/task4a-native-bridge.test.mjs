@@ -10,6 +10,8 @@ import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract
 import {projectMarker,contractHash} from '../scripts/project-context.mjs';
 import {requireTask4aNativeGrant} from '../scripts/benchmark/task4a-native-gate.mjs';
 import {forwardAuthorizedModelRequest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
+import {createResponsesProvider} from '../scripts/benchmark/native-provider-receipts.mjs';
+import {nativeChildInterruptionRetryable} from '../scripts/benchmark/native-http-bridge.mjs';
 
 const id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const task='b1111111-1111-4111-8111-111111111111';
@@ -112,6 +114,62 @@ test('missing provider receipt cannot count as accepted execution',async()=>{
   assert.deepEqual(s.events.slice(0,3),['task4a_native_live','task4a_native_reserve','upstream']);
  }
 });
+
+test('Task4A: provider rejects unauthorized pinned model only AFTER financial reservation; no retry or fabricated receipt',async()=>{
+ for(const status of [401,403,404]){
+  const events=[];
+  let providerAttempts=0,receipts=0;
+  const upstream=createResponsesProvider({
+   apiKey:'synthetic-provider-denial-only-no-real-key',
+   fetchImpl:async(url,options)=>{
+    providerAttempts++;events.push('provider');
+    assert.equal(new URL(url).origin,'https://api.openai.com');
+    assert.equal(new URL(url).pathname,'/v1/responses');
+    assert.equal(options.method,'POST');
+    assert.equal(options.redirect,'error');
+    assert.equal(JSON.parse(options.body).model,'gpt-5.3-codex');
+    return {ok:false,status};
+   }
+  });
+  upstream.nonbillableFixture=true;
+  const db={rpc:async(name,args)=>{
+   events.push(name);
+   if(name==='task4a_native_live')return {data:true,error:null};
+   if(name==='task4a_native_reserve'){
+    assert.equal(args.p_model,'gpt-5.3-codex');
+    assert.ok(args.p_tokens>0);
+    return {data:'held-operation',error:null};
+   }
+   throw Error('Unexpected RPC '+name);
+  }};
+  await assert.rejects(forwardAuthorizedModelRequest({
+   db,grantToken:'x'.repeat(40),developerProjectId:id,trialId:null,task4a:true,
+   executionEpoch:1,model:'gpt-5.3-codex',upperTokens:120,
+   requestBody:{model:'gpt-5.3-codex',input:[],max_output_tokens:20},
+   upstream,providerNamespace:'openai-responses',
+   recordReceipt:async()=>{receipts++}
+  }),e=>e.message==='GATEWAY_UPSTREAM_UNCERTAIN'&&
+       e.operationId==='held-operation'&&e.cause?.message==='GATEWAY_PROVIDER_HTTP_'+status);
+  assert.deepEqual(events,['task4a_native_live','task4a_native_reserve','provider']);
+  assert.equal(providerAttempts,1,'No automatic extra provider attempts');
+  assert.equal(receipts,0,'No fabricated completion/settlement after denial');
+  assert.equal(nativeChildInterruptionRetryable({code:null,signal:'SIGKILL'},'upstream-uncertain'),false);
+ }
+});
+test('Task4A provider policy is explicit: catalog lookup is not inference authorization',()=>{
+ const sql=readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8');
+ assert.match(sql,/'mode','provider_enforced_at_responses_execution'/);
+ assert.match(sql,/'providerAuthorizationMode','provider_enforced_at_responses_execution'/);
+ assert.match(sql,/'modelLookupProvesInferencePermission',false/);
+ assert.match(sql,/'financialAdmissionBeforeProvider',true/);
+ assert.match(sql,/'providerDenialPolicy','fail_closed_hold_unresolved_no_automatic_retry'/);
+ assert.match(sql,/a\.model is distinct from 'gpt-5\.3-codex'/);
+ assert.match(sql,/price\.pricing_status is distinct from 'verified'/);
+ assert.match(sql,/assessment_reserve_tokens=60000/);
+ assert.match(sql,/completion_reserve_tokens=60000/);
+ assert.doesNotMatch(sql,/task4a_postpaid_model_eligible|task4a_credential_lookup/);
+});
+
 test('ordinary and benchmark modes retain their original RPCs',async()=>{
  for(const variant of [
   {trialId:null,developerProjectId:id,task4a:false,live:'developer_gateway_execution_live',reserve:'developer_native_reserve'},
