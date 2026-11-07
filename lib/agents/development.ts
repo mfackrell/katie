@@ -707,8 +707,39 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
   let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;
+  // The original post-paid owner consent deliberately leaves project/mission
+  // BLOCKED until task4a_postpaid_claim validates all three immutable receipts.
+  // Ordinary dispatch's scope loader requires RUNNING, making that claim
+  // unreachable. Permit a read-only PRE-CLAIM binding only for the one original
+  // Task 4A / saved-task / explicitly postpaid successor; all other tasks keep
+  // their existing running-project requirement.
+  const task4aPostpaidPreclaim=a.project_id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
+    a.task_id==='d0e41ff5-149e-4319-9e65-dcc605fb75da'&&
+    Boolean(a.previous_developer_approval_id)&&
+    a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1';
   try{
-   task=await readTask(a.task_id);c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
+   task=await readTask(a.task_id);
+   c=await getDevelopmentProjectContext(task.id,!task4aPostpaidPreclaim);
+   if(!c||c.projectId!==a.project_id)continue;
+   if(task4aPostpaidPreclaim){
+    // Never widen ordinary dispatch or use a stale/changed scope. This only
+    // admits inspection before the immutable SQL one-shot claim, which still
+    // enforces blocked/blocked/failed/blocked, owner digests and payment limits.
+    if(task.status!=='blocked')continue;
+    const [{data:p,error:pe},{data:j,error:je}]=await Promise.all([
+     db.from('work_projects').select('status,phase,approved_hash,approval_hash,active_mission_id')
+       .eq('id',a.project_id).maybeSingle<{status:string;phase:string;approved_hash:string|null;approval_hash:string|null;active_mission_id:string|null}>(),
+     db.from('mission_assignments').select('status,mission_id')
+       .eq('id',task.id).maybeSingle<{status:string;mission_id:string}>()
+    ]);
+    if(pe||je||!p||!j||p.status!=='blocked'||p.phase!=='development'||
+       p.approved_hash!==c.scopeHash||!p.approved_hash||p.approved_hash!==p.approval_hash||
+       p.active_mission_id!==j.mission_id||j.status!=='failed')continue;
+    const {data:m,error:me}=await db.from('agent_missions')
+      .select('status,project_id').eq('id',j.mission_id)
+      .maybeSingle<{status:string;project_id:string}>();
+    if(me||!m||m.status!=='blocked'||m.project_id!==a.project_id)continue;
+   }
    if(a.previous_developer_approval_id){
     // One pre-provider Task 4A gate failure has no WIP checkpoint to recover.
     // Only the separately owner-consented, immutable replacement approval
