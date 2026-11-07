@@ -64,6 +64,8 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
     assert.equal(url.searchParams.get('chatId'),originalChat);
     body=blockPrice?{state:'blocked_authority',reason:'fresh_official_model_pricing_required'}:
      stage===0?{state:'requires_owner_limits',reason:'explicit_owner_limits_required',evidence:{settledCalls:4,settledTokens:49620}}:
+     stage===3?{state:'paid_authorized_pending_dispatch',authorityReceiptId:'fixture-receipt',
+       redispatchReceiptId:'redispatch-receipt',paidReceiptId:'paid-receipt',dispatched:false,noAutomaticRetry:true}:
      {state:'pending_redispatch',ready:true,nextAction:'approveRedispatch',digest:'b'.repeat(64),authorityReceiptId:'fixture-receipt',proposal:{ownerId:'fixture-owner'}};
    }else{
     assert.equal(request.method(),'POST');
@@ -135,7 +137,17 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
   assert.equal(await page.getByText('Authoritative state changed or authentication failed. No consent assumed.').count(),0);
   assert.equal(posts.filter(p=>p.action==='approveAuthority').length,beforeRefresh,
    'Retrying quote must never retry financial consent');
+  // Once the paid receipt exists but the original issue was not dispatched,
+  // the owner must NOT see a second paid-consent button (the production bug).
+  stage=3;const priorPosts=posts.length;
+  await page.goto('http://localhost/owner-ui?chatId='+originalChat);
+  await page.getByText('The bounded PAID execution consent is already recorded.',{exact:false}).waitFor();
+  assert.equal(await page.getByRole('button',{name:/Separately authorize bounded PAID execution/}).count(),0);
+  assert.equal(await page.getByRole('button',{name:/Approve original issue redispatch/}).count(),0);
+  await page.getByRole('button',{name:'Refresh owner approval status'}).click();
+  await page.getByText('The bounded PAID execution consent is already recorded.',{exact:false}).waitFor();
+  assert.equal(posts.length,priorPosts,'Refresh never replays an already-recorded owner decision');
   assert.deepEqual(errors,[]);
-  console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: automatic quote, stale 403 recovery on Refresh, zero manual entry, no implicit consent');
+  console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: auto quote, denied preview recovery, paid receipt no replay, zero manual entry');
  }finally{await browser.close();}
 });

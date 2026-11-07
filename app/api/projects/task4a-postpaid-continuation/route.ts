@@ -89,6 +89,13 @@ export async function GET(request:NextRequest){
    authorityReceiptId:saved.authority?.id,redispatchReceiptId:saved.redispatch?.id,
    paidReceiptId:saved.paid?.id,claimReceiptId:saved.claim?.id,
    submittedReceiptId:saved.submitted?.id,noAutomaticRetry:true});
+  // A paid receipt already exists even when the later one-shot GitHub claim
+  // has not happened. Never render another consent button or retry a paid POST.
+  if(saved.paid)return reply({state:'paid_authorized_pending_dispatch',
+   authorityReceiptId:saved.authority?.id,redispatchReceiptId:saved.redispatch?.id,
+   paidReceiptId:saved.paid.id,originalIssue:969,
+   dispatchClaimed:false,dispatched:false,noAutomaticRetry:true,
+   reason:'Paid authority recorded; original issue dispatch not yet confirmed. Investigate the one-shot claim; do not reauthorize.'});
   if(saved.authority){
    const stage=saved.redispatch?'paid':'redispatch';
    const offer=await offerForStage(sha,stage);
