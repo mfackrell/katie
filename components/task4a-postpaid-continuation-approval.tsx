@@ -14,37 +14,55 @@ type Limits={cumulativeTokens:number;developmentTokens:number;assessmentTokens:6
  perCallMicrousd:1680000;ceilingMicrousd:number;durationSeconds:number};
 type Reply={accepted?:boolean;ready?:boolean;digest?:string;proposal?:Record<string,unknown>;
  error?:string;reason?:string;dispatchStatus?:string;dispatchAccepted?:boolean};
+// Previously agreed Task 4A ceiling, NOT a payment or dispatch authorization.
+// The authenticated server recomputes a fresh, evidence-bound quote and digest.
+const REQUESTED_LIMITS:Limits={
+ cumulativeTokens:289620,developmentTokens:229620,developmentCalls:16,
+ assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
+ perCallMicrousd:1680000,ceilingMicrousd:9000000,durationSeconds:14400
+};
+const quoteMatchesRequestedLimits=(proposal:Record<string,unknown>|undefined)=>{
+ const actual=proposal?.nativeLimits;
+ if(!actual||typeof actual!=='object'||Array.isArray(actual))return false;
+ return (Object.keys(REQUESTED_LIMITS) as (keyof Limits)[]).every(
+  key=>(actual as Record<string,unknown>)[key]===REQUESTED_LIMITS[key]);
+};
 export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
  const enabled=chatId===CHAT;
  const [status,setStatus]=useState<Status|null>(null),[quote,setQuote]=useState<Reply|null>(null);
  const [busy,setBusy]=useState(false),[message,setMessage]=useState('');
- const [tokens,setTokens]=useState(''),[development,setDevelopment]=useState('');
- const [calls,setCalls]=useState(''),[ceiling,setCeiling]=useState(''),[hours,setHours]=useState('');
  const refresh=useCallback(async()=>{
   if(!enabled)return;
-  const token=await ownerSessionBearer();if(!token)return;
+  const token=await ownerSessionBearer();
+  if(!token){setStatus({state:'owner_sign_in_required',reason:'Sign in as original owner to authorize Task 4A.'});setQuote(null);return;}
   try{
    const result=await fetch(endpoint+'?chatId='+CHAT,{
     headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(20000)});
    const data=await result.json() as Status;
+   if(!result.ok)throw Error(data.error??'Original owner evidence unavailable');
    setStatus(data);
-  }catch{setStatus({state:'evidence_required',error:'Owner evidence lookup unavailable'});}
+   setQuote(null);
+   // Prepare the established limits automatically. PREVIEW ONLY: no owner consent,
+   // paid API call, GitHub dispatch or new financial authority can occur here.
+   if(!data.authorityReceiptId&&data.state==='requires_owner_limits'&&
+      data.reason==='explicit_owner_limits_required'){
+    const previewResponse=await fetch(endpoint,{method:'POST',cache:'no-store',
+     headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+     body:JSON.stringify({action:'previewAuthority',limits:REQUESTED_LIMITS}),
+     signal:AbortSignal.timeout(25000)});
+    const preview=await previewResponse.json() as Reply;
+    if(!previewResponse.ok||!preview.ready||!preview.digest||
+       !quoteMatchesRequestedLimits(preview.proposal))
+     throw Error(preview.error??preview.reason??'Exact preapproved limits could not be quoted safely');
+    setQuote(preview);
+   }
+  }catch(error){
+   setQuote(null);
+   setStatus({state:'evidence_required',error:error instanceof Error?error.message:'Owner evidence lookup unavailable'});
+  }
  },[enabled]);
  useEffect(()=>{void refresh();},[refresh]);
- const numbers=():Limits=>{
-  if(![tokens,development,calls,ceiling,hours].every(v=>/^\d+(?:\.\d+)?$/.test(v)))
-   throw Error('Enter all five exact owner limits before previewing.');
-  const usd=Number(ceiling),time=Number(hours),money=Math.round(usd*1_000_000);
-  const candidate:Limits={cumulativeTokens:Number(tokens),developmentTokens:Number(development),
-   assessmentTokens:60000,completionTokens:60000,developmentCalls:Number(calls),
-   assessmentCalls:4,completionCalls:4,perCallMicrousd:1680000,
-   ceilingMicrousd:money,durationSeconds:Math.round(time*3600)};
-  if(!Number.isSafeInteger(candidate.cumulativeTokens)||!Number.isSafeInteger(candidate.developmentTokens)||
-   !Number.isSafeInteger(candidate.developmentCalls)||!Number.isSafeInteger(money)||
-   !Number.isSafeInteger(candidate.durationSeconds)||candidate.durationSeconds!==time*3600)
-   throw Error('Financial limits must be exact integers and time exact to the second.');
-  return candidate;
- };
+ const numbers=():Limits=>REQUESTED_LIMITS;
  const submit=async(action:'previewAuthority'|'approveAuthority'|'approveRedispatch'|'approvePaidInference')=>{
   if(busy)return;
   setBusy(true);setMessage('');
@@ -95,29 +113,23 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
    <p>Confirmed next-call shortfall: <strong>11,484 tokens</strong>.
     Additional native call minimum: <strong>4</strong>. Future development, review, repair,
     completion and Preview costs and duration are not yet estimable. The limits below are ceilings, not forecasts.</p>
-   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-    {([
-      ['Total cumulative tokens',tokens,setTokens,'At least 191484'],
-      ['Development tokens including completion',development,setDevelopment,'At least 131484'],
-      ['Development calls including completion',calls,setCalls,'At least 16'],
-      ['Cumulative dollar ceiling, USD',ceiling,setCeiling,'Exact dollars, e.g. 4.00'],
-      ['Execution window, hours from approval',hours,setHours,'Exact hours, maximum 48']
-     ] as const).map(([label,value,change,placeholder])=><label key={label} className="space-y-1">
-       <span>{label}</span>
-       <input type="text" inputMode="decimal" value={value} placeholder={placeholder}
-        className="w-full rounded border bg-transparent px-2 py-2"
-        onChange={ev=>{change(ev.currentTarget.value);setQuote(null);}}/>
-      </label>)}
+   <div className="rounded-lg border p-3 space-y-1" aria-label="Katie-prepared exact continuation limits">
+    <p className="font-semibold">Katie-prepared limits — no data entry</p>
+    <p><strong>240,000 additional tokens</strong> (289,620 cumulative including 49,620 already consumed)</p>
+    <p>Development tokens including completion: <strong>229,620</strong>; development calls: <strong>16</strong></p>
+    <p>Cumulative spending ceiling: <strong>$9.00</strong>; execution window: <strong>4 hours from consent</strong></p>
+    <p>Protected assessment and completion reserves: <strong>60,000 tokens each</strong> (4 native calls each)</p>
+    <p className="text-xs">These are maximum authorizations, not cost or completion forecasts. No authority is created until you explicitly approve.</p>
    </div>
-   {status.reason?<p role="status">Preflight: {status.reason}.</p>:null}
-   <button type="button" disabled={busy} className="rounded border px-3 py-2"
-    onClick={()=>void submit('previewAuthority')}>Preview exact limits — no charges</button>
+   {status.reason&&status.reason!=='explicit_owner_limits_required'?<p role="status">Preflight: {status.reason}.</p>:null}
+   {status.error?<p role="alert">{status.error}</p>:null}
    {quote?.ready&&quote.digest?<div className="space-y-2">
-    <p>Owner consent digest: <code className="break-all">{quote.digest}</code></p>
+    <p role="status">Katie verified the exact limits and saved work. This is a read-only quote, not an authorization.</p>
+    <details><summary>Owner consent digest</summary><code className="break-all">{quote.digest}</code></details>
     <details><summary>Review the complete evidence-bound authority</summary>
      <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(quote.proposal,null,2)}</pre></details>
     <button type="button" disabled={busy} className="rounded border px-3 py-2 font-semibold"
-     onClick={()=>void submit('approveAuthority')}>Approve exactly this authority — NO dispatch</button>
+     onClick={()=>void submit('approveAuthority')}>Authorize these exact limits — NO dispatch or paid inference</button>
    </div>:null}
   </div>:<div className="space-y-2">
     <p>Successor owner receipt: <code className="break-all">{status.authorityReceiptId}</code>.
