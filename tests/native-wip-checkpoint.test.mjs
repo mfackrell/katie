@@ -77,6 +77,18 @@ test('out-of-scope, protected configuration, symlink and secret writes never rea
  }
 });
 
+test('task-specific tests checkpoint inside approved source scope; repository tests remain forbidden',t=>{
+ const f=fixture(t),wip=createNativeWipCheckpointer(f.options);
+ f.file('app/pilot/page.tsx','export default function Page(){return null}');
+ f.file('app/pilot/probe.test.mjs','import assert from "node:assert/strict"; assert.ok(true);');
+ const saved=wip.save({phase:'implementation'}),refs=f.git('ls-remote','--tags','origin');
+ assert.match(f.git('show',saved.checkpointSha+':app/pilot/probe.test.mjs'),/assert/);
+ f.file('tests/task4a-preview-probe.browser.test.mjs','// outside approved paths');
+ assert.throws(()=>wip.save({phase:'implementation'}),/NATIVE_WIP_CHECKPOINT_DENIED/);
+ assert.equal(f.git('ls-remote','--tags','origin'),refs);
+ assert.equal(f.git('rev-parse','HEAD'),f.context.baseSha);
+});
+
 test('snapshot failure blocks admission and provider; unauthenticated requests cannot trigger snapshots',async t=>{
  let checkpoints=0,admissions=0,provider=0;
  const server=createNativeHttpBridge({db:{rpc:async()=>{admissions++;}},grantToken:'fixture-'.repeat(8),trialId:'trial',executionEpoch:1,
