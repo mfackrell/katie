@@ -6,7 +6,7 @@ const project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const mission='d3fd3d95-7287-4bfc-8c97-c105fde46c36';
 const task='d0e41ff5-149e-4319-9e65-dcc605fb75da';
 const checkpoint='8e53ce01693303fc50daf5da1567e93e725f9b2d';
-const release='d530aa94dd8d9c2bc442b43b324ace312d0d62b9';
+const release='2147b910ad7bba849e8f4de7cf91f36a3410595e';
 const snapshot='f'.repeat(64);
 const wrong='919a68f0-3fb9-423c-80f2-4a3a51407bf0';
 const wrongReceipt='3120cdbf-ec74-4f1a-b314-8ec3e0f0d0c1';
@@ -95,6 +95,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  assert.deepEqual(before,{proposal:false,decision:false},
   'Do not broaden protected lifecycle table INSERT privileges');
  await db.query(readFileSync('supabase/migrations/20261107150000_task4a_owner_quote_validator_access.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261107170000_task4a_exact_release_handoff.sql','utf8'));
  const access=(await db.query(`select
   has_function_privilege('service_role','public.developer_validate_limits(jsonb)','EXECUTE') as server,
   has_function_privilege('anon','public.developer_validate_limits(jsonb)','EXECUTE') as anonymous,
@@ -148,9 +149,9 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   return;
  }
  await db.query('set role service_role');
- const limits={cumulativeTokens:240000,developmentTokens:180000,developmentCalls:24,
+ const limits={cumulativeTokens:289620,developmentTokens:229620,developmentCalls:16,
   assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
-  perCallMicrousd:1680000,ceilingMicrousd:6000000,durationSeconds:14400};
+  perCallMicrousd:1680000,ceilingMicrousd:9000000,durationSeconds:14400};
  const args=[release,checkpoint,snapshot,limits];
  const offer=await rpc(db,'task4a_postpaid_proposal',args);
  assert.equal(offer.ready,true,JSON.stringify(offer));
@@ -313,10 +314,50 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal(await rpc(db,'task4a_postpaid_claim',[release]),false,'Paid approval missing');
   assert.equal((await rpc(db,'task4a_postpaid_authorize_paid',[owner,paid.digest,release])).authorized,true);
   await db.query('commit');
-  const claims=await Promise.all(rivals.map(c=>rpc(c,'task4a_postpaid_claim',[release])));
-  assert.equal(claims.filter(Boolean).length,1,'Only one one-shot claim');
-  assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[release])),true);
-  assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[release])),false);
+  const nextRelease='e'.repeat(40);
+  assert.equal((await rpc(db,'task4a_postpaid_paid_proposal',[nextRelease])).ready,false,
+   'Previously approved paid consent cannot silently bind a new executable SHA');
+  assert.equal(await rpc(db,'task4a_postpaid_claim',[nextRelease]),false,
+   'New executor cannot claim before separate owner release consent');
+  const handoff=await rpc(db,'task4a_postpaid_release_handoff_proposal',[nextRelease]);
+  assert.equal(handoff.ready,true,JSON.stringify(handoff));
+  assert.equal(handoff.proposal.priorReleaseSha,release);
+  assert.equal(handoff.proposal.paidDigest,paid.digest);
+  assert.equal(handoff.proposal.nativeLimits.ceilingMicrousd,9000000);
+  await db.query('begin');
+  await negative(db,()=>rpc(db,'task4a_postpaid_release_handoff_authorize',
+   [randomUUID(),handoff.digest,nextRelease]),/TASK4A_RELEASE_HANDOFF_CONSENT_DENIED/);
+  await negative(db,()=>rpc(db,'task4a_postpaid_release_handoff_authorize',
+   [owner,'0'.repeat(64),nextRelease]),/TASK4A_RELEASE_HANDOFF_CONSENT_DENIED/);
+  await db.query('commit');
+  const rivalHandoffs=await Promise.allSettled(rivals.map(c=>rpc(c,
+   'task4a_postpaid_release_handoff_authorize',[owner,handoff.digest,nextRelease])));
+  assert.equal(rivalHandoffs.filter(x=>x.status==='fulfilled'&&x.value.authorized).length,1,
+   'Exactly one release-bound owner handoff may commit under concurrent attempts');
+  assert.equal(rivalHandoffs.filter(x=>x.status==='rejected').length,1);
+  assert.equal((await rpc(db,'task4a_postpaid_release_handoff_authentic',[nextRelease])),true);
+  const paidNext=await rpc(db,'task4a_postpaid_paid_proposal',[nextRelease]);
+  assert.equal(paidNext.ready,true,JSON.stringify(paidNext));
+  assert.equal(paidNext.digest,paid.digest,
+   'Original signed paid consent must remain exactly unchanged');
+  assert.deepEqual(paidNext.proposal,paid.proposal,
+   'New executor must use the ORIGINAL signed paid proposal plus handoff, not forge paid consent');
+  const claims=await Promise.all(rivals.map(c=>rpc(c,'task4a_postpaid_claim',[nextRelease])));
+  assert.equal(claims.filter(Boolean).length,1,'Only one original-task dispatch claim');
+  const claim=await one(db,
+   "select data from project_events where project_id=$1 and event='task4a_postpaid_dispatch_claimed'",
+   [project]);
+  assert.equal(claim.data.releaseSha,nextRelease);
+  assert.ok(claim.data.releaseHandoffReceiptId);
+  assert.equal((await rpc(db,'task4a_postpaid_release_handoff_authentic',[nextRelease])),true);
+  assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[nextRelease])),true);
+  assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[nextRelease])),false);
+  assert.equal((await one(db,
+   "select count(*)::int n from project_events where project_id=$1 and event='task4a_postpaid_release_handoff_authorized'",
+   [project])).n,1);
+  assert.equal((await one(db,
+   "select count(*)::int n from project_events where project_id=$1 and event='task4a_postpaid_paid_authorized'",
+   [project])).n,1);
   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[account])).n,4);
   assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,1);
   console.log(watchdogMode
