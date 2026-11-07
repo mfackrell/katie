@@ -152,7 +152,7 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
    </div>:null}
   </div>:<div className="space-y-2">
     <p>Successor owner receipt: <code className="break-all">{status.authorityReceiptId}</code>.
-     The original task stays blocked until the next two independent owner decisions.</p>
+     {status.state!=='claimed_once'?'The original task stays blocked until its remaining separate owner decisions.':'The consumed original dispatch remains preserved.'}</p>
     {status.state==='release_handoff_recorded_pending_dispatch'?<p role="status">
      Release handoff: <code className="break-all">{status.handoffReceiptId}</code>.
      No duplicate approval or paid request is permitted.</p>:

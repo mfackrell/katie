@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import {loadRecoveryDiagnostics} from '../scripts/benchmark/native-wip-recovery.mjs';
 import {TASK4A_FAILED_RUN as c,authenticateTask4aFailedRun,task4aLinkedRecoveryTask,loadTask4aLinkedDiagnostics} from '../scripts/benchmark/task4a-failed-run-link.mjs';
 const task={id:c.taskId,external:{developerApprovalId:c.approvalId,task4aPostpaidDispatchClaimId:c.consumedClaimId,
  issueNumber:969,receipt:{run_id:c.failedRunId,outcome:'BLOCKED',pr_url:null,repository:'mfackrell/katie',issue_number:969}}};
@@ -67,4 +69,31 @@ test('missing link, changed original workflow, diagnostic substitution and corru
   {[`${root}/actions/runs/${c.originalRunId}/artifacts?per_page=100`]:{total_count:1,artifacts:[{...archive,id:123}]}},
   {[`${root}/actions/artifacts/13448824242/zip`]:Buffer.from('corrupted')}
  ])await assert.rejects(loadTask4aLinkedDiagnostics({task,evidence,github:reader(overrides)}),/DENIED/);
+});
+
+test('actual native host requires an authentic replacement claim before selecting the older run',async()=>{
+ const evidence=await authenticateTask4aFailedRun({task,github:reader()});
+ const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+ const start=source.indexOf(' let linkedEvidence=null;'),end=source.indexOf(' // Authenticated diagnostics',start);
+ assert.ok(start>0&&end>start);
+ const block=source.slice(start,end);
+ const run=async({ready=true,postpaid=true,link=true}={})=>{
+  const current=structuredClone(task);
+  if(link){current.external.task4aReplacementClaimId='replacement-claim';current.external.task4aReplacementAuthorizationId='owner-receipt';}
+  const context={task:current,task4aHistory:{postpaid},project:{id:c.projectId},
+   process:{env:{GITHUB_SHA:'e'.repeat(40),GITHUB_REPOSITORY:'mfackrell/katie'}},
+   denied:reason=>{throw Error(reason);},
+   db:{rpc:async(name,args)=>{assert.equal(name,'task4a_replacement_authentic');assert.equal(args.p_release,'e'.repeat(40));return {data:ready,error:null};}},
+   readOne:async(table,column,value)=>{assert.equal(table,'project_events');assert.equal(column,'id');assert.equal(value,'owner-receipt');
+    return {event:'task4a_replacement_authorized',project_id:c.projectId,data:{proposal:{evidence}}};},
+   githubRecoveryReader:()=>reader(),loadTask4aLinkedDiagnostics,loadRecoveryDiagnostics,
+   priorRefs:[{}],wipContext:{},};
+  const result=await vm.runInNewContext('(async()=>{'+block+';return record;})()',context);
+  return result;
+ };
+ assert.equal((await run()).checkpointSha,c.checkpointSha);
+ await assert.rejects(run({ready:false}),/Exact replacement owner claim required/);
+ await assert.rejects(run({postpaid:false}),/only valid for original post-paid/);
+ await assert.rejects(run({link:false}),/missing, expired or ambiguous trusted diagnostics/);
+ assert.match(readFileSync('.github/workflows/autonomous-development.yml','utf8'),/native-wip-recovery,task4a-failed-run-link,/);
 });
