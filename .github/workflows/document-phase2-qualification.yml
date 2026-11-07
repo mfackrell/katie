@@ -6,9 +6,10 @@ on:
       - 'lib/documents/**'
       - 'lib/chat/task-progress.ts'
       - 'app/api/chat/route.ts'
-      - 'tests/document-phase*.test.ts'
+      - 'tests/document*.test.ts'
       - 'fixtures/documents/**'
       - 'scripts/document-phase*.mjs'
+      - 'scripts/document-font-investigation.mjs'
       - '.github/workflows/document-phase2-qualification.yml'
   workflow_dispatch:
 
@@ -41,6 +42,10 @@ jobs:
           ln -s .. .test-dist/node_modules/@
       - name: Regress original document production, accounting and secure delivery
         run: node --experimental-test-isolation=none --test .test-dist/tests/document-production.test.js
+      - name: Verify semantic escapes and actual strict PDF font minimum
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-markdown-escapes.test.js .test-dist/tests/document-content-font.test.js
+      - name: Trace computed CSS and actual PDF font operators without inference
+        run: node scripts/document-font-investigation.mjs
       - name: Phase 1 reproduction with actual generator
         run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase1-qualification.test.js
       - name: Phase 2 genuine document comparison and delivery contract
