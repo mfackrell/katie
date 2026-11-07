@@ -81,6 +81,19 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   await db.query('release savepoint task4a_validator_403');
  }
  await db.query('reset role');
+ // Match the second production denial before the authorized commit: these
+ // immutable lifecycle tables allow service_role SELECT but not direct INSERT.
+ // A narrow SECURITY DEFINER consent function is safer than granting general
+ // service_role INSERT on either table. All of this is disposable PostgreSQL.
+ await db.query('alter table public.benchmark_lifecycle_proposals owner to postgres');
+ await db.query('alter table public.benchmark_lifecycle_decisions owner to postgres');
+ await db.query('alter function public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb) owner to postgres');
+ await db.query('revoke insert on public.benchmark_lifecycle_proposals,public.benchmark_lifecycle_decisions from public,anon,authenticated,service_role');
+ const before=(await db.query(`select
+   has_table_privilege('service_role','public.benchmark_lifecycle_proposals','INSERT') proposal,
+   has_table_privilege('service_role','public.benchmark_lifecycle_decisions','INSERT') decision`)).rows[0];
+ assert.deepEqual(before,{proposal:false,decision:false},
+  'Do not broaden protected lifecycle table INSERT privileges');
  await db.query(readFileSync('supabase/migrations/20261107150000_task4a_owner_quote_validator_access.sql','utf8'));
  const access=(await db.query(`select
   has_function_privilege('service_role','public.developer_validate_limits(jsonb)','EXECUTE') as server,
@@ -88,7 +101,18 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   has_function_privilege('authenticated','public.developer_validate_limits(jsonb)','EXECUTE') as client`)).rows[0];
  assert.deepEqual(access,{server:true,anonymous:false,client:false},
   'Only the trusted service role may call the immutable limits validator');
- console.log('TASK4A_OWNER_QUOTE_POSTGRES_403_REPRODUCED_AND_SERVICE_ROLE_ONLY_GRANT_VERIFIED');
+ const approveAccess=(await db.query(`select
+  (select p.prosecdef and pg_get_userbyid(p.proowner)='postgres'
+     from pg_proc p where p.oid=to_regprocedure('public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)')) as definer,
+  has_function_privilege('service_role','public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)','EXECUTE') as server,
+  has_function_privilege('anon','public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)','EXECUTE') as anonymous,
+  has_function_privilege('authenticated','public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)','EXECUTE') as client,
+  has_table_privilege('service_role','public.benchmark_lifecycle_proposals','INSERT') as broad_proposal,
+  has_table_privilege('service_role','public.benchmark_lifecycle_decisions','INSERT') as broad_decision`)).rows[0];
+ assert.deepEqual(approveAccess,{definer:true,server:true,anonymous:false,client:false,
+  broad_proposal:false,broad_decision:false},
+  'Owner commit runs through exact trusted function, never general table INSERT');
+ console.log('TASK4A_OWNER_QUOTE_42501_REPRODUCED; TRUSTED_QUOTE_AND_CONSENT_EXECUTE_ONLY; LIFECYCLE_TABLE_INSERT_STILL_DENIED');
  await db.query('set role service_role');
  // Validate the ENTIRE install-only migration on a disposable PostgreSQL
  // instance, independently of owner-recovery and concurrency qualification.
