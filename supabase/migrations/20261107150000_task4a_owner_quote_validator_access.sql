@@ -14,3 +14,21 @@ revoke all on function public.developer_validate_limits(jsonb)
   from public, anon, authenticated;
 grant execute on function public.developer_validate_limits(jsonb)
   to service_role;
+
+-- The same authenticated post-paid owner commit currently runs SECURITY
+-- INVOKER but must insert immutable lifecycle proposal/decision rows.
+-- Those two tables deliberately prohibit service_role INSERT; do NOT open
+-- direct table writes to the backend. Run only this narrowly validated,
+-- original-task/digest-bound commit function as its postgres owner instead.
+-- All existing owner/price/scope/ledger/one-child checks stay unchanged.
+alter function public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)
+  security definer;
+alter function public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)
+  set search_path = pg_catalog, public, pg_temp;
+
+-- Keep the privileged commit entrypoint callable solely by the trusted
+-- service role. Signed-in browser clients are NOT allowed to call it.
+revoke all on function public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)
+  from public, anon, authenticated;
+grant execute on function public.task4a_postpaid_authorize(uuid,text,text,text,text,jsonb)
+  to service_role;
