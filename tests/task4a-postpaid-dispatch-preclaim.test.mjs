@@ -75,7 +75,10 @@ test('paid authorization already recorded: no second approval button or implicit
    assert.equal(table,'project_events');
    return {select:()=>({eq:()=>({in:()=>({returns:async()=>({data:records,error:null})})})})};
   },
-  rpc:async()=>{rpcs++;throw Error('Duplicate approvals must not call a new database RPC');}
+  rpc:async(name)=>{
+   rpcs++;assert.equal(name,'task4a_postpaid_release_handoff_proposal');
+   return{data:{ready:false,reason:'original_release_handoff_not_eligible'},error:null};
+  }
  };
  const {GET,POST}=modules({
   'next/server':{NextResponse:{json:(body,options)=>Response.json(body,options)}},
@@ -91,18 +94,20 @@ test('paid authorization already recorded: no second approval button or implicit
  const url='https://katie.local/api/projects/task4a-postpaid-continuation';
  try{
   const status=await(await GET(new Request(url+'?chatId='+originalChat))).json();
-  assert.equal(status.state,'paid_authorized_pending_dispatch');
+  assert.equal(status.state,'blocked_release_handoff');
   assert.equal(status.paidReceiptId,'paid-1');
   assert.equal(status.authorityReceiptId,'authority-1');
   assert.equal(status.redispatchReceiptId,'redispatch-1');
   assert.equal(status.noAutomaticRetry,true);
   assert.equal(status.dispatched,false);
   assert.equal(status.nextAction,undefined,'Already recorded paid receipt cannot show a second consent control');
-  assert.equal(rpcs,0);assert.equal(dispatches,0);
+  assert.equal(rpcs,1,'Read-only handoff quote must not create consent');
+  assert.equal(dispatches,0);
   const denied=await POST(new Request(url,{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({action:'approvePaidInference',confirm:true,digest:'c'.repeat(64)})}));
   assert.equal(denied.status,409);
-  assert.equal(rpcs,0);assert.equal(dispatches,0);
+  assert.equal(rpcs,1,'Read-only handoff quote must not create consent');
+  assert.equal(dispatches,0);
  }finally{
   for(const [key,value] of Object.entries({
    KATIE_OWNER_AUTH_USER_ID:old.owner,VERCEL_ENV:old.environment,VERCEL_GIT_COMMIT_SHA:old.sha
