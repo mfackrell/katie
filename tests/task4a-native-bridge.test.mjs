@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority} from '../scripts/benchmark/developer-dispatch-contract.mjs';
+import {classifyTask4aRecoveryHistory} from '../scripts/benchmark/ordinary-native-authority.mjs';
 import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract.mjs';
 import {projectMarker,contractHash} from '../scripts/project-context.mjs';
 import {requireTask4aNativeGrant} from '../scripts/benchmark/task4a-native-gate.mjs';
@@ -38,6 +39,38 @@ test('Task4A can never classify an unbound grant as ordinary development',()=>{
  assert.match(code,/classifyDeveloperDispatchAuthority\(c\.projectId,a\.developer_authority\)/);
  assert.match(code,/task4a_native_authority_ready/);
  assert.match(code,/if\(verified\.error\|\|verified\.data!==true\)continue/);
+});
+test('paid Task4A WIP never falls back to historical zero-call pregrant recovery',()=>{
+ const originalTask='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+ const nativeApproval='d1f7d69c-850f-4ce4-88de-a70d4222e157';
+ const original={authorityKind:'task4a-developer',projectId:id,taskId:originalTask,
+  approvalId:nativeApproval};
+ const inherited={id:nativeApproval,developer_authority:{
+  task4aRecovery:{version:'preinference-invalid-handoff-v1'},
+  task4aPostpaid:{version:'postpaid-same-task-v1',priorGrantId:'65ba2f60-2021-449e-8569-58a96b1695d8'}
+ }};
+ assert.deepEqual(classifyTask4aRecoveryHistory({proof:original,approval:inherited}),
+  {postpaid:true,pregrant:false},'Four paid calls and original WIP are not pregrant');
+ assert.deepEqual(classifyTask4aRecoveryHistory({proof:original,
+  approval:{...inherited,developer_authority:{...inherited.developer_authority,task4aPostpaid:undefined}}}),
+  {postpaid:false,pregrant:true},'Genuine earlier pregrant remains distinct');
+ for(const bad of [
+  {...original,projectId:randomUUID()},
+  {...original,taskId:randomUUID()},
+  {...original,authorityKind:'ordinary-developer'},
+  {...original,approvalId:randomUUID()}
+ ]){
+  const result=classifyTask4aRecoveryHistory({proof:bad,approval:inherited});
+  assert.equal(result.postpaid,false,'Foreign/mismatched source cannot claim postpaid WIP');
+ }
+ const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+ assert.match(host,/classifyTask4aRecoveryHistory\(\{proof,approval\}\)/);
+ assert.match(host,/if\(task4aHistory\.pregrant\)/);
+ assert.match(host,/if\(task4aHistory\.postpaid&&priorRefs\.length===0\)/);
+ assert.match(host,/loadRecoveryDiagnostics/);
+ assert.match(host,/validateRecoveryRecords/);
+ assert.match(host,/prepareRecovery/);
+ console.log('TASK4A_REAL_PAID_WIP_DISTINCT_FROM_PREGRANT_NEGATIVE_AND_POSITIVE_PASS');
 });
 test('Task4A handoff is signed separately and bound to original project and continuation',()=>{
  const signed=encodeDeveloperHandoff(proof,key);

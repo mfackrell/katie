@@ -1,5 +1,6 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
+import {Task4aReplacementApproval} from './task4a-replacement-approval';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 
 const CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
@@ -151,7 +152,7 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
    </div>:null}
   </div>:<div className="space-y-2">
     <p>Successor owner receipt: <code className="break-all">{status.authorityReceiptId}</code>.
-     The original task stays blocked until the next two independent owner decisions.</p>
+     {status.state!=='claimed_once'?'The original task stays blocked until its remaining separate owner decisions.':'The consumed original dispatch remains preserved.'}</p>
     {status.state==='release_handoff_recorded_pending_dispatch'?<p role="status">
      Release handoff: <code className="break-all">{status.handoffReceiptId}</code>.
      No duplicate approval or paid request is permitted.</p>:
@@ -171,6 +172,7 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
         onClick={()=>void submit('approvePaidInference')}>Separately authorize bounded PAID execution and one dispatch</button>}
     </div>:<p role="status">Pending consent: {status.reason??status.state}. No paid admission is authorized by a missing offer.</p>}
    </div>}
+  {status.state==='claimed_once'?<Task4aReplacementApproval/>:null}
   {message?<p role="status">{message}</p>:null}
   <button type="button" className="text-xs underline" disabled={busy} onClick={()=>void refresh(true)}>Refresh owner approval status</button>
  </section>;

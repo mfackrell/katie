@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {capacityProgress} from '../scripts/benchmark/native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from '../scripts/benchmark/native-development-lifecycle.mjs';
+import {classifyTask4aRecoveryHistory} from '../scripts/benchmark/ordinary-native-authority.mjs';
 const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
 // Exercise the host's actual lifecycle control with nonbillable phase/verifier doubles.
 const text=source.slice(source.indexOf(" const verifyCandidate="),source.indexOf(' if(!evidencePath'));
@@ -53,7 +54,7 @@ test('authenticated clean-baseline predecessor retains bounded phase observation
  const start=source.indexOf('let recoveryPlan=null,priorCapacityObservations=[]'),end=source.indexOf('let latestCapacityForecast',start);
  assert.ok(start>=0&&end>start);
  const observations=Array.from({length:70},(_,i)=>({id:'settled-phase-'+i}));
- const context={priorRefs:[],task:{id:'original',external:{receipt:{outcome:'BLOCKED'}}},proof:{},wipContext:{baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40)},process:{env:{GITHUB_REPOSITORY:'synthetic/repository'}},githubRecoveryReader:()=>({}),loadRecoveryDiagnostics:async input=>{assert.equal(input.emptyBaselineSha,'a'.repeat(40));return {record:null,diagnostics:{capacityObservations:observations}};},recoveryCompletedEvidence:()=>assert.fail('No source checkpoint exists'),validateRecoveryRecords:()=>assert.fail('No source checkpoint exists'),prepareRecovery:()=>assert.fail('No source checkpoint exists')};
+ const context={classifyTask4aRecoveryHistory,approval:{},priorRefs:[],task:{id:'original',external:{receipt:{outcome:'BLOCKED'}}},proof:{},wipContext:{baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40)},process:{env:{GITHUB_REPOSITORY:'synthetic/repository'}},githubRecoveryReader:()=>({}),loadRecoveryDiagnostics:async input=>{assert.equal(input.emptyBaselineSha,'a'.repeat(40));return {record:null,diagnostics:{capacityObservations:observations}};},recoveryCompletedEvidence:()=>assert.fail('No source checkpoint exists'),validateRecoveryRecords:()=>assert.fail('No source checkpoint exists'),prepareRecovery:()=>assert.fail('No source checkpoint exists')};
  const run=()=>vm.runInNewContext('(async()=>{'+source.slice(start,end)+';return {recovery,capacityObservations};})()',context);
  const result=await run();assert.equal(result.recovery,null);assert.deepEqual(JSON.parse(JSON.stringify(result.capacityObservations)),observations.slice(-64));
  context.loadRecoveryDiagnostics=async()=>{throw Error('Untrusted predecessor artifact');};await assert.rejects(run(),/Untrusted predecessor artifact/);

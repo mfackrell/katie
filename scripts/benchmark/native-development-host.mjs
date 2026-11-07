@@ -1,5 +1,6 @@
+import {loadTask4aLinkedDiagnostics} from './task4a-failed-run-link.mjs';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
-import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity} from './ordinary-native-authority.mjs';
+import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
 import {recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
@@ -175,9 +176,11 @@ let recoveryPlan=null,priorCapacityObservations=[],priorRepairIterations=[],prio
 // from its unchanged baseline without a native WIP checkpoint. It had no
 // provider call or native source change; all ordinary failed tasks still
 // require the existing authenticated diagnostics and checkpoint recovery.
+const task4aHistory=classifyTask4aRecoveryHistory({proof,approval});
 let task4aPregrant=false;
-if(proof.authorityKind==='task4a-developer'&&
- approval.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
+if(task4aHistory.postpaid&&priorRefs.length===0)
+ denied('Post-paid Task 4A requires the existing authenticated WIP checkpoint');
+if(task4aHistory.pregrant){
  if(priorRefs.length)denied('Task 4A pregrant recovery unexpectedly contains native WIP');
  const {data,error}=await db.rpc('task4a_pregrant_redispatch_ready',{
   p_task:task.id,p_approval:approval.id
@@ -190,7 +193,20 @@ if(proof.authorityKind==='task4a-developer'&&
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant)){
- const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
+ let linkedEvidence=null;
+ if(task.external?.task4aReplacementClaimId){
+  if(!task4aHistory.postpaid)denied('Replacement is only valid for original post-paid Task 4A');
+  const ready=await db.rpc('task4a_replacement_authentic',{p_release:process.env.GITHUB_SHA});
+  if(ready.error||ready.data!==true)denied('Exact replacement owner claim required');
+  const receipt=await readOne('project_events','id',task.external.task4aReplacementAuthorizationId);
+  if(receipt.event!=='task4a_replacement_authorized'||receipt.project_id!==project.id)
+   denied('Replacement provenance unavailable');
+  linkedEvidence=receipt.data?.proposal?.evidence;
+ }
+ const historicalReader=githubRecoveryReader(process.env.GITHUB_REPOSITORY);
+ const {record,diagnostics:priorDiagnostics}=linkedEvidence
+  ?await loadTask4aLinkedDiagnostics({task,evidence:linkedEvidence,github:historicalReader})
+  :await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:historicalReader,emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
  // Authenticated diagnostics may carry measured history even when the accepted
  // predecessor stopped at the clean baseline and has no source to restore.
  // Capacity adapters still validate every observation against settled receipts.

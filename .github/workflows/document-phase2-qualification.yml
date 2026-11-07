@@ -12,6 +12,8 @@ on:
       - 'scripts/document-phase*.mjs'
       - 'scripts/document-font-investigation.mjs'
       - 'scripts/document-page-continuity.mjs'
+      - 'scripts/document-cross-render-investigation.py'
+      - 'tests/document-cross-render-policy.test.py'
       - '.github/workflows/document-phase2-qualification.yml'
   workflow_dispatch:
 
@@ -67,6 +69,10 @@ jobs:
           command -v soffice
       - name: Cross-render geometry and continuity
         run: node scripts/document-phase1-word-acceptance.mjs
+      - name: Separate explicit page constraints from measured cross-render parity
+        run: |
+          python3 tests/document-cross-render-policy.test.py
+          python3 scripts/document-cross-render-investigation.py --docx test-artifacts/documents/phase1/business-agreement.docx --metadata test-artifacts/documents/phase1/business-agreement.json --office ci-office=/usr/bin/soffice --output test-artifacts/documents/cross-render
       - name: Preserve real DOCX and independent office rendered pages
         if: always()
         uses: actions/upload-artifact@v4
