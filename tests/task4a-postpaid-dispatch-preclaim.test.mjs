@@ -45,11 +45,11 @@ test('ordinary dispatch rejects a blocked project, while the original paid precl
  const end=native.indexOf('const client=github()',start);
  assert.ok(start>0&&end>start);
  const fenced=native.slice(start,end);
- assert.match(fenced,/a\\.project_id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'/);
- assert.match(fenced,/a\\.task_id==='d0e41ff5-149e-4319-9e65-dcc605fb75da'/);
- assert.match(fenced,/Boolean\\(a\\.previous_developer_approval_id\\)/);
- assert.match(fenced,/task4aPostpaid\\?\\.version==='postpaid-same-task-v1'/);
- assert.match(fenced,/getDevelopmentProjectContext\\(task.id,!task4aPostpaidPreclaim\\)/);
+ assert.match(fenced,/a\.project_id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'/);
+ assert.match(fenced,/a\.task_id==='d0e41ff5-149e-4319-9e65-dcc605fb75da'/);
+ assert.match(fenced,/Boolean\(a\.previous_developer_approval_id\)/);
+ assert.match(fenced,/task4aPostpaid\?\.version==='postpaid-same-task-v1'/);
+ assert.match(fenced,/getDevelopmentProjectContext\(task.id,!task4aPostpaidPreclaim\)/);
  assert.match(fenced,/task.status!=='blocked'/);
  assert.match(fenced,/p.status!=='blocked'/);
  assert.match(fenced,/j.status!=='failed'/);
