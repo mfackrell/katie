@@ -1,6 +1,7 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
+import {Task4aCapacityExecutionApproval} from '@/components/task4a-capacity-execution-approval';
 const endpoint='/api/projects/task4a-capacity';
 type Status={state?:string;ready?:boolean;digest?:string;proposal?:unknown;result?:{deadline?:string};error?:string;reason?:string};
 export function Task4aCapacityApproval(){
@@ -32,7 +33,8 @@ export function Task4aCapacityApproval(){
   {status.ready&&status.digest?<>
    <details><summary>Review the capacity-only decision</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(status.proposal,null,2)}</pre></details>
    <button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={()=>void approve()}>Approve capacity amendment only</button>
-  </>:<p role="status">{status.error??status.reason??(status.state==='capacity_authorized_execution_blocked'?'Capacity approved. Execution remains blocked.':status.state)} {status.result?.deadline?`Deadline: ${status.result.deadline}`:''}</p>}
+  </>:<p role="status">{status.error??status.reason??(status.state==='capacity_authorized_execution_blocked'?'Capacity amendment recorded.':status.state)} {status.result?.deadline?`Deadline: ${status.result.deadline}`:''}</p>}
+  {status.state==='capacity_authorized_execution_blocked'?<Task4aCapacityExecutionApproval/>:null}
   {message?<p role="status">{message}</p>:null}
   <button type="button" disabled={busy} className="text-xs underline" onClick={()=>void refresh()}>Refresh capacity evidence</button>
  </div>;

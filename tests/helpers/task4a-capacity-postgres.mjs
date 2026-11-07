@@ -46,6 +46,7 @@ export async function verifyTask4aCapacityPostgres(db,{connect,owner,account,app
  const ledgers=async()=>({calls:(await db.query('select to_jsonb(c) c from benchmark_budget_calls c where account_id=$1 order by id',[account])).rows,exposures:(await db.query('select to_jsonb(e) e from benchmark_dollar_exposures e where account_id=$1 order by call_id',[account])).rows,grants:(await db.query('select to_jsonb(g) g from benchmark_execution_grants g where account_id=$1 order by id',[account])).rows});
  const ledgerBefore=await ledgers();
  await db.query('set role service_role');
+ assert.equal(await rpc(db,'task4a_postpaid_grant_ready',[approval,release]),false,'Historical fallback remains callable and safely denies stale authority');
  const offer=await rpc(db,'task4a_capacity_proposal',[release,checkpoint]);assert.equal(offer.ready,true,JSON.stringify(offer));
  assert.equal((await one(db,"select prosecdef v from pg_proc where oid='public.task4a_capacity_authorize(uuid,text,text,jsonb)'::regprocedure")).v,true,'Consent uses narrow privileged RPC');
  for(const table of ['benchmark_lifecycle_proposals','benchmark_lifecycle_decisions'])assert.equal((await one(db,"select has_table_privilege('service_role',$1,'INSERT') v",[table])).v,false,'No broad lifecycle INSERT permission');
@@ -114,5 +115,64 @@ export async function verifyTask4aCapacityPostgres(db,{connect,owner,account,app
   await denied(db,()=>rpc(db,'developer_issue_execution_grant',[result.approvalId,task,'b'.repeat(64),release]),/CAPACITY_ONLY_EXECUTION_FORBIDDEN/);
   await db.query('rollback');
   console.log('TASK4A_CAPACITY_ONLY_REAL_POSTGRES_TWO_CONNECTION_CONSENT_AND_EXECUTION_DENIAL_PASS');
+  const execution=await rpc(db,'task4a_capacity_execution_proposal',[release]);
+  assert.equal(execution.ready,true,JSON.stringify(execution));
+  assert.equal(execution.proposal.approvalId,result.approvalId);assert.equal(execution.proposal.deadline,result.deadline);
+  assert.equal(await rpc(db,'task4a_capacity_execution_claim',[release]),false,'Capacity receipt cannot claim execution');
+  assert.equal((await rpc(db,'task4a_capacity_execution_proposal',['a'.repeat(40)])).ready,false);
+  await db.query('begin');
+  await denied(db,()=>rpc(db,'task4a_capacity_execution_authorize',[randomUUID(),execution.digest,release]),/CONSENT_DENIED/);
+  await denied(db,()=>rpc(db,'task4a_capacity_execution_authorize',[owner,'0'.repeat(64),release]),/CONSENT_DENIED/);
+  await denied(db,()=>rpc(db,'task4a_capacity_execution_authorize',[owner,execution.digest,'a'.repeat(40)]),/CONSENT_DENIED/);
+  for(const [sql,args] of [
+   ["update benchmark_budget_calls set state='uncertain' where id=(select id from benchmark_budget_calls where account_id=$1 limit 1)",[account]],
+   ["update work_projects set deadline=now()-interval '1 second' where id=$1",[project]],
+   ["update agent_missions set routing_calls=1 where id=$1",[mission]],
+   ["update benchmark_dollar_exposures set exposure_microusd=exposure_microusd+1 where call_id=(select call_id from benchmark_dollar_exposures where account_id=$1 limit 1)",[account]]
+  ]){
+   await db.query('savepoint execution_changed');await db.query('reset role');await db.query(sql,args);await db.query('set role service_role');
+   assert.equal((await rpc(db,'task4a_capacity_execution_proposal',[release])).ready,false,sql);
+   await denied(db,()=>rpc(db,'task4a_capacity_execution_authorize',[owner,execution.digest,release]),/CONSENT_DENIED/);
+   await db.query('rollback to savepoint execution_changed');await db.query('release savepoint execution_changed');
+  }
+  await db.query('commit');
+  for(const c of clients)await c.query('set role service_role');
+  const consents=await Promise.allSettled(clients.map(c=>rpc(c,'task4a_capacity_execution_authorize',[owner,execution.digest,release])));
+  assert.equal(consents.filter(x=>x.status==='fulfilled').length,1,'Exactly one separate execution decision');
+  assert.equal(consents.filter(x=>x.status==='rejected').length,1);
+  assert.equal(await rpc(db,'task4a_capacity_execution_authorized',[release]),true);
+  assert.equal(await rpc(db,'task4a_capacity_execution_ready',[result.approvalId,release]),false,'Execution consent alone is not a claim');
+  assert.equal(await rpc(db,'developer_claim_dispatch',[result.approvalId,release]),false,'Generic path stays forbidden even after separate consent');
+  await db.query('begin');
+  await denied(db,()=>rpc(db,'developer_issue_execution_grant',[result.approvalId,task,'c'.repeat(64),release]),/dispatch binding/);
+  await db.query('commit');
+  const claims=await Promise.all(clients.map(c=>rpc(c,'task4a_capacity_execution_claim',[release])));
+  assert.equal(claims.filter(Boolean).length,1,'Two actual PostgreSQL sessions consume one replacement claim');
+  assert.equal(await rpc(db,'task4a_capacity_execution_claim',[release]),false,'Uncertain external acceptance cannot retry claim');
+  assert.equal(await rpc(db,'task4a_capacity_execution_ready',[result.approvalId,release]),true);
+  assert.equal(await rpc(db,'task4a_capacity_execution_ready',[result.approvalId,'a'.repeat(40)]),false);
+  assert.equal(await rpc(db,'task4a_capacity_execution_ready',[approval,release]),false);
+  assert.equal(await rpc(db,'task4a_postpaid_grant_ready',[result.approvalId,release]),true);
+  assert.equal(await rpc(db,'task4a_capacity_execution_submitted',[release]),true);
+  assert.equal(await rpc(db,'task4a_capacity_execution_submitted',[release]),false);
+  await db.query('begin');await db.query('reset role');
+  for(const event of ['task4a_capacity_owner_authorized','task4a_capacity_execution_authorized','task4a_capacity_execution_claimed','task4a_capacity_execution_submitted']){
+   await denied(db,()=>db.query("update project_events set data='{}' where project_id=$1 and event=$2",[project,event]),/IMMUTABLE/);
+   await denied(db,()=>db.query('delete from project_events where project_id=$1 and event=$2',[project,event]),/IMMUTABLE/);
+  }
+  await db.query('rollback');await db.query('set role service_role');
+  const grants=await Promise.allSettled(clients.map((c,i)=>rpc(c,'developer_issue_execution_grant',[result.approvalId,task,String(i+5).repeat(64),release])));
+  assert.equal(grants.filter(x=>x.status==='fulfilled').length,1,JSON.stringify(grants));
+  assert.equal(grants.filter(x=>x.status==='rejected').length,1);
+  const winner=grants.findIndex(x=>x.status==='fulfilled');
+  assert.equal(await rpc(db,'developer_gateway_execution_live',[String(winner+5).repeat(64),project,grants[winner].value.executionEpoch]),true,'Exact separate owner receipt and claim permit actual native gateway');
+  assert.equal(await rpc(db,'developer_gateway_execution_live',[grant.token_digest,project,grant.execution_epoch]),false);
+  const finalLedger=await ledgers();assert.deepEqual(finalLedger.calls,ledgerBefore.calls);assert.deepEqual(finalLedger.exposures,ledgerBefore.exposures);
+  assert.equal(finalLedger.grants.length,ledgerBefore.grants.length+1,'One native grant without provider calls');
+  assert.equal((await one(db,'select deadline from benchmark_native_spending_approvals where id=$1',[result.approvalId])).deadline.getTime(),Date.parse(result.deadline));
+  assert.deepEqual((await one(db,'select to_jsonb(a) a from benchmark_native_spending_approvals a where id=$1',[approval])).a,before);
+  const oldIds=history.rows.map(x=>x.id);
+  assert.deepEqual((await db.query('select id,event,data from project_events where id=any($1::uuid[]) order by id',[oldIds])).rows,history.rows);
+  console.log('TASK4A_SEPARATE_EXECUTION_REAL_POSTGRES_TWO_CONNECTION_CONSENT_CLAIM_AND_NATIVE_GRANT_PASS');
  }finally{await Promise.allSettled(clients.map(c=>c.end()));}
 }

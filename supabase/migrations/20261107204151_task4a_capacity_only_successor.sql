@@ -1,9 +1,9 @@
 -- Install only. Capacity consent never authorizes dispatch, a grant or inference.
 create unique index task4a_capacity_one_successor on public.project_events(project_id,event)
- where event='task4a_capacity_owner_authorized';
+ where event in ('task4a_capacity_owner_authorized','task4a_capacity_execution_authorized','task4a_capacity_execution_claimed','task4a_capacity_execution_submitted');
 create function public.task4a_capacity_immutable() returns trigger language plpgsql set search_path=public as $$
 begin
- if old.event='task4a_capacity_owner_authorized' then raise exception 'TASK4A_CAPACITY_AUDIT_IMMUTABLE';end if;
+ if old.event in ('task4a_capacity_owner_authorized','task4a_capacity_execution_authorized','task4a_capacity_execution_claimed','task4a_capacity_execution_submitted') then raise exception 'TASK4A_CAPACITY_AUDIT_IMMUTABLE';end if;
  return case when tg_op='DELETE' then old else new end;
 end $$;
 create trigger task4a_capacity_immutable before update or delete on public.project_events
@@ -172,6 +172,7 @@ end $$;
 create function public.task4a_capacity_no_execution() returns trigger language plpgsql set search_path=public as $$
 begin
  if exists(select 1 from public.benchmark_native_spending_approvals where id=new.developer_approval_id and developer_authority ? 'task4aCapacityRenewal')
+  and not public.task4a_capacity_execution_ready(new.developer_approval_id,(select external->>'developerReleaseSha' from public.agent_tasks where id=new.mission_assignment_id))
  then raise exception 'TASK4A_CAPACITY_ONLY_EXECUTION_FORBIDDEN';end if;
  return new;
 end $$;
@@ -182,3 +183,155 @@ revoke all on function public.task4a_capacity_proposal(text,jsonb),public.task4a
  public.developer_claim_dispatch(uuid,text) from public,anon,authenticated,service_role;
 grant execute on function public.task4a_capacity_proposal(text,jsonb),public.task4a_capacity_authorize(uuid,text,text,jsonb),
  public.developer_claim_dispatch(uuid,text) to service_role;
+
+-- Dormant until a NEW, separately authenticated owner execution decision.
+-- Installing code or committing capacity consent cannot create this receipt.
+create function public.task4a_capacity_execution_proposal(p_release text)
+returns jsonb language plpgsql stable security invoker set search_path=public as $$
+declare e public.project_events;a public.benchmark_native_spending_approvals;t public.agent_tasks;
+ p public.work_projects;s public.project_continuation_authorizations;price public.model_registry;
+ plan jsonb;proposal jsonb;calls bigint;tokens bigint;held bigint;money numeric;
+begin
+ select * into e from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_owner_authorized';
+ plan:=e.data->'proposal';
+ select * into a from public.benchmark_native_spending_approvals where id=(e.data->'result'->>'approvalId')::uuid;
+ select * into t from public.agent_tasks where id=a.task_id;
+ select * into p from public.work_projects where id=a.project_id;
+ select * into s from public.project_continuation_authorizations where id=public.task4a_current_continuation_id(p.id);
+ select * into price from public.model_registry where provider_name='openai' and model_id='gpt-5.3-codex';
+ select count(*),coalesce(sum(actual_tokens),0),count(*) filter(where state<>'settled' or actual_tokens is null)
+ into calls,tokens,held from public.benchmark_budget_calls where account_id=a.account_id;
+ select coalesce(sum(exposure_microusd),0) into money from public.benchmark_dollar_exposures where account_id=a.account_id;
+ if e.id is null or a.id is null or t.id is distinct from 'd0e41ff5-149e-4319-9e65-dcc605fb75da'::uuid
+  or a.owner_id is distinct from public.task4a_original_owner_id(p.actor_id,p.chat_id)
+  or e.data->>'ownerId' is distinct from a.owner_id::text or a.consumed_at is not null or a.revoked_at is not null
+  or a.deadline<=clock_timestamp() or p.deadline is distinct from a.deadline or s.deadline is distinct from a.deadline
+  or s.revoked_at is not null or s.id::text is distinct from e.data->'result'->>'continuationId'
+  or a.developer_authority->>'task4aContinuationId' is distinct from s.id::text
+  or a.developer_authority->'task4aCapacityRenewal'->>'consentDigest' is distinct from e.data->>'consentDigest'
+  or a.developer_authority->'task4aCapacityRenewal'->>'version' is distinct from 'capacity-only-v1'
+  or a.developer_authority->'limits' is distinct from plan->'limits'
+  or a.developer_authority->'checkpoint' is distinct from plan->'checkpoint'
+  or a.developer_authority->>'releaseSha' is distinct from p_release or plan->>'releaseSha' is distinct from p_release
+  or coalesce(p_release,'')!~'^[a-f0-9]{40}$' or a.model is distinct from 'gpt-5.3-codex'
+  or p.approved_hash is distinct from plan->'checkpoint'->>'scopeHash' or p.approval_hash is distinct from p.approved_hash
+  or s.assessment_reserve_tokens<>60000 or s.completion_reserve_tokens<>60000 or s.assessment_reserve_calls<>6 or s.completion_reserve_calls<>6
+  or s.allowed_models is distinct from array['openai:gpt-5.3-codex']::text[]
+  or t.external->>'developerApprovalId' is distinct from a.id::text
+  or t.external->>'task4aCapacityConsentDigest' is distinct from e.data->>'consentDigest'
+  or t.external->>'task4aPostpaidDispatchClaimId' is distinct from 'f105fde0-1e35-4aaf-80c6-b80645701325'
+  or t.external->>'task4aReplacementClaimId' is distinct from '2cbdbff0-cc11-4dd8-8a62-95b0e8ae2534'
+  or t.external->'receipt'->>'run_id' is distinct from '42405698589' or t.external->'receipt'->>'outcome' is distinct from 'BLOCKED'
+  or calls<>8 or tokens<>102625 or held<>0 or money<>198756
+  or (select count(*) from public.benchmark_execution_grants where account_id=a.account_id)<>2
+  or exists(select 1 from public.benchmark_native_spending_approvals where previous_developer_approval_id=a.id)
+  or not exists(select 1 from public.benchmark_budget_accounts where id=a.account_id and frozen_at is null and spent_tokens=tokens
+    and arm='developer' and developer_task_id=t.id and developer_project_id=p.id)
+  or not exists(select 1 from public.agent_missions m join public.mission_assignments j on j.mission_id=m.id
+    join public.project_runs r on r.mission_id=m.id and r.project_id=p.id where m.id=p.active_mission_id and j.id=t.id
+    and m.project_id=p.id and m.calls=8 and m.routing_calls=0 and m.actual_tokens=102625 and m.reserved_tokens=102625
+    and m.deadline=a.deadline and r.binding=a.developer_authority->'binding' and p.completion_contract=a.developer_authority->'completionContract')
+  or price.is_active is distinct from true or price.pricing_status is distinct from 'verified'
+  or price.pricing_verified_at is null or price.pricing_verified_at not between clock_timestamp()-interval '24 hours' and clock_timestamp()
+  or price.pricing_input_per_1m is distinct from 1.75 or price.pricing_output_per_1m is distinct from 14
+  or price.source_metadata->>'pricing_verification_source' is distinct from 'https://developers.openai.com/api/docs/models/gpt-5.3-codex'
+ then return jsonb_build_object('ready',false,'reason','successor_execution_evidence_unavailable');end if;
+ proposal:=jsonb_build_object('version','task4a-capacity-execution-v1','ownerId',a.owner_id,'projectId',p.id,'taskId',t.id,
+  'approvalId',a.id,'continuationId',s.id,'capacityReceiptId',e.id,'capacityConsentDigest',e.data->>'consentDigest',
+  'releaseSha',p_release,'deadline',a.deadline,'checkpoint',plan->'checkpoint','checkpointDigest',plan->>'checkpointDigest',
+  'limits',a.developer_authority->'limits','settledCalls',calls,'settledTokens',tokens,'exposureMicrousd',money,
+  'remainingNativeTokens',66995,'remainingNativeCalls',8,'oneReplacementOnly',true,'noAutomaticRetry',true,
+  'noDeadlineExtension',true,'noProductionPublication',true,'draftPrAndProtectedPreviewOnly',true);
+ return jsonb_build_object('ready',true,'proposal',proposal,'digest',encode(sha256(convert_to(public.project_canonical(proposal),'UTF8')),'hex'));
+end $$;
+
+create function public.task4a_capacity_execution_authorize(p_owner uuid,p_digest text,p_release text)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare offer jsonb;receipt uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ offer:=public.task4a_capacity_execution_proposal(p_release);
+ if p_owner is null or offer->>'ready' is distinct from 'true' or offer->>'digest' is distinct from p_digest
+  or offer->'proposal'->>'ownerId' is distinct from p_owner::text
+  or exists(select 1 from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_execution_authorized')
+ then raise exception 'TASK4A_CAPACITY_EXECUTION_CONSENT_DENIED';end if;
+ insert into public.project_events(project_id,event,data) values('6d1c29f1-b31e-47a5-aabb-cbcf1326f388','task4a_capacity_execution_authorized',
+  jsonb_build_object('ownerId',p_owner,'consentDigest',p_digest,'proposal',offer->'proposal')) returning id into receipt;
+ return jsonb_build_object('authorized',true,'receiptId',receipt,'dispatched',false,'newPaidCalls',0);
+end $$;
+
+create function public.task4a_capacity_execution_authorized(p_release text)
+returns boolean language plpgsql stable security invoker set search_path=public as $$
+declare e public.project_events;offer jsonb;
+begin
+ select * into e from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_execution_authorized';
+ offer:=public.task4a_capacity_execution_proposal(p_release);
+ return coalesce(e.id is not null and offer->>'ready'='true' and e.data->>'consentDigest'=offer->>'digest'
+  and e.data->'proposal'=offer->'proposal' and e.data->>'ownerId'=offer->'proposal'->>'ownerId',false);
+end $$;
+
+create function public.task4a_capacity_execution_claim(p_release text)
+returns boolean language plpgsql security definer set search_path=public as $$
+declare e public.project_events;t public.agent_tasks;claim uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into t from public.agent_tasks where id='d0e41ff5-149e-4319-9e65-dcc605fb75da' for update;
+ if not public.task4a_capacity_execution_authorized(p_release)
+  or exists(select 1 from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_execution_claimed')
+  or t.status is distinct from 'blocked' or not exists(select 1 from public.work_projects p join public.agent_missions m on m.id=p.active_mission_id
+    join public.mission_assignments j on j.mission_id=m.id where p.id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'
+    and j.id=t.id and p.status='blocked' and m.status='blocked' and j.status='failed') then return false;end if;
+ select * into e from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_execution_authorized';
+ insert into public.project_events(project_id,event,data) values(e.project_id,'task4a_capacity_execution_claimed',
+  jsonb_build_object('authorizationId',e.id,'approvalId',e.data->'proposal'->>'approvalId','releaseSha',p_release,'consentDigest',e.data->>'consentDigest')) returning id into claim;
+ insert into public.project_events(project_id,event,data) values(e.project_id,'developer_native_dispatch_claimed',
+  jsonb_build_object('approvalId',e.data->'proposal'->>'approvalId','taskId',t.id,'releaseSha',p_release,'capacityExecutionClaimId',claim,'originalIssueNumber',969));
+ update public.work_projects set status='running',lease=null,lease_until=null,impediment=null,updated_at=clock_timestamp() where id=e.project_id;
+ update public.agent_missions set status='running',updated_at=clock_timestamp() where id='d3fd3d95-7287-4bfc-8c97-c105fde46c36';
+ update public.mission_assignments set status='waiting_external',lease=null,lease_until=null,available_at=clock_timestamp(),updated_at=clock_timestamp() where id=t.id;
+ update public.agent_tasks set status='dispatching',external=external||jsonb_build_object('developerReleaseSha',p_release,
+  'developerDispatchSince',clock_timestamp(),'dispatchStartedAt',clock_timestamp(),'task4aCapacityExecutionClaimId',claim),updated_at=clock_timestamp() where id=t.id;
+ return true;
+end $$;
+
+create function public.task4a_capacity_execution_ready(p_approval uuid,p_release text)
+returns boolean language plpgsql stable security invoker set search_path=public as $$
+declare e public.project_events;t public.agent_tasks;
+begin
+ select * into e from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_execution_claimed';
+ select * into t from public.agent_tasks where id='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+ return coalesce(public.task4a_capacity_execution_authorized(p_release) and e.id is not null
+  and e.data->>'approvalId'=p_approval::text and e.data->>'releaseSha'=p_release
+  and e.data->>'authorizationId'=(select id::text from public.project_events where project_id=e.project_id and event='task4a_capacity_execution_authorized')
+  and t.external->>'developerApprovalId'=p_approval::text and t.external->>'developerReleaseSha'=p_release
+  and t.external->>'task4aCapacityExecutionClaimId'=e.id::text and t.status in ('dispatching','submitted')
+  and exists(select 1 from public.work_projects p join public.agent_missions m on m.id=p.active_mission_id
+   join public.mission_assignments j on j.mission_id=m.id where p.id=e.project_id and j.id=t.id
+    and p.status='running' and m.status='running' and j.status='waiting_external'),false);
+end $$;
+
+alter function public.task4a_postpaid_grant_ready(uuid,text) rename to task4a_postpaid_grant_ready_before_capacity;
+create function public.task4a_postpaid_grant_ready(p_approval uuid,p_release text)
+returns boolean language plpgsql stable security definer set search_path=public as $$
+begin
+ if exists(select 1 from public.benchmark_native_spending_approvals where id=p_approval and developer_authority ? 'task4aCapacityRenewal')
+ then return public.task4a_capacity_execution_ready(p_approval,p_release);end if;
+ return public.task4a_postpaid_grant_ready_before_capacity(p_approval,p_release);
+end $$;
+create function public.task4a_capacity_execution_submitted(p_release text)
+returns boolean language plpgsql security definer set search_path=public as $$
+declare e public.project_events;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into e from public.project_events where project_id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388' and event='task4a_capacity_execution_claimed';
+ if e.id is null or e.data->>'releaseSha' is distinct from p_release or exists(select 1 from public.project_events where project_id=e.project_id and event='task4a_capacity_execution_submitted') then return false;end if;
+ insert into public.project_events(project_id,event,data) values(e.project_id,'task4a_capacity_execution_submitted',jsonb_build_object('claimId',e.id,'releaseSha',p_release,'acceptedByGithubApi',true));
+ return true;
+end $$;
+revoke all on function public.task4a_capacity_execution_proposal(text),public.task4a_capacity_execution_authorize(uuid,text,text),
+ public.task4a_capacity_execution_authorized(text),public.task4a_capacity_execution_claim(text),public.task4a_capacity_execution_ready(uuid,text),
+ public.task4a_capacity_execution_submitted(text),public.task4a_postpaid_grant_ready_before_capacity(uuid,text),public.task4a_postpaid_grant_ready(uuid,text)
+ from public,anon,authenticated,service_role;
+grant execute on function public.task4a_capacity_execution_proposal(text),public.task4a_capacity_execution_authorize(uuid,text,text),
+ public.task4a_capacity_execution_authorized(text),public.task4a_capacity_execution_claim(text),public.task4a_capacity_execution_ready(uuid,text),
+ public.task4a_capacity_execution_submitted(text),public.task4a_postpaid_grant_ready(uuid,text) to service_role;

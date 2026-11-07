@@ -21,7 +21,10 @@ export function classifyTask4aRecoveryHistory({proof,approval}){
 // is synthesized; the service snapshot authenticates the original project owner.
 export async function readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha}){
  const deny=()=>{throw Error('ORDINARY_NATIVE_AUTHORITY_DENIED');};
- if(approval?.developer_authority&&'task4aCapacityRenewal' in approval.developer_authority)deny();
+ if(approval?.developer_authority&&'task4aCapacityRenewal' in approval.developer_authority){
+  const consent=await db.rpc('task4a_capacity_execution_ready',{p_approval:approval.id,p_release:releaseSha});
+  if(consent.error||consent.data!==true)deny();
+ }
  // The native host independently rejects a legacy ordinary proof for the
  // original Task 4A project, even if the GitHub workflow gate were bypassed.
  if(project?.id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&proof?.authorityKind!=='task4a-developer')deny();

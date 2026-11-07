@@ -21,7 +21,7 @@ test('capacity-only owner route verifies latest evidence, accepts no financial e
  const route=modules({'next/server':{NextResponse:{json:(b,o)=>Response.json(b,o)}},
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>signed},
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
-  '@/lib/agents/development':{authenticatedLifecycleCheckpoint:async()=>{proofs++;return {record:checkpoint,checkpoint};},qualifiedOrdinaryDevelopmentRelease:async()=>head}
+  '@/lib/agents/development':{authenticatedTask4aCapacityCheckpoint:async()=>{proofs++;return {record:checkpoint,checkpoint};},qualifiedOrdinaryDevelopmentRelease:async()=>head}
  })('@/app/api/projects/task4a-capacity/route');
  const get=()=>route.GET(new Request('https://katie.local/api/projects/task4a-capacity?chatId=e53defeb-16eb-457e-aa07-435141165ee8'));
  const post=body=>route.POST(new Request('https://katie.local/api/projects/task4a-capacity',{method:'POST',body:JSON.stringify(body)}));
@@ -43,13 +43,13 @@ test('capacity-only owner route verifies latest evidence, accepts no financial e
 
 test('capacity-only successor is rejected before native authority or scheduler side effects',async()=>{
  let calls=0;
- await assert.rejects(readOrdinaryNativeAuthority({approval:{developer_authority:{task4aCapacityRenewal:{executionAuthorized:false}}},db:{rpc:async()=>{calls++;}}}),/ORDINARY_NATIVE_AUTHORITY_DENIED/);
- assert.equal(calls,0);
+ await assert.rejects(readOrdinaryNativeAuthority({approval:{developer_authority:{task4aCapacityRenewal:{executionAuthorized:false}}},db:{rpc:async()=>{calls++;return {data:false,error:null};}}}),/ORDINARY_NATIVE_AUTHORITY_DENIED/);
+ assert.equal(calls,1);
  const src=readFileSync('lib/agents/development.ts','utf8');
  const start=src.indexOf(' for(const a of rows.data){',src.indexOf('async function dispatchOrdinaryNativeDevelopment'));
  const end=src.indexOf('  if(onlyTaskId',start);
  assert.ok(start>0&&end>start);
  const code=src.slice(start,end)+'seen++;}';
- const context={rows:{data:[{developer_authority:{task4aCapacityRenewal:{executionAuthorized:false}}},{developer_authority:{version:'ordinary-developer-v1'}}]},seen:0};
+ const context={rows:{data:[{developer_authority:{task4aCapacityRenewal:{executionAuthorized:false}}},{developer_authority:{version:'ordinary-developer-v1'}}]},seen:0,capacityExecution:false};
  vm.runInNewContext(code,context);assert.equal(context.seen,1);
 });

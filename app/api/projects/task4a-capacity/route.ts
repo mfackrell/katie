@@ -2,9 +2,9 @@ import {NextRequest,NextResponse} from 'next/server';
 import {z} from 'zod';
 import {verifiedProjectOwnerSession} from '@/lib/projects/owner-authorization';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
-import {authenticatedLifecycleCheckpoint,qualifiedOrdinaryDevelopmentRelease} from '@/lib/agents/development';
+import {authenticatedTask4aCapacityCheckpoint,qualifiedOrdinaryDevelopmentRelease} from '@/lib/agents/development';
 export const runtime='nodejs';
-const PROJECT='6d1c29f1-b31e-47a5-aabb-cbcf1326f388',TASK='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+const PROJECT='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
 const input=z.object({action:z.literal('approveCapacityOnly'),confirm:z.literal(true),digest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'private, no-store'}});
@@ -17,7 +17,7 @@ async function receipt(){
  return r.data?.data;
 }
 async function quote(sha:string){
- const e=await authenticatedLifecycleCheckpoint(TASK);
+ const e=await authenticatedTask4aCapacityCheckpoint();
  if(e.record.checkpointSha!=='2667a81d4f18452e9ca59498c8805670b04cfe47'||e.checkpoint.releaseSha!=='3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0')throw Error('Latest checkpoint changed');
  const r=await getSupabaseAdminClient().rpc<Offer>('task4a_capacity_proposal',{p_release:sha,p_checkpoint:e.checkpoint});
  if(r.error||!r.data)throw Error('Capacity evidence unavailable');

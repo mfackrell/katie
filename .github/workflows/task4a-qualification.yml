@@ -15,6 +15,9 @@ on:
       - 'tests/helpers/task4a-capacity-postgres.mjs'
       - 'components/task4a-capacity-approval.tsx'
       - 'app/api/projects/task4a-capacity/**'
+      - 'app/api/projects/task4a-capacity-execution/**'
+      - 'components/task4a-capacity-execution-approval.tsx'
+      - 'tests/task4a-capacity-execution.test.mjs'
       - 'tests/helpers/task4a-replacement-postgres.mjs'
       - 'lib/projects/preview.ts'
       - 'tests/task4a-preview-security.test.mjs'
@@ -128,7 +131,7 @@ jobs:
       - name: Verify saved Task 4A specification repair and authenticated recovery endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-saved-specification-recovery.test.mjs
       - name: Verify exact failed-run link and replacement owner decision
-        run: node --experimental-test-isolation=none --test tests/task4a-failed-run-link.test.mjs tests/task4a-replacement-owner.test.mjs tests/task4a-capacity-owner.test.mjs
+        run: node --experimental-test-isolation=none --test tests/task4a-failed-run-link.test.mjs tests/task4a-replacement-owner.test.mjs tests/task4a-capacity-owner.test.mjs tests/task4a-capacity-execution.test.mjs
       - name: Verify Task 4A signed native gateway and unchanged legacy routes
         run: node --test tests/task4a-native-bridge.test.mjs
       - name: Verify original Task 4A owner-consented pregrant endpoint
