@@ -99,8 +99,9 @@ test('paid authorization already recorded: no second approval button or implicit
   assert.equal(status.authorityReceiptId,'authority-1');
   assert.equal(status.redispatchReceiptId,'redispatch-1');
   assert.equal(status.noAutomaticRetry,true);
-  assert.equal(status.dispatched,false);
-  assert.equal(status.nextAction,undefined,'Already recorded paid receipt cannot show a second consent control');
+  assert.equal(status.ready,false,'Unqualified release handoff cannot present an active approval');
+  assert.equal(status.nextAction,'approveReleaseHandoff',
+   'Paid consent cannot be reoffered: only a separately authenticated release handoff is eligible');
   assert.equal(rpcs,1,'Read-only handoff quote must not create consent');
   assert.equal(dispatches,0);
   const denied=await POST(new Request(url,{method:'POST',headers:{'Content-Type':'application/json'},
