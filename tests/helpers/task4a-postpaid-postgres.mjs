@@ -1,3 +1,4 @@
+import {verifyTask4aReplacementPostgres} from './task4a-replacement-postgres.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -314,7 +315,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal(await rpc(db,'task4a_postpaid_claim',[release]),false,'Paid approval missing');
   assert.equal((await rpc(db,'task4a_postpaid_authorize_paid',[owner,paid.digest,release])).authorized,true);
   await db.query('commit');
-  const nextRelease='e'.repeat(40);
+  const nextRelease='25363d8cd0906e7915c4e0aa6443142a95a76c20';
   assert.equal((await rpc(db,'task4a_postpaid_paid_proposal',[nextRelease])).ready,false,
    'Previously approved paid consent cannot silently bind a new executable SHA');
   assert.equal(await rpc(db,'task4a_postpaid_claim',[nextRelease]),false,
@@ -367,6 +368,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
    [project])).n,1);
   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[account])).n,4);
   assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,1);
+  await verifyTask4aReplacementPostgres(db,{connect,owner,account,approval:nativeApprovalId});
   console.log(watchdogMode
    ?'TASK4A_WATCHDOG_BLOCKED_TWO_CONNECTION_OWNER_CLAIM_POSTGRES_PASS'
    :'TASK4A_POSTPAID_TWO_CONNECTION_OWNER_CLAIM_POSTGRES_PASS');

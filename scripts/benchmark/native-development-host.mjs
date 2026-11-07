@@ -1,3 +1,4 @@
+import {loadTask4aLinkedDiagnostics} from './task4a-failed-run-link.mjs';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
 import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
@@ -192,7 +193,20 @@ if(task4aHistory.pregrant){
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant)){
- const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY),emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
+ let linkedEvidence=null;
+ if(task.external?.task4aReplacementClaimId){
+  if(!task4aHistory.postpaid)denied('Replacement is only valid for original post-paid Task 4A');
+  const ready=await db.rpc('task4a_replacement_authentic',{p_release:process.env.GITHUB_SHA});
+  if(ready.error||ready.data!==true)denied('Exact replacement owner claim required');
+  const receipt=await readOne('project_events','id',task.external.task4aReplacementAuthorizationId);
+  if(receipt.event!=='task4a_replacement_authorized'||receipt.project_id!==project.id)
+   denied('Replacement provenance unavailable');
+  linkedEvidence=receipt.data?.proposal?.evidence;
+ }
+ const historicalReader=githubRecoveryReader(process.env.GITHUB_REPOSITORY);
+ const {record,diagnostics:priorDiagnostics}=linkedEvidence
+  ?await loadTask4aLinkedDiagnostics({task,evidence:linkedEvidence,github:historicalReader})
+  :await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:historicalReader,emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
  // Authenticated diagnostics may carry measured history even when the accepted
  // predecessor stopped at the clean baseline and has no source to restore.
  // Capacity adapters still validate every observation against settled receipts.

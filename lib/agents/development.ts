@@ -1,3 +1,4 @@
+import {authenticateTask4aFailedRun,loadTask4aLinkedDiagnostics} from '../../scripts/benchmark/task4a-failed-run-link.mjs';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
@@ -99,7 +100,7 @@ function github() {
 
 // Nonbillable: authenticate Task 1 evidence before proposing/approving authority.
 // No provider request, dispatcher or mutation of historical recovery records.
-export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string){
+export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string,failedRunLink?:Record<string,unknown>){
  const task=await readTask(taskId),context=await getDevelopmentProjectContext(taskId);
  if(!context||!task.repository_full_name||(task.status!=='blocked'&&!(approvedContinuation&&task.status==='dispatching')))throw Error('A blocked original development task is required');
  const db=getSupabaseAdminClient(),client=github();
@@ -115,7 +116,7 @@ export async function authenticatedLifecycleCheckpoint(taskId:string,approvedCon
   if(/\/actions\/runs\/\d+$/.test(path))releaseSha=String(result.data.head_sha??'');
   return binary?Buffer.from(result.data as ArrayBuffer):result.data;
  };
- const {record,diagnostics}=await loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:reader});
+ const {record,diagnostics}=await (failedRunLink?loadTask4aLinkedDiagnostics({task,evidence:failedRunLink,github:reader}):loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:reader}));
  if(!record)throw Error('Authenticated checkpoint required');
  await validateRecoveryRecords({record,completedEvidence:recoveryCompletedEvidence(record,diagnostics),task,context,project,
   trialId:snap.data.snapshot.approval.trial_id,authorityKind:snap.data.authorityKind,accountId:snap.data.accountId,
@@ -131,6 +132,22 @@ export async function authenticatedLifecycleCheckpoint(taskId:string,approvedCon
  if(commit.data.tree.sha!==record.sourceTreeSha||commit.data.parents[0]?.sha!==record.completedCheckpointSha||
   digest(JSON.parse(commit.data.message))!==digest(metadata))throw Error('Checkpoint metadata differs');
  return {task,context,snapshot:snap.data,record,diagnostics,checkpoint:{...record,scopeHash:record.approvedScopeHash,runId:String(record.runId),releaseSha}};
+}
+
+// Read-only dual-run proof. Never rewrites the authoritative latest receipt.
+export async function authenticatedTask4aReplacementCheckpoint(){
+ const task=await readTask('d0e41ff5-149e-4319-9e65-dcc605fb75da');
+ const client=github();
+ const evidence=await authenticateTask4aFailedRun({task,github:async(path:string,binary=false)=>{
+  const r=await client.request('GET '+path);
+  return binary?Buffer.from(r.data as ArrayBuffer):r.data;
+ }});
+ const saved=await authenticatedLifecycleCheckpoint(task.id,'d1f7d69c-850f-4ce4-88de-a70d4222e157',evidence);
+ if(saved.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
+    String(saved.record.runId)!=='42102615797'||
+    saved.checkpoint.releaseSha!=='d530aa94dd8d9c2bc442b43b324ace312d0d62b9')
+  throw Error('Original dual-run WIP proof changed');
+ return {...saved,evidence:{...evidence,checkpointDigest:digest(saved.checkpoint)}};
 }
 
 export async function prepareLifecycleOwnerProposal(taskId:string){
@@ -691,7 +708,7 @@ export async function qualifiedOrdinaryDevelopmentRelease(){
  const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
  return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
 }
-async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
+async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
@@ -753,7 +770,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
       });
       if(error||ready!==true)continue;
     }else{
-      const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
+      const evidence=replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
       if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
         if(evidence.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
           digest(evidence.checkpoint)!==(a.developer_authority.checkpoint as {digest?:string}|undefined)?.digest)continue;
@@ -783,14 +800,27 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
-  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false;
+  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false,replacementClaimedDispatch=false;
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
    const priorBody=unpackDevelopmentRequest(existing.data.body??'');
    if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||
      !priorBody.startsWith(marker(task)+'\n'))continue;
-   if(postpaid){
+   if(postpaid&&replacement){
+     const evidence=await authenticatedTask4aReplacementCheckpoint();
+     const previous=readDeveloperHandoff(priorBody,key,0);
+     if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||
+       previous.projectId!==c.projectId||previous.approvalId!==a.id||
+       previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
+       previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
+       previous.releaseSha!=='25363d8cd0906e7915c4e0aa6443142a95a76c20')continue;
+     const ready=await db.rpc<boolean>('task4a_replacement_authorized',{
+       p_release:release,p_evidence:evidence.evidence
+     });
+     if(ready.error||ready.data!==true)continue;
+     replacementClaimedDispatch=true;
+   }else if(postpaid){
      const priorReceipt=task.external.receipt as {outcome?:string;run_id?:number;pr_url?:string|null}|undefined;
      if(issue!==969||priorReceipt?.outcome!=='BLOCKED'||priorReceipt.run_id!==42102615797||
        priorReceipt.pr_url!==null)continue;
@@ -936,7 +966,9 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
 
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
-  const claim=postpaidClaimedDispatch
+  const claim=replacementClaimedDispatch
+   ?await db.rpc('task4a_replacement_claim',{p_release:release})
+   :postpaidClaimedDispatch
    ?await db.rpc('task4a_postpaid_claim',{p_release:release})
    :recoveredClaimedDispatch
    ?await db.rpc('task4a_claim_failed_dispatch',{p_release:release})
@@ -947,7 +979,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string){
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
-   if(postpaidClaimedDispatch){
+   if(replacementClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_replacement_record_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('Replacement accepted but audit failed; no retry permitted');
+   }else if(postpaidClaimedDispatch){
     const sent=await db.rpc<boolean>('task4a_postpaid_record_submitted',{p_release:release});
     if(sent.error||sent.data!==true)throw Error('GitHub accepted same-task dispatch but audit failed; no retry allowed');
    }else if(recoveredClaimedDispatch){
@@ -973,6 +1008,10 @@ export async function dispatchTask4aFailedDispatchOnce(){
 export async function dispatchTask4aPostpaidOnce(){
  return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
 }
+export async function dispatchTask4aReplacementOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',true);
+}
+
 export async function dispatchOwnerRenewedNativeDevelopment() {
  if(await dispatchOrdinaryNativeDevelopment())return true;
  const release=process.env.VERCEL_GIT_COMMIT_SHA;
