@@ -7,9 +7,11 @@ on:
       - 'lib/chat/task-progress.ts'
       - 'app/api/chat/route.ts'
       - 'tests/document*.test.ts'
+      - 'tests/document*.test.mjs'
       - 'fixtures/documents/**'
       - 'scripts/document-phase*.mjs'
       - 'scripts/document-font-investigation.mjs'
+      - 'scripts/document-page-continuity.mjs'
       - '.github/workflows/document-phase2-qualification.yml'
   workflow_dispatch:
 
@@ -34,7 +36,9 @@ jobs:
       - name: Typecheck full code base
         run: npm run typecheck
       - name: Validate private acceptance runner syntax without reading private data
-        run: node --check scripts/document-phase2-private-acceptance.mjs
+        run: |
+          node --check scripts/document-phase2-private-acceptance.mjs
+          node --test tests/document-page-continuity.test.mjs
       - name: Compile offline qualification suites
         run: |
           node node_modules/typescript/bin/tsc -p tsconfig.tests.json

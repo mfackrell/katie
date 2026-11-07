@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync
 import { tmpdir } from 'node:os';
 import { resolve, sep, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { orderedBlockPages } from './document-page-continuity.mjs';
 const require = createRequire(import.meta.url);
 const repo = resolve(process.cwd());
 const [sourceArg, outputArg] = process.argv.slice(2);
@@ -107,7 +108,7 @@ try {
       throw Error(name+': actual PDF font, glyph order or physical-page validation failed');
     const glyphs=s=>normalizedText(s).replace(/\s/gu,'');
     const pageGlyphs=rendered.pageTexts.map(glyphs);
-    const blockPages=spec.blocks.map(block=>pageGlyphs.flatMap((page,i)=>page.includes(glyphs(blockText(block)))?[i+1]:[]));
+    const blockPages=orderedBlockPages(spec.blocks.map(block=>glyphs(blockText(block))),pageGlyphs);
     if(blockPages.some(p=>p.length!==1)) throw Error(name+': a source block is split or ambiguously placed');
     const orphanHeadings=spec.blocks.flatMap((block,i)=>block.kind==='heading' && i+1<spec.blocks.length && blockPages[i][0]!==blockPages[i+1][0]?[i]:[]);
     const splitGroups=[];
