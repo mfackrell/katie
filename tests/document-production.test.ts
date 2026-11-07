@@ -354,8 +354,8 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     if (rejectInspection) throw blocked;
     if (unknownReviewError) throw new Error('Fixture visual transport unavailable');
     return { provider: 'anthropic', model: 'fixture-model', text: JSON.stringify({
-      pages: QUALIFIED_PAGES.map((_, i) => ({ page: i + 1, verdict: 'pass', repair: 'none', observations: 'Raster bytes exactly match the independently reviewed synthetic fixture baseline.' })),
-      design: { verdict:'pass',summary:'Verified professional document structure and readable hierarchy across all rendered pages.',issues:[],actions:[],comparison:'not_applicable' },
+      pages: QUALIFIED_PAGES.map((_, i) => ({ page: i + 1, verdict: 'pass', repair: 'none', observations: 'Synthetic inspector response for offline accounting and delivery tests; professional visual review is tested separately.' })),
+      design: { verdict:'pass',summary:'Deterministic fixture exercises the design-approved delivery path without claiming independent professional acceptance.',issues:[],actions:[],comparison:'not_applicable' },
     }) };
   } };
   const markdown = fixture.blocks.map(block => block.kind === 'heading' ? '#'.repeat(block.level) + ' ' + block.text : block.kind === 'bullet' ? '- ' + block.text : block.kind === 'paragraph' ? block.text : '').join('\n\n');
