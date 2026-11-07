@@ -50,7 +50,7 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
  });
  try{
   const page=await browser.newPage();
-  const errors=[],posts=[],requests=[];let stage=0,blockPrice=false,corruptQuote=false;
+  const errors=[],posts=[],requests=[];let stage=0,blockPrice=false,corruptQuote=false,denyValidator=false;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://localhost/**',async route=>{
    const request=route.request(),url=new URL(request.url());
@@ -71,6 +71,8 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
     assert.deepEqual(payload.limits,expectedLimits);
     if(payload.action==='previewAuthority'){
      assert.equal(stage,0);
+     if(denyValidator)return route.fulfill({status:409,contentType:'application/json',
+      body:JSON.stringify({error:'Authoritative state changed or authentication failed. No consent assumed.'})});
      body={ready:true,digest:sha,proposal:{ownerId:'fixture-owner',nativeLimits:corruptQuote?{...expectedLimits,cumulativeTokens:289621}:expectedLimits,settledCalls:4,settledTokens:49620}};
     }else if(payload.action==='approveAuthority'){
      assert.equal(stage,0);
@@ -120,7 +122,20 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
   await page.goto('http://localhost/owner-ui?chatId='+originalChat);
   await page.getByText('Exact preapproved limits could not be quoted safely').waitFor();
   assert.equal(await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).count(),0);
+  // Real production 42501 -> HTTP 403 was hidden by the server API. Refresh
+  // must re-request only a non-executing quote and clear the stale error.
+  corruptQuote=false;denyValidator=true;
+  await page.goto('http://localhost/owner-ui?chatId='+originalChat);
+  await page.getByText('Authoritative state changed or authentication failed. No consent assumed.').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).count(),0);
+  const beforeRefresh=posts.filter(p=>p.action==='approveAuthority').length;
+  denyValidator=false;
+  await page.getByRole('button',{name:'Refresh owner approval status'}).click();
+  await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).waitFor();
+  assert.equal(await page.getByText('Authoritative state changed or authentication failed. No consent assumed.').count(),0);
+  assert.equal(posts.filter(p=>p.action==='approveAuthority').length,beforeRefresh,
+   'Retrying quote must never retry financial consent');
   assert.deepEqual(errors,[]);
-  console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: automatic read-only quote, zero manual fields, fail-closed stale/tampered evidence, separate consent');
+  console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: automatic quote, stale 403 recovery on Refresh, zero manual entry, no implicit consent');
  }finally{await browser.close();}
 });
