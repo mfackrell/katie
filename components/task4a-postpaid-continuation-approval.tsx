@@ -31,8 +31,11 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
  const enabled=chatId===CHAT;
  const [status,setStatus]=useState<Status|null>(null),[quote,setQuote]=useState<Reply|null>(null);
  const [busy,setBusy]=useState(false),[message,setMessage]=useState('');
- const refresh=useCallback(async()=>{
+ const refresh=useCallback(async(clearPriorError=false)=>{
   if(!enabled)return;
+  // A user-triggered refresh clears stale approval errors even if the prior
+  // request failed before any receipt was written. It never replays a consent.
+  if(clearPriorError)setMessage('');
   const token=await ownerSessionBearer();
   if(!token){setStatus({state:'owner_sign_in_required',reason:'Sign in as original owner to authorize Task 4A.'});setQuote(null);return;}
   try{
@@ -144,6 +147,6 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
     </div>:<p role="status">Pending consent: {status.reason??status.state}. No paid admission is authorized by a missing offer.</p>}
    </div>}
   {message?<p role="status">{message}</p>:null}
-  <button type="button" className="text-xs underline" disabled={busy} onClick={()=>void refresh()}>Refresh owner approval status</button>
+  <button type="button" className="text-xs underline" disabled={busy} onClick={()=>void refresh(true)}>Refresh owner approval status</button>
  </section>;
 }
