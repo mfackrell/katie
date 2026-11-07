@@ -50,7 +50,7 @@ begin
    and t.external->'receipt'->>'outcome'='BLOCKED'
    and t.external->'receipt'->>'run_id'='42102615797'
    and a.developer_authority->'task4aPostpaid'->>'version'='postpaid-same-task-v1'
-   and a.model='gpt-5.3-codex' and s.id=a.developer_authority->>'task4aContinuationId'
+   and a.model='gpt-5.3-codex' and s.id::text=a.developer_authority->>'task4aContinuationId'
    and s.deadline>clock_timestamp() and s.revoked_at is null
    and s.assessment_reserve_tokens=60000 and s.completion_reserve_tokens=60000
    and s.assessment_reserve_calls=6 and s.completion_reserve_calls=6
