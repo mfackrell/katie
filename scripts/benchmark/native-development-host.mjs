@@ -1,5 +1,5 @@
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
-import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity} from './ordinary-native-authority.mjs';
+import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
 import {recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
@@ -175,9 +175,11 @@ let recoveryPlan=null,priorCapacityObservations=[],priorRepairIterations=[],prio
 // from its unchanged baseline without a native WIP checkpoint. It had no
 // provider call or native source change; all ordinary failed tasks still
 // require the existing authenticated diagnostics and checkpoint recovery.
+const task4aHistory=classifyTask4aRecoveryHistory({proof,approval});
 let task4aPregrant=false;
-if(proof.authorityKind==='task4a-developer'&&
- approval.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
+if(task4aHistory.postpaid&&priorRefs.length===0)
+ denied('Post-paid Task 4A requires the existing authenticated WIP checkpoint');
+if(task4aHistory.pregrant){
  if(priorRefs.length)denied('Task 4A pregrant recovery unexpectedly contains native WIP');
  const {data,error}=await db.rpc('task4a_pregrant_redispatch_ready',{
   p_task:task.id,p_approval:approval.id
