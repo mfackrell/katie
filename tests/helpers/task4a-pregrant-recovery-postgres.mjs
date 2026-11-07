@@ -14,7 +14,7 @@ const contract='e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e
 const baseline='49c8a5f791e66c351436bb97839193b53d7a1cd1';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 
-export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false,ownerGovernedPaidMode=false,postpaidMode=false}={}){
+export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=false,concurrentMode=false,connect=null,failedDispatchMode=false,failedDispatchConcurrent=false,ownerGovernedMode=false,ownerGovernedConcurrent=false,ownerGovernedPaidMode=false,postpaidMode=false,watchdogMode=false}={}){
  await db.query('reset role');
  await db.query('begin');
  let committedForConcurrency=false;
@@ -551,7 +551,7 @@ export async function verifyTask4aPregrantRecoveryPostgres(db,{successorMode=fal
     console.log('TASK4A_TWO_DISTINCT_OWNER_CONSENTS_REPLAY_IMMUTABILITY_AND_ACK_POSTGRES_PASS');
     console.log('TASK4A_FAILED_DISPATCH_CONSENT_REPLAY_IMMUTABILITY_AND_ACK_POSTGRES_PASS');
     if(postpaidMode){
-     await verifyTask4aPostpaidPostgres(db,{connect,owner,account:id,approval:activeForFailedDispatch});
+     await verifyTask4aPostpaidPostgres(db,{connect,owner,account:id,approval:activeForFailedDispatch,watchdogMode});
      committedForConcurrency=true;
     }
     return;

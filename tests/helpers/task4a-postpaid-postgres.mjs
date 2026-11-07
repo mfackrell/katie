@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {qualifyTask4aWatchdogFixture} from './task4a-watchdog-state.mjs';
 const project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const mission='d3fd3d95-7287-4bfc-8c97-c105fde46c36';
 const task='d0e41ff5-149e-4319-9e65-dcc605fb75da';
@@ -17,7 +18,7 @@ const negative=async(db,fn,pattern)=>{
  try{await assert.rejects(fn(),pattern);}
  finally{await db.query('rollback to savepoint rejected');await db.query('release savepoint rejected');}
 };
-export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,approval}){
+export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,approval,watchdogMode=false}){
  assert.equal(typeof connect,'function','Requires two independent real PostgreSQL connections');
  // Build historical four-settled-call fixture in this disposable test cluster.
  await db.query('reset role');
@@ -55,6 +56,7 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query('alter table project_continuation_authorizations enable trigger user');
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261107035500_task4a_exact_watchdog_blocked_proposal.sql','utf8'));
  // Validate the ENTIRE install-only migration on a disposable PostgreSQL
  // instance, independently of owner-recovery and concurrency qualification.
  if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE==='1'){
@@ -69,6 +71,8 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.match(named('benchmark_lifecycle_decide'),/TASK4A_GENERIC_LIFECYCLE_FORBIDDEN/);
   assert.match(named('task4a_postpaid_proposal'),/mistakenGenericApproval/);
   assert.match(named('task4a_postpaid_proposal'),/wrong\.previous_developer_approval_id/);
+  assert.match(named('task4a_postpaid_proposal'),/task4a_exact_watchdog_block_v1/);
+  assert.match(named('task4a_postpaid_proposal'),/watchdog_deadline\.created_at/);
   assert.match(named('task4a_postpaid_authorize'),/coalesce\(wrong\.id,a\.id\)/);
   assert.match(named('task4a_postpaid_authorize'),/pg_advisory_xact_lock/);
   await db.query('set role service_role');
@@ -142,11 +146,12 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query(`insert into benchmark_lifecycle_decisions(
    proposal_id,owner_id,decision,developer_approval_id)
    values($1,$2,'approved',$3)`,[wrongProposal,owner,wrong]);
- await db.query(`insert into project_events(id,project_id,event,data)
+ await db.query(`insert into project_events(id,project_id,event,created_at,data)
    values($1,$2,'lifecycle_amendment_authorized',
+    case when $9::boolean then '2026-11-06T16:45:55.024788Z'::timestamptz else now() end,
     jsonb_build_object('taskId',$3::uuid,'ownerId',$4::uuid,'approvalId',$5::uuid,
      'previousApprovalId',$6::uuid,'proposalId',$7::text,'limits',$8::jsonb))`,
-   [wrongReceipt,project,task,owner,wrong,approval,wrongProposal,JSON.stringify(genericLimits)]);
+   [wrongReceipt,project,task,owner,wrong,approval,wrongProposal,JSON.stringify(genericLimits),watchdogMode]);
  await db.query('set constraints developer_approval_decision immediate');
  await db.query("update benchmark_execution_grants set stopped_at=clock_timestamp() where developer_approval_id=$1",[approval]);
  await db.query(`update work_projects set status='running',
@@ -184,6 +189,10 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query('rollback to savepoint generic_expired');
  await db.query('release savepoint generic_expired');
  await db.query('set role service_role');
+ if(watchdogMode)auth=[owner,await qualifyTask4aWatchdogFixture(db,{
+  project,mission,task,wrong,owner,account,priorDigest:conflict.digest,
+  release,checkpoint,snapshot,limits
+ }),...args];
  // Synthetic fixture is committed ONLY to the ephemeral isolated test server.
  await db.query('commit');
  const rivals=await Promise.all([connect(),connect()]);
@@ -253,6 +262,8 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[release])),false);
   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[account])).n,4);
   assert.equal((await one(db,'select count(*)::int n from benchmark_execution_grants where project_id=$1',[project])).n,1);
-  console.log('TASK4A_POSTPAID_TWO_CONNECTION_OWNER_CLAIM_POSTGRES_PASS');
+  console.log(watchdogMode
+   ?'TASK4A_WATCHDOG_BLOCKED_TWO_CONNECTION_OWNER_CLAIM_POSTGRES_PASS'
+   :'TASK4A_POSTPAID_TWO_CONNECTION_OWNER_CLAIM_POSTGRES_PASS');
  }finally{await Promise.allSettled(rivals.map(c=>c.end()));}
 }
