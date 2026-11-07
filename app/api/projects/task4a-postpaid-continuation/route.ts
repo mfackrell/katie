@@ -26,7 +26,8 @@ const action=z.discriminatedUnion('action',[
  z.object({action:z.literal('previewAuthority'),limits}).strict(),
  z.object({action:z.literal('approveAuthority'),limits,digest:digestSchema,confirm:z.literal(true)}).strict(),
  z.object({action:z.literal('approveRedispatch'),digest:digestSchema,confirm:z.literal(true)}).strict(),
- z.object({action:z.literal('approvePaidInference'),digest:digestSchema,confirm:z.literal(true)}).strict()
+ z.object({action:z.literal('approvePaidInference'),digest:digestSchema,confirm:z.literal(true)}).strict(),
+ z.object({action:z.literal('approveReleaseHandoff'),digest:digestSchema,confirm:z.literal(true)}).strict()
 ]);
 type Offer={ready?:boolean;reason?:string;digest?:string;proposal?:Record<string,unknown>;evidence?:Record<string,unknown>};
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'private, no-store'}});
@@ -38,7 +39,7 @@ async function receipts(){
  const {data,error}=await db().from('project_events')
   .select('id,event,data').eq('project_id',PROJECT)
   .in('event',['task4a_postpaid_owner_authorized','task4a_postpaid_redispatch_authorized',
-   'task4a_postpaid_paid_authorized','task4a_postpaid_dispatch_claimed',
+   'task4a_postpaid_paid_authorized','task4a_postpaid_release_handoff_authorized','task4a_postpaid_dispatch_claimed',
    'task4a_postpaid_dispatch_submitted'])
   .returns<{id:string;event:string;data:Record<string,unknown>}>();
  if(error)throw Error('Immutable Task 4A authority history unavailable');
@@ -46,6 +47,7 @@ async function receipts(){
  return {authority:get('task4a_postpaid_owner_authorized'),
   redispatch:get('task4a_postpaid_redispatch_authorized'),
   paid:get('task4a_postpaid_paid_authorized'),
+  handoff:get('task4a_postpaid_release_handoff_authorized'),
   claim:get('task4a_postpaid_dispatch_claimed'),
   submitted:get('task4a_postpaid_dispatch_submitted')};
 }
@@ -91,11 +93,20 @@ export async function GET(request:NextRequest){
    submittedReceiptId:saved.submitted?.id,noAutomaticRetry:true});
   // A paid receipt already exists even when the later one-shot GitHub claim
   // has not happened. Never render another consent button or retry a paid POST.
-  if(saved.paid)return reply({state:'paid_authorized_pending_dispatch',
-   authorityReceiptId:saved.authority?.id,redispatchReceiptId:saved.redispatch?.id,
-   paidReceiptId:saved.paid.id,originalIssue:969,
-   dispatchClaimed:false,dispatched:false,noAutomaticRetry:true,
-   reason:'Paid authority recorded; original issue dispatch not yet confirmed. Investigate the one-shot claim; do not reauthorize.'});
+  if(saved.paid){
+   if(saved.handoff)return reply({state:'release_handoff_recorded_pending_dispatch',
+    authorityReceiptId:saved.authority?.id,redispatchReceiptId:saved.redispatch?.id,
+    paidReceiptId:saved.paid.id,handoffReceiptId:saved.handoff.id,
+    originalIssue:969,noAutomaticRetry:true,
+    reason:'Release-bound consent recorded. Dispatch must be reconciled; do not retry payment or handoff.'});
+   const {data:offer,error}=await db().rpc<Offer>('task4a_postpaid_release_handoff_proposal',
+    {p_release:sha});
+   if(error||!offer)throw Error('Release-bound handoff proof unavailable');
+   return reply({state:offer.ready?'pending_release_handoff':'blocked_release_handoff',
+    nextAction:'approveReleaseHandoff',...offer,authorityReceiptId:saved.authority?.id,
+    redispatchReceiptId:saved.redispatch?.id,paidReceiptId:saved.paid.id,
+    originalIssue:969,dispatchClaimed:false,noAutomaticRetry:true});
+  }
   if(saved.authority){
    const stage=saved.redispatch?'paid':'redispatch';
    const offer=await offerForStage(sha,stage);
@@ -141,6 +152,32 @@ export async function POST(request:NextRequest){
     return reply({error:'Exact atomic owner continuation approval rejected'},409);
    return reply({accepted:true,stage:'authority',...data,
     originalTask:TASK,originalIssue:969,dispatched:false});
+  }
+  if(parsed.action==='approveReleaseHandoff'){
+   if(!saved.authority||!saved.redispatch||!saved.paid||saved.handoff)
+    return reply({error:'Release handoff is out of sequence or already recorded'},409);
+   const {data:offer,error:offerError}=await db().rpc<Offer>(
+    'task4a_postpaid_release_handoff_proposal',{p_release:sha});
+   if(offerError||!offer?.ready||!offer.digest||!offer.proposal||
+      offer.digest!==parsed.digest||offer.proposal.ownerId!==owner())
+    return reply({error:'Original release-bound owner decision is stale or invalid'},409);
+   const qualified=await qualifiedOrdinaryDevelopmentRelease();
+   if(qualified!==sha)return reply({error:'New production executor is not qualified against main'},409);
+   const {data,error}=await db().rpc<{authorized:boolean;receiptId:string;
+     newPaidCalls:number;newFinancialAuthority:boolean;dispatched:boolean}>(
+     'task4a_postpaid_release_handoff_authorize',
+     {p_owner:owner(),p_digest:parsed.digest,p_release:sha});
+   if(error||data?.authorized!==true||data.newPaidCalls!==0||
+      data.newFinancialAuthority!==false||data.dispatched!==false)
+    return reply({error:'Exact release handoff was not safely committed'},409);
+   let accepted=false,dispatchStatus='handoff_authorized_pending_dispatch';
+   try{
+    accepted=await dispatchTask4aPostpaidOnce();
+    dispatchStatus=accepted?'one_original_issue_dispatch_accepted':'handoff_authorized_pending_dispatch';
+   }catch{dispatchStatus='github_status_uncertain_one_shot_claim_must_be_reconciled';}
+   return reply({accepted:true,stage:'releaseHandoff',handoffReceiptId:data.receiptId,
+    dispatchAccepted:accepted,dispatchStatus,originalIssue:969,
+    noNewFinancialAuthority:true,newPaidCalls:0,noAutomaticRetry:true});
   }
   if(!saved.authority)return reply({error:'Separate continuation authority must be committed first'},409);
   const stage=parsed.action==='approveRedispatch'?'redispatch':'paid';
