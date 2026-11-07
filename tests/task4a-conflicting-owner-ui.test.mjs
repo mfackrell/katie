@@ -64,13 +64,19 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
     assert.equal(url.searchParams.get('chatId'),originalChat);
     body=blockPrice?{state:'blocked_authority',reason:'fresh_official_model_pricing_required'}:
      stage===0?{state:'requires_owner_limits',reason:'explicit_owner_limits_required',evidence:{settledCalls:4,settledTokens:49620}}:
-     stage===3?{state:'paid_authorized_pending_dispatch',authorityReceiptId:'fixture-receipt',
+     stage===4?{state:'pending_release_handoff',ready:true,nextAction:'approveReleaseHandoff',digest:sha,
+       authorityReceiptId:'fixture-receipt',redispatchReceiptId:'redispatch-receipt',
+       paidReceiptId:'paid-receipt',proposal:{ownerId:'fixture-owner',releaseSha:'e'.repeat(40)}}:
+      stage===5?{state:'release_handoff_recorded_pending_dispatch',authorityReceiptId:'fixture-receipt',
+       paidReceiptId:'paid-receipt',handoffReceiptId:'release-handoff-1'}:
+      stage===3?{state:'paid_authorized_pending_dispatch',authorityReceiptId:'fixture-receipt',
        redispatchReceiptId:'redispatch-receipt',paidReceiptId:'paid-receipt',dispatched:false,noAutomaticRetry:true}:
      {state:'pending_redispatch',ready:true,nextAction:'approveRedispatch',digest:'b'.repeat(64),authorityReceiptId:'fixture-receipt',proposal:{ownerId:'fixture-owner'}};
    }else{
     assert.equal(request.method(),'POST');
     const payload=request.postDataJSON();posts.push(payload);
-    assert.deepEqual(payload.limits,expectedLimits);
+    if(payload.action==='previewAuthority'||payload.action==='approveAuthority')
+     assert.deepEqual(payload.limits,expectedLimits);
     if(payload.action==='previewAuthority'){
      assert.equal(stage,0);
      if(denyValidator)return route.fulfill({status:409,contentType:'application/json',
@@ -82,8 +88,13 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
      assert.equal(payload.digest,sha);
      stage=1;
      body={accepted:true,stage:'authority',dispatched:false,paidInferenceAuthorized:false,newPaidCalls:0,receiptId:'fixture-receipt'};
-    }else{
-     assert.fail('Preview and authority must never submit redispatch or paid inference');
+    }else if(payload.action==='approveReleaseHandoff'){
+      assert.equal(stage,4);assert.equal(payload.confirm,true);assert.equal(payload.digest,sha);
+      stage=5;
+      body={accepted:true,stage:'releaseHandoff',handoffReceiptId:'release-handoff-1',
+       dispatchAccepted:true,noNewFinancialAuthority:true,newPaidCalls:0};
+     }else{
+      assert.fail('Preview and authority must never submit redispatch or paid inference');
     }
    }
    return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -147,6 +158,18 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
   await page.getByRole('button',{name:'Refresh owner approval status'}).click();
   await page.getByText('The bounded PAID execution consent is already recorded.',{exact:false}).waitFor();
   assert.equal(posts.length,priorPosts,'Refresh never replays an already-recorded owner decision');
+  stage=4;const firstHandoff=posts.length;
+  await page.goto('http://localhost/owner-ui?chatId='+originalChat);
+  const handoffButton=page.getByRole('button',{
+   name:'Authorize one original dispatch on qualified executor — existing $9 limit'});
+  await handoffButton.waitFor();
+  assert.equal(await region.locator('input').count(),0);
+  assert.equal(posts.length,firstHandoff);
+  await handoffButton.click();
+  await page.getByText('The release-bound handoff is already recorded.',{exact:false}).waitFor();
+  assert.deepEqual(posts.slice(firstHandoff).map(x=>x.action),['approveReleaseHandoff']);
+  await page.goto('http://localhost/owner-ui?chatId='+originalChat);
+  assert.equal(await page.getByRole('button',{name:/Authorize one original dispatch on qualified executor/}).count(),0);
   assert.deepEqual(errors,[]);
   console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: auto quote, denied preview recovery, paid receipt no replay, zero manual entry');
  }finally{await browser.close();}

@@ -6,8 +6,8 @@ const CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
 const endpoint='/api/projects/task4a-postpaid-continuation';
 type Status={state?:string;ready?:boolean;reason?:string;error?:string;
  digest?:string;proposal?:Record<string,unknown>;evidence?:Record<string,unknown>;
- nextAction?:'approveRedispatch'|'approvePaidInference';authorityReceiptId?:string;
- redispatchReceiptId?:string;paidReceiptId?:string;claimReceiptId?:string;
+ nextAction?:'approveRedispatch'|'approvePaidInference'|'approveReleaseHandoff';authorityReceiptId?:string;
+ redispatchReceiptId?:string;paidReceiptId?:string;handoffReceiptId?:string;claimReceiptId?:string;
  submittedReceiptId?:string;checkpointSha?:string};
 type Limits={cumulativeTokens:number;developmentTokens:number;assessmentTokens:60000;
  completionTokens:60000;developmentCalls:number;assessmentCalls:4;completionCalls:4;
@@ -66,7 +66,7 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
  },[enabled]);
  useEffect(()=>{void refresh();},[refresh]);
  const numbers=():Limits=>REQUESTED_LIMITS;
- const submit=async(action:'previewAuthority'|'approveAuthority'|'approveRedispatch'|'approvePaidInference')=>{
+ const submit=async(action:'previewAuthority'|'approveAuthority'|'approveRedispatch'|'approvePaidInference'|'approveReleaseHandoff')=>{
   if(busy)return;
   setBusy(true);setMessage('');
   try{
@@ -92,6 +92,10 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
      ?'Continuation approved. No dispatch or paid inference is authorized. Review separate redispatch consent.'
      :action==='approveRedispatch'
      ?'Redispatch-only consent recorded. No paid inference or GitHub dispatch occurred.'
+     :action==='approveReleaseHandoff'
+     ?data.dispatchAccepted
+      ?'Exact executor-release consent recorded; one original issue #969 dispatch accepted. Independent Preview acceptance remains pending.'
+      :'Executor-release consent recorded; original issue dispatch not confirmed. No automatic retry: reconcile the one-shot claim.'
      :data.dispatchAccepted
      ?'Separate paid consent recorded and one original issue #969 dispatch accepted. Protected Preview acceptance remains pending.'
      :data.dispatchStatus==='github_status_uncertain_one_shot_claim_must_be_reconciled'
@@ -110,6 +114,13 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
   {status.state==='claimed_once'?<p role="status">Original dispatch was already claimed.
    {status.submittedReceiptId?' GitHub acceptance is recorded.':' External acceptance requires reconciliation.'}
    No automatic retry is permitted.</p>:null}
+  {status.state==='pending_release_handoff'?<p role="status">
+   The three prior owner approvals are recorded for the original executor. Katie has prepared
+   one new release-bound consent to use the corrected, qualified executor under the SAME
+   $9 cumulative ceiling. This is permission for one paid dispatch, not additional budget.</p>:null}
+  {status.state==='release_handoff_recorded_pending_dispatch'?<p role="alert">
+   The release-bound handoff is already recorded. Do not approve or retry again;
+   the original issue dispatch requires one-shot reconciliation.</p>:null}
   {status.state==='paid_authorized_pending_dispatch'?<p role="alert">
    The bounded PAID execution consent is already recorded. Original issue #969 has NOT been dispatched.
    Do not repeat the recorded paid approval. The one-shot dispatch claim must be reconciled
@@ -141,7 +152,10 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
   </div>:<div className="space-y-2">
     <p>Successor owner receipt: <code className="break-all">{status.authorityReceiptId}</code>.
      The original task stays blocked until the next two independent owner decisions.</p>
-    {status.state==='paid_authorized_pending_dispatch'?<p role="status">
+    {status.state==='release_handoff_recorded_pending_dispatch'?<p role="status">
+     Release handoff: <code className="break-all">{status.handoffReceiptId}</code>.
+     No duplicate approval or paid request is permitted.</p>:
+    status.state==='paid_authorized_pending_dispatch'?<p role="status">
      Paid receipt: <code className="break-all">{status.paidReceiptId}</code>.
      Dispatch pending, no automatic retry permitted.</p>:
     status.ready&&status.digest&&status.nextAction?<div className="space-y-2">
@@ -149,6 +163,10 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
      {status.nextAction==='approveRedispatch'
       ?<button type="button" disabled={busy} className="rounded border px-3 py-2"
         onClick={()=>void submit('approveRedispatch')}>Approve original issue redispatch ONLY (no inference)</button>
+      :status.nextAction==='approveReleaseHandoff'
+      ?<button type="button" disabled={busy} className="rounded border px-3 py-2 font-semibold"
+        onClick={()=>void submit('approveReleaseHandoff')}>
+         Authorize one original dispatch on qualified executor — existing $9 limit</button>
       :<button type="button" disabled={busy} className="rounded border px-3 py-2 font-semibold"
         onClick={()=>void submit('approvePaidInference')}>Separately authorize bounded PAID execution and one dispatch</button>}
     </div>:<p role="status">Pending consent: {status.reason??status.state}. No paid admission is authorized by a missing offer.</p>}
