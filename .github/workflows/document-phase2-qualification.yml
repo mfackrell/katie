@@ -37,6 +37,8 @@ jobs:
           node node_modules/typescript/bin/tsc -p tsconfig.tests.json
           mkdir -p .test-dist/node_modules
           ln -s .. .test-dist/node_modules/@
+      - name: Regress original document production, accounting and secure delivery
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-production.test.js
       - name: Phase 1 reproduction with actual generator
         run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase1-qualification.test.js
       - name: Phase 2 genuine document comparison and delivery contract
