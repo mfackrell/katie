@@ -4,6 +4,13 @@ on:
   pull_request:
     paths:
       - 'lib/agents/development.ts'
+      - 'scripts/benchmark/task4a-failed-run-link*'
+      - 'supabase/migrations/20261107183028_task4a_failed_run_replacement.sql'
+      - 'app/api/projects/task4a-replacement/route.ts'
+      - 'components/task4a-replacement-approval.tsx'
+      - 'tests/task4a-failed-run-link.test.mjs'
+      - 'tests/task4a-replacement-owner.test.mjs'
+      - 'tests/helpers/task4a-replacement-postgres.mjs'
       - 'lib/projects/preview.ts'
       - 'tests/task4a-preview-security.test.mjs'
       - 'tests/helpers/lifecycle-preview-transport.mjs'
@@ -115,6 +122,8 @@ jobs:
         run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
       - name: Verify saved Task 4A specification repair and authenticated recovery endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-saved-specification-recovery.test.mjs
+      - name: Verify exact failed-run link and replacement owner decision
+        run: node --experimental-test-isolation=none --test tests/task4a-failed-run-link.test.mjs tests/task4a-replacement-owner.test.mjs
       - name: Verify Task 4A signed native gateway and unchanged legacy routes
         run: node --test tests/task4a-native-bridge.test.mjs
       - name: Verify original Task 4A owner-consented pregrant endpoint
