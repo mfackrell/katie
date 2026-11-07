@@ -18,6 +18,8 @@ on:
       - 'supabase/migrations/20261105210000_task4a_separate_dispatch_paid_execution.sql'
       - 'supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql'
       - 'supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql'
+      - 'supabase/migrations/20261107035500_task4a_exact_watchdog_blocked_proposal.sql'
+      - 'tests/helpers/task4a-watchdog-state.mjs'
       - 'app/api/projects/task4a-postpaid-continuation/route.ts'
       - 'components/task4a-postpaid-continuation-approval.tsx'
       - 'tests/helpers/task4a-postpaid-postgres.mjs'
@@ -248,6 +250,23 @@ jobs:
           if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
             throw Error('Task 4A postpaid same-task two-connection security qualification did not pass');
           console.log('Task 4A postpaid owner and one-shot claim: real PostgreSQL PASS; synthetic calls only');
+          NODE
+
+      - name: Prove exact production watchdog-blocked owner proposal and two-connection recovery
+        env:
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_ONLY_TASK4A_WATCHDOG_RACE: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          KATIE_TEST_REPORT_PATH=task4a-qualification/postgres-watchdog-race-report.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/projects-sql.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const r=JSON.parse(readFileSync('task4a-qualification/postgres-watchdog-race-report.json','utf8'));
+          if(!r.success||r.counts.tests!==1||r.counts.passed!==1||r.counts.failed||r.counts.cancelled||r.counts.skipped||r.counts.todo)
+            throw Error('Exact production watchdog-blocked Task 4A recovery / concurrency failed');
+          console.log('Exact watchdog events, blocked status, strict pricing and expiry, historical 49,620 tokens, two-connection owner consent: PASS');
           NODE
 
       - name: Retain independently inspectable machine evidence
