@@ -72,7 +72,10 @@ test('release-SHA handoff requires one new owner click, reuses paid receipt and 
   assert.equal(authorizations,1);assert.equal(dispatches,1);assert.equal(newBudgets,0);
   const repeated=await post({action:'approveReleaseHandoff',digest,confirm:true});
   assert.equal(repeated.status,409);assert.equal(authorizations,1);assert.equal(dispatches,1);
-  assert.equal((await get()).json instanceof Function,true);
+  const after=await(await get()).json();
+  assert.equal(after.state,'claimed_once');
+  assert.equal(after.paidReceiptId,'paid-existing');
+  assert.equal(after.claimReceiptId,'original-claim');
  }finally{
   for(const [k,v] of Object.entries({KATIE_OWNER_AUTH_USER_ID:prior.owner,
    VERCEL_ENV:prior.vercel,VERCEL_GIT_COMMIT_SHA:prior.sha}))
