@@ -32,6 +32,8 @@ jobs:
       - run: npm ci
       - name: Typecheck full code base
         run: npm run typecheck
+      - name: Validate private acceptance runner syntax without reading private data
+        run: node --check scripts/document-phase2-private-acceptance.mjs
       - name: Compile offline qualification suites
         run: |
           node node_modules/typescript/bin/tsc -p tsconfig.tests.json
