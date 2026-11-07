@@ -721,6 +721,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
  for(const a of rows.data){
+  // Capacity-only Task 4A consent cannot authorize even an issue rewrite.
+  if('task4aCapacityRenewal' in (a.developer_authority??{}))continue;
   if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
   let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;

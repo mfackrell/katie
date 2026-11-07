@@ -1,6 +1,7 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
+import {Task4aCapacityApproval} from '@/components/task4a-capacity-approval';
 const endpoint='/api/projects/task4a-replacement';
 const chat='e53defeb-16eb-457e-aa07-435141165ee8';
 type Status={state?:string;ready?:boolean;digest?:string;proposal?:Record<string,unknown>;reason?:string;error?:string};
@@ -30,6 +31,7 @@ export function Task4aReplacementApproval(){
   finally{setBusy(false);}
  };
  if(!status)return null;
+ if(status.state==='claimed_once')return <Task4aCapacityApproval/>;
  return <div className="rounded border p-3 space-y-2" aria-label="Original Task 4A replacement dispatch">
   <p className="font-semibold">Recover the failed run and resume the saved work</p>
   <p>The consumed dispatch stays recorded. One replacement resumes the original WIP under the existing $9 cumulative ceiling,
