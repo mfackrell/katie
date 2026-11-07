@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import bundledChromium from "@sparticuz/chromium";
 
 const composer = readFileSync("components/chat-composer-input.tsx", "utf8");
-const resetEffect = /  \/\/ Resetting the draft does not fire onChange\. Recalculate the DOM height\n  \/\/ after external clears, restores and conversation switches as well\.\n  useEffect\(\(\) => \{\n    scheduleResize\(\);\n  \}, \[props\.externalValue, props\.resetVersion\]\);\n\n/;
+const resetEffect = /  \/\/ External resets queue setValue in an earlier effect; their frame can run\n  \/\/ before that value commits\. Re-measure after the local value is rendered\.\n  useEffect\(\(\) => \{\n    scheduleResize\(\);\n  \}, \[value, props\.resetVersion, scheduleResize\]\);\n\n/;
 const artifacts = "test-artifacts/composer-height";
 const longText = Array.from({ length: 20 }, (_, n) => `Synthetic draft line ${n + 1}`).join("\n");
 let browser;
@@ -33,8 +33,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-test("composer recalculates textarea height on external clears and conversation resets", () => {
-  assert.match(composer, /useEffect\(\(\) => \{\s*scheduleResize\(\);\s*\}, \[props\.externalValue, props\.resetVersion\]\)/);
+test("composer recalculates height after the local value commits and on conversation resets", () => {
+  assert.match(composer, /useEffect\(\(\) => \{\s*scheduleResize\(\);\s*\}, \[value, props\.resetVersion, scheduleResize\]\)/);
   assert.match(composer, /textarea\.style\.height = "auto"/);
   assert.match(composer, /Math\.min\(textarea\.scrollHeight, 192\)/);
 });
