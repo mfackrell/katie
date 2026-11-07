@@ -57,6 +57,39 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
  await db.query(readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261106173000_task4a_generic_owner_approval_conflict.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261107035500_task4a_exact_watchdog_blocked_proposal.sql','utf8'));
+ // Reproduce the exact production 403 before applying the focused grant:
+ // the pure validator belongs to postgres and is deliberately NOT executable
+ // by service_role. The original disposable fixture accidentally owned the
+ // helper as service_role, which masked the real production permission gap.
+ await db.query('reset role');
+ await db.query('alter function public.developer_validate_limits(jsonb) owner to postgres');
+ await db.query('revoke all on function public.developer_validate_limits(jsonb) from public,anon,authenticated,service_role');
+ assert.equal((await db.query(
+  "select has_function_privilege('service_role','public.developer_validate_limits(jsonb)','EXECUTE') as allowed"
+ )).rows[0].allowed,false,'The production denial must be faithfully reproduced');
+ await db.query('set role service_role');
+ await db.query('savepoint task4a_validator_403');
+ try{
+  await assert.rejects(rpc(db,'task4a_postpaid_proposal',[
+   release,checkpoint,snapshot,{
+    cumulativeTokens:289620,developmentTokens:229620,developmentCalls:16,
+    assessmentTokens:60000,completionTokens:60000,assessmentCalls:4,completionCalls:4,
+    perCallMicrousd:1680000,ceilingMicrousd:9000000,durationSeconds:14400
+   }]),/permission denied for function developer_validate_limits/);
+ }finally{
+  await db.query('rollback to savepoint task4a_validator_403');
+  await db.query('release savepoint task4a_validator_403');
+ }
+ await db.query('reset role');
+ await db.query(readFileSync('supabase/migrations/20261107150000_task4a_owner_quote_validator_access.sql','utf8'));
+ const access=(await db.query(`select
+  has_function_privilege('service_role','public.developer_validate_limits(jsonb)','EXECUTE') as server,
+  has_function_privilege('anon','public.developer_validate_limits(jsonb)','EXECUTE') as anonymous,
+  has_function_privilege('authenticated','public.developer_validate_limits(jsonb)','EXECUTE') as client`)).rows[0];
+ assert.deepEqual(access,{server:true,anonymous:false,client:false},
+  'Only the trusted service role may call the immutable limits validator');
+ console.log('TASK4A_OWNER_QUOTE_POSTGRES_403_REPRODUCED_AND_SERVICE_ROLE_ONLY_GRANT_VERIFIED');
+ await db.query('set role service_role');
  // Validate the ENTIRE install-only migration on a disposable PostgreSQL
  // instance, independently of owner-recovery and concurrency qualification.
  if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE==='1'){
