@@ -110,6 +110,10 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
   {status.state==='claimed_once'?<p role="status">Original dispatch was already claimed.
    {status.submittedReceiptId?' GitHub acceptance is recorded.':' External acceptance requires reconciliation.'}
    No automatic retry is permitted.</p>:null}
+  {status.state==='paid_authorized_pending_dispatch'?<p role="alert">
+   The bounded PAID execution consent is already recorded. Original issue #969 has NOT been dispatched.
+   Do not repeat the recorded paid approval. The one-shot dispatch claim must be reconciled
+   without an automatic retry. A changed production release SHA requires new explicit release-bound consent.</p>:null}
   {!status.authorityReceiptId?<div className="space-y-2">
    <p>Before a new owner approval, **both protected token reserves remain 60,000 each**.
     Native protected calls stay 4 assessment / 4 completion; project-level reserves stay 6 / 6.</p>
@@ -137,7 +141,10 @@ export function Task4aPostpaidContinuationApproval({chatId}:{chatId:string}){
   </div>:<div className="space-y-2">
     <p>Successor owner receipt: <code className="break-all">{status.authorityReceiptId}</code>.
      The original task stays blocked until the next two independent owner decisions.</p>
-    {status.ready&&status.digest&&status.nextAction?<div className="space-y-2">
+    {status.state==='paid_authorized_pending_dispatch'?<p role="status">
+     Paid receipt: <code className="break-all">{status.paidReceiptId}</code>.
+     Dispatch pending, no automatic retry permitted.</p>:
+    status.ready&&status.digest&&status.nextAction?<div className="space-y-2">
      <p>Consent digest: <code className="break-all">{status.digest}</code></p>
      {status.nextAction==='approveRedispatch'
       ?<button type="button" disabled={busy} className="rounded border px-3 py-2"

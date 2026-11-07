@@ -25,6 +25,7 @@ on:
       - 'components/task4a-postpaid-continuation-approval.tsx'
       - 'tests/helpers/task4a-postpaid-postgres.mjs'
       - 'tests/task4a-postpaid-owner.test.mjs'
+      - 'tests/task4a-postpaid-dispatch-preclaim.test.mjs'
       - 'tests/task4a-conflicting-owner-ui.test.mjs'
       - 'app/api/projects/task4a-blocked-dispatch/route.ts'
       - 'components/task4a-blocked-dispatch-owner-approval.tsx'
@@ -124,6 +125,8 @@ jobs:
         run: node --experimental-test-isolation=none --test tests/task4a-separated-paid-owner.test.mjs
       - name: Verify three separate same-task owner decisions and no unauthorized execution
         run: node --experimental-test-isolation=none --test tests/task4a-postpaid-owner.test.mjs
+      - name: Verify Task 4A blocked paid preclaim, explicit pending state and no consent replay
+        run: node --experimental-test-isolation=none --test tests/task4a-postpaid-dispatch-preclaim.test.mjs
       - name: Task 4A actual owner approval UI acceptance in headless Chromium
         run: node --experimental-test-isolation=none --test tests/task4a-conflicting-owner-ui.test.mjs
       - name: Install isolated PostgreSQL and filesystem containment
