@@ -65,6 +65,12 @@ export const ChatComposerInput = memo(function ChatComposerInput(props: Props) {
     });
   };
 
+  // Resetting the draft does not fire onChange. Recalculate the DOM height
+  // after external clears, restores and conversation switches as well.
+  useEffect(() => {
+    scheduleResize();
+  }, [props.externalValue, props.resetVersion]);
+
   const onChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const next = event.currentTarget.value;
     props.currentValueRef.current = next;
