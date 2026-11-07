@@ -350,6 +350,13 @@ export async function verifyTask4aPostpaidPostgres(db,{connect,owner,account,app
   assert.equal(claim.data.releaseSha,nextRelease);
   assert.ok(claim.data.releaseHandoffReceiptId);
   assert.equal((await rpc(db,'task4a_postpaid_release_handoff_authentic',[nextRelease])),true);
+  const nativeApprovalId=(await one(db,
+   "select (data->>'newApprovalId')::uuid as id from project_events where project_id=$1 and event='task4a_postpaid_owner_authorized'",
+   [project])).id;
+  assert.equal(await rpc(db,'task4a_postpaid_grant_ready',[nativeApprovalId,nextRelease]),true,
+   'The actual native provider grant must accept exactly the owner-consented executor SHA after claim');
+  assert.equal(await rpc(db,'task4a_postpaid_grant_ready',[nativeApprovalId,release]),false,
+   'The old executor SHA must not inherit the new claim');
   assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[nextRelease])),true);
   assert.equal((await rpc(db,'task4a_postpaid_record_submitted',[nextRelease])),false);
   assert.equal((await one(db,
