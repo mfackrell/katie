@@ -14,6 +14,7 @@ import { documentLinks, documentStore, receiptSchema, type DocumentScope } from 
 export async function deliverDocument(input: {
   result: ProviderResponse; provider: LlmProvider; params: ChatGenerateParams;
   actorId: string; chatId: string; requestId: string; targetPages?: number; deadlineMs: number;
+  requireProfessionalAcceptance?: boolean;
   /** Internal deterministic test dependency only; never accepted from /api/chat. */
   selectVisualInspector?: typeof selectDocumentVisualInspector;
 }): Promise<ProviderResponse> {
@@ -39,6 +40,7 @@ export async function deliverDocument(input: {
     const timer = setTimeout(() => { void browser.close().catch(() => undefined); }, Math.max(1, deadlineMs - Date.now()));
     try {
       const produced = await produceDocument({ spec, browser, deadlineMs,
+        requireProfessionalAcceptance: input.requireProfessionalAcceptance,
         // Aesthetic review is best effort, but a pending payment/approval or
         // uncertain provider charge must never be silently settled as success.
         canSkipDesignReviewError: async error => {
@@ -76,7 +78,7 @@ export async function deliverDocument(input: {
             user: `Evaluate the FINAL document as a single professional deliverable, based on its actual purpose, audience, structure and constraints. User task: ${input.params.user.slice(0, 800)}. Source title: ${spec.title.slice(0, 160)}. Outline (untrusted document data): ${JSON.stringify(headingOutline)}. Hard page requirement: ${spec.targetPages ?? 'none provided'}; final pages: ${rendered.images.length}; approximate occupied-height percentages per page: ${occupancy.join(', ')} (only a diagnostic, not an automatic failure). Current raster pages are images 1–${rendered.images.length}; ${previousCount ? `previous candidate raster pages are images ${rendered.images.length + 1}–${rendered.images.length + previousCount}, compare directly and justify improvement` : 'no previous design candidate exists'}. Analyze overall aesthetic hierarchy, density, section separation, balance, readability, list rhythm, professional audience suitability, and cross-page grouping. A readable but cramped or poorly balanced layout may still be materially inadequate. Do not infer a PASS just because there is no clipping. A short last page may be legitimate. Do not rewrite facts or violate required page count.
 Return strict JSON only. Valid example for a material design defect:
 {"pages":[{"page":1,"verdict":"pass","observations":"All visible glyphs are readable and none overlap.","repair":"none"}],"design":{"verdict":"repair","summary":"Section titles and supporting bullets are insufficiently separated for the audience.","issues":[{"page":1,"category":"density","severity":"material","evidence":"Section and bullet groups are visually crowded."}],"actions":["section-separation"],"comparison":"not_applicable"}}.
-Choose verdict values from pass, repair, blocked. Allowed issue categories: hierarchy, density, balance, section-continuity, lists, other. Allowed actions: section-separation, list-rhythm, line-rhythm, heading-hierarchy, page-balance. Choose comparison from not_applicable, improved, unchanged, regressed.
+Choose verdict values from pass, repair, blocked. Allowed issue categories: hierarchy, density, balance, section-continuity, lists, other. Allowed actions: section-separation, list-rhythm, line-rhythm, heading-hierarchy, page-balance, compact-layout, natural-reflow, group-continuity. Choose comparison from not_applicable, improved, unchanged, regressed.
 Include every current page exactly once. Use issue page=0 only for document-wide problems. For design PASS provide [] actions; for design REPAIR provide 1–2 supported design actions and at least one material issue. For BLOCKED provide no actions. When comparing an earlier candidate, comparison must explicitly say whether visible composition improved; do not claim improvement based on source text. Each pages[].repair MUST be exactly one of "none", "increase_spacing", or "repaginate"; it is an enum, never a sentence or arbitrary instruction. Put descriptive critique in observations and design.issues[].evidence, and use only allowed design.actions for bounded layout changes. Source-text deletions or rewrites are not layout actions and must never be requested via pages[].repair. Page-level repair should be none when only the document-wide design needs revision.`,
             images: [...rendered.images, ...(context?.previous?.images ?? [])]
               .map(image => 'data:image/png;base64,' + image.toString('base64')),

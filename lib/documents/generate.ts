@@ -33,9 +33,15 @@ export function documentPageStyle(layout?: Pick<Layout, 'compact'>) {
 export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<Buffer> {
   const pageStyle = documentPageStyle(layout);
   const design = layout.design ?? { sectionGap: 1, listGap: 1, lineScale: 1, hierarchy: 1 };
-  const paragraph = (block: Exclude<Block, { kind: 'table' }>) => new Paragraph({
+  const paragraph = (block: Exclude<Block, { kind: 'table' }>, index: number) => new Paragraph({
     heading: block.kind === 'heading' ? [HeadingLevel.TITLE, HeadingLevel.HEADING_1, HeadingLevel.HEADING_2][block.level - 1] : undefined,
-    keepNext: block.kind === 'heading',
+    // Keep a heading and its metadata line with the first substantive block
+    // when one exists. Avoid entire multi-bullet chains that may not fit.
+    keepNext: block.kind === 'heading' || (
+      block.kind === 'paragraph' && index > 0 && index < spec.blocks.length - 1 &&
+      spec.blocks[index - 1].kind === 'heading' &&
+      (spec.blocks[index + 1].kind === 'bullet' || spec.blocks[index + 1].kind === 'paragraph')
+    ),
     keepLines: true,
     spacing: {
       before: block.kind === 'heading'
@@ -72,7 +78,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
       paragraphStyles: [{ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: Math.round(DOCUMENT_TYPE.headingHalfPoints[0] * design.hierarchy), color: DOCUMENT_TYPE.headingColors[0], bold: true } }] },
     sections: layout.pages.map(indices => ({
       properties: { page: { size: { width: PAGE.width * 20, height: PAGE.height * 20 }, margin: { top: pageStyle.margin * 20, bottom: pageStyle.margin * 20, left: pageStyle.margin * 20, right: pageStyle.margin * 20 } } },
-      children: indices.map(index => spec.blocks[index].kind === 'table' ? table(spec.blocks[index] as Extract<Block, { kind: 'table' }>) : paragraph(spec.blocks[index] as Exclude<Block, { kind: 'table' }>)),
+      children: indices.map(index => spec.blocks[index].kind === 'table' ? table(spec.blocks[index] as Extract<Block, { kind: 'table' }>) : paragraph(spec.blocks[index] as Exclude<Block, { kind: 'table' }>,index)),
     })),
   }));
 }
@@ -90,7 +96,17 @@ export function paginate(spec: DocumentSpec, heights: number[], pages: number, s
     for (let start = p - 1; start < end; start++) {
       const height = sums[end] - sums[start];
       if (height > capacity) continue;
-      const cost = dp[p - 1][start] + (height - target) ** 2;
+      // Penalize rather than prohibit semantically harmful boundaries:
+      // genuinely oversized groups must still paginate without deleting text.
+      const left = spec.blocks[end - 1], right = spec.blocks[end];
+      const context = spec.blocks[end - 2];
+      const strandsMetadata = right && left.kind === 'paragraph' &&
+        context?.kind === 'heading' && (right.kind === 'bullet' || right.kind === 'paragraph');
+      const breaksList = right && left.kind === 'bullet' && right.kind === 'bullet';
+      const breaksClause = right && left.kind === 'paragraph' &&
+        /^\\d+(?:\\.\\d+)*[.)]\\s/u.test(left.text) && right.kind === 'paragraph';
+      const continuity = strandsMetadata || breaksClause ? 150000 : breaksList ? 16000 : 0;
+      const cost = dp[p - 1][start] + (height - target) ** 2 + continuity;
       if (cost < dp[p][end]) { dp[p][end] = cost; previous[p][end] = start; }
     }
   }

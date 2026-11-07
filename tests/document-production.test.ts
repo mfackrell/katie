@@ -115,6 +115,8 @@ test('technical-only DOCX/PDF can be privately delivered while mechanical errors
     const mechanicallyAccepted={...rendered.inspection,visual:'technical-only' as const};
     const receipt=await store.save(scope,{docx,pdf:rendered.pdf},mechanicallyAccepted,0);
     assert.equal(receipt.pages,1);
+    assert.match(documentLinks(receipt),/Technical validation passed; professional design review remains unresolved/);
+    assert.doesNotMatch(documentLinks(receipt),/Created and inspected 1 page/);
     assert.equal(hash((await store.read(scope,receipt.id,'docx')).bytes),hash(docx));
     assert.equal(hash((await store.read(scope,receipt.id,'pdf')).bytes),hash(rendered.pdf));
     await assert.rejects(store.read({...scope,ownerId:other},receipt.id,'pdf'),/access denied/);
@@ -345,7 +347,8 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
           'no_qualified_document_design_vision','No qualified design model is available.');
         },
       }));
-    assert.match(fallback.text,/Created and inspected 2 pages/);
+    assert.match(fallback.text,/Technical validation passed; professional design review remains unresolved/);
+    assert.doesNotMatch(fallback.text,/Created and inspected 2 pages/);
     assert.match(fallback.text,/format=pdf/);
     assert.equal(visualCalls,2,'Unavailable reviewer must never dispatch a model.');
     assert.equal(uploads,6,'Independent scoped mechanical files remain deliverable.');

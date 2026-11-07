@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "phase": 2,
+  "acceptance": [
+    {"id":"PAGE_COUNT_EXACT","status":"pending_private","evidence":"Synthetic requested-two-page regression covered; actual private source not regenerated in Katie."},
+    {"id":"SOURCE_FIDELITY","status":"pending_private","evidence":"Synthetic DOCX/PDF glyph tests; approved private source requires controlled reproduction."},
+    {"id":"FONT_FLOOR","status":"pending_private","evidence":"Synthetic 11pt run check and Phase1 private DOCX XML; Phase2 private render outstanding."},
+    {"id":"DOCX_OFFICE_PARITY","status":"pending_private","evidence":"LibreOffice/Chromium synthetic parity tested; private and Microsoft Word not qualified."},
+    {"id":"NO_AVOIDABLE_PAGE_BREAK","status":"pending_private","evidence":"Synthetic report and agreement compact counterfactual saves pages; private result unverified."},
+    {"id":"HEADING_GROUP_CONTINUITY","status":"pending_independent","evidence":"Word keepNext and rendered-page diagnostics added; independent cross-page professional acceptance outstanding."},
+    {"id":"ENGAGEMENT_GROUP_CONTINUITY","status":"pending_private","evidence":"General heading/metadata/bullet cohesion added; original private engagement grouping unverified."},
+    {"id":"TABLE_AND_CLAUSE_INTEGRITY","status":"pending_independent","evidence":"Synthetic legal and financial structures render; independent visual and office clause checks outstanding."},
+    {"id":"PAGE_COMPOSITION","status":"pending_independent","evidence":"Actual rendered synthetic page images preserved; independent final reviewer has not certified composition."},
+    {"id":"DELIVERY_SEPARATION","status":"passed","evidence":"Strict professional-delivery test rejects blocked review while technical-only result is labeled."},
+    {"id":"NO_PAID_INFERENCE_CI","status":"passed","evidence":"All CI tests use deterministic offline reviewers and local browser/office rendering."}
+  ],
+  "private_source_available_only_outside_public_ci": true,
+  "release_allowed": false
+}
