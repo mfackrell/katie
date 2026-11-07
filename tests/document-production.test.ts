@@ -345,7 +345,7 @@ test('specialist delivery inspects actual pages inside accounting scope and stop
     assert.match(accounting.context.activity!, /^document-visual-/);
     assert.equal(params.images?.length,2,'Specialist must inspect both real rendered pages');
     for (const supplied of params.images ?? []){
-      assert.match(supplied,/^data:image\\/png;base64,/);
+      assert.ok(supplied.startsWith('data:image/png;base64,'),'Expected a PNG data URL');
       const bytes=Buffer.from(supplied.split(',')[1],'base64');
       assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a','Renderer must supply actual PNG bytes');
       assert.ok(bytes.length>3000,'The page cannot be an empty placeholder');
