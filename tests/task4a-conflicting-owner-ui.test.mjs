@@ -50,7 +50,7 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
  });
  try{
   const page=await browser.newPage();
-  const errors=[],posts=[],requests=[];let stage=0;
+  const errors=[],posts=[],requests=[];let stage=0,blockPrice=false,corruptQuote=false;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://localhost/**',async route=>{
    const request=route.request(),url=new URL(request.url());
@@ -62,16 +62,16 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
    let body;
    if(request.method()==='GET'){
     assert.equal(url.searchParams.get('chatId'),originalChat);
-    body=stage===0
-     ?{state:'requires_owner_limits',reason:'explicit_owner_limits_required',evidence:{settledCalls:4,settledTokens:49620}}
-     :{state:'pending_redispatch',ready:true,nextAction:'approveRedispatch',digest:'b'.repeat(64),authorityReceiptId:'fixture-receipt',proposal:{ownerId:'fixture-owner'}};
+    body=blockPrice?{state:'blocked_authority',reason:'fresh_official_model_pricing_required'}:
+     stage===0?{state:'requires_owner_limits',reason:'explicit_owner_limits_required',evidence:{settledCalls:4,settledTokens:49620}}:
+     {state:'pending_redispatch',ready:true,nextAction:'approveRedispatch',digest:'b'.repeat(64),authorityReceiptId:'fixture-receipt',proposal:{ownerId:'fixture-owner'}};
    }else{
     assert.equal(request.method(),'POST');
     const payload=request.postDataJSON();posts.push(payload);
     assert.deepEqual(payload.limits,expectedLimits);
     if(payload.action==='previewAuthority'){
      assert.equal(stage,0);
-     body={ready:true,digest:sha,proposal:{ownerId:'fixture-owner',nativeLimits:expectedLimits,settledCalls:4,settledTokens:49620}};
+     body={ready:true,digest:sha,proposal:{ownerId:'fixture-owner',nativeLimits:corruptQuote?{...expectedLimits,cumulativeTokens:289621}:expectedLimits,settledCalls:4,settledTokens:49620}};
     }else if(payload.action==='approveAuthority'){
      assert.equal(stage,0);
      assert.equal(payload.confirm,true);
@@ -93,15 +93,14 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
   })+'; original error: '+String(e));}
   assert.equal(await page.getByTestId('generic-owner-approval').count(),0);
   assert.equal(await page.getByRole('button',{name:'Approve exactly this amendment'}).count(),0);
-  await page.getByLabel('Total cumulative tokens').fill('289620');
-  await page.getByLabel('Development tokens including completion').fill('229620');
-  await page.getByLabel('Development calls including completion').fill('16');
-  await page.getByLabel('Cumulative dollar ceiling, USD').fill('9');
-  await page.getByLabel('Execution window, hours from approval').fill('4');
-  await page.getByRole('button',{name:'Preview exact limits — no charges'}).click();
-  await page.getByRole('button',{name:'Approve exactly this authority — NO dispatch'}).waitFor();
-  assert.deepEqual(posts.map(x=>x.action),['previewAuthority']);
-  await page.getByRole('button',{name:'Approve exactly this authority — NO dispatch'}).click();
+  // Katie prepares the exact historical limits without asking the owner to type.
+  assert.equal(await region.locator('input').count(),0,'No manual financial-entry form');
+  await region.getByText('Katie-prepared limits — no data entry').waitFor();
+  await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).waitFor();
+  assert.deepEqual(posts.map(x=>x.action),['previewAuthority'],
+   'Mount may only make an authenticated, read-only quote');
+  assert.equal(stage,0,'Preview must not create any approval or dispatch');
+  await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).click();
   await page.getByRole('button',{name:'Approve original issue redispatch ONLY (no inference)'}).waitFor();
   assert.deepEqual(posts.map(x=>x.action),['previewAuthority','approveAuthority']);
   assert.equal(posts.some(x=>x.action==='approvePaidInference'||x.action==='approveRedispatch'),false);
@@ -109,7 +108,19 @@ test('actual Task 4A postpaid UI replaces generic lifecycle in original chat and
   await page.goto('http://localhost/owner-ui?chatId='+otherChat);
   await page.getByTestId('generic-owner-approval').waitFor();
   assert.equal(await page.getByRole('region',{name:'Task 4A postpaid same-task continuation'}).count(),0);
+  // Stale official pricing is a hard stop, not an invitation to invent limits.
+  stage=0;blockPrice=true;
+  const previewCount=posts.length;
+  await page.goto('http://localhost/owner-ui?chatId='+originalChat);
+  await page.getByText('fresh_official_model_pricing_required').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).count(),0);
+  assert.equal(posts.length,previewCount,'No quote or payment attempt under stale pricing');
+  // A contradictory server quote must never enable authorization either.
+  blockPrice=false;corruptQuote=true;
+  await page.goto('http://localhost/owner-ui?chatId='+originalChat);
+  await page.getByText('Exact preapproved limits could not be quoted safely').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Authorize these exact limits — NO dispatch or paid inference'}).count(),0);
   assert.deepEqual(errors,[]);
-  console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: original chat is postpaid-only; unrelated generic approval reachable; no dispatch or paid calls');
+  console.log('TASK4A_ACTUAL_APPROVAL_UI_BROWSER_PASS: automatic read-only quote, zero manual fields, fail-closed stale/tampered evidence, separate consent');
  }finally{await browser.close();}
 });
