@@ -25,7 +25,9 @@ before(async () => {
   })]).process("@tailwind base; @tailwind components; @tailwind utilities;", { from: undefined })).css;
   browser = await chromium.launch({
     executablePath: process.env.KATIE_TEST_CHROMIUM || await bundledChromium.executablePath(),
-    args: bundledChromium.args,
+    // The single-process serverless default cannot reopen isolated contexts.
+    // Keep every other bundled flag and use Chromium's multiprocess lifecycle.
+    args: bundledChromium.args.filter(arg => arg !== "--single-process"),
     headless: true,
   });
 });
