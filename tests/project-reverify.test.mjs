@@ -23,6 +23,6 @@ test('baseline installation errors are classified only by trusted verifier',()=>
  assert.match(source,/kind:'infrastructure'/);
  assert.match(source,/stage:'baseline-install'/);
  assert.match(source,/if\(install\.status!==0\)/);
- assert.match(source,/sandboxArgs\(root,\{dependencies,writable:true\}\)/);
+ assert.match(source,/sandboxArgs\(root,\{dependencies,writable:true,artifacts\}\)/);
  assert.match(source,/--unshare-net|sandboxArgs/);
 });

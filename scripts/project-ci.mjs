@@ -1,9 +1,9 @@
 import {spawnSync,spawn,execFileSync} from 'node:child_process';
-import {readFileSync,writeFileSync,mkdirSync,existsSync,rmSync,symlinkSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,existsSync,rmSync,symlinkSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseProjectContext} from './project-context.mjs';
-import {sandboxArgs} from './project-sandbox.mjs';
+import {sandboxArgs,collectTestArtifacts} from './project-sandbox.mjs';
 import {checkGameModel} from './project-game-check.mjs';
 // This entry point and its sibling tools come from the preserved main artifact,
 // never from the writable candidate. Candidate commands run only in bwrap.
@@ -49,8 +49,11 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
  const model=checkGameModel(context,root,dependencies);
  if(model)writeFileSync(resolve(dirname(output),'project-game-model.json'),JSON.stringify({version:1,projectId:context.projectId,headSha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),checkedAt:new Date().toISOString(),...model},null,2));
  const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
- const checkArgs=[...sandboxArgs(root,{dependencies,writable:true}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
- const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});if(checked.status!==0)throw Error('Isolated project CI failed');
+ // Per-attempt diagnostics survive failed verification outside the candidate.
+ const artifacts=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-artifacts-'));
+ const diagnostics=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-diagnostics-'));
+ const checkArgs=[...sandboxArgs(root,{dependencies,writable:true,artifacts}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
+ const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));if(checked.status!==0)throw Error('Isolated project CI failed');
  execFileSync('git',['-c','core.fsmonitor=false','diff','--no-ext-diff','--exit-code','HEAD','--'],{cwd:root,timeout:10000});
  // Tools resolve only immutable baseline dependencies, inaccessible to tests.
  const modulePath=resolve(tools,'node_modules');if(existsSync(modulePath))rmSync(modulePath,{recursive:true,force:true});symlinkSync(dependencies,modulePath,'dir');

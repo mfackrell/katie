@@ -151,3 +151,57 @@ jobs:
         run: npm run test:video-fallback
 
 
+
+  native-verifier-environment:
+    name: Native verifier PostgreSQL and saved Task 4A acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Prepare native verifier isolation and PostgreSQL 16
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat postgresql-16
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Actual isolated PostgreSQL concurrency and passing/failing WIP preservation
+        env:
+          KATIE_VERIFY_NATIVE_ENV: '1'
+        run: node --test tests/project-verifier-environment.test.mjs tests/native-wip-checkpoint.test.mjs
+      - name: Verify unchanged saved application with trusted candidate verifier
+        run: |
+          set -euo pipefail
+          git fetch origin 1d51f2fa7f95fec1cb8c777c0525402e05f34f8e
+          test "$(git rev-parse '1d51f2fa7f95fec1cb8c777c0525402e05f34f8e^{tree}')" = 26869fb977fd29b4f96652b9de3d47e0f0e0ffeb
+          mkdir "$RUNNER_TEMP/project-tools"
+          cp scripts/project-*.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
+          cp tests/fixtures/task4a-verifier-request.md "$RUNNER_TEMP/task4a-request.md"
+          git worktree add --detach "$RUNNER_TEMP/task4a-candidate" 1d51f2fa7f95fec1cb8c777c0525402e05f34f8e
+          cd "$RUNNER_TEMP/task4a-candidate"
+          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/task4a-request.md"
+          set +e
+          node "$RUNNER_TEMP/project-tools/project-ci.mjs" --request "$RUNNER_TEMP/task4a-request.md" --output "$RUNNER_TEMP/task4a-acceptance.json" > "$RUNNER_TEMP/task4a-verification.log" 2>&1
+          result=$?
+          set -e
+          tail -100 "$RUNNER_TEMP/task4a-verification.log"
+          test "$(git rev-parse 'HEAD^{tree}')" = 26869fb977fd29b4f96652b9de3d47e0f0e0ffeb
+          test -z "$(git status --porcelain)"
+          exit "$result"
+      - name: Preserve nonbillable verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4a-native-verifier-evidence
+          path: |
+            ${{ runner.temp }}/task4a-verification.log
+            ${{ runner.temp }}/task4a-acceptance.json
+            ${{ runner.temp }}/project-test-diagnostics-*/standalone-rail/*.png
+          if-no-files-found: warn
+          retention-days: 30
