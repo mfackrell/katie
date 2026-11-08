@@ -1,4 +1,5 @@
 'use client';
+import {Task4aVerifierRecoveryApproval} from '@/components/task4a-verifier-recovery-approval';
 import {useCallback,useEffect,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 const endpoint='/api/projects/task4a-final-successor';
@@ -22,6 +23,7 @@ export function Task4aFinalSuccessorApproval(){
  }catch(e){setMessage(e instanceof Error?e.message:'Decision unavailable');await refresh();}finally{setBusy(false);}
  };
  if(!status)return null;
+ if(status.state==='claimed_once')return <Task4aVerifierRecoveryApproval/>;
  return <div className="rounded border p-3 space-y-2" aria-label="Task 4A final successor">
  <p className="font-semibold">Finish the existing Task 4A application</p>
  <p>Restore the authenticated application to verification. Independent reviews and protected Preview acceptance remain required.</p>

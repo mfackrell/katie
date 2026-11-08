@@ -6,8 +6,9 @@ import {chromium} from 'playwright-core';
 import bundled from '@sparticuz/chromium';
 test('Chromium owner controls require four separate clicks and never dispatch on rendering',{timeout:90000},async()=>{
  const js=ts.transpileModule(readFileSync('components/task4a-final-successor-approval.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+ const verifierJs=ts.transpileModule(readFileSync('components/task4a-verifier-recovery-approval.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
  const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js'].map(p=>readFileSync('node_modules/'+p,'utf8')).join('\n');
- const code='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k}),Fragment:React.Fragment}:{ownerSessionBearer:async()=>"test-owner"};'+js+';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.Task4aFinalSuccessorApproval));';
+ const code='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k}),Fragment:React.Fragment}:n==="@/components/task4a-verifier-recovery-approval"?verifierExports:{ownerSessionBearer:async()=>"test-owner"};'+'const verifierExports=(()=>{const exports={};'+verifierJs+';return exports;})();'+js+';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.Task4aFinalSuccessorApproval));';
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
  try{
  const page=await browser.newPage(),actions=['finance','replacement','inference','dispatch'],labels=['Approve bounded capacity and four-hour renewal','Authorize verification-first replacement','Authorize bounded paid review','Dispatch this replacement once'],posts=[],errors=[];

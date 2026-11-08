@@ -1,3 +1,4 @@
+import {verifyTask4aVerifierPostgres} from './task4a-verifier-postgres.mjs';
 import {prepareTask4aFinalFinancialSchema,installTask4aFinalFinancialAdmission} from './task4a-final-financial-schema.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -101,5 +102,6 @@ export async function verifyTask4aFinalPostgres(db,{connect,owner,account:oldAcc
  assert.equal((await one(db,'select sum(greatest(reserved_tokens,actual_tokens))::int n from mission_calls where project_continuation_id=$1',[child.continuationId])).n,138204);
  const remaining=await one(db,'select incremental_tokens-138204 n,assessment_reserve_tokens a,completion_reserve_tokens c from project_continuation_authorizations where id=$1',[child.continuationId]);assert.equal(Number(remaining.n),120000);assert.equal(Number(remaining.a),60000);assert.equal(Number(remaining.c),60000);
  console.log('TASK4A_FINAL_REAL_POSTGRES_CONSENT_CLAIM_GRANT_AND_RESERVATION_CONCURRENCY_PASS');
+ await verifyTask4aVerifierPostgres(db,{connect,owner,priorChild:child});
  }finally{await Promise.allSettled(clients.map(c=>c.end()));}
 }

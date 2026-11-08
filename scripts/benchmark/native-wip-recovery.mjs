@@ -1,3 +1,4 @@
+import {requireTask4aVerifierRestoration} from './task4a-verifier-recovery.mjs';
 // Trusted host only. Recovery reads historical evidence; it never grants authority,
 // reconciles charges, replays a request, or treats WIP as reviewed source.
 import {createHash} from 'node:crypto';
@@ -30,6 +31,12 @@ export function createTask4aVerificationFirstCapability(record,recovery){
  same(record.reviewFindings,'','verification-first unexpected findings');
  same(record.lastCompleted,{checkpointSha:record.completedCheckpointSha,modelCall:{requestKey:'1ebf357e-4075-4b31-8d17-55891468b102',operationId:'6d51c3f4-a019-444b-ab87-9d424f1b25e2',actualTokens:13046,settlement:'settled'}},'verification-first completed evidence mismatch');
  same(recovery,{verification:'unverified',phase:record.phase,checkpointSha:record.checkpointSha,completedCheckpointSha:record.completedCheckpointSha,reviewFindings:record.reviewFindings,checkpointEvidence:record.lastCompleted,lastCompleted:record.lastCompleted},'verification-first restored evidence mismatch');
+ const capability=Object.freeze({});
+ verificationFirstCapabilities.set(capability,{recovery,snapshot:structuredClone(recovery),sourceTreeSha:record.sourceTreeSha});
+ return capability;
+}
+export function createTask4aFailedVerifierCapability(record,recovery){
+ requireTask4aVerifierRestoration(record,recovery);
  const capability=Object.freeze({});
  verificationFirstCapabilities.set(capability,{recovery,snapshot:structuredClone(recovery),sourceTreeSha:record.sourceTreeSha});
  return capability;

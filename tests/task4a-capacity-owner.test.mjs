@@ -50,7 +50,7 @@ test('capacity-only successor is rejected before native authority or scheduler s
  const end=src.indexOf('  if(onlyTaskId',start);
  assert.ok(start>0&&end>start);
  const code=src.slice(start,end)+'seen++;}';
- const context={rows:{data:[{developer_authority:{task4aCapacityRenewal:{executionAuthorized:false}}},{developer_authority:{version:'ordinary-developer-v1'}},{developer_authority:{task4aCapacityRenewal:{},task4aFinalSuccessor:{}}}]},seen:0,capacityExecution:false,finalExecution:false};
+ const context={rows:{data:[{developer_authority:{task4aCapacityRenewal:{executionAuthorized:false}}},{developer_authority:{version:'ordinary-developer-v1'}},{developer_authority:{task4aCapacityRenewal:{},task4aFinalSuccessor:{}}}]},seen:0,capacityExecution:false,finalExecution:false,verifierExecution:false};
  vm.runInNewContext(code,context);assert.equal(context.seen,1);
  context.seen=0;context.capacityExecution=true;context.finalExecution=true;
  vm.runInNewContext(code,context);assert.equal(context.seen,1,'Explicit final mode selects only final successor; scheduler never does');
