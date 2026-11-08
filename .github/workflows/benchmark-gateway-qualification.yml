@@ -2,6 +2,9 @@ name: Native gateway qualification
 on:
   pull_request:
     paths:
+      - 'scripts/project-ci.mjs'
+      - 'scripts/project-sandbox.mjs'
+      - 'tests/project-verifier-environment.test.mjs'
       - 'scripts/benchmark/**'
       - 'supabase/migrations/*benchmark*'
       - 'supabase/migrations/20261103173000_task4a_native_origin_guard.sql'

@@ -145,6 +145,12 @@ jobs:
           npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          /usr/lib/postgresql/16/bin/initdb --version
+          /usr/lib/postgresql/16/bin/pg_ctl --version
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - name: Run approved native Developer through trusted gateway
         if: steps.task.outputs.native == 'true'
@@ -177,6 +183,14 @@ jobs:
           path: ${{ runner.temp }}/native-metered-review.json.diagnostics.json
           retention-days: 7
           if-no-files-found: error
+      - name: Preserve isolated verification screenshots
+        if: always() && steps.task.outputs.native == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-verification-screenshots
+          path: ${{ runner.temp }}/project-test-diagnostics-*/standalone-rail/*.png
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Autonomous developer
         if: steps.task.outputs.native != 'true'
         uses: openai/codex-action@v1
