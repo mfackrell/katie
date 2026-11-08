@@ -79,6 +79,10 @@ on:
       - 'scripts/benchmark/developer-dispatch-contract.mjs'
       - 'scripts/benchmark/developer-dispatch-contract.d.mts'
       - 'scripts/benchmark/native-development-host.mjs'
+      - 'scripts/benchmark/native-development-lifecycle.mjs'
+      - 'scripts/benchmark/native-wip-recovery.mjs'
+      - 'tests/task4a-verification-first.test.mjs'
+      - 'tests/fixtures/task4a-verification-first.json'
       - 'scripts/benchmark/native-dispatch-cli.mjs'
       - 'scripts/benchmark/ordinary-native-authority.mjs'
       - 'scripts/benchmark/authenticated-native-gateway.mjs'
@@ -130,6 +134,8 @@ jobs:
         run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
       - name: Verify saved Task 4A specification repair and authenticated recovery endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-saved-specification-recovery.test.mjs
+      - name: Verify authenticated verification-first recovery
+        run: node --test tests/task4a-verification-first.test.mjs tests/native-wip-recovery.test.mjs tests/native-capacity-lifecycle.test.mjs tests/native-adaptive-repair.test.mjs
       - name: Verify exact failed-run link and replacement owner decision
         run: node --experimental-test-isolation=none --test tests/task4a-failed-run-link.test.mjs tests/task4a-replacement-owner.test.mjs tests/task4a-capacity-owner.test.mjs tests/task4a-capacity-execution.test.mjs
       - name: Verify Task 4A signed native gateway and unchanged legacy routes
