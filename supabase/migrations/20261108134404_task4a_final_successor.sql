@@ -348,10 +348,12 @@ end $$;
 create function task4a_final_budget_guard() returns trigger language plpgsql security definer set search_path=public as $$
 declare a benchmark_native_spending_approvals;n bigint;used bigint;
 begin
- perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select approval.* into a from mission_calls m join benchmark_execution_grants g on g.id=m.lease join benchmark_native_spending_approvals approval on approval.id=g.developer_approval_id
  where m.id=new.legacy_mission_call_id and approval.account_id=new.account_id and approval.developer_authority ? 'task4aFinalSuccessor';
  if a.id is null then return new;end if;
+ -- Legacy admission locks its account first; never add a global lock to it.
+ -- Final native admission already owns this lock before reserving the account.
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  if new.model is distinct from a.model then raise exception 'TASK4A_FINAL_MODEL_DENIED';end if;
  select count(*),coalesce(sum(greatest(reserved_tokens,coalesce(actual_tokens,0))),0) into n,used from mission_calls
  where job_id=a.task_id and model=a.model and project_continuation_id=(a.developer_authority->>'task4aContinuationId')::uuid;

@@ -56,6 +56,13 @@ export async function verifyTask4aFinalPostgres(db,{connect,owner,account:oldAcc
  const clients=await Promise.all([connect(),connect()]);
  try{
  for(const c of clients)await c.query('set role service_role');
+ // Unrelated admission must reach its original guard without waiting for the
+ // final-successor global lock (legacy admission locks the account first).
+ await db.query('begin');await db.query("select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))");
+ await clients[0].query('begin');await clients[0].query("set local statement_timeout='1000ms'");
+ try{
+ await assert.rejects(()=>clients[0].query("insert into benchmark_budget_calls(account_id,request_key,model,reserved_tokens) values($1,$2,'gpt-5.3-codex',1)",[account,randomUUID()]),/Ordinary financial admission denied/);
+ }finally{await clients[0].query('rollback');await db.query('rollback');}
  const results=await Promise.all(clients.map(c=>rpc(c,'task4a_final_authorize',[owner,offer.digest,release,checkpoint])));assert.deepEqual(results[0],results[1]);const child=results[0];
  assert.equal(child.dispatchAuthorized,false);assert.equal(child.paidInferenceAuthorized,false);assert.ok(Date.parse(child.deadline)>Date.now()+14390000);
  assert.equal(await rpc(db,'developer_claim_dispatch',[child.approvalId,release]),false);
