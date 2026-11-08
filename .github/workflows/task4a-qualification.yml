@@ -3,6 +3,9 @@ name: Task 4A protected Preview nonbillable qualification
 on:
   pull_request:
     paths:
+      - 'scripts/project-ci.mjs'
+      - 'scripts/project-sandbox.mjs'
+      - 'tests/project-verifier-environment.test.mjs'
       - 'lib/agents/development.ts'
       - 'supabase/migrations/20261108134404_task4a_final_successor.sql'
       - 'app/api/projects/task4a-final-successor/**'

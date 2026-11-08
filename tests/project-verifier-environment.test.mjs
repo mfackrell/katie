@@ -22,10 +22,9 @@ test('diagnostic mount rejects existing source, symlinks and overlapping checkou
  assert.throws(()=>sandboxArgs(repo,{artifacts:join(root,'alias')}),/Invalid artifact/);
 });
 
-test('native isolation runs PostgreSQL concurrency and preserves clean WIP on passing and failing verification', {timeout:180000},t=>{
+if(process.env.KATIE_VERIFY_NATIVE_ENV==='1')test('native isolation runs PostgreSQL concurrency and preserves clean WIP on passing and failing verification', {timeout:180000},t=>{
  // Explicit opt-in: this test is mandatory in the dedicated native verifier CI
  // job, where missing namespace/PG support is a failure, never a silent skip.
- if(process.env.KATIE_VERIFY_NATIVE_ENV!=='1')return;
  const root=mkdtempSync(join(tmpdir(),'verifier-native-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
  const repo=join(root,'candidate'),artifacts=join(root,'diagnostics'),remote=join(root,'durable.git');mkdirSync(repo);mkdirSync(artifacts);
  const command=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:'pipe'}).trim();
@@ -72,6 +71,11 @@ test('host diagnostic collection rejects symlinks and hardlinks; preserves norma
  const {linkSync}=await import('node:fs');
  const root=mkdtempSync(join(tmpdir(),'verifier-collector-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
  const source=join(root,'source'),rail=join(source,'standalone-rail');mkdirSync(rail,{recursive:true});
+ writeFileSync(join(source,'hidden-source.ts'),'out of scope');
+ assert.throws(()=>collectTestArtifacts(source,join(root,'output')),/Unexpected test artifact path/);
+ rmSync(join(source,'hidden-source.ts'));mkdirSync(join(source,'other'));
+ assert.throws(()=>collectTestArtifacts(source,join(root,'output')),/Unexpected test artifact path/);
+ rmSync(join(source,'other'),{recursive:true});
  writeFileSync(join(root,'secret'),'private');symlinkSync(join(root,'secret'),join(rail,'leak.png'));
  assert.throws(()=>collectTestArtifacts(source,join(root,'output')));
  rmSync(join(rail,'leak.png'));linkSync(join(root,'secret'),join(rail,'leak.png'));

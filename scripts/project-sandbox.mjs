@@ -37,6 +37,7 @@ export function collectTestArtifacts(source,destination){
  const fds=[];
  try{
   let dir=openSync(source,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);fds.push(dir);
+  if(readdirSync(`/proc/self/fd/${dir}`).some(name=>name!=='standalone-rail'))throw Error('Unexpected test artifact path');
   try{dir=openSync(`/proc/self/fd/${dir}/standalone-rail`,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);fds.push(dir);}catch(e){if(e.code==='ENOENT')return;throw e;}
   const names=readdirSync(`/proc/self/fd/${dir}`);if(names.length>100)throw Error('Too many test artifacts');
   let total=0;
