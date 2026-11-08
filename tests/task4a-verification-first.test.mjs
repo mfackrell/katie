@@ -70,7 +70,7 @@ test('trusted host creates capability only after authenticated restoration; exis
  assert.ok(auth<prepare&&prepare<restore&&restore<mint&&mint<forecast&&forecast<grant);
  const block=host.slice(restore,host.indexOf('let capacityRecovery=recovery;',restore));
  for(const fails of [false,true]){
-  const calls=[];const context={recoveryPlan:{record,restore(){calls.push('restore');if(fails)throw Error('source authentication failed');return restored();}},createTask4aVerificationFirstCapability(r,w){calls.push('capability');return createTask4aVerificationFirstCapability(r,w);}};
+  const calls=[];const context={approval:{developer_authority:{task4aFinalSuccessor:true}},denied:reason=>{throw Error(reason);},recoveryPlan:{record,restore(){calls.push('restore');if(fails)throw Error('source authentication failed');return restored();}},createTask4aVerificationFirstCapability(r,w){calls.push('capability');return createTask4aVerificationFirstCapability(r,w);}};
   if(fails)assert.throws(()=>vm.runInNewContext(block,context),/authentication failed/);else vm.runInNewContext(block,context);
   assert.deepEqual(calls,fails?['restore']:['restore','capability']);
  }

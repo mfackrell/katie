@@ -1,3 +1,4 @@
+import {verifyTask4aFinalPostgres} from './task4a-final-postgres.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -174,5 +175,6 @@ export async function verifyTask4aCapacityPostgres(db,{connect,owner,account,app
   const oldIds=history.rows.map(x=>x.id);
   assert.deepEqual((await db.query('select id,event,data from project_events where id=any($1::uuid[]) order by id',[oldIds])).rows,history.rows);
   console.log('TASK4A_SEPARATE_EXECUTION_REAL_POSTGRES_TWO_CONNECTION_CONSENT_CLAIM_AND_NATIVE_GRANT_PASS');
+  await verifyTask4aFinalPostgres(db,{connect,owner,account,approval:result.approvalId,continuation:result.continuationId});
  }finally{await Promise.allSettled(clients.map(c=>c.end()));}
 }

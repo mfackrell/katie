@@ -4,6 +4,16 @@ on:
   pull_request:
     paths:
       - 'lib/agents/development.ts'
+      - 'supabase/migrations/20261108134404_task4a_final_successor.sql'
+      - 'app/api/projects/task4a-final-successor/**'
+      - 'components/task4a-final-successor-approval.tsx'
+      - 'scripts/benchmark/task4a-successor-envelope*'
+      - 'tests/task4a-final-successor.test.mjs'
+      - 'tests/task4a-final-successor-browser.test.mjs'
+      - 'tests/helpers/task4a-final-financial-schema.mjs'
+      - 'tests/task4a-successor-envelope.test.mjs'
+      - 'tests/helpers/task4a-final-postgres.mjs'
+      - 'tests/fixtures/task4a-final-*.json'
       - 'scripts/benchmark/task4a-failed-run-link*'
       - 'supabase/migrations/20261107183028_task4a_failed_run_replacement.sql'
       - 'app/api/projects/task4a-replacement/route.ts'
@@ -130,6 +140,8 @@ jobs:
           writeFileSync('task4a-qualification/receipt.json',JSON.stringify(receipt,null,2)+'\n');
           console.log('Task 4A deterministic source-validator qualification: PASS; live requirement: BLOCKED');
           NODE
+      - name: Verify final successor separated consent and bounded bootstrap
+        run: node --experimental-test-isolation=none --test tests/task4a-final-successor.test.mjs tests/task4a-successor-envelope.test.mjs tests/task4a-final-successor-browser.test.mjs
       - name: Verify authenticated Task 4A owner approval endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
       - name: Verify saved Task 4A specification repair and authenticated recovery endpoint

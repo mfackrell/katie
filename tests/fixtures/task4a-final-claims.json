@@ -1,0 +1,40 @@
+[
+  {
+    "id": "2cbdbff0-cc11-4dd8-8a62-95b0e8ae2534",
+    "event": "task4a_replacement_claimed",
+    "data": {
+      "approvalId": "d1f7d69c-850f-4ce4-88de-a70d4222e157",
+      "releaseSha": "3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0",
+      "issueNumber": 969,
+      "authorizationId": "0347bc06-90cb-4b8d-a904-51b38bc5a1aa",
+      "consumedClaimId": "f105fde0-1e35-4aaf-80c6-b80645701325"
+    }
+  },
+  {
+    "id": "c156d764-652f-4740-aa50-4ab8c5ab04e4",
+    "event": "task4a_capacity_execution_claimed",
+    "data": {
+      "approvalId": "ac443164-faf7-45be-96f1-cc93dfc85346",
+      "releaseSha": "c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed",
+      "consentDigest": "fc9c6c5d14bdcc7c5ac56699b8cb4c873162089991c44401d2789b77c8fb254d",
+      "authorizationId": "4c344874-470d-49a7-a567-0e7ab847db53"
+    }
+  },
+  {
+    "id": "f105fde0-1e35-4aaf-80c6-b80645701325",
+    "event": "task4a_postpaid_dispatch_claimed",
+    "data": {
+      "approvalId": "d1f7d69c-850f-4ce4-88de-a70d4222e157",
+      "paidDigest": "176220e0179d047e3de4217b39f9def778a2c6ecd4eb7af4bd65961347f562ec",
+      "priorRunId": 42102615797,
+      "releaseSha": "25363d8cd0906e7915c4e0aa6443142a95a76c20",
+      "issueNumber": 969,
+      "checkpointSha": "8e53ce01693303fc50daf5da1567e93e725f9b2d",
+      "noPaidCallYet": true,
+      "paidReceiptId": "80656ac4-6209-4ed1-961c-df48502badbf",
+      "redispatchReceiptId": "f5f0b81c-9f28-4a40-9909-add2cb2d53b8",
+      "ownerAuthorityReceiptId": "13280079-abb3-4359-83ad-3d4f28d92882",
+      "releaseHandoffReceiptId": "51124935-416a-4cfa-b70d-ee6e6a533158"
+    }
+  }
+]
