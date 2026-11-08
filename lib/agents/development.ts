@@ -150,6 +150,19 @@ export async function authenticatedTask4aReplacementCheckpoint(){
  return {...saved,evidence:{...evidence,checkpointDigest:digest(saved.checkpoint)}};
 }
 
+// Original task UUID and public Git commit IDs; these are identifiers, not credentials.
+const TASK4A_ORIGINAL_TASK_ID = 'd0e41ff5-149e-4319-9e65-dcc605fb75da';
+const TASK4A_SAVED_WIP_COMMIT = '2667a81d4f18452e9ca59498c8805670b04cfe47';
+const TASK4A_SOURCE_COMMIT = '3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0';
+export async function authenticatedTask4aCapacityCheckpoint(approvedContinuation?:string){
+ const e=await authenticatedLifecycleCheckpoint(TASK4A_ORIGINAL_TASK_ID,approvedContinuation);
+ if(e.record.checkpointSha!==TASK4A_SAVED_WIP_COMMIT||e.checkpoint.releaseSha!==TASK4A_SOURCE_COMMIT)throw Error('Latest Task 4A checkpoint changed');
+ const runs=await github().actions.listWorkflowRuns({owner:'mfackrell',repo:'katie',workflow_id:'autonomous-development.yml',created:'>=2026-11-07T19:20:08Z',per_page:100});
+ if(runs.data.total_count!==1||runs.data.workflow_runs.length!==1||runs.data.workflow_runs[0].id!==42405698589)
+  throw Error('Additional or ambiguous original execution history');
+ return e;
+}
+
 export async function prepareLifecycleOwnerProposal(taskId:string){
  const evidence=await authenticatedLifecycleCheckpoint(taskId);
  const plan=lifecycleProposalFromSnapshot({snapshot:evidence.snapshot,record:evidence.record,observations:evidence.diagnostics.capacityObservations??[]});
@@ -708,7 +721,7 @@ export async function qualifiedOrdinaryDevelopmentRelease(){
  const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
  return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
 }
-async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false){
+async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false,capacityExecution=false){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
@@ -721,6 +734,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
  for(const a of rows.data){
+  // The scheduler cannot activate capacity. Only the explicit execution route
+  // enters this mode after a separate exact owner execution consent.
+  const capacityRenewal='task4aCapacityRenewal' in (a.developer_authority??{});
+  if(capacityRenewal!==capacityExecution)continue;
   if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
   let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;
@@ -770,8 +787,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
       });
       if(error||ready!==true)continue;
     }else{
-      const evidence=replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
-      if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
+      const evidence=capacityRenewal?await authenticatedTask4aCapacityCheckpoint(a.id):replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
+      if(capacityRenewal){
+        if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+      }else if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
         if(evidence.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
           digest(evidence.checkpoint)!==(a.developer_authority.checkpoint as {digest?:string}|undefined)?.digest)continue;
       }else if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
@@ -800,14 +819,23 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
-  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false,replacementClaimedDispatch=false;
+  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false,replacementClaimedDispatch=false,capacityClaimedDispatch=false;
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
    const priorBody=unpackDevelopmentRequest(existing.data.body??'');
    if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||
      !priorBody.startsWith(marker(task)+'\n'))continue;
-   if(postpaid&&replacement){
+   if(postpaid&&capacityRenewal){
+     const previous=readDeveloperHandoff(priorBody,key,0);
+     if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||previous.projectId!==c.projectId||
+        previous.approvalId!==a.previous_developer_approval_id||previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
+        previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
+        previous.releaseSha!=='3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0')continue;
+     const consent=await db.rpc<boolean>('task4a_capacity_execution_authorized',{p_release:release});
+     if(consent.error||consent.data!==true)continue;
+     capacityClaimedDispatch=true;
+   }else if(postpaid&&replacement){
      const evidence=await authenticatedTask4aReplacementCheckpoint();
      const previous=readDeveloperHandoff(priorBody,key,0);
      if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||
@@ -966,7 +994,9 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
 
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
-  const claim=replacementClaimedDispatch
+  const claim=capacityClaimedDispatch
+   ?await db.rpc('task4a_capacity_execution_claim',{p_release:release})
+   :replacementClaimedDispatch
    ?await db.rpc('task4a_replacement_claim',{p_release:release})
    :postpaidClaimedDispatch
    ?await db.rpc('task4a_postpaid_claim',{p_release:release})
@@ -979,7 +1009,10 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
-   if(replacementClaimedDispatch){
+   if(capacityClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_capacity_execution_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('Capacity successor dispatch accepted but audit failed; no retry permitted');
+   }else if(replacementClaimedDispatch){
     const sent=await db.rpc<boolean>('task4a_replacement_record_submitted',{p_release:release});
     if(sent.error||sent.data!==true)throw Error('Replacement accepted but audit failed; no retry permitted');
    }else if(postpaidClaimedDispatch){
@@ -1010,6 +1043,9 @@ export async function dispatchTask4aPostpaidOnce(){
 }
 export async function dispatchTask4aReplacementOnce(){
  return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',true);
+}
+export async function dispatchTask4aCapacityOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',false,true);
 }
 
 export async function dispatchOwnerRenewedNativeDevelopment() {

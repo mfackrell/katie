@@ -194,7 +194,11 @@ if(task4aHistory.pregrant){
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant)){
  let linkedEvidence=null;
- if(task.external?.task4aReplacementClaimId){
+ if(task.external?.task4aCapacityConsentDigest){
+  const ready=await db.rpc('task4a_capacity_execution_ready',{p_approval:approval.id,p_release:process.env.GITHUB_SHA});
+  if(ready.error||ready.data!==true)denied('Fresh capacity-successor execution claim required');
+  // Recover the latest paid run normally, never the older failed-host bridge.
+ }else if(task.external?.task4aReplacementClaimId){
   if(!task4aHistory.postpaid)denied('Replacement is only valid for original post-paid Task 4A');
   const ready=await db.rpc('task4a_replacement_authentic',{p_release:process.env.GITHUB_SHA});
   if(ready.error||ready.data!==true)denied('Exact replacement owner claim required');

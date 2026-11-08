@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {verifyTask4aCapacityPostgres} from './task4a-capacity-postgres.mjs';
 const project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388',task='d0e41ff5-149e-4319-9e65-dcc605fb75da';
 const oldRelease='25363d8cd0906e7915c4e0aa6443142a95a76c20',newRelease='f'.repeat(40);
 const claimId='f105fde0-1e35-4aaf-80c6-b80645701325';
@@ -93,5 +94,6 @@ export async function verifyTask4aReplacementPostgres(db,{connect,owner,account,
   assert.equal(await rpc(db,'developer_gateway_execution_live',[String(winner+1).repeat(64),project,accepted[0].value.executionEpoch]),true,'Actual production gateway live gate');
   assert.equal((await one(db,'select count(*)::int n from benchmark_budget_calls where account_id=$1',[account])).n,4,'No provider calls from qualification');
   console.log('TASK4A_REPLACEMENT_REAL_POSTGRES_TWO_CONNECTION_CLAIM_AND_PRODUCTION_NATIVE_GRANT_PASS');
+  await verifyTask4aCapacityPostgres(db,{connect,owner,account,approval});
  }finally{await Promise.allSettled(clients.map(c=>c.end()));}
 }
