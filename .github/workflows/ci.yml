@@ -183,7 +183,8 @@ jobs:
           mkdir "$RUNNER_TEMP/project-tools"
           cp scripts/project-*.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           cp tests/fixtures/task4a-verifier-request.md "$RUNNER_TEMP/task4a-request.md"
-          git worktree add --detach "$RUNNER_TEMP/task4a-candidate" 1d51f2fa7f95fec1cb8c777c0525402e05f34f8e
+          git clone --no-hardlinks . "$RUNNER_TEMP/task4a-candidate"
+          git -C "$RUNNER_TEMP/task4a-candidate" checkout --detach 1d51f2fa7f95fec1cb8c777c0525402e05f34f8e
           cd "$RUNNER_TEMP/task4a-candidate"
           node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/task4a-request.md"
           set +e

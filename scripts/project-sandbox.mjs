@@ -21,11 +21,12 @@ export function sandboxArgs(workspace,{dependencies,network=false,writable=false
  // Overlay only an absent or empty diagnostics directory. Never hide source,
  // tracked artifacts or a symlink from scope validation/checkpoint preservation.
  if(artifacts){
-  const target=resolve(root,'test-artifacts'),external=realpathSync(artifacts),source=realpathSync(root);
+  const parent=resolve(root,'test-artifacts'),target=resolve(parent,'standalone-rail'),external=realpathSync(artifacts),source=realpathSync(root);
   if(external===source||external.startsWith(source+'/')||source.startsWith(external+'/'))throw Error('Artifact mount must be outside candidate checkout');
   if(lstatSync(artifacts).isSymbolicLink()||!lstatSync(external).isDirectory())throw Error('Invalid artifact mount');
+  try{const st=lstatSync(parent);if(st.isSymbolicLink()||!st.isDirectory())throw Error('Refusing to hide candidate artifacts');}catch(e){if(e.code!=='ENOENT')throw e;}
   try{const st=lstatSync(target);if(st.isSymbolicLink()||!st.isDirectory()||readdirSync(target).length)throw Error('Refusing to hide candidate artifacts');}catch(e){if(e.code!=='ENOENT')throw e;}
-  args.push('--bind',external,'/app/test-artifacts');
+  args.push('--bind',external,'/app/test-artifacts/standalone-rail');
  }
  args.push('--chdir','/app','--setenv','PATH',process.env.PATH??'/usr/bin:/bin','--setenv','HOME','/tmp','--setenv','TMPDIR','/tmp','--setenv','LANG','C.UTF-8','--setenv','GIT_OPTIONAL_LOCKS','0','--remount-ro','/');
  return args;
@@ -37,8 +38,6 @@ export function collectTestArtifacts(source,destination){
  const fds=[];
  try{
   let dir=openSync(source,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);fds.push(dir);
-  if(readdirSync(`/proc/self/fd/${dir}`).some(name=>name!=='standalone-rail'))throw Error('Unexpected test artifact path');
-  try{dir=openSync(`/proc/self/fd/${dir}/standalone-rail`,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);fds.push(dir);}catch(e){if(e.code==='ENOENT')return;throw e;}
   const names=readdirSync(`/proc/self/fd/${dir}`);if(names.length>100)throw Error('Too many test artifacts');
   let total=0;
   for(const name of names){

@@ -13,12 +13,16 @@ test('diagnostic mount rejects existing source, symlinks and overlapping checkou
  const repo=join(root,'candidate'),artifacts=join(root,'diagnostics');mkdirSync(repo);mkdirSync(artifacts);
  assert.throws(()=>sandboxArgs(repo,{artifacts:repo}),/outside/);
  assert.throws(()=>sandboxArgs(repo,{artifacts:root}),/outside/);
- mkdirSync(join(repo,'test-artifacts'));writeFileSync(join(repo,'test-artifacts','source'),'preserve');
+ mkdirSync(join(repo,'test-artifacts/standalone-rail'),{recursive:true});writeFileSync(join(repo,'test-artifacts/standalone-rail/source'),'preserve');
  assert.throws(()=>sandboxArgs(repo,{artifacts}),/hide candidate/);
- assert.equal(readFileSync(join(repo,'test-artifacts','source'),'utf8'),'preserve');
+ assert.equal(readFileSync(join(repo,'test-artifacts/standalone-rail/source'),'utf8'),'preserve');
  rmSync(join(repo,'test-artifacts'),{recursive:true});symlinkSync(artifacts,join(repo,'test-artifacts'));
  assert.throws(()=>sandboxArgs(repo,{artifacts}),/hide candidate/);
- rmSync(join(repo,'test-artifacts'));symlinkSync(artifacts,join(root,'alias'));
+ rmSync(join(repo,'test-artifacts'));
+ mkdirSync(join(repo,'test-artifacts/documents'),{recursive:true});writeFileSync(join(repo,'test-artifacts/documents/existing.pdf'),'preserve sibling');
+ const args=sandboxArgs(repo,{artifacts});assert.ok(args.includes('/app/test-artifacts/standalone-rail'));assert.ok(!args.includes('/app/test-artifacts'));
+ assert.equal(readFileSync(join(repo,'test-artifacts/documents/existing.pdf'),'utf8'),'preserve sibling');
+ symlinkSync(artifacts,join(root,'alias'));
  assert.throws(()=>sandboxArgs(repo,{artifacts:join(root,'alias')}),/Invalid artifact/);
 });
 
@@ -45,10 +49,22 @@ BIN=/usr/lib/postgresql/16/bin
 "$BIN/pg_ctl" -D /tmp/fixture -l /tmp/pg.log -o '-h 127.0.0.1 -k /tmp -p 55432' -w start
 trap '"$BIN/pg_ctl" -D /tmp/fixture -m immediate -w stop' EXIT
 "$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -c 'create table counter(n integer); insert into counter values(0)'
-"$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -c 'begin; update counter set n=n+1; select pg_sleep(1); commit' > /tmp/first &
+PGAPPNAME=fixture_first "$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -c 'begin; update counter set n=n+1; select pg_sleep(3); commit' > /tmp/first &
 FIRST=$!
-"$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -c 'update counter set n=n+1' > /tmp/second &
+for i in {1..50}; do
+  sleeping=$("$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -Atc "select count(*) from pg_stat_activity where application_name='fixture_first' and wait_event='PgSleep'")
+  [ "$sleeping" = 1 ] && break
+  sleep 0.05
+done
+test "$sleeping" = 1
+PGAPPNAME=fixture_second "$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -c 'update counter set n=n+1' > /tmp/second &
 SECOND=$!
+for i in {1..50}; do
+  blocked=$("$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -Atc "select count(*) from pg_stat_activity where application_name='fixture_second' and wait_event_type='Lock'")
+  [ "$blocked" = 1 ] && break
+  sleep 0.05
+done
+test "$blocked" = 1
 wait "$FIRST"; wait "$SECOND"
 test "$("$BIN/psql" -h 127.0.0.1 -p 55432 -U postgres -Atc 'select n from counter')" = 2
 mkdir -p /app/test-artifacts/standalone-rail
@@ -56,13 +72,13 @@ printf diagnostics > /app/test-artifacts/standalone-rail/fixture.png
 `;
  for(const passed of [true,false]){
   const r=spawnSync('bwrap',[...sandboxArgs(repo,{writable:true,artifacts}),'/bin/bash','-c',pg+`\nexit ${passed?0:17}\n`],{encoding:'utf8',timeout:60000});
-  assert.equal(r.status,passed?0:17,r.stderr+r.stdout);assert.equal(readFileSync(join(artifacts,'standalone-rail/fixture.png'),'utf8'),'diagnostics');
+  assert.equal(r.status,passed?0:17,r.stderr+r.stdout);assert.equal(readFileSync(join(artifacts,'fixture.png'),'utf8'),'diagnostics');
   assert.equal(git('status','--porcelain'),'');assert.equal(git('rev-parse','HEAD^{tree}'),tree);
   const record=wip.save({phase:'review',boundary:true,lastCompleted:{verification:{passed,head}}});
   assert.equal(record.sourceTreeSha,tree);assert.equal(record.verification,'unverified');
   assert.equal(record.lastCompleted.verification.passed,passed);
  }
- writeFileSync(join(repo,'unrelated.txt'),'must still be rejected');
+ writeFileSync(join(repo,'test-artifacts/unrelated.ts'),'must still be rejected');
  assert.throws(()=>wip.save({phase:'review',boundary:true}),/NATIVE_WIP_CHECKPOINT_DENIED/);
 });
 
@@ -70,11 +86,11 @@ test('host diagnostic collection rejects symlinks and hardlinks; preserves norma
  const {collectTestArtifacts}=await import('../scripts/project-sandbox.mjs');
  const {linkSync}=await import('node:fs');
  const root=mkdtempSync(join(tmpdir(),'verifier-collector-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
- const source=join(root,'source'),rail=join(source,'standalone-rail');mkdirSync(rail,{recursive:true});
+ const source=join(root,'source'),rail=source;mkdirSync(rail,{recursive:true});
  writeFileSync(join(source,'hidden-source.ts'),'out of scope');
- assert.throws(()=>collectTestArtifacts(source,join(root,'output')),/Unexpected test artifact path/);
+ assert.throws(()=>collectTestArtifacts(source,join(root,'output')),/Invalid test artifact name/);
  rmSync(join(source,'hidden-source.ts'));mkdirSync(join(source,'other'));
- assert.throws(()=>collectTestArtifacts(source,join(root,'output')),/Unexpected test artifact path/);
+ assert.throws(()=>collectTestArtifacts(source,join(root,'output')),/Invalid test artifact name/);
  rmSync(join(source,'other'),{recursive:true});
  writeFileSync(join(root,'secret'),'private');symlinkSync(join(root,'secret'),join(rail,'leak.png'));
  assert.throws(()=>collectTestArtifacts(source,join(root,'output')));
