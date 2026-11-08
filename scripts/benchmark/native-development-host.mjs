@@ -1,3 +1,4 @@
+import {task4aSuccessorRequestCap} from './task4a-successor-envelope.mjs';
 import {loadTask4aLinkedDiagnostics} from './task4a-failed-run-link.mjs';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
 import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
@@ -226,6 +227,7 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
 const verificationFirstCapability=createTask4aVerificationFirstCapability(recoveryPlan?.record,recovery);
+if(approval.developer_authority?.task4aFinalSuccessor&&!verificationFirstCapability)denied('Final successor requires exact verification-first restoration');
 let capacityRecovery=recovery;
 // Advisory only. Recovery authentication above, grants/admission below remain
 // authoritative. Forecast errors never call denied() or change phase selection.
@@ -322,7 +324,7 @@ const commitCandidate=(label)=>{
 };
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
 mkdirSync(sockdir,{mode:0o700});
-const perRequestCap=Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens));
+const perRequestCap=task4aSuccessorRequestCap({approval,defaultCap:Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens))});
 if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
 const upstream=createResponsesProvider({apiKey:providerKey});
 let gatewayFailure=null,capacityPhase=null,capacityReceipts=[];
@@ -331,7 +333,7 @@ const server=createNativeHttpBridge({
  onFailure:classification=>{gatewayFailure??=classification;},
  requireInputCount:true,
  db,grantToken,trialId:ordinary?null:proof.trialId,developerProjectId:ordinary?project.id:null,task4a,executionEpoch,
- providerNamespace:'openai-responses',upperTokens:perRequestCap,
+ providerNamespace:'openai-responses',upperTokens:perRequestCap,successorEnvelope:approval.developer_authority?.task4aSuccessorEnvelope,
  upstream,clientToken,fullMission:true,
  recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens,usage})=>{
   const {data,error}=await db.rpc(task4a?'task4a_native_reconcile_provider_usage':'benchmark_reconcile_provider_usage',{

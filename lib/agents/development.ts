@@ -163,6 +163,18 @@ export async function authenticatedTask4aCapacityCheckpoint(approvedContinuation
  return e;
 }
 
+// The final successor authenticates the latest settled run, never the older
+// capacity checkpoint or an unverified Git tag.
+export async function authenticatedTask4aFinalCheckpoint(approvedContinuation?:string){
+ const e=await authenticatedLifecycleCheckpoint(TASK4A_ORIGINAL_TASK_ID,approvedContinuation);
+ if(e.record.checkpointSha!=='d2610d94289a0ba5aafcaa60598cae7c21507cfe'||
+  String(e.record.runId)!=='42443455661'||e.record.approvalId!=='ac443164-faf7-45be-96f1-cc93dfc85346'||
+  e.checkpoint.releaseSha!=='c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed'||
+  e.record.sourceTreeSha!=='26869fb977fd29b4f96652b9de3d47e0f0e0ffeb')throw Error('Final Task 4A checkpoint changed');
+ return e;
+}
+export async function dispatchTask4aFinalOnce(){return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',false,true,true);}
+
 export async function prepareLifecycleOwnerProposal(taskId:string){
  const evidence=await authenticatedLifecycleCheckpoint(taskId);
  const plan=lifecycleProposalFromSnapshot({snapshot:evidence.snapshot,record:evidence.record,observations:evidence.diagnostics.capacityObservations??[]});
@@ -721,7 +733,7 @@ export async function qualifiedOrdinaryDevelopmentRelease(){
  const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
  return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
 }
-async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false,capacityExecution=false){
+async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false,capacityExecution=false,finalExecution=false){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
@@ -737,7 +749,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
   // The scheduler cannot activate capacity. Only the explicit execution route
   // enters this mode after a separate exact owner execution consent.
   const capacityRenewal='task4aCapacityRenewal' in (a.developer_authority??{});
-  if(capacityRenewal!==capacityExecution)continue;
+  const finalSuccessor='task4aFinalSuccessor' in (a.developer_authority??{});
+  if(finalSuccessor!==finalExecution||capacityRenewal!==capacityExecution)continue;
   if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
   let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;
@@ -787,7 +800,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
       });
       if(error||ready!==true)continue;
     }else{
-      const evidence=capacityRenewal?await authenticatedTask4aCapacityCheckpoint(a.id):replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
+      const evidence=finalSuccessor?await authenticatedTask4aFinalCheckpoint(a.id):capacityRenewal?await authenticatedTask4aCapacityCheckpoint(a.id):replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
       if(capacityRenewal){
         if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
       }else if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
@@ -831,8 +844,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
      if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||previous.projectId!==c.projectId||
         previous.approvalId!==a.previous_developer_approval_id||previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
         previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
-        previous.releaseSha!=='3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0')continue;
-     const consent=await db.rpc<boolean>('task4a_capacity_execution_authorized',{p_release:release});
+        previous.releaseSha!==(finalExecution?'c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed':'3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0'))continue;
+     const consent=await db.rpc<boolean>(finalExecution?'task4a_final_execution_authorized':'task4a_capacity_execution_authorized',{p_release:release});
      if(consent.error||consent.data!==true)continue;
      capacityClaimedDispatch=true;
    }else if(postpaid&&replacement){
@@ -995,7 +1008,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
   const claim=capacityClaimedDispatch
-   ?await db.rpc('task4a_capacity_execution_claim',{p_release:release})
+   ?await db.rpc(finalExecution?'task4a_final_execution_claim':'task4a_capacity_execution_claim',{p_release:release})
    :replacementClaimedDispatch
    ?await db.rpc('task4a_replacement_claim',{p_release:release})
    :postpaidClaimedDispatch
@@ -1010,7 +1023,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
    if(capacityClaimedDispatch){
-    const sent=await db.rpc<boolean>('task4a_capacity_execution_submitted',{p_release:release});
+    const sent=await db.rpc<boolean>(finalExecution?'task4a_final_execution_submitted':'task4a_capacity_execution_submitted',{p_release:release});
     if(sent.error||sent.data!==true)throw Error('Capacity successor dispatch accepted but audit failed; no retry permitted');
    }else if(replacementClaimedDispatch){
     const sent=await db.rpc<boolean>('task4a_replacement_record_submitted',{p_release:release});

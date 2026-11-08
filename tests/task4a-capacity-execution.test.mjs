@@ -53,7 +53,7 @@ test('actual successor dispatcher claims before GitHub and never retries uncerta
  const c={projectId:'6d1c29f1-b31e-47a5-aabb-cbcf1326f388',scopeHash:'scope',contractHash:'contract',baselineSha:'baseline'};
  const proof={authorityKind:'task4a-developer',taskId:task.id,projectId:c.projectId,approvalId:'old-approval',accountId:'account',scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:'3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0'};
  let authorized=false,claimed=false,uncertain=false;const events=[];
- const context={task,release,c,key:'test-key',postpaid:true,capacityRenewal:true,replacement:false,body:'new signed body',
+ const context={task,release,c,key:'test-key',postpaid:true,finalExecution:false,capacityRenewal:true,replacement:false,body:'new signed body',
   approval:{id:'new-approval',previous_developer_approval_id:'old-approval',account_id:'account'},
   binding:{owner:'mfackrell',repo:'katie'},marker:()=> 'task-marker',unpackDevelopmentRequest:x=>x,readDeveloperHandoff:()=>proof,
   readTask:async()=>task,

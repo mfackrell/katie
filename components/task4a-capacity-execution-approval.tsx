@@ -1,5 +1,6 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
+import {Task4aFinalSuccessorApproval} from '@/components/task4a-final-successor-approval';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 const endpoint='/api/projects/task4a-capacity-execution';
 const chat='e53defeb-16eb-457e-aa07-435141165ee8';
@@ -30,6 +31,7 @@ export function Task4aCapacityExecutionApproval(){
   finally{setBusy(false);}
  };
  if(!status)return null;
+ if(status.state==='claimed_once')return <Task4aFinalSuccessorApproval/>;
  return <div className="rounded border p-3 space-y-2" aria-label="Original Task 4A successor execution">
   <p className="font-semibold">Separately authorize one saved-work execution</p>
   <p>Both consumed dispatch claims stay recorded. One replacement resumes the latest saved WIP under the approved 20-call limit and $9 cumulative ceiling,
