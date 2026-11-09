@@ -26,17 +26,18 @@ export async function executiveChoices(choices:OrchestrationChoice[]):Promise<Or
  return result;
 }
 export const MANAGEMENT_INSTRUCTION=`You are a management-only agent in a persistent software organization. Return ONLY a JSON array of management commands. Never write code, perform research, run tests, or substitute your own technical output for execution workers. Managers manage; workers execute.
-Interpret the original owner objective. Define functional areas, goals, architecture responsibilities and measurable acceptance. Appoint only needed organizations; The Project Director determines how many directorates the requirements justify; there is no predetermined count or depth. Establish purpose and direction before commissioning leadership. Independent QA must remain separate from development. Functional directors may appoint managers and workers recursively. Use the supplied existing execution team where appropriate through reuseAgentId. Reuse does not change worker permissions.
+Interpret the original owner objective. Define functional areas, goals, architecture responsibilities and measurable acceptance. The Project Director commissions only Functional Directors (kind manager), never execution workers, and never assigns worker tasks. Functional Directors have the same management capabilities within their delegated scope and may commission managers or workers recursively. Appoint only needed organizations; The Project Director determines how many directorates the requirements justify; there is no predetermined count or depth. Establish purpose and direction before commissioning leadership. Independent QA must remain separate from development. Functional directors may appoint managers and workers recursively. Use the supplied existing execution team where appropriate through reuseAgentId. Reuse does not change worker permissions.
 Commands:
 plan: {action:"plan",purpose,direction,outcomes:[{criterion,verification}],milestones:[{objective}],organizations:["justified-area-key"]}. Preserve the original owner objective; identify strategic priorities, measurable outcomes and milestone direction. The Project Director commissions the organizations in its own plan, not a fixed chart. Material ambiguities require an exception through the owner approval boundary.
 appoint: {action:"appoint",kind:"manager"|"worker",name,area,purpose,objective,deliverables:["expected artifacts"],interfaces:["component interfaces"],reporting,acceptance:["measurable criteria"],tokens:integer,deadline:ISO8601,tools:["manage"|"analysis"|"research"|"development"|"repository_review"],paths:[],reuseAgentId?:UUID}. Sibling allocations together must fit parent resources; retain capacity for your own management decisions. Workers cannot delegate. Organizational growth must remain within inherited operational and financial resources. Do not allocate unavailable scope or authority.
 grant_scope: {action:"grant_scope",nodeId:directChildUUID,paths:["approved/path/"]}. After scope approval, delegate only the current parent scope grant to each organization. Managers propagate it to workers; initial empty paths never authorize coding.
-assign: {action:"assign",nodeId:directWorkerUUID,capability:"analysis"|"research"|"writing"|"repository_review",instruction}. Delegate technical research/design work through the existing mission worker. Coding remains in the approved cumulative project milestone workflow; appoint its existing developer as an execution worker.
+assign: {action:"assign",nodeId:directWorkerUUID,capability:"analysis"|"research"|"writing"|"repository_review",instruction}. Delegate technical research/design work through the existing mission worker. Functional Directors appoint and supervise the existing developers as execution workers. Coding remains in the approved cumulative project milestone workflow. The Project Director must delegate this responsibility to a Functional Director.
 dependency: {action:"dependency",nodeId:directChildUUID,dependsOn:directChildUUID}.
 exception: {action:"exception",reason:"routine"|"authority"|"scope"|"resources"|"dependency"|"security"|"objective",detail}. Routine problems stay in your organization. Escalate only insufficient authority, material changes, cross-organization dependencies, policy boundaries or inability to achieve objectives.
 resolve: {action:"resolve",exceptionId,assignmentId,evidence}. Resolve only your assigned exceptions with actual evidence.
 escalate: {action:"escalate",exceptionId}. Moves to your immediate superior only; owner involvement is a last-resort material decision.
-certify: {action:"certify",nodeId:directChildUUID,assignmentId:UUID,checks:[{criterion:"exact delegated criterion",passed:true,assignmentId:UUID,evaluation:"how the actual artifact satisfies it"}]}. Evaluate every original delegated criterion; activity reports are not component acceptance. Evidence must be actual completed work from that organization. Never invent evidence IDs. Component completion is not project completion.
+submit_component: {action:"submit_component",assignmentId:UUID,checks:[{criterion:"exact delegated criterion",passed:true,assignmentId:UUID,evaluation:"how the verified organization fulfills its contract"}]}. Functional Directors and subordinate managers certify their OWN complete organizational objective after accepting all subordinates. This submits evidence to the immediate superior; it does not accept your own component. Root cannot submit.
+certify: {action:"certify",nodeId:directChildUUID,assignmentId:UUID,checks:[{criterion:"exact delegated criterion",passed:true,assignmentId:UUID,evaluation:"how the actual artifact satisfies it"}]}. Evaluate every original delegated criterion; activity reports are not component acceptance. Evidence must be actual completed work from that organization. Never invent evidence IDs. For a management component, require its current completion_submission first and independently evaluate its original contract; accepted worker tasks alone are insufficient. Component completion is not project completion.
 reject: {action:"reject",nodeId:directChildUUID,findings}. Return incomplete outcomes to the responsible subordinate for corrective action.
 replace_leader: {action:"replace_leader",nodeId:directManagerUUID,reason}. Replace ineffective leadership while preserving its organization, contracts, subordinate work and consumed resources.
 reorganize: {action:"reorganize",nodeId:directChildUUID,underId:directManagerUUID,reason}. Transfer responsibility to a sibling manager only within that manager's inherited authority; revise your organizational plan accordingly.
@@ -52,7 +53,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  db.from('work_projects').select('objective,spec,team,approved_hash,verified_sha,phase').eq('id',claim.mission.project_id).single(),
  ]);
  if(results.some(r=>r.error))throw Error('Durable organization evidence unavailable');
- const nodes=results[0].data as Array<{id:string;agent_id:string;kind:string}>;
+ const nodes=results[0].data as Array<{id:string;agent_id:string;kind:string;parent_id?:string|null}>;
  const node=nodes.find(n=>n.id===claim.job.payload.organizationNodeId&&n.agent_id===claim.job.agent_id);
  if(!node||node.kind==='worker')throw Error('Management principal mismatch');
  const ids=new Set(nodes.map(n=>n.id));
@@ -73,7 +74,23 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  if(grants.error||plans.error||dependencies.error)throw Error('Organization scope or direction evidence unavailable');
  const response=await model(claim,MANAGEMENT_INSTRUCTION,JSON.stringify({plans:plans.data,dependencies:dependencies.data,scopeGrants:grants.data,principal:node,project,executionTeam:team.data,organization:nodes,exceptions:results[1].data,assignments,evidence:evidence.data}),'none');
  const commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));
+ assertManagementCommands(node,nodes,commands);
  await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
+}
+
+// Dispatch checks complement the authoritative lease-bound database decisions.
+// Never infer authority from a model-provided role or node identifier.
+export function assertManagementCommands(principal:{id:string;kind:string},nodes:Array<{id:string;parent_id?:string|null}>,commands:unknown){
+ if(!Array.isArray(commands)||commands.length<1||commands.length>16)throw Error('Bounded management commands required');
+ for(const c of commands){
+  if(!c||typeof c!=='object')throw Error('Invalid management command');
+  if(principal.kind==='project_director'&&((c.action==='appoint'&&c.kind!=='manager')||c.action==='assign'))throw Error('Project Director commissions only Functional Directors and cannot assign execution work');
+  if(c.action==='submit_component'&&(principal.kind!=='manager'||c.nodeId!=null))throw Error('Only the responsible Functional Director may submit its own component');
+  if(['assign','certify','reject','grant_scope','reorganize','replace_leader','dependency'].includes(c.action)){
+   const targets=[c.nodeId,...(c.action==='reorganize'?[c.underId]:c.action==='dependency'?[c.dependsOn]:[])];
+   if(targets.some(id=>!nodes.some(n=>n.id===id&&n.parent_id===principal.id)))throw Error('Management decisions require immediate reporting authority');
+  }
+ }
 }
 
 // Pass the director's strategy and accepted organization outputs into the
