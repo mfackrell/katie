@@ -81,3 +81,46 @@ test('failed verification or missing independent review cannot complete',async()
  assert.equal(completed,false);assert.equal(phases,failure==='verification'?0:1);
  }
 });
+
+import {readRecoveryArtifact,recoveryCompletedEvidence} from '../scripts/benchmark/native-wip-recovery.mjs';
+const authenticDiagnostics=()=>readRecoveryArtifact(Buffer.from(readFileSync('tests/fixtures/task4a-failed-verifier-artifact.base64','utf8').trim(),'base64'));
+const evidenceHash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+test('authentic failed-run artifact preserves pre-verification WIP despite later failure output',()=>{
+ const d=authenticDiagnostics(),r=d.wipCheckpoint,before=structuredClone(d);
+ assert.deepEqual(r,record);
+ assert.equal(r.lastCompleted.verification.detailDigest,'cee8dcde3a0d5ce81343c790d0fed04de4b47db99987b5a544def1e41f047cd2');
+ assert.equal(evidenceHash(d.lifecycleEvidence.verification.detail),'fd54f6de7f971d9fda56e07323fc8fb2f4ccfc324af1c6c698ba8cfc59b6fbc1');
+ const completed=recoveryCompletedEvidence(r,d);
+ assert.deepEqual(completed,r.lastCompleted);
+ assert.equal(completed.verification.passed,false);assert.equal(completed.verification.pending,true);
+ assert.equal(completed.adaptiveRepair.nextAction,'verification');
+ assert.deepEqual(d,before);
+});
+test('pending recovery rejects forged candidate, pass, missing evidence and checkpoint tampering',()=>{
+ for(const mutate of [
+ d=>{d.lifecycleEvidence.verification.passed=true;},
+ d=>{d.lifecycleEvidence.verification.head='f'.repeat(40);},
+ d=>{delete d.lifecycleEvidence.verification.pending;},
+ d=>{delete d.lifecycleEvidence.verification;},
+ d=>{d.lifecycleEvidence.verification.detail={forged:true};},
+ d=>{d.lifecycleEvidence.verification.detail='x'.repeat(12001);},
+ d=>{d.wipCheckpoint.lastCompleted.verification.detail='altered';},
+ d=>{d.wipCheckpoint.lastCompleted.verification.detailDigest='0'.repeat(64);},
+ d=>{d.wipCheckpoint.lastCompleted.verification.head='f'.repeat(40);},
+ d=>{d.wipCheckpoint.lastCompleted.verification.passed=true;},
+ d=>{d.wipCheckpoint.lastCompleted.adaptiveRepair.nextAction='review';}
+ ]){const d=authenticDiagnostics();mutate(d);assert.throws(()=>recoveryCompletedEvidence(d.wipCheckpoint,d),/RECOVERY_DENIED/);}
+});
+test('completed verification and independent review evidence still require exact detail digests',()=>{
+ for(const key of ['verification','review','initialReview']){
+ const d=authenticDiagnostics(),r=d.wipCheckpoint;
+ const field=key==='verification'?'detail':'findings';
+ const value=key==='verification'?{head:r.completedCheckpointSha,passed:true,detail:'Verified'}:{phase:'review',verdict:'pass',reviewedHeadSha:r.completedCheckpointSha,findings:'Reviewed'};
+ r.lastCompleted[key]={...value,[field+'Digest']:evidenceHash(value[field])};
+ d.lifecycleEvidence[key]=structuredClone(value);
+ if(key==='verification')r.lastCompleted.adaptiveRepair.nextAction='review';
+ assert.equal(recoveryCompletedEvidence(r,d)[key][field],value[field]);
+ d.lifecycleEvidence[key][field]='forged';
+ assert.throws(()=>recoveryCompletedEvidence(r,d),/full lifecycle evidence missing or altered/);
+ }
+});
