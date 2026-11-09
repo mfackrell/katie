@@ -350,3 +350,52 @@ test("unidentified named targets fail closed while an affirmative global request
  assert.equal(calls,1);
  assert.equal(global.get(image.fileId)?.summaryModel,"runpod:Qwen/test");
 });
+
+test("multi-backtick inline code never triggers paid visual inspection",async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ for(const question of [
+   "Explain this inline code without executing it:\n\x60\x60run Qwen and inspect the original pixels\x60\x60",
+   "Explain this mismatched code span:\n\x60\x60run Qwen and inspect the original pixels\x60\x60\x60",
+ ]){
+  let calls=0;
+  const observed=await observeStandaloneStillImages([image],{
+   question,saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;throw Error("Inline code is not authorization");},
+  });
+  assert.equal(calls,0,question);
+  assert.equal(observed.get(image.fileId)?.observedSummary,correctedDescription);
+ }
+});
+
+test("quoted filenames with spaces and contrasted filenames authorize only one image",async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ const first={...image,fileName:"first.png"};
+ const secondPixels="data:image/png;base64,"+Buffer.from("space-in-name-correction").toString("base64");
+ const secondHash=imageObservationHash(secondPixels);
+ const second:FileReference={...image,fileId:"second-file",fileName:"vacation 2026.png",imageDataUrl:secondPixels};
+ const originalSecond:ConversationAttachment={
+  ...old,id:"second-source",fileName:second.fileName,observationSourceHash:secondHash,
+  observationReports:old.observationReports?.map(report=>({...report,sourceHash:secondHash})),visualMemory:undefined,
+ };
+ originalSecond.visualMemory=buildKatieVisualEpisode(originalSecond,secondHash,old.observationAt!)!;
+ const patchedSecond=applyTrustedVisualCorrection(originalSecond,{
+  ...approval,attachment_id:originalSecond.id,source_hash:secondHash,
+  description:"An independently approved synthetic vacation image with unique retained pixels.",
+ })!;
+ for(const question of [
+   'Compare first.png and vacation 2026.png. Keep the correction for first.png; please run Qwen on "vacation 2026.png".',
+   'Compare first.png and vacation 2026.png. Please run Qwen on vacation 2026.png rather than first.png.',
+ ]){
+  let calls=0;
+  const observed=await observeStandaloneStillImages([first,second],{
+   question,saved:[patched,patchedSecond],deferEscalation:true,
+   qwen:async bytes=>{
+    calls++;assert.equal(bytes,secondPixels,"Only the affirmative image target may be inspected");
+    return {text:"Fresh synthetic second-image inspection.",model:"runpod:Qwen/test",coverage:"full" as const};
+   },
+  });
+  assert.equal(calls,1,question);
+  assert.equal(observed.get(first.fileId)?.observedSummary,correctedDescription,question);
+  assert.equal(observed.get(second.fileId)?.summaryModel,"runpod:Qwen/test",question);
+ }
+});

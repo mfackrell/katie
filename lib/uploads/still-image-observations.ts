@@ -55,42 +55,69 @@ export function weakFocalPointDescription(text:string):boolean {
 function explicitFreshImageInspection(
   question:string, reference?:FileReference, references?:FileReference[],
 ):boolean {
-  // Fenced examples are never instructions. A closing Markdown fence must
-  // match the opener's character and have at least its delimiter length.
-  const untrustedLines=question.split('\n');
+  const available=references??(reference?[reference]:[]);
+  // Strip fenced and indented code as data, honoring the opening fence's
+  // exact character and minimum closing length. Unclosed fences fail closed.
   const outside:string[]=[];
   let fence:{kind:string;length:number}|null=null;
-  for(const line of untrustedLines){
+  for(const line of question.split('\n')){
     const marker=line.match(/^\s{0,3}(\x60{3,}|~{3,})(?:[^\r\n]*)$/);
     if(fence){
-      if(marker && marker[1][0]===fence.kind &&
-         marker[1].length>=fence.length &&
-         /^\s{0,3}(?:\x60{3,}|~{3,})\s*$/.test(line)) fence=null;
-      outside.push(' ');
-      continue;
+      if(marker&&marker[1][0]===fence.kind&&marker[1].length>=fence.length&&
+         /^\s{0,3}(?:\x60{3,}|~{3,})\s*$/.test(line))fence=null;
+      outside.push(' ');continue;
     }
     if(marker){fence={kind:marker[1][0],length:marker[1].length};outside.push(' ');continue;}
-    outside.push(/^\s*>/.test(line)?' ':line);
+    outside.push(/^(?: {4}|\t|\s*>)/.test(line)?' ':line);
   }
-  // Preserve quoted *filenames* as operands, not quoted directives.
-  // Discard multiline, unfinished and historical quoted instructions.
-  const withoutQuotes=outside.join('\n').replace(
-    /\x60[^\x60]*(?:\x60|$)|"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'[^']+'(?!\w)/g,
-    (quoted:string)=>{
-      const value=quoted.slice(1,-1);
-      return /^[\w.-]+\.(?:png|jpe?g|webp|gif|heic|bmp|tiff?|pdf)$/i.test(value)?value:' ';
-    },
-  );
-  const available=references??(reference?[reference]:[]);
-  return withoutQuotes.split(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/i).some(part=>{
+  // Inline code delimiters must close with the same number of backticks.
+  // Quoted directives are data; only quoted names of *selected* attachments
+  // survive as inert target operands. Unclosed spans fail closed.
+  const source=outside.join('\n');
+  let clean='';
+  for(let i=0;i<source.length;){
+    const ch=source[i];
+    if(ch==='\x60'){
+      let count=1;
+      while(source[i+count]==='\x60')count++;
+      let close=-1;
+      for(let j=i+count;j<source.length;){
+        if(source[j]!=='\x60'){j++;continue;}
+        let run=1;while(source[j+run]==='\x60')run++;
+        if(run===count){close=j;break;}
+        j+=run;
+      }
+      clean+=' ';if(close<0)break;
+      i=close+count;continue;
+    }
+    const singleQuote=ch==="'"&&!(i>0&&/[a-z0-9]/i.test(source[i-1])&&/[a-z0-9]/i.test(source[i+1]??''));
+    if(ch==='"'||ch==='“'||singleQuote){
+      const closeChar=ch==='“'?'”':ch;
+      let close=-1;
+      for(let j=i+1;j<source.length;j++){
+        if(source[j]==='\\'){j++;continue;}
+        if(source[j]===closeChar){close=j;break;}
+      }
+      clean+=' ';
+      if(close<0)break;
+      const operand=source.slice(i+1,close).trim();
+      const known=available.find(item=>item.fileName.toLowerCase()===operand.toLowerCase());
+      if(known)clean+=known.fileName;
+      i=close+1;continue;
+    }
+    clean+=ch;i++;
+  }
+  return clean.split(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/i).some(part=>{
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
     if(!/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive))return false;
     if(!reference||!available.length)return true;
     const onlyAt=part.search(/\bonly\b/i);
-    const target=onlyAt>=0?part.slice(onlyAt+4):part;
-    const named=available.filter(candidate=>{
-      const name=candidate.fileName.toLowerCase(),value=target.toLowerCase();
+    const scope=onlyAt>=0?part.slice(onlyAt+4):part;
+    const contrasted=scope.search(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i);
+    const positive=contrasted>=0?scope.slice(0,contrasted):scope;
+    const matchName=(candidate:FileReference):boolean=>{
+      const name=candidate.fileName.toLowerCase(),value=positive.toLowerCase();
       if(!name)return false;
       for(let pos=value.indexOf(name);pos>=0;pos=value.indexOf(name,pos+1)){
         const before=value[pos-1],after=value[pos+name.length];
@@ -98,21 +125,22 @@ function explicitFreshImageInspection(
            (!after||!/[a-z0-9_.-]/i.test(after)))return true;
       }
       return false;
-    });
+    };
+    const named=available.filter(matchName);
     if(named.length===1)return named[0].fileId===reference.fileId;
     if(named.length>1)return onlyAt<0&&named.some(item=>item.fileId===reference.fileId);
-    const ordinal=target.match(/\b(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)\b/i);
+    const ordinal=positive.match(/\b(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)\b/i);
     if(ordinal){
       const index=['first','second','third','fourth','fifth'].indexOf(ordinal[1].toLowerCase());
       return available[index]?.fileId===reference.fileId;
     }
     if(onlyAt>=0)return false;
-    // A specifically scoped but unidentified target cannot silently become
-    // blanket approval for all selected images.
-    const targetPhrase=directive.match(/\b(?:on|for|of)\s+(.+)$/i)?.[1]?.trim();
-    if(targetPhrase){
-      if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)\b/i.test(targetPhrase))return true;
-      if(!/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)\b/i.test(targetPhrase))return false;
+    const scopeMarker=directive.match(/\b(?:on|for|of)\b([\s\S]*)$/i);
+    if(scopeMarker){
+      const operand=scopeMarker[1].trim();
+      if(!operand)return false;
+      if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)\b/i.test(operand))return true;
+      if(!/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)\b/i.test(operand))return false;
     }
     return true;
   });
