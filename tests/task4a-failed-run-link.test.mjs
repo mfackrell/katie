@@ -80,7 +80,7 @@ test('actual native host requires an authentic replacement claim before selectin
  const run=async({ready=true,postpaid=true,link=true}={})=>{
   const current=structuredClone(task);
   if(link){current.external.task4aReplacementClaimId='replacement-claim';current.external.task4aReplacementAuthorizationId='owner-receipt';}
-  const context={task:current,task4aHistory:{postpaid},project:{id:c.projectId},
+  const context={approval:{developer_authority:{}},task:current,task4aHistory:{postpaid},project:{id:c.projectId},
    process:{env:{GITHUB_SHA:'e'.repeat(40),GITHUB_REPOSITORY:'mfackrell/katie'}},
    denied:reason=>{throw Error(reason);},
    db:{rpc:async(name,args)=>{assert.equal(name,'task4a_replacement_authentic');assert.equal(args.p_release,'e'.repeat(40));return {data:ready,error:null};}},
@@ -95,5 +95,5 @@ test('actual native host requires an authentic replacement claim before selectin
  await assert.rejects(run({ready:false}),/Exact replacement owner claim required/);
  await assert.rejects(run({postpaid:false}),/only valid for original post-paid/);
  await assert.rejects(run({link:false}),/missing, expired or ambiguous trusted diagnostics/);
- assert.match(readFileSync('.github/workflows/autonomous-development.yml','utf8'),/native-wip-recovery,task4a-failed-run-link,/);
+ assert.match(readFileSync('.github/workflows/autonomous-development.yml','utf8'),/native-wip-recovery,task4a-verifier-recovery,task4a-failed-run-link,/);
 });

@@ -1,3 +1,4 @@
+import {task4aVerifierReader,validateTask4aVerifierCheckpoint} from '../../scripts/benchmark/task4a-verifier-recovery.mjs';
 import {authenticateTask4aFailedRun,loadTask4aLinkedDiagnostics} from '../../scripts/benchmark/task4a-failed-run-link.mjs';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
@@ -100,7 +101,7 @@ function github() {
 
 // Nonbillable: authenticate Task 1 evidence before proposing/approving authority.
 // No provider request, dispatcher or mutation of historical recovery records.
-export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string,failedRunLink?:Record<string,unknown>){
+export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string,failedRunLink?:Record<string,unknown>,failedVerifier=false){
  const task=await readTask(taskId),context=await getDevelopmentProjectContext(taskId);
  if(!context||!task.repository_full_name||(task.status!=='blocked'&&!(approvedContinuation&&task.status==='dispatching')))throw Error('A blocked original development task is required');
  const db=getSupabaseAdminClient(),client=github();
@@ -116,7 +117,8 @@ export async function authenticatedLifecycleCheckpoint(taskId:string,approvedCon
   if(/\/actions\/runs\/\d+$/.test(path))releaseSha=String(result.data.head_sha??'');
   return binary?Buffer.from(result.data as ArrayBuffer):result.data;
  };
- const {record,diagnostics}=await (failedRunLink?loadTask4aLinkedDiagnostics({task,evidence:failedRunLink,github:reader}):loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:reader}));
+ const authenticatedReader=failedVerifier?await task4aVerifierReader(reader):reader;
+ const {record,diagnostics}=await (failedRunLink?loadTask4aLinkedDiagnostics({task,evidence:failedRunLink,github:reader}):loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:authenticatedReader}));
  if(!record)throw Error('Authenticated checkpoint required');
  await validateRecoveryRecords({record,completedEvidence:recoveryCompletedEvidence(record,diagnostics),task,context,project,
   trialId:snap.data.snapshot.approval.trial_id,authorityKind:snap.data.authorityKind,accountId:snap.data.accountId,
@@ -173,6 +175,13 @@ export async function authenticatedTask4aFinalCheckpoint(approvedContinuation?:s
   e.record.sourceTreeSha!=='26869fb977fd29b4f96652b9de3d47e0f0e0ffeb')throw Error('Final Task 4A checkpoint changed');
  return e;
 }
+export async function authenticatedTask4aVerifierCheckpoint(approvedContinuation?:string){
+ const e=await authenticatedLifecycleCheckpoint(TASK4A_ORIGINAL_TASK_ID,approvedContinuation,undefined,true);
+ const proof=validateTask4aVerifierCheckpoint(e.record,e.diagnostics);
+ return {...e,checkpoint:{...e.checkpoint,...proof}};
+}
+export async function dispatchTask4aVerifierOnce(){return dispatchOrdinaryNativeDevelopment(TASK4A_ORIGINAL_TASK_ID,false,true,true,true);}
+
 export async function dispatchTask4aFinalOnce(){return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',false,true,true);}
 
 export async function prepareLifecycleOwnerProposal(taskId:string){
@@ -733,7 +742,7 @@ export async function qualifiedOrdinaryDevelopmentRelease(){
  const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
  return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
 }
-async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false,capacityExecution=false,finalExecution=false){
+async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false,capacityExecution=false,finalExecution=false,verifierExecution=false){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
@@ -750,6 +759,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
   // enters this mode after a separate exact owner execution consent.
   const capacityRenewal='task4aCapacityRenewal' in (a.developer_authority??{});
   const finalSuccessor='task4aFinalSuccessor' in (a.developer_authority??{});
+  const verifierRecovery='task4aVerifierRecovery' in (a.developer_authority??{});
+  if(verifierRecovery!==verifierExecution)continue;
   if(finalSuccessor!==finalExecution||capacityRenewal!==capacityExecution)continue;
   if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
@@ -800,7 +811,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
       });
       if(error||ready!==true)continue;
     }else{
-      const evidence=finalSuccessor?await authenticatedTask4aFinalCheckpoint(a.id):capacityRenewal?await authenticatedTask4aCapacityCheckpoint(a.id):replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
+      const evidence=verifierRecovery?await authenticatedTask4aVerifierCheckpoint(a.id):finalSuccessor?await authenticatedTask4aFinalCheckpoint(a.id):capacityRenewal?await authenticatedTask4aCapacityCheckpoint(a.id):replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
       if(capacityRenewal){
         if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
       }else if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
@@ -844,8 +855,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
      if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||previous.projectId!==c.projectId||
         previous.approvalId!==a.previous_developer_approval_id||previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
         previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
-        previous.releaseSha!==(finalExecution?'c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed':'3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0'))continue;
-     const consent=await db.rpc<boolean>(finalExecution?'task4a_final_execution_authorized':'task4a_capacity_execution_authorized',{p_release:release});
+        previous.releaseSha!==(verifierExecution?'61184faf4628d6fd9172cde8f16428e01700468b':finalExecution?'c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed':'3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0'))continue;
+     const consent=await db.rpc<boolean>(verifierExecution?'task4a_verifier_execution_authorized':finalExecution?'task4a_final_execution_authorized':'task4a_capacity_execution_authorized',{p_release:release});
      if(consent.error||consent.data!==true)continue;
      capacityClaimedDispatch=true;
    }else if(postpaid&&replacement){
@@ -1008,7 +1019,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
   const claim=capacityClaimedDispatch
-   ?await db.rpc(finalExecution?'task4a_final_execution_claim':'task4a_capacity_execution_claim',{p_release:release})
+   ?await db.rpc(verifierExecution?'task4a_verifier_execution_claim':finalExecution?'task4a_final_execution_claim':'task4a_capacity_execution_claim',{p_release:release})
    :replacementClaimedDispatch
    ?await db.rpc('task4a_replacement_claim',{p_release:release})
    :postpaidClaimedDispatch
@@ -1023,7 +1034,7 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
    await client.issues.update({...binding,issue_number:issue,body});
    await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
    if(capacityClaimedDispatch){
-    const sent=await db.rpc<boolean>(finalExecution?'task4a_final_execution_submitted':'task4a_capacity_execution_submitted',{p_release:release});
+    const sent=await db.rpc<boolean>(verifierExecution?'task4a_verifier_execution_submitted':finalExecution?'task4a_final_execution_submitted':'task4a_capacity_execution_submitted',{p_release:release});
     if(sent.error||sent.data!==true)throw Error('Capacity successor dispatch accepted but audit failed; no retry permitted');
    }else if(replacementClaimedDispatch){
     const sent=await db.rpc<boolean>('task4a_replacement_record_submitted',{p_release:release});

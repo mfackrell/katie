@@ -1,10 +1,11 @@
+import {task4aVerifierReader,validateTask4aVerifierCheckpoint} from './task4a-verifier-recovery.mjs';
 import {task4aSuccessorRequestCap} from './task4a-successor-envelope.mjs';
 import {loadTask4aLinkedDiagnostics} from './task4a-failed-run-link.mjs';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
 import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
-import {createTask4aVerificationFirstCapability,recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
+import {createTask4aFailedVerifierCapability,createTask4aVerificationFirstCapability,recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
 import {createNativeWipCheckpointer} from './native-wip-checkpoint.mjs';
 import {sanitizeEvidence,worktreeEvidence,NATIVE_EXECUTION_EVIDENCE_VERSION} from './native-execution-evidence.mjs';
 import {NATIVE_ADMISSION_DIAGNOSTICS_VERSION} from './native-request-admission.mjs';
@@ -208,7 +209,8 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
    denied('Replacement provenance unavailable');
   linkedEvidence=receipt.data?.proposal?.evidence;
  }
- const historicalReader=githubRecoveryReader(process.env.GITHUB_REPOSITORY);
+ const rawHistoricalReader=githubRecoveryReader(process.env.GITHUB_REPOSITORY);
+ const historicalReader=approval.developer_authority?.task4aVerifierRecovery?await task4aVerifierReader(rawHistoricalReader):rawHistoricalReader;
  const {record,diagnostics:priorDiagnostics}=linkedEvidence
   ?await loadTask4aLinkedDiagnostics({task,evidence:linkedEvidence,github:historicalReader})
   :await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:historicalReader,emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
@@ -218,6 +220,7 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
  priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  priorLifecycleEvidence=priorDiagnostics.lifecycleEvidence??null;
  priorRepairIterations=Array.isArray(priorDiagnostics.repairIterations)?priorDiagnostics.repairIterations.slice(-64):[];
+ if(approval.developer_authority?.task4aVerifierRecovery)validateTask4aVerifierCheckpoint(record,priorDiagnostics);
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:ordinary?null:proof.trialId,authorityKind:ordinary?'ordinary-developer':undefined,accountId:account.id,readOne});
@@ -226,7 +229,7 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
-const verificationFirstCapability=createTask4aVerificationFirstCapability(recoveryPlan?.record,recovery);
+const verificationFirstCapability=approval.developer_authority?.task4aVerifierRecovery?createTask4aFailedVerifierCapability(recoveryPlan?.record,recovery):createTask4aVerificationFirstCapability(recoveryPlan?.record,recovery);
 if(approval.developer_authority?.task4aFinalSuccessor&&!verificationFirstCapability)denied('Final successor requires exact verification-first restoration');
 let capacityRecovery=recovery;
 // Advisory only. Recovery authentication above, grants/admission below remain

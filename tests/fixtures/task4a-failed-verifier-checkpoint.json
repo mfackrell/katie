@@ -1,0 +1,61 @@
+{
+  "checkpointSha": "1d51f2fa7f95fec1cb8c777c0525402e05f34f8e",
+  "ref": "refs/tags/katie-wip/d0e41ff5-149e-4319-9e65-dcc605fb75da/42506385410-1/1",
+  "version": 2,
+  "kind": "native-unverified-wip",
+  "verification": "unverified",
+  "taskId": "d0e41ff5-149e-4319-9e65-dcc605fb75da",
+  "projectId": "6d1c29f1-b31e-47a5-aabb-cbcf1326f388",
+  "trialId": null,
+  "authorityKind": "ordinary-developer",
+  "approvalId": "1961239b-1722-4901-b671-8e61f4e6af49",
+  "grantId": "36d66bdc-c907-49ca-859d-abfed5fc334e",
+  "executionEpoch": 4,
+  "approvedScopeHash": "debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685",
+  "runId": "42506385410",
+  "runAttempt": "1",
+  "originalBaselineSha": "49c8a5f791e66c351436bb97839193b53d7a1cd1",
+  "baseSha": "49c8a5f791e66c351436bb97839193b53d7a1cd1",
+  "approvedScope": {
+    "hash": "debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685",
+    "allowedPaths": [
+      "app/project-pilots/task4a-preview-probe/"
+    ],
+    "contractHash": "e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e"
+  },
+  "phase": "review",
+  "sourceTreeSha": "26869fb977fd29b4f96652b9de3d47e0f0e0ffeb",
+  "completedCheckpointSha": "6270f88765be34811896f1be93373d9b58037f6b",
+  "reviewFindings": "",
+  "lastCompleted": {
+    "checkpointSha": "6270f88765be34811896f1be93373d9b58037f6b",
+    "modelCall": {
+      "requestKey": "1ebf357e-4075-4b31-8d17-55891468b102",
+      "operationId": "6d51c3f4-a019-444b-ab87-9d424f1b25e2",
+      "actualTokens": 13046,
+      "settlement": "settled"
+    },
+    "phase": "implementation",
+    "verification": {
+      "passed": false,
+      "pending": true,
+      "head": "6270f88765be34811896f1be93373d9b58037f6b",
+      "detail": "Candidate verification pending",
+      "detailDigest": "cee8dcde3a0d5ce81343c790d0fed04de4b47db99987b5a544def1e41f047cd2"
+    },
+    "repairPerformed": false,
+    "repairVerification": null,
+    "reviewRepair": null,
+    "adaptiveRepair": {
+      "version": 2,
+      "iteration": 0,
+      "seen": [],
+      "stagnant": 0,
+      "failureSignature": null,
+      "nextAction": "verification",
+      "candidateHead": "6270f88765be34811896f1be93373d9b58037f6b",
+      "pendingRepair": null
+    }
+  },
+  "savedAt": "2026-11-08T17:45:19.629Z"
+}
