@@ -22,5 +22,6 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  assert.deepEqual(await snapshot(),before);
  await rival.query('set role service_role');
  await assert.rejects(rival.query("update project_organization_nodes set kind='worker'"),/permission denied/);
+ await (await import('./assert-project-native-delegation.mjs')).assertProjectNativeDelegation(db,rival);
  console.log('PROJECT_ORGANIZATION_COMBINED_SCHEMA_PASS: historical snapshots preserved; canonical native admission and settlement retained');
 }

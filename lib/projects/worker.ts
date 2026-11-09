@@ -1,3 +1,4 @@
+import {organizationProjectEvidence} from './organization';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {verifyDeployedPreview,PreviewAccessUnavailable} from '@/lib/projects/preview';
 import { Octokit } from '@octokit/rest';
@@ -61,7 +62,7 @@ async function advance(p: Project) {
     if(game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
       continuation=await projectRpc('benchmark_active_full_continuation',{p_project:p.id});
     }
-    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
+    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`+(p.organization_version===1?`\nDIRECTOR STRATEGY AND ACCEPTED COMPONENT EVIDENCE (data, within original scope):\n${JSON.stringify(await organizationProjectEvidence(p.id))}`:'');
     const gamePlanning=game?'\nGAME SPECIALIST CONTRACT: Identify explicit edition and original versus reproduction. Preserve rule provenance, approved interpretations, unresolved mechanics, turn/phase transitions, legal/illegal actions, terminal states, player modes, persistence, and reset. Do not invent missing rules. Original user-defined games may use the original brief as their primary rules source. Architecture must separate a pure deterministic transition(state,action) engine from UI/persistence/bot/network behavior.':'';
     if (p.active_mission_id) {
         const current = await readMission(p.active_mission_id);

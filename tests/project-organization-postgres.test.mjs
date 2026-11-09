@@ -48,10 +48,10 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  const work=(await db.query('select claim_mission_work() c')).rows[0].c;assert.equal(work.mission.id,result.missionId);return work;
  };
  const deadline=new Date(Date.now()+3600000).toISOString();
- const cmd=(name,tokens=100000,kind='manager',extra={})=>({action:'appoint',kind,name,area:name.toLowerCase(),objective:'Complete '+name,acceptance:['Verified '+name+' deliverable'],tokens,deadline,maxChildren:kind==='worker'?0:4,maxDepth:5,tools:['manage','analysis','development'],paths:[],...extra});
+ const cmd=(name,tokens=100000,kind='manager',extra={})=>({action:'appoint',kind,name,area:name.toLowerCase(),objective:'Complete '+name,acceptance:['Verified '+name+' deliverable'],tokens,deadline,tools:['manage','analysis','development'],paths:[],...extra});
  let work=await management();
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,randomUUID(),[{action:'ready'}]]),/Live management/);
- await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[cmd('Research'),cmd('Development'),cmd('QA',100000,'manager',{area:'quality_assurance',tools:['manage','analysis']}),{action:'ready'}]]);
+ await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'plan',purpose:'Deliver the owner inventory outcome',direction:'Delegate design, implementation and independent QA',outcomes:[{criterion:'All inventory scenarios pass',verification:'Independent browser tests'}],milestones:[{objective:'Integrated inventory accepted'}],organizations:['research','development','quality_assurance']},cmd('Research'),cmd('Development'),cmd('QA',100000,'manager',{area:'quality_assurance',tools:['manage','analysis']}),{action:'ready'}]]);
  assert.equal((await nodes()).filter(n=>n.parent_id===rootNode.id).length,3);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[cmd('Duplicate')]]),/Live management/);
  // Restart connection and reclaim: persistent organization ownership is unchanged.
@@ -100,12 +100,15 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await resetLease();let p0=(await db.query('select claim_work_project() p')).rows[0].p;await db.query('select project_org_schedule($1,$2)',[project,p0.lease]);
  await resetLease();work=await management();assert.equal(work.job.agent_id,submanager.agent_id);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'certify',nodeId:coder.id,assignmentId:randomUUID()}]]),/Authenticated component/);
- await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'resolve',exceptionId:failure.id,assignmentId:executed.job.id,evidence:'Completed local repair'},{action:'resolve',exceptionId:local.id,assignmentId:executed.job.id,evidence:'Completed design assignment '+executed.job.id},{action:'certify',nodeId:coder.id,assignmentId:executed.job.id},{action:'exception',reason:'authority',detail:'Data service credential exceeds this organization authority.'}]]);
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'certify',nodeId:coder.id,assignmentId:executed.job.id,checks:[]}]]),/Every original delegated criterion/);
+ await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'resolve',exceptionId:failure.id,assignmentId:executed.job.id,evidence:'Completed local repair'},{action:'resolve',exceptionId:local.id,assignmentId:executed.job.id,evidence:'Completed design assignment '+executed.job.id},{action:'certify',nodeId:coder.id,assignmentId:executed.job.id,checks:coder.acceptance.map(criterion=>({criterion,passed:true,assignmentId:executed.job.id,evaluation:'Verified the actual design artifact against this criterion'}))},{action:'exception',reason:'authority',detail:'Data service credential exceeds this organization authority.'}]]);
  assert.equal((await db.query('select status from project_organization_nodes where id=$1',[coder.id])).rows[0].status,'accepted');
  const escalation=(await db.query("select * from project_organization_exceptions where reason='authority'")).rows[0];assert.equal(escalation.owner_id,submanager.parent_id);assert.notEqual(escalation.owner_id,rootNode.id);
  await resetLease();work=await management();assert.equal(work.job.agent_id,(await nodes()).find(n=>n.id===submanager.parent_id).agent_id);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'resolve',exceptionId:failure.id,assignmentId:executed.job.id,evidence:'Completed local repair'},{action:'resolve',exceptionId:local.id,assignmentId:executed.job.id,evidence:'Bypass reporting'}]]),/another manager/);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'close'}]]),/Only the Project Director/);
+ const activity=(await db.query("select j.id from mission_assignments j join project_organization_assignments b on b.assignment_id=j.id join agent_missions m on m.id=j.mission_id where b.node_id=$1 and m.project_kind='management' and j.status='completed' limit 1",[submanager.id])).rows[0];
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'certify',nodeId:submanager.id,assignmentId:activity.id,checks:[]}]]),/Authenticated component evidence/);
  // Real admission reserves use verified registry prices and inherited token limits.
  await db.query('reset role');
  await db.query("insert into model_registry(provider_name,model_id,normalized_model_id,is_active,reasoning_tier,capability_status,pricing_status,routing_eligibility,capability_verified_at,pricing_verified_at,pricing_input_per_1m,pricing_output_per_1m) values('openai','synthetic-executive','synthetic-executive',true,'high','verified','verified','verified',now(),now(),2,8)");
@@ -119,7 +122,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query('reset role');
  const dev=(await nodes()).find(n=>n.name==='Development');
  const nativeAgent=(await db.query("select save_managed_agent(null,$1,false) a",[{name:'Synthetic native worker',instructions:'Execute approved code only',research:false,development:true,attachments:false,reviewMode:'always',maxActiveTasks:1,maxInputChars:16000}])).rows[0].a.id;
- const nativeNode=(await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,max_children,max_depth,depth,decision_needed) values($1,$2,$3,'worker','Native worker','Implement approved component','[\"Verified code\"]',array['analysis','development'],20000,$4,0,5,2,false) returning id",[project,dev.id,nativeAgent,deadline])).rows[0].id;
+ const nativeNode=(await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,depth,decision_needed) values($1,$2,$3,'worker','Native worker','Implement approved component','[\"Verified code\"]',array['analysis','development'],20000,$4,2,false) returning id",[project,dev.id,nativeAgent,deadline])).rows[0].id;
  const scope='a'.repeat(64),head='b'.repeat(40),nativeMid=randomUUID(),nativeJob=randomUUID(),account=randomUUID();
  await db.query("update work_projects set spec=$2,approved_hash=$3,approval_hash=$3,verified_sha=$4 where id=$1",[project,{allowedPaths:['src/'],finalContract:{scenarios:[]}},scope,head]);
  await db.query('insert into project_organization_scope_grants values($1,$2,$3,$4)',[nativeNode,scope,['src/'],dev.id]);
@@ -149,7 +152,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  // and QA reviewer, persisted completed components. Negative mutations roll back.
  const qa=(await nodes()).find(n=>n.area==='quality_assurance'&&n.depth===1);
  const qaAgent=(await db.query("select save_managed_agent(null,$1,false) a",[{name:'Independent QA worker',instructions:'Verify original requirements',research:false,development:false,attachments:false,reviewMode:'always',maxActiveTasks:1,maxInputChars:16000}])).rows[0].a.id;
- const qaNode=(await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,max_children,max_depth,depth,decision_needed) values($1,$2,$3,'worker','QA worker','Verify original requirements','[\"All original requirements pass\"]',array['analysis'],10000,$4,0,5,2,false) returning id",[project,qa.id,qaAgent,deadline])).rows[0].id;
+ const qaNode=(await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,depth,decision_needed) values($1,$2,$3,'worker','QA worker','Verify original requirements','[\"All original requirements pass\"]',array['analysis'],10000,$4,2,false) returning id",[project,qa.id,qaAgent,deadline])).rows[0].id;
  const assessment=randomUUID(),reviewId=randomUUID();
  const preview={headSha:head,immutable:true,browserAcceptance:{passed:true,headSha:head}};
  await db.query('select create_mission($1,$2,$3,20,null)',[assessment,'Independent final assessment',[nativeAgent,qaAgent]]);
@@ -167,7 +170,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  for(const manager of (await nodes()).filter(n=>n.kind==='manager')){
   if((await nodes()).some(n=>n.parent_id===manager.id))continue;
   const agent=(await db.query('select save_managed_agent(null,$1,false) a',[{name:'Component worker',instructions:'Deliver component',research:false,development:false,attachments:false,reviewMode:'always',maxActiveTasks:1,maxInputChars:16000}])).rows[0].a.id;
-  await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,max_children,max_depth,depth,decision_needed) values($1,$2,$3,'worker','Component worker','Deliver component','[\"Verified deliverable\"]',array['analysis'],1000,$4,0,5,$5,false)",[project,manager.id,agent,deadline,manager.depth+1]);
+  await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,depth,decision_needed) values($1,$2,$3,'worker','Component worker','Deliver component','[\"Verified deliverable\"]',array['analysis'],1000,$4,$5,false)",[project,manager.id,agent,deadline,manager.depth+1]);
  }
  for(const worker of (await nodes()).filter(n=>n.kind==='worker'&&!artifacts.has(n.id))){
   const mid=randomUUID();await db.query('select create_mission($1,$2,$3,20,null)',[mid,'Synthetic completed component',[worker.agent_id]]);
@@ -180,7 +183,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
   await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=(id=$2) where project_id=$1',[project,manager.id]);
   await db.query('set role service_role');await resetLease();const session=await management();assert.equal(session.job.agent_id,manager.agent_id);
   const children=(await nodes()).filter(n=>n.parent_id===manager.id);
-  await db.query('select project_org_decide($1,$2,$3)',[session.job.id,session.job.lease,children.map(child=>({action:'certify',nodeId:child.id,assignmentId:artifacts.get(child.id)}))]);
+  await db.query('select project_org_decide($1,$2,$3)',[session.job.id,session.job.lease,children.map(child=>({action:'certify',nodeId:child.id,assignmentId:artifacts.get(child.id),checks:child.acceptance.map(criterion=>({criterion,passed:true,assignmentId:artifacts.get(child.id),evaluation:'Verified the component artifact against the delegated criterion'}))}))]);
   artifacts.set(manager.id,manager.id===qa.id?reviewId:artifacts.get(children[0].id));
  }
  await db.query('reset role');
@@ -188,7 +191,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query("update project_organization_nodes set decision_needed=true where id=$1",[rootNode.id]);
  await db.query("update work_projects set active_mission_id=$2,phase='assessment',preview=$3 where id=$1",[project,assessment,preview]);
  await db.query('set role service_role');await resetLease();work=await management();assert.equal(work.job.agent_id,rootNode.agent_id);
- const rootCerts=(await nodes()).filter(n=>n.parent_id===rootNode.id).map(n=>({action:'certify',nodeId:n.id,assignmentId:artifacts.get(n.id)}));
+ const rootCerts=(await nodes()).filter(n=>n.parent_id===rootNode.id).map(n=>({action:'certify',nodeId:n.id,assignmentId:artifacts.get(n.id),checks:n.acceptance.map(criterion=>({criterion,passed:true,assignmentId:artifacts.get(n.id),evaluation:'Verified the organization outcome against its delegated criterion'}))}));
  await db.query('reset role');await db.query('begin');
  await db.query("update mission_assignments set result=jsonb_set(result,'{checks,0,passed}','false') where id=$1",[reviewId]);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts,{action:'close'}]]),/Independent original-requirement/);await db.query('rollback');
@@ -213,12 +216,13 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query('rollback');
  // A legacy planner cannot assign analysis to a worker with only coding tools.
  const noAnalysis=(await db.query("select save_managed_agent(null,$1,false) a",[{name:'Coding only',instructions:'Code only',research:false,development:true,attachments:false,reviewMode:'always',maxActiveTasks:1,maxInputChars:16000}])).rows[0].a.id;
- await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,max_children,max_depth,depth,decision_needed) values($1,$2,$3,'worker','Coding only','Code only','[\"Code\"]',array['development'],1000,$4,0,5,2,false)",[project,dev.id,noAnalysis,deadline]);
+ await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,depth,decision_needed) values($1,$2,$3,'worker','Coding only','Code only','[\"Code\"]',array['development'],1000,$4,2,false)",[project,dev.id,noAnalysis,deadline]);
  await assert.rejects(db.query("insert into mission_assignments(id,mission_id,agent_id,job_key,role,instruction,payload) values($1,$2,$3,'escape','work','Calculate something','{\"capability\":\"analysis\"}')",[randomUUID(),nativeMid,noAnalysis]),/delegated execution authority/);
  await db.query('set role service_role');
  await db.query('reset role');await assert.rejects(db.query('update work_projects set organization_version=0 where id=$1',[project]),/cannot be disabled/);await db.query('set role service_role');
- await db.query('reset role');await assert.rejects(db.query('update project_organization_nodes set parent_id=id where id=$1',[rootNode.id]),/immutable/);
- await assert.rejects(db.query("insert into project_organization_nodes select gen_random_uuid(),project_id,parent_id,agent_id,kind,area,name,objective,acceptance,scope_paths,tools,token_limit,deadline,max_children,max_depth,depth,decision_needed,scope_hash,status,evidence,created_at from project_organization_nodes where id=$1",[rootNode.id]),/duplicate key/);
+ await db.query('reset role');await assert.rejects(db.query('update project_organization_nodes set parent_id=id where id=$1',[rootNode.id]),/Circular|immutable/);
+ await assert.rejects(db.query("insert into project_organization_nodes select gen_random_uuid(),project_id,parent_id,agent_id,kind,area,name,objective,acceptance,scope_paths,tools,token_limit,deadline,depth,decision_needed,scope_hash,status,evidence,created_at,management_contract from project_organization_nodes where id=$1",[rootNode.id]),/duplicate key/);
  await assert.rejects(db.query("update work_projects set status='completed' where id=$1",[project]),/Director closure/);
+ await (await import('./helpers/assert-dynamic-project-management.mjs')).assertDynamicProjectManagement(db);
  }finally{for(const c of clients)await c.end().catch(()=>{});if(started)spawnSync(join(bin,'pg_ctl'),['-D',join(root,'data'),'-m','immediate','stop']);rmSync(root,{recursive:true,force:true});}
 });
