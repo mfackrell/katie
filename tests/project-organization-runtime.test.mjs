@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
@@ -72,4 +73,21 @@ test('coding packages require immediate Functional Director authority at dispatc
  assert.throws(()=>assertManagementCommands(root,nodes,[command]),/cannot assign execution/);
  for(const action of ['evaluate_package','repair_package'])assert.throws(()=>assertManagementCommands(root,nodes,[{action}]),/cannot assign execution/);
  assert.throws(()=>assertManagementCommands(manager,nodes,[{...command,workerId:'foreign'}]),/immediate reporting/);
+});
+
+
+test('native host authenticates package paths and predecessor before granting execution',async()=>{
+ const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+ const start=host.indexOf('if(project.organization_version===1){'),end=host.indexOf('const priorRefs=',start);
+ assert.ok(start>0&&end>start);
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('project','task','readOne','wipContext','denied',host.slice(start,end));
+ const binding={projectId:'project',baseSha:'accepted-predecessor',baselineSha:'original',allowedPaths:['app/pilot/view/'],cumulativePaths:['app/pilot/'],contractHash:'original-contract'};
+ const readOne=async(table,column,id)=>{
+  if(table==='mission_assignments'){assert.equal(column,'id');assert.equal(id,'task');return {mission_id:'mission'};}
+  assert.equal(table,'project_runs');assert.equal(column,'mission_id');assert.equal(id,'mission');return {binding};
+ };
+ const denied=message=>{throw Error(message);};
+ await run({organization_version:1},{id:'task'},readOne,binding,denied);
+ for(const key of Object.keys(binding))await assert.rejects(run({organization_version:1},{id:'task'},readOne,{...binding,[key]:key.endsWith('Paths')?['app/escape/']:'forged'},denied),/package dispatch context mismatch/);
+ await run({organization_version:0},{id:'historical'},()=>assert.fail('Historical execution must retain its existing guard'),{},denied);
 });
