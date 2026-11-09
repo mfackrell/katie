@@ -263,7 +263,7 @@ export async function assertProjectNativeDelegation(db,rival){
   const director=byName(name),worker=byName(name+' worker');
   for(const bad of name==='QA'?[true,false]:[false]){
    await wake(director);s=await session();assert.equal(s.node.id,director.id);
-   await decide(s,[{action:'assign',nodeId:worker.id,capability:'analysis',smart:task(director,'work',[],{maxAssignments:1})}]);
+   await decide(s,[{action:'assign',nodeId:worker.id,capability:name==='Architecture'?'writing':'analysis',smart:task(director,'work',[],{maxAssignments:1,capability:name==='Architecture'?'writing':'analysis'})}]);
    const work=await session();assert.equal(work.node.id,worker.id);
    const evidence=name==='QA'?{head:previousHead,checks:bad?failed:passed,passed:!bad}:{head:previousHead,interface:readFileSync(join(workspace,'app/pilot/engine/sum.mjs'),'utf8'),passed:true};
    await db.query('select project_org_finish_work($1,$2,$3)',[work.job,work.lease,{text:JSON.stringify(evidence),...evidence}]);

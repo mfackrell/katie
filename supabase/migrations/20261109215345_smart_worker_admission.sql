@@ -49,7 +49,7 @@ begin
  if n.kind<>'manager' or w.id is null then raise exception 'SMART requires the immediate management owner';end if;
  update project_organization_nodes set status='active',evidence=null where id in (with recursive ancestors(id,parent_id) as(select w.id,w.parent_id union all select x.id,x.parent_id from project_organization_nodes x join ancestors t on x.id=t.parent_id) select id from ancestors);
  select * into a from managed_agents where id=w.agent_id;
- capability:=case when p_role='development' then 'development' when p_role in ('compose','review','revise') then 'analysis' else c->>'capability' end;
+ capability:=case when p_role='development' then 'development' when p_role in ('compose','review','revise') then 'analysis' else case when c->>'capability'='writing' then 'analysis' else c->>'capability' end end;
  if c is null or jsonb_typeof(c) is distinct from 'object'
  or length(trim(coalesce(c->>'objective',''))) not between 1 and 2000
  or length(trim(coalesce(c->>'deliverable',''))) not between 1 and 500
