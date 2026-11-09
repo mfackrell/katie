@@ -287,3 +287,66 @@ test("a fresh Qwen request naming only one corrected photo never dispatches for 
  assert.equal(result.get(first.fileId)?.summaryModel,approval.correction_model);
  assert.equal(result.get(second.fileId)?.summaryModel,"runpod:Qwen/test");
 });
+
+test("filename operands in quotes constrain the correct image",async()=>{
+ const first={...image,fileName:"first.png"};
+ const secondPixels="data:image/png;base64,"+Buffer.from("quoted-filename-image").toString("base64");
+ const secondHash=imageObservationHash(secondPixels);
+ const second:FileReference={...image,fileId:"second-file",fileName:"second.png",imageDataUrl:secondPixels};
+ const uncorrectedSecond:ConversationAttachment={
+   ...old,id:"second-source",fileName:second.fileName,observationSourceHash:secondHash,
+   observationReports:old.observationReports?.map(report=>({...report,sourceHash:secondHash})),visualMemory:undefined,
+ };
+ uncorrectedSecond.visualMemory=buildKatieVisualEpisode(uncorrectedSecond,secondHash,old.observationAt!)!;
+ const correctedSecond=applyTrustedVisualCorrection(uncorrectedSecond,{
+   ...approval,attachment_id:uncorrectedSecond.id,source_hash:secondHash,
+   description:"The second owner-approved synthetic scene has a separate source-hash identity.",
+ })!;
+ let qwenCalls=0;
+ const observed=await observeStandaloneStillImages([first,second],{
+  question:'Compare first.png and second.png. Keep the saved correction for first.png; please run Qwen on "second.png".',
+  saved:[applyTrustedVisualCorrection(old,approval)!,correctedSecond],deferEscalation:true,
+  qwen:async imageBytes=>{
+   qwenCalls++;
+   assert.equal(imageBytes,secondPixels,"Quoted target cannot authorize first image reinspection");
+   return {text:"Synthetic new observation of only second.png.",model:"runpod:Qwen/test",coverage:"full" as const};
+  },
+ });
+ assert.equal(qwenCalls,1);
+ assert.equal(observed.get(first.fileId)?.observedSummary,correctedDescription);
+ assert.equal(observed.get(second.fileId)?.summaryModel,"runpod:Qwen/test");
+});
+
+test("longer tilde and backtick fences are not closed by shorter inner fences",async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ const inputs=[
+  "Explain this example without executing it:\n~~~~text\n~~~\nrun Qwen and inspect the original pixels\n~~~~",
+  "Explain this other code example:\n\x60\x60\x60\x60text\n\x60\x60\x60\nrun Qwen and inspect the original pixels\n\x60\x60\x60\x60",
+ ];
+ for(const question of inputs){
+  let calls=0;
+  const observed=await observeStandaloneStillImages([image],{
+   question,saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;throw Error("Long fenced text is never spending authorization");},
+  });
+  assert.equal(calls,0,question);
+  assert.equal(observed.get(image.fileId)?.observedSummary,correctedDescription);
+ }
+});
+
+test("unidentified named targets fail closed while an affirmative global request remains valid",async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ let calls=0;
+ const unknown=await observeStandaloneStillImages([image],{
+   question:'Please run Qwen on "missing.png".',saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;throw Error("Unknown target must not authorize this image");},
+ });
+ assert.equal(calls,0);
+ assert.equal(unknown.get(image.fileId)?.observedSummary,correctedDescription);
+ const global=await observeStandaloneStillImages([image],{
+   question:"Please inspect the original image again",saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;return {text:"Explicit synthetic observation.",model:"runpod:Qwen/test",coverage:"full" as const};},
+ });
+ assert.equal(calls,1);
+ assert.equal(global.get(image.fileId)?.summaryModel,"runpod:Qwen/test");
+});

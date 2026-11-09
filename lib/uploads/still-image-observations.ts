@@ -55,20 +55,37 @@ export function weakFocalPointDescription(text:string):boolean {
 function explicitFreshImageInspection(
   question:string, reference?:FileReference, references?:FileReference[],
 ):boolean {
-  // Never treat quoted instructions, including multiline/fenced examples,
-  // as authority to trigger a paid inspection. Unclosed quotes fail closed.
-  const unquoted=question
-    .replace(/\x60{3,}[\s\S]*?(?:\x60{3,}|$)|~{3,}[\s\S]*?(?:~{3,}|$)/g,' ')
-    .replace(/\x60[^\x60]*(?:\x60|$)|"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'[^']+'(?!\w)/g,' ')
-    .replace(/^\s*>.*$/gm,' ');
+  // Fenced examples are never instructions. A closing Markdown fence must
+  // match the opener's character and have at least its delimiter length.
+  const untrustedLines=question.split('\n');
+  const outside:string[]=[];
+  let fence:{kind:string;length:number}|null=null;
+  for(const line of untrustedLines){
+    const marker=line.match(/^\s{0,3}(\x60{3,}|~{3,})(?:[^\r\n]*)$/);
+    if(fence){
+      if(marker && marker[1][0]===fence.kind &&
+         marker[1].length>=fence.length &&
+         /^\s{0,3}(?:\x60{3,}|~{3,})\s*$/.test(line)) fence=null;
+      outside.push(' ');
+      continue;
+    }
+    if(marker){fence={kind:marker[1][0],length:marker[1].length};outside.push(' ');continue;}
+    outside.push(/^\s*>/.test(line)?' ':line);
+  }
+  // Preserve quoted *filenames* as operands, not quoted directives.
+  // Discard multiline, unfinished and historical quoted instructions.
+  const withoutQuotes=outside.join('\n').replace(
+    /\x60[^\x60]*(?:\x60|$)|"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'[^']+'(?!\w)/g,
+    (quoted:string)=>{
+      const value=quoted.slice(1,-1);
+      return /^[\w.-]+\.(?:png|jpe?g|webp|gif|heic|bmp|tiff?|pdf)$/i.test(value)?value:' ';
+    },
+  );
   const available=references??(reference?[reference]:[]);
-  return unquoted.split(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/i).some(part=>{
+  return withoutQuotes.split(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/i).some(part=>{
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
-    const affirmative=/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive);
-    if(!affirmative)return false;
-    // The user may request a fresh look at only one of several images.
-    // Image names in earlier clauses do not grant authority to this clause.
+    if(!/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive))return false;
     if(!reference||!available.length)return true;
     const onlyAt=part.search(/\bonly\b/i);
     const target=onlyAt>=0?part.slice(onlyAt+4):part;
@@ -89,8 +106,15 @@ function explicitFreshImageInspection(
       const index=['first','second','third','fourth','fifth'].indexOf(ordinal[1].toLowerCase());
       return available[index]?.fileId===reference.fileId;
     }
-    // "only" without a resolvable target cannot authorize every image.
-    return onlyAt<0;
+    if(onlyAt>=0)return false;
+    // A specifically scoped but unidentified target cannot silently become
+    // blanket approval for all selected images.
+    const targetPhrase=directive.match(/\b(?:on|for|of)\s+(.+)$/i)?.[1]?.trim();
+    if(targetPhrase){
+      if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)\b/i.test(targetPhrase))return true;
+      if(!/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)\b/i.test(targetPhrase))return false;
+    }
+    return true;
   });
 }
 
