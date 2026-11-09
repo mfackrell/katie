@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const contract=JSON.parse(readFileSync('fixtures/documents/phase1-acceptance-contract.json','utf8'));
 const evidence=JSON.parse(readFileSync('fixtures/documents/phase2-acceptance-evidence.json','utf8'));
+// Mechanical attestations are invalidated by any engine or dependency change.
+if(evidence.mechanical_evidence_file){
+  const measured=JSON.parse(readFileSync(evidence.mechanical_evidence_file,'utf8'));
+  for(const [path,expected] of Object.entries(measured.engine_files)){
+    const actual=createHash('sha256').update(readFileSync(path)).digest('hex');
+    assert.equal(actual,expected,'Stale mechanical acceptance: '+path);
+  }
+}
 const required=new Set(contract.rules.map(x=>x.id));
 assert.equal(required.size,11,'Phase 1 contract unexpectedly changed');
 assert.equal(evidence.acceptance.length,11,'All 11 Phase 2 gates must be reported');

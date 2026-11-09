@@ -223,5 +223,6 @@ export async function assertOrdinaryAuthority(db,rival,options={}){
  await assert.rejects(db.query(decide,args),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
  if(process.env.KATIE_TEST_RESOURCE_DIMENSIONS==='1'){const dimensions=await (await import('./qualify-resource-dimensions.mjs')).qualifyResourceDimensions(db,rival);if(process.env.RUNNER_TEMP)writeFileSync(join(process.env.RUNNER_TEMP,'resource-dimensions.json'),JSON.stringify(dimensions,null,2));console.log('RESOURCE_DIMENSIONS_POSTGRES_PASS');}
+ if(process.env.KATIE_TEST_PROJECT_ORGANIZATION==='1')await (await import('./assert-project-organization-compatibility.mjs')).assertProjectOrganizationCompatibility(db,rival);
  console.log('ORDINARY_INITIAL_AUTHORITY_POSTGRES_PASS: isolated synthetic consent, no benchmark provenance, atomic first amendment, exact two-slot reservation, preserved eleven historical calls and four completion reserves');
 }

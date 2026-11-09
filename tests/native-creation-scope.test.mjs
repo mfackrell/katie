@@ -28,3 +28,14 @@ test('independent reviews remain read-only and baseline anchored',()=>{
   assert.doesNotMatch(text,/create the required directories/);
  }
 });
+
+test('test generation and its output obey the same frozen implementation paths',()=>{
+ for(const phase of ['implementation','repair']){
+  const text=prompt(phase);
+  assert.match(text,/Test files, browser probes, fixtures, screenshots, reports and generated test output are subject to the SAME approved paths/);
+  assert.match(text,/Do not default to a repository-level tests\/ directory unless that directory is explicitly authorized/);
+  assert.match(text,/Put task-specific tests inside an approved implementation directory and invoke them by their exact path/);
+  assert.match(text,/Disable or redirect generated output/);
+  assert.match(text,/never remove, widen or bypass the scope guard/);
+ }
+});

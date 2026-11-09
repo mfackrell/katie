@@ -29,6 +29,20 @@ export function documentPageStyle(layout?: Pick<Layout, 'compact'>) {
     : { margin: PAGE.margin, lineTwips: 276, headingBeforeTwips: 120, tableVerticalMarginTwips: 80 };
 }
 
+/** Explicit, font-relative line boxes avoid version-dependent automatic leading.
+ * All supported runs use Arial-compatible fonts. A 1.2em minimum contains
+ * their measured ascent/descent, including the largest heading; standard
+ * rhythm and reviewer lineScale may expand it, never shrink it below that floor.
+ * exact means twips, not 240ths of a line. No page-count target is inferred.
+ */
+export function documentLineSpacing(fontHalfPoints: number, layout?: Pick<Layout, 'compact'>, lineScale = 1) {
+  if (!Number.isFinite(fontHalfPoints) || fontHalfPoints < DOCUMENT_TYPE.bodyHalfPoints ||
+      !Number.isFinite(lineScale) || lineScale < 1 || lineScale > 2)
+    throw new Error('Invalid document typography or line scale.');
+  return { line: Math.ceil(Math.max(documentPageStyle(layout).lineTwips, fontHalfPoints * 12) * lineScale),
+    lineRule: 'exact' as const };
+}
+
 /** Layout changes never alter text or shrink type. Explicit pages make pagination portable. */
 export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<Buffer> {
   const pageStyle = documentPageStyle(layout);
@@ -48,7 +62,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
         ? Math.round(pageStyle.headingBeforeTwips * (block.level === 1 ? 2 : 1) * design.sectionGap)
         : 0,
       after: Math.round((block.kind === 'heading' ? Math.max(layout.spacing, 4) * design.sectionGap : layout.spacing * (block.kind === 'bullet' ? design.listGap : 1)) * 20),
-      line: Math.round(pageStyle.lineTwips * design.lineScale),
+      ...documentLineSpacing(block.kind === 'heading' ? Math.round(DOCUMENT_TYPE.headingHalfPoints[block.level - 1] * design.hierarchy) : DOCUMENT_TYPE.bodyHalfPoints, layout, design.lineScale),
     },
     ...(block.kind === 'bullet' ? { numbering: { reference: 'document-bullets', level: 0 }, indent: { left: 240, hanging: 180 } } : {}),
     children: [new TextRun({
@@ -66,7 +80,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
         margins: { top: pageStyle.tableVerticalMarginTwips, bottom: pageStyle.tableVerticalMarginTwips, left: 80, right: 80 },
         shading: { fill: index === 0 ? 'E8E8E8' : 'FFFFFF' },
         borders: Object.fromEntries(['top', 'bottom', 'left', 'right'].map(side => [side, { style: BorderStyle.SINGLE, color: 'D9D9D9', size: 4 }])),
-        children: [new Paragraph({ spacing: { after: 0, line: Math.round(pageStyle.lineTwips * design.lineScale) }, children: [new TextRun({ text: value, size: 22, font: 'Arial', bold: index === 0, color: '000000' })] })],
+        children: [new Paragraph({ spacing: { after: 0, ...documentLineSpacing(DOCUMENT_TYPE.bodyHalfPoints, layout, design.lineScale) }, children: [new TextRun({ text: value, size: 22, font: 'Arial', bold: index === 0, color: '000000' })] })],
       })),
     })),
   });
@@ -74,7 +88,7 @@ export async function generateDocx(spec: DocumentSpec, layout: Layout): Promise<
     creator: 'Katie', title: spec.title, description: 'Generated document',
     numbering: { config: [{ reference: 'document-bullets', levels: [{ level: 0, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT,
       style: { run: { font: 'Arial', size: 18 }, paragraph: { indent: { left: 240, hanging: 180 } } } }] }] },
-    styles: { default: { document: { run: { font: 'Arial', size: 22, color: '000000' }, paragraph: { spacing: { line: pageStyle.lineTwips, after: layout.spacing * 20 } } } },
+    styles: { default: { document: { run: { font: 'Arial', size: 22, color: '000000' }, paragraph: { spacing: { ...documentLineSpacing(DOCUMENT_TYPE.bodyHalfPoints, layout, design.lineScale), after: layout.spacing * 20 } } } },
       paragraphStyles: [{ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: Math.round(DOCUMENT_TYPE.headingHalfPoints[0] * design.hierarchy), color: DOCUMENT_TYPE.headingColors[0], bold: true } }] },
     sections: layout.pages.map(indices => ({
       properties: { page: { size: { width: PAGE.width * 20, height: PAGE.height * 20 }, margin: { top: pageStyle.margin * 20, bottom: pageStyle.margin * 20, left: pageStyle.margin * 20, right: pageStyle.margin * 20 } } },
@@ -123,3 +137,4 @@ export function paginate(spec: DocumentSpec, heights: number[], pages: number, s
   for (let p = pages; p > 0; p--) { const start = previous[p][end]; groups.unshift(Array.from({ length: end - start }, (_, i) => start + i)); end = start; }
   return { pages: groups, spacing, ...(compact ? { compact } : {}), ...(design ? { design } : {}) };
 }
+

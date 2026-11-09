@@ -1,3 +1,4 @@
+import {requireTask4aVerifierRestoration} from './task4a-verifier-recovery.mjs';
 // Trusted host only. Recovery reads historical evidence; it never grants authority,
 // reconciles charges, replays a request, or treats WIP as reviewed source.
 import {createHash} from 'node:crypto';
@@ -9,6 +10,43 @@ import {isDeepStrictEqual} from 'node:util';
 import {protectedGitConfig} from './native-trust-boundary.mjs';
 
 const fail=reason=>{throw Error('NATIVE_WIP_RECOVERY_DENIED: '+reason);};
+// Process-local evidence, issued only by the trusted host after record validation
+// and source restoration. This is not an execution grant or a review attestation.
+const verificationFirstCapabilities=new WeakMap();
+const task4aCheckpoint='d2610d94289a0ba5aafcaa60598cae7c21507cfe';
+const task4aRecoveryBinding=Object.freeze({
+ version:1,kind:'native-unverified-wip',verification:'unverified',phase:'implementation',authorityKind:'ordinary-developer',
+ taskId:'d0e41ff5-149e-4319-9e65-dcc605fb75da',projectId:'6d1c29f1-b31e-47a5-aabb-cbcf1326f388',trialId:null,
+ checkpointSha:task4aCheckpoint,sourceTreeSha:'26869fb977fd29b4f96652b9de3d47e0f0e0ffeb',
+ originalBaselineSha:'49c8a5f791e66c351436bb97839193b53d7a1cd1',baseSha:'49c8a5f791e66c351436bb97839193b53d7a1cd1',
+ completedCheckpointSha:'49c8a5f791e66c351436bb97839193b53d7a1cd1',
+ approvalId:'ac443164-faf7-45be-96f1-cc93dfc85346',grantId:'939d9d7a-e101-4ec7-8af5-1561f1319b5f',executionEpoch:3,
+ runId:'42443455661',runAttempt:'1',ref:'refs/tags/katie-wip/d0e41ff5-149e-4319-9e65-dcc605fb75da/42443455661-1/5',
+ approvedScopeHash:'debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685',
+ approvedScope:{hash:'debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685',allowedPaths:['app/project-pilots/task4a-preview-probe/'],contractHash:'e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e'}
+});
+export function createTask4aVerificationFirstCapability(record,recovery){
+ if(record?.checkpointSha!==task4aCheckpoint)return null;
+ for(const [key,value] of Object.entries(task4aRecoveryBinding))same(record[key],value,'verification-first '+key+' mismatch');
+ same(record.reviewFindings,'','verification-first unexpected findings');
+ same(record.lastCompleted,{checkpointSha:record.completedCheckpointSha,modelCall:{requestKey:'1ebf357e-4075-4b31-8d17-55891468b102',operationId:'6d51c3f4-a019-444b-ab87-9d424f1b25e2',actualTokens:13046,settlement:'settled'}},'verification-first completed evidence mismatch');
+ same(recovery,{verification:'unverified',phase:record.phase,checkpointSha:record.checkpointSha,completedCheckpointSha:record.completedCheckpointSha,reviewFindings:record.reviewFindings,checkpointEvidence:record.lastCompleted,lastCompleted:record.lastCompleted},'verification-first restored evidence mismatch');
+ const capability=Object.freeze({});
+ verificationFirstCapabilities.set(capability,{recovery,snapshot:structuredClone(recovery),sourceTreeSha:record.sourceTreeSha});
+ return capability;
+}
+export function createTask4aFailedVerifierCapability(record,recovery){
+ requireTask4aVerifierRestoration(record,recovery);
+ const capability=Object.freeze({});
+ verificationFirstCapabilities.set(capability,{recovery,snapshot:structuredClone(recovery),sourceTreeSha:record.sourceTreeSha});
+ return capability;
+}
+export function task4aVerificationFirstTree(recovery,capability){
+ if(!capability&&recovery?.checkpointSha!==task4aCheckpoint)return null;
+ const evidence=capability&&verificationFirstCapabilities.get(capability);
+ if(!evidence||evidence.recovery!==recovery||!isDeepStrictEqual(evidence.snapshot,recovery))fail('verification-first trusted restoration capability missing or changed');
+ return evidence.sourceTreeSha;
+}
 const sha=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
 const same=(actual,expected,reason)=>{if(!isDeepStrictEqual(actual,expected))fail(reason);};
 const gitAt=workspace=>(...args)=>execFileSync('git',[...protectedGitConfig,...args],{
@@ -120,11 +158,17 @@ export function recoveryCompletedEvidence(record,diagnostics){
   for(const key of ['verification','review','initialReview']){
    const saved=last[key];if(!saved)continue;
    const value=full?.[key],field=key==='verification'?'detail':'findings',hashKey=field+'Digest';
+   // A pending checkpoint predates the verifier's failure output. Authenticate
+   // its own saved detail; later diagnostics must still describe the same
+   // unpassed candidate. Neither observation is completed verification evidence.
+   const pending=key==='verification'&&last.adaptiveRepair.nextAction==='verification'&&saved.pending===true&&saved.passed===false;
+   if(pending&&(saved.head!==record.completedCheckpointSha||typeof saved.detail!=='string'||saved.detail.length>12000||
+      digest(saved.detail)!==saved.detailDigest))fail('pending verification checkpoint missing or altered');
    if(!value||typeof (value[field]??'')!=='string'||(value[field]??'').length>12000||
-      digest(value[field]??'')!==saved[hashKey])fail('full lifecycle evidence missing or altered');
+      (!pending&&digest(value[field]??'')!==saved[hashKey]))fail('full lifecycle evidence missing or altered');
    const omit=o=>Object.fromEntries(Object.entries(o).filter(([k])=>k!==field&&k!==hashKey));
    same(omit(value),omit(saved),'full lifecycle candidate or verdict mismatch');
-   last[key]={...saved,[field]:value[field]??''};
+   if(!pending)last[key]={...saved,[field]:value[field]??''};
   }
   return last;
  }

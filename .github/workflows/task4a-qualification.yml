@@ -3,13 +3,34 @@ name: Task 4A protected Preview nonbillable qualification
 on:
   pull_request:
     paths:
+      - 'scripts/project-ci.mjs'
+      - 'scripts/project-sandbox.mjs'
+      - 'tests/project-verifier-environment.test.mjs'
       - 'lib/agents/development.ts'
+      - 'supabase/migrations/20261108134404_task4a_final_successor.sql'
+      - 'app/api/projects/task4a-final-successor/**'
+      - 'components/task4a-final-successor-approval.tsx'
+      - 'scripts/benchmark/task4a-successor-envelope*'
+      - 'tests/task4a-final-successor.test.mjs'
+      - 'tests/task4a-final-successor-browser.test.mjs'
+      - 'tests/helpers/task4a-final-financial-schema.mjs'
+      - 'tests/task4a-successor-envelope.test.mjs'
+      - 'tests/helpers/task4a-final-postgres.mjs'
+      - 'tests/fixtures/task4a-final-*.json'
       - 'scripts/benchmark/task4a-failed-run-link*'
       - 'supabase/migrations/20261107183028_task4a_failed_run_replacement.sql'
       - 'app/api/projects/task4a-replacement/route.ts'
       - 'components/task4a-replacement-approval.tsx'
       - 'tests/task4a-failed-run-link.test.mjs'
       - 'tests/task4a-replacement-owner.test.mjs'
+      - 'tests/task4a-capacity-owner.test.mjs'
+      - 'supabase/migrations/20261107204151_task4a_capacity_only_successor.sql'
+      - 'tests/helpers/task4a-capacity-postgres.mjs'
+      - 'components/task4a-capacity-approval.tsx'
+      - 'app/api/projects/task4a-capacity/**'
+      - 'app/api/projects/task4a-capacity-execution/**'
+      - 'components/task4a-capacity-execution-approval.tsx'
+      - 'tests/task4a-capacity-execution.test.mjs'
       - 'tests/helpers/task4a-replacement-postgres.mjs'
       - 'lib/projects/preview.ts'
       - 'tests/task4a-preview-security.test.mjs'
@@ -71,6 +92,10 @@ on:
       - 'scripts/benchmark/developer-dispatch-contract.mjs'
       - 'scripts/benchmark/developer-dispatch-contract.d.mts'
       - 'scripts/benchmark/native-development-host.mjs'
+      - 'scripts/benchmark/native-development-lifecycle.mjs'
+      - 'scripts/benchmark/native-wip-recovery.mjs'
+      - 'tests/task4a-verification-first.test.mjs'
+      - 'tests/fixtures/task4a-verification-first.json'
       - 'scripts/benchmark/native-dispatch-cli.mjs'
       - 'scripts/benchmark/ordinary-native-authority.mjs'
       - 'scripts/benchmark/authenticated-native-gateway.mjs'
@@ -118,12 +143,16 @@ jobs:
           writeFileSync('task4a-qualification/receipt.json',JSON.stringify(receipt,null,2)+'\n');
           console.log('Task 4A deterministic source-validator qualification: PASS; live requirement: BLOCKED');
           NODE
+      - name: Verify final successor separated consent and bounded bootstrap
+        run: node --experimental-test-isolation=none --test tests/task4a-final-successor.test.mjs tests/task4a-successor-envelope.test.mjs tests/task4a-final-successor-browser.test.mjs
       - name: Verify authenticated Task 4A owner approval endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-continuation-owner.test.mjs
       - name: Verify saved Task 4A specification repair and authenticated recovery endpoint
         run: node --experimental-test-isolation=none --test tests/task4a-saved-specification-recovery.test.mjs
+      - name: Verify authenticated verification-first recovery
+        run: node --test tests/task4a-verification-first.test.mjs tests/native-wip-recovery.test.mjs tests/native-capacity-lifecycle.test.mjs tests/native-adaptive-repair.test.mjs
       - name: Verify exact failed-run link and replacement owner decision
-        run: node --experimental-test-isolation=none --test tests/task4a-failed-run-link.test.mjs tests/task4a-replacement-owner.test.mjs
+        run: node --experimental-test-isolation=none --test tests/task4a-failed-run-link.test.mjs tests/task4a-replacement-owner.test.mjs tests/task4a-capacity-owner.test.mjs tests/task4a-capacity-execution.test.mjs
       - name: Verify Task 4A signed native gateway and unchanged legacy routes
         run: node --test tests/task4a-native-bridge.test.mjs
       - name: Verify original Task 4A owner-consented pregrant endpoint

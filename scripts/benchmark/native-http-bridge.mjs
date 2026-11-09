@@ -23,7 +23,7 @@ export function nativeChildInterruptionRetryable(outcome,gatewayFailure){
 // The caller must supply a server-owned grant and DB client. This bridge
 // deliberately does not forward model requests unless all dependencies exist.
 export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
- providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false,developerProjectId=null,task4a=false,onFailure=()=>{},requireInputCount=false,beforeRequest=()=>{}}){
+ providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false,developerProjectId=null,task4a=false,successorEnvelope=null,onFailure=()=>{},requireInputCount=false,beforeRequest=()=>{}}){
  if(!db||!grantToken||(!trialId&&!developerProjectId)||(trialId&&developerProjectId)||!upstream||!recordReceipt||
     typeof clientToken!=='string'||clientToken.length<12)
   throw Error('NATIVE_GATEWAY_NOT_CONFIGURED');
@@ -53,7 +53,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    await beforeRequest();
    const result=await forwardAuthorizedModelRequest({
     db,grantToken,trialId,developerProjectId,task4a,executionEpoch,model:body.model,
-    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,reasoningProvenance,
+    requestBody:body,upperTokens,successorEnvelope,upstream,providerNamespace,recordReceipt,reasoningProvenance,
     fullMission:typeof fullMission==='function'?fullMission():fullMission,requireInputCount
    });
    if(!result||typeof result.body!=='string')throw Error('UPSTREAM_RESPONSE_INVALID');

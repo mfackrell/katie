@@ -1,9 +1,9 @@
 import {spawnSync,spawn,execFileSync} from 'node:child_process';
-import {readFileSync,writeFileSync,mkdirSync,existsSync,rmSync,symlinkSync} from 'node:fs';
+import {readFileSync,writeFileSync,cpSync,mkdtempSync,mkdirSync,existsSync,rmSync,symlinkSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseProjectContext} from './project-context.mjs';
-import {sandboxArgs} from './project-sandbox.mjs';
+import {sandboxArgs,collectTestArtifacts} from './project-sandbox.mjs';
 import {checkGameModel} from './project-game-check.mjs';
 // This entry point and its sibling tools come from the preserved main artifact,
 // never from the writable candidate. Candidate commands run only in bwrap.
@@ -24,9 +24,7 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
  // on GitHub's ephemeral runner ("Exit handler never called"), despite the
  // repository's regular npm ci succeeding. No generated application code runs
  // here, and no provider credentials are passed to the installer.
- const install=spawnSync('npm',['ci','--ignore-scripts','--no-audit','--no-fund','--no-progress'],{
-  cwd:deps,stdio:'inherit',timeout:300000,
-  env:{
+ const dependencyEnv={
    PATH:process.env.PATH??'/usr/bin:/bin',
    HOME:process.env.RUNNER_TEMP??'/tmp',
    TMPDIR:process.env.RUNNER_TEMP??'/tmp',
@@ -34,8 +32,8 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
    npm_config_ignore_scripts:'true',
    npm_config_audit:'false',
    npm_config_fund:'false',
-  },
- });
+  };
+ const install=spawnSync('npm',['ci','--ignore-scripts','--no-audit','--no-fund','--no-progress'],{cwd:deps,stdio:'inherit',timeout:300000,env:dependencyEnv});
  if(install.status!==0){
   // This receipt is written by trusted verifier code outside the isolated
   // candidate checkout. Failed application tests never create this marker.
@@ -45,12 +43,31 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
   }));
   throw Error('Trusted baseline dependency preparation failed; candidate tests were not run');
  }
+ // The full offline suite exercises the real, pinned native SDK against
+ // synthetic local responses. Install its tooling separately so baseline
+ // dependency versions and lockfiles cannot be re-resolved or overwritten.
+ const sdk=mkdtempSync(resolve(dirname(tools),'project-verifier-sdk-'));
+ writeFileSync(resolve(sdk,'package.json'),JSON.stringify({private:true}));
+ const sdkInstall=spawnSync('npm',['install','--no-save','--package-lock=false','--ignore-scripts','--no-audit','--no-fund','@openai/codex-sdk@0.164.0'],{cwd:sdk,stdio:'inherit',timeout:300000,env:dependencyEnv});
+ try{
+  if(sdkInstall.status!==0)throw Error('Trusted verifier SDK preparation failed');
+  // This namespace is supplementary verifier tooling, never application data.
+  // Fail closed rather than shadow any package in the immutable baseline.
+  if(existsSync(resolve(deps,'node_modules/@openai')))throw Error('Verifier SDK conflicts with baseline dependency namespace');
+  cpSync(resolve(sdk,'node_modules/@openai'),resolve(deps,'node_modules/@openai'),{recursive:true,force:false,errorOnExist:true});
+ }catch(error){
+  writeFileSync(resolve(dirname(output),'project-verification-failure.json'),JSON.stringify({version:1,kind:'infrastructure',stage:'verifier-sdk-install',projectId:context.projectId,baseSha:context.baseSha}));
+  throw error;
+ }
  const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(dependencies,'.vite'),{recursive:true});mkdirSync(resolve(root,'node_modules'),{recursive:true});
  const model=checkGameModel(context,root,dependencies);
  if(model)writeFileSync(resolve(dirname(output),'project-game-model.json'),JSON.stringify({version:1,projectId:context.projectId,headSha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),checkedAt:new Date().toISOString(),...model},null,2));
  const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
- const checkArgs=[...sandboxArgs(root,{dependencies,writable:true}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
- const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});if(checked.status!==0)throw Error('Isolated project CI failed');
+ // Per-attempt diagnostics survive failed verification outside the candidate.
+ const artifacts=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-artifacts-'));
+ const diagnostics=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-diagnostics-'));
+ const checkArgs=[...sandboxArgs(root,{dependencies,writable:true,artifacts}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
+ const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));if(checked.status!==0)throw Error('Isolated project CI failed');
  execFileSync('git',['-c','core.fsmonitor=false','diff','--no-ext-diff','--exit-code','HEAD','--'],{cwd:root,timeout:10000});
  // Tools resolve only immutable baseline dependencies, inaccessible to tests.
  const modulePath=resolve(tools,'node_modules');if(existsSync(modulePath))rmSync(modulePath,{recursive:true,force:true});symlinkSync(dependencies,modulePath,'dir');

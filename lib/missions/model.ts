@@ -1,3 +1,4 @@
+import {executiveChoices} from '@/lib/projects/organization';
 import {COMPACT_GAME_INSTRUCTION} from '@/lib/projects/game-specification-transport';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {missionReviewFormat,type ReviewFormat} from './review-format';
@@ -81,6 +82,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  // Take Eleven's frozen tool profile has no premium/search tools. Its supplied
  // issue and contract are sufficient evidence for every DO phase.
  if(ordinary&&tools==='research')throw Error('Ordinary lifecycle research requires verified external-tool monetary authority; saved progress is preserved');
+ if(claim.mission.project_kind==='management'&&tools!=='none')throw Error('Management tools must remain disabled');
  const effectiveTools=fullBinding?'none':tools;
  const executionDeadline=missionExecutionDeadline(claim);
  const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
@@ -88,11 +90,11 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
- const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
+ let choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
   `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${effectiveTools}. Complete input size: ${instruction.length+input.length} characters; select a model with sufficient context capacity. `+
   (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
   (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
-  requestId:claim.job.id,accounting:metered?{
+  management:claim.mission.project_kind==='management',requestId:claim.job.id,accounting:metered?{
    reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));return fullBenchmarkAccounting(claim,ordinary).reserve(model,tokens,true);},
    finish:async(id,tokens,receipt)=>{
     if(receipt){if(!receipt.id||!receipt.usage)throw Error('Full routing provider receipt missing');await rpc('benchmark_reconcile_provider_usage',{p_call:id,p_provider_request:receipt.id,p_usage:receipt.usage,p_linked:true});}
@@ -106,6 +108,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   // Avoid paying a second classifier to rediscover this known phase.
   planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)),
   synthesis:['compose','revise'].includes(claim.job.role)});
+ if(claim.mission.project_kind==='management')choices=await executiveChoices(choices);
  const acceptanceInjection=Boolean(process.env.KATIE_ACCEPTANCE_MISSION_ID&&process.env.KATIE_ACCEPTANCE_MISSION_ID===claim.mission.id&&claim.job.role==='work'&&claim.mission.objective.startsWith('[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE]')&&(claim.mission.project_evidence as {syntheticFaultAcceptance?:boolean}|null)?.syntheticFaultAcceptance===true);
  const attemptedModels:string[]=[];
  const failedProviders=new Set<string>();

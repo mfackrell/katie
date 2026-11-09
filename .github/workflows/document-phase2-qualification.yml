@@ -13,6 +13,7 @@ on:
       - 'scripts/document-font-investigation.mjs'
       - 'scripts/document-page-continuity.mjs'
       - 'scripts/document-cross-render-investigation.py'
+      - 'scripts/document-cross-render-acceptance.mjs'
       - 'tests/document-cross-render-policy.test.py'
       - '.github/workflows/document-phase2-qualification.yml'
   workflow_dispatch:
@@ -50,6 +51,8 @@ jobs:
         run: node --experimental-test-isolation=none --test .test-dist/tests/document-production.test.js
       - name: Verify semantic escapes and actual strict PDF font minimum
         run: node --experimental-test-isolation=none --test .test-dist/tests/document-markdown-escapes.test.js .test-dist/tests/document-content-font.test.js
+      - name: Verify font-relative line spacing and large-heading margin safety
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-line-spacing.test.js
       - name: Trace computed CSS and actual PDF font operators without inference
         run: node scripts/document-font-investigation.mjs
       - name: Phase 1 reproduction with actual generator
@@ -73,6 +76,8 @@ jobs:
         run: |
           python3 tests/document-cross-render-policy.test.py
           python3 scripts/document-cross-render-investigation.py --docx test-artifacts/documents/phase1/business-agreement.docx --metadata test-artifacts/documents/phase1/business-agreement.json --office ci-office=/usr/bin/soffice --output test-artifacts/documents/cross-render
+      - name: Audit exact semantic text, actual fonts, margins and continuity across generated artifacts
+        run: node scripts/document-cross-render-acceptance.mjs --office ci-office=/usr/bin/soffice
       - name: Preserve real DOCX and independent office rendered pages
         if: always()
         uses: actions/upload-artifact@v4

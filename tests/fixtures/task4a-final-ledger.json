@@ -1,0 +1,374 @@
+[
+  {
+    "id": "d899c184-0c27-43c2-9a1e-576ca5a9e030",
+    "request_key": "0e6cb3c0-dc76-49da-8c85-f3179c1afe58",
+    "state": "settled",
+    "actual_tokens": 7312,
+    "reserved_tokens": 12364,
+    "provider_usage": {
+      "input_tokens": 7244,
+      "total_tokens": 7312,
+      "output_tokens": 68,
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_09bf2281c259f658016aece59c309887d198a3cb5963acd86b",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 7312,
+    "mission_reserved_tokens": 12364,
+    "project_actual_microusd": "13629",
+    "project_reserved_microusd": "285609",
+    "project_provider_request_id": "resp_09bf2281c259f658016aece59c309887d198a3cb5963acd86b",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "13629",
+    "reserved_microusd": "173096"
+  },
+  {
+    "id": "f34d306f-6855-4d8a-a1fb-291e3e39a334",
+    "request_key": "2f23aadf-26ae-4d60-bdc8-f56833bcfb86",
+    "state": "settled",
+    "actual_tokens": 11950,
+    "reserved_tokens": 16959,
+    "provider_usage": {
+      "input_tokens": 11839,
+      "total_tokens": 11950,
+      "output_tokens": 111,
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_09bf2281c259f658016aece59f5dd087d19779db6b65b5eb7a",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 11950,
+    "mission_reserved_tokens": 16959,
+    "project_actual_microusd": "22273",
+    "project_reserved_microusd": "391753",
+    "project_provider_request_id": "resp_09bf2281c259f658016aece59f5dd087d19779db6b65b5eb7a",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "22273",
+    "reserved_microusd": "237426"
+  },
+  {
+    "id": "0705ceb6-f4ce-41c0-a70e-2a3713c93a09",
+    "request_key": "2616e2c1-c4b0-42e2-b37c-0f81cc20f8f6",
+    "state": "settled",
+    "actual_tokens": 15000,
+    "reserved_tokens": 19906,
+    "provider_usage": {
+      "input_tokens": 14786,
+      "total_tokens": 15000,
+      "output_tokens": 214,
+      "input_tokens_details": {
+        "cached_tokens": 11776,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_09bf2281c259f658016aece5a3336887d197b4b865d58d8a29",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 15000,
+    "mission_reserved_tokens": 19906,
+    "project_actual_microusd": "28872",
+    "project_reserved_microusd": "459829",
+    "project_provider_request_id": "resp_09bf2281c259f658016aece5a3336887d197b4b865d58d8a29",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "28872",
+    "reserved_microusd": "278684"
+  },
+  {
+    "id": "d976874a-7206-4f52-ac33-dd7ddc483162",
+    "request_key": "9475e380-91c9-4ac5-a3d2-582f208d4647",
+    "state": "settled",
+    "actual_tokens": 15358,
+    "reserved_tokens": 20374,
+    "provider_usage": {
+      "input_tokens": 15254,
+      "total_tokens": 15358,
+      "output_tokens": 104,
+      "input_tokens_details": {
+        "cached_tokens": 14720,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_09bf2281c259f658016aece5a93fd887d19c34bafed47a5977",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 15358,
+    "mission_reserved_tokens": 20374,
+    "project_actual_microusd": "28151",
+    "project_reserved_microusd": "470640",
+    "project_provider_request_id": "resp_09bf2281c259f658016aece5a93fd887d19c34bafed47a5977",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "28151",
+    "reserved_microusd": "285236"
+  },
+  {
+    "id": "a0d31012-e586-49b9-9003-cc6a96406690",
+    "request_key": "60db45be-9c25-4b4b-998e-242bee56445f",
+    "state": "settled",
+    "actual_tokens": 7326,
+    "reserved_tokens": 12364,
+    "provider_usage": {
+      "input_tokens": 7244,
+      "total_tokens": 7326,
+      "output_tokens": 82,
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_054d3a5cd3a3fec4016aef7a535f0487d28f7c6ba46af2ed8c",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 7326,
+    "mission_reserved_tokens": 12364,
+    "project_actual_microusd": "13825",
+    "project_reserved_microusd": "285609",
+    "project_provider_request_id": "resp_054d3a5cd3a3fec4016aef7a535f0487d28f7c6ba46af2ed8c",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "13825",
+    "reserved_microusd": "173096"
+  },
+  {
+    "id": "dd1590f9-e26c-4b60-8714-bd8cd8b3a395",
+    "request_key": "c9dd2fa3-26e8-4fc9-b57a-c3ca071c8ab5",
+    "state": "settled",
+    "actual_tokens": 11979,
+    "reserved_tokens": 16986,
+    "provider_usage": {
+      "input_tokens": 11866,
+      "total_tokens": 11979,
+      "output_tokens": 113,
+      "input_tokens_details": {
+        "cached_tokens": 7168,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_054d3a5cd3a3fec4016aef7a576d6487d2a0045b75aba1ca6b",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 11979,
+    "mission_reserved_tokens": 16986,
+    "project_actual_microusd": "22348",
+    "project_reserved_microusd": "392377",
+    "project_provider_request_id": "resp_054d3a5cd3a3fec4016aef7a576d6487d2a0045b75aba1ca6b",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "22348",
+    "reserved_microusd": "237804"
+  },
+  {
+    "id": "b30e159c-2483-4fb1-9b36-a28eddcc927e",
+    "request_key": "c1214517-9e29-4f4e-b534-06ea2b8cf8c5",
+    "state": "settled",
+    "actual_tokens": 15012,
+    "reserved_tokens": 20034,
+    "provider_usage": {
+      "input_tokens": 14914,
+      "total_tokens": 15012,
+      "output_tokens": 98,
+      "input_tokens_details": {
+        "cached_tokens": 11776,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_054d3a5cd3a3fec4016aef7a5bc8b887d298fd0460c6dec0db",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 15012,
+    "mission_reserved_tokens": 20034,
+    "project_actual_microusd": "27472",
+    "project_reserved_microusd": "462786",
+    "project_provider_request_id": "resp_054d3a5cd3a3fec4016aef7a5bc8b887d298fd0460c6dec0db",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "27472",
+    "reserved_microusd": "280476"
+  },
+  {
+    "id": "f4d1d56e-863b-4401-a424-2e8040f2986d",
+    "request_key": "8b9d5f3e-a89c-42ad-9cec-3b3f72325b6f",
+    "state": "settled",
+    "actual_tokens": 18688,
+    "reserved_tokens": 23034,
+    "provider_usage": {
+      "input_tokens": 17914,
+      "total_tokens": 18688,
+      "output_tokens": 774,
+      "input_tokens_details": {
+        "cached_tokens": 14848,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_054d3a5cd3a3fec4016aef7a5fedd487d29d493037464c36fe",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 18688,
+    "mission_reserved_tokens": 23034,
+    "project_actual_microusd": "42186",
+    "project_reserved_microusd": "532086",
+    "project_provider_request_id": "resp_054d3a5cd3a3fec4016aef7a5fedd487d29d493037464c36fe",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "42186",
+    "reserved_microusd": "322476"
+  },
+  {
+    "id": "d6ef75ea-8d98-453b-942d-cd3df3a59fa2",
+    "request_key": "b463cec2-8039-439b-86fb-ed8c52520b6f",
+    "state": "settled",
+    "actual_tokens": 7483,
+    "reserved_tokens": 12519,
+    "provider_usage": {
+      "input_tokens": 7399,
+      "total_tokens": 7483,
+      "output_tokens": 84,
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_0608cba49f30e9bf016aefeebf180087d094645f0550e70ce2",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 7483,
+    "mission_reserved_tokens": 12519,
+    "project_actual_microusd": "14125",
+    "project_reserved_microusd": "289189",
+    "project_provider_request_id": "resp_0608cba49f30e9bf016aefeebf180087d094645f0550e70ce2",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "14125",
+    "reserved_microusd": "175266"
+  },
+  {
+    "id": "e7fc31a8-9466-45b3-b93b-1621770590c7",
+    "request_key": "4152a994-9eb1-41ef-ae89-26ab08639c42",
+    "state": "settled",
+    "actual_tokens": 11321,
+    "reserved_tokens": 16357,
+    "provider_usage": {
+      "input_tokens": 11237,
+      "total_tokens": 11321,
+      "output_tokens": 84,
+      "input_tokens_details": {
+        "cached_tokens": 7296,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_0608cba49f30e9bf016aefeec348e087d080ec6ac8e79e74cb",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 11321,
+    "mission_reserved_tokens": 16357,
+    "project_actual_microusd": "20841",
+    "project_reserved_microusd": "377847",
+    "project_provider_request_id": "resp_0608cba49f30e9bf016aefeec348e087d080ec6ac8e79e74cb",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "20841",
+    "reserved_microusd": "228998"
+  },
+  {
+    "id": "4f8545d9-f884-4f1a-ba93-de74388b9bc2",
+    "request_key": "2072f432-d695-4789-9bd2-4a99af8b1d3f",
+    "state": "settled",
+    "actual_tokens": 12895,
+    "reserved_tokens": 17922,
+    "provider_usage": {
+      "input_tokens": 12802,
+      "total_tokens": 12895,
+      "output_tokens": 93,
+      "input_tokens_details": {
+        "cached_tokens": 11136,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_0608cba49f30e9bf016aefeec7886087d0bc60dff2277686e2",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 12895,
+    "mission_reserved_tokens": 17922,
+    "project_actual_microusd": "23706",
+    "project_reserved_microusd": "413999",
+    "project_provider_request_id": "resp_0608cba49f30e9bf016aefeec7886087d0bc60dff2277686e2",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "23706",
+    "reserved_microusd": "250908"
+  },
+  {
+    "id": "6d51c3f4-a019-444b-ab87-9d424f1b25e2",
+    "request_key": "1ebf357e-4075-4b31-8d17-55891468b102",
+    "state": "settled",
+    "actual_tokens": 13046,
+    "reserved_tokens": 18122,
+    "provider_usage": {
+      "input_tokens": 13002,
+      "total_tokens": 13046,
+      "output_tokens": 44,
+      "input_tokens_details": {
+        "cached_tokens": 12672,
+        "cache_write_tokens": 0
+      },
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "provider_request_id": "resp_0608cba49f30e9bf016aefeecc1a3c87d083c1eff9eccb207e",
+    "model": "gpt-5.3-codex",
+    "mission_status": "completed",
+    "mission_actual_tokens": 13046,
+    "mission_reserved_tokens": 18122,
+    "project_actual_microusd": "23370",
+    "project_reserved_microusd": "418619",
+    "project_provider_request_id": "resp_0608cba49f30e9bf016aefeecc1a3c87d083c1eff9eccb207e",
+    "matching_provider_usage": true,
+    "matching_provider_receipt": true,
+    "exposure_microusd": "23370",
+    "reserved_microusd": "253708"
+  }
+]

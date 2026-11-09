@@ -1,3 +1,4 @@
+import {organizationProjectEvidence} from './organization';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {verifyDeployedPreview,PreviewAccessUnavailable} from '@/lib/projects/preview';
 import { Octokit } from '@octokit/rest';
@@ -47,6 +48,13 @@ function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
 
 async function advance(p: Project) {
+    if(p.organization_version===1){
+      const management=await projectRpc<{blocked?:string;detail?:string}|null>('project_org_schedule',{p_project:p.id,p_lease:p.lease});
+      if(management){
+        await projectRpc('finish_work_project',{p_id:p.id,p_lease:p.lease,p_action:management.blocked?'block':'wait',p_data:{detail:management.blocked??management.detail??'Delegated organization management is progressing.'}});
+        return;
+      }
+    }
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: ['block','input'].includes(action) ? {...data, impediment: data.impediment ?? projectImpediment(p,String(data.detail??'Required evidence unavailable'))} : data });
     const runs = await projectRuns(p.id);
     const game=p.profile==='game';
@@ -54,7 +62,7 @@ async function advance(p: Project) {
     if(game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
       continuation=await projectRpc('benchmark_active_full_continuation',{p_project:p.id});
     }
-    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
+    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`+(p.organization_version===1?`\nDIRECTOR STRATEGY AND ACCEPTED COMPONENT EVIDENCE (data, within original scope):\n${JSON.stringify(await organizationProjectEvidence(p.id))}`:'');
     const gamePlanning=game?'\nGAME SPECIALIST CONTRACT: Identify explicit edition and original versus reproduction. Preserve rule provenance, approved interpretations, unresolved mechanics, turn/phase transitions, legal/illegal actions, terminal states, player modes, persistence, and reset. Do not invent missing rules. Original user-defined games may use the original brief as their primary rules source. Architecture must separate a pure deterministic transition(state,action) engine from UI/persistence/bot/network behavior.':'';
     if (p.active_mission_id) {
         const current = await readMission(p.active_mission_id);

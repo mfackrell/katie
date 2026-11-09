@@ -2,18 +2,64 @@
   "schema_version": 1,
   "phase": 2,
   "acceptance": [
-    {"id":"PAGE_COUNT_EXACT","status":"pending_private","evidence":"Synthetic requested-two-page regression covered; actual private source not regenerated in Katie."},
-    {"id":"SOURCE_FIDELITY","status":"pending_private","evidence":"Synthetic DOCX/PDF glyph tests; approved private source requires controlled reproduction."},
-    {"id":"FONT_FLOOR","status":"pending_private","evidence":"Synthetic 11pt run check and Phase1 private DOCX XML; Phase2 private render outstanding."},
-    {"id":"DOCX_OFFICE_PARITY","status":"pending_private","evidence":"LibreOffice/Chromium synthetic parity tested; private and Microsoft Word not qualified."},
-    {"id":"NO_AVOIDABLE_PAGE_BREAK","status":"pending_private","evidence":"Synthetic report and agreement compact counterfactual saves pages; private result unverified."},
-    {"id":"HEADING_GROUP_CONTINUITY","status":"pending_independent","evidence":"Word keepNext and rendered-page diagnostics added; independent cross-page professional acceptance outstanding."},
-    {"id":"ENGAGEMENT_GROUP_CONTINUITY","status":"pending_private","evidence":"General heading/metadata/bullet cohesion added; original private engagement grouping unverified."},
-    {"id":"TABLE_AND_CLAUSE_INTEGRITY","status":"pending_independent","evidence":"Synthetic legal and financial structures render; independent visual and office clause checks outstanding."},
-    {"id":"PAGE_COMPOSITION","status":"pending_independent","evidence":"Actual rendered synthetic page images preserved; independent final reviewer has not certified composition."},
-    {"id":"DELIVERY_SEPARATION","status":"passed","evidence":"Strict professional-delivery test rejects blocked review while technical-only result is labeled."},
-    {"id":"NO_PAID_INFERENCE_CI","status":"passed","evidence":"All CI tests use deterministic offline reviewers and local browser/office rendering."}
+    {
+      "id": "PAGE_COUNT_EXACT",
+      "status": "passed",
+      "evidence": "Actual approved private source and synthetic resume render exactly 2 pages in Chromium, LibreOffice 24.2.7.2 and 26.2.6.3. Agreement/report have requested_pages=null; no one-page cap is invented."
+    },
+    {
+      "id": "SOURCE_FIDELITY",
+      "status": "passed",
+      "evidence": "Source SHA b466561895813598f7b5b0f9f09cda5ca6e0f130e85f96c2369577e839900aa3 unchanged. DOCX semantic extraction and all three PDF ordered-glyph comparisons PASS for every acceptance case, including all table cells."
+    },
+    {
+      "id": "FONT_FLOOR",
+      "status": "passed",
+      "evidence": "Actual PDF minima are 11.002499616562496pt in Chromium and 11pt in both Office versions for all cases. OOXML content/default body declarations remain >=11pt; strict font rejection regression retained."
+    },
+    {
+      "id": "DOCX_OFFICE_PARITY",
+      "status": "passed",
+      "evidence": "All acceptance cases have equal physical page count, preserved ordered glyphs, intact blocks, and printed-margin checks in three renderers. Recorded Office coordinate deltas are <0.173pt, not claimed pixel identity."
+    },
+    {
+      "id": "NO_AVOIDABLE_PAGE_BREAK",
+      "status": "passed",
+      "evidence": "Actual same-source standard/natural/compact comparison retained. Uncapped report/agreement finish on the minimum possible one page; both resumes obey exactly two requested pages. No universal utilization threshold or new page cap is introduced."
+    },
+    {
+      "id": "HEADING_GROUP_CONTINUITY",
+      "status": "passed",
+      "evidence": "Actual ordered glyph-to-page mapping shows every heading with its first supporting block and every content block intact in all three renderers, including the large multiline heading margin fixture."
+    },
+    {
+      "id": "ENGAGEMENT_GROUP_CONTINUITY",
+      "status": "passed",
+      "evidence": "All level-three semantic groups and the 39 private resume blocks remain intact on matching pages in Chromium and both LibreOffice versions. No resume-specific formatting rule was added."
+    },
+    {
+      "id": "TABLE_AND_CLAUSE_INTEGRITY",
+      "status": "passed",
+      "evidence": "Both financial tables, all numbered agreement clauses and signature groups fit intact on the actual accepted pages in all three renderers. Ordered cell fidelity and heading support checks pass. Header repetition is not required on these single-page tables; no broader untested large-table claim is made."
+    },
+    {
+      "id": "PAGE_COMPOSITION",
+      "status": "pending_independent",
+      "evidence": "Final exact rendered resume, report and agreement images are prepared. No reviewer other than the implementation agent has issued an artifact-hash-bound professional design verdict. Mechanical PASS cannot close this gate."
+    },
+    {
+      "id": "DELIVERY_SEPARATION",
+      "status": "passed",
+      "evidence": "Existing strict-professional negative tests and authenticated technical-only delivery tests pass. Old raster approval is deliberately not inherited by changed line boxes; no new golden aesthetic fingerprint was self-approved."
+    },
+    {
+      "id": "NO_PAID_INFERENCE_CI",
+      "status": "passed",
+      "evidence": "No provider calls in artifact qualification. Deterministic mechanical inspectors explicitly withhold independent design approval. Private rendering ran with outbound network deny-all."
+    }
   ],
   "private_source_available_only_outside_public_ci": true,
-  "release_allowed": false
+  "release_allowed": false,
+  "mechanical_evidence_file": "fixtures/documents/phase2-mechanical-evidence.json",
+  "independent_visual_review": "PENDING"
 }

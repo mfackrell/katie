@@ -635,10 +635,10 @@ test('real two-page DOCX/PDF request, rendering, inspection, correction and secu
     const produced = await qualifyDocument(browser, Date.now() + 90000);
     assert.equal(produced.inspection.pageCount, 2);
     assert.deepEqual(produced.inspection.findings, []);
-    assert.equal(produced.inspection.visual, 'passed');
+    assert.equal(produced.inspection.visual, 'technical-only', 'Changed line boxes must not inherit approval from the old visual fingerprint');
     assert.equal(produced.corrections, 1);
     assert.ok(produced.attempts[0].findings.some(f => f.rule === 'overflow'));
-    assert.deepEqual(produced.images.map(hash), QUALIFIED_PAGES);
+    assert.notDeepEqual(produced.images.map(hash), QUALIFIED_PAGES, 'Old page-image approval cannot certify the new typography');
     const extracted = await (mammoth.extractRawText as unknown as (input: { buffer: Buffer }) => Promise<{ value: string }>)({ buffer: produced.docx });
     assert.equal(normalizedText(extracted.value), normalizedText(contentText(fixture)));
     assert.equal(normalizedText(produced.inspection.extractedText), normalizedText(contentText(fixture)));

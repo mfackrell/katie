@@ -1,8 +1,10 @@
 import {createHash} from 'node:crypto';
+import {task4aVerificationFirstTree} from './native-wip-recovery.mjs';
 
 // Shared trusted control path. runPhase owns fresh authority/capacity admission;
 // neither this controller nor recovery can grant authority or mutate accounting.
-export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,onCompleted=()=>{},candidateIdentity=head=>head,onIteration=()=>{}}){
+export async function executeNativeDevelopmentLifecycle({recovery,verificationFirstCapability,runPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,onCompleted=()=>{},candidateIdentity=head=>head,onIteration=()=>{}}){
+ const restoredTree=task4aVerificationFirstTree(recovery,verificationFirstCapability);
  const summary=value=>Buffer.from(String(value??''),'utf8').subarray(0,1600).toString('utf8');
  const findingsOf=review=>review?.verdict==='changes_requested'?String(review.findings).split('\n').map(s=>s.trim()).filter(Boolean).slice(0,32).map(s=>s.slice(0,240)):[];
  const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -51,11 +53,15 @@ export async function executeNativeDevelopmentLifecycle({recovery,runPhase,commi
  if(!nextAction)nextAction=!['repair','review','final-review'].includes(recovery?.phase)?'implementation':saved.verification?.pending?'verification':recovery.phase;
  if(pendingRepair?.iteration===iteration&&['repair','complete'].includes(nextAction)){await finishRepairReview();publish();}
  if(nextAction==='implementation'){
-  await runPhase('implementation');candidateHead=await commitCandidate('native: checkpoint approved implementation');
+  if(!restoredTree)await runPhase('implementation');
+  candidateHead=await commitCandidate('native: checkpoint approved implementation');
+  if(restoredTree&&await candidateIdentity(candidateHead)!==restoredTree)throw Error('NATIVE_RECOVERY_CANDIDATE_TREE_MISMATCH');
   verification={passed:false,pending:true,head:candidateHead,detail:'Candidate verification pending'};nextAction='verification';publish({phase:'implementation'});
  }
  if(nextAction==='verification'){
-  verification=await verifyCandidate(candidateHead);retainVerification();nextAction=repairPerformed?'final-review':'review';publish();
+  verification=await verifyCandidate(candidateHead);retainVerification();
+  if(restoredTree&&verification?.passed!==true){verification={...verification,pending:true};publish();throw Error('NATIVE_RECOVERY_VERIFICATION_FAILED: restored source remains unverified');}
+  nextAction=repairPerformed?'final-review':'review';publish();
  }
  if(nextAction==='review'){
   decision=await review('review');first??=decision;

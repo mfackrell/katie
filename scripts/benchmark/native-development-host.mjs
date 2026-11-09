@@ -1,9 +1,11 @@
+import {task4aVerifierReader,validateTask4aVerifierCheckpoint} from './task4a-verifier-recovery.mjs';
+import {task4aSuccessorRequestCap} from './task4a-successor-envelope.mjs';
 import {loadTask4aLinkedDiagnostics} from './task4a-failed-run-link.mjs';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
 import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
-import {recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
+import {createTask4aFailedVerifierCapability,createTask4aVerificationFirstCapability,recoveryCompletedEvidence,recoveryRefs,loadRecoveryDiagnostics,validateRecoveryRecords,prepareRecovery,githubRecoveryReader} from './native-wip-recovery.mjs';
 import {createNativeWipCheckpointer} from './native-wip-checkpoint.mjs';
 import {sanitizeEvidence,worktreeEvidence,NATIVE_EXECUTION_EVIDENCE_VERSION} from './native-execution-evidence.mjs';
 import {NATIVE_ADMISSION_DIAGNOSTICS_VERSION} from './native-request-admission.mjs';
@@ -194,7 +196,11 @@ if(task4aHistory.pregrant){
 // Other failed tasks require positive evidence even when their Git refs vanished.
 if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant)){
  let linkedEvidence=null;
- if(task.external?.task4aReplacementClaimId){
+ if(task.external?.task4aCapacityConsentDigest){
+  const ready=await db.rpc('task4a_capacity_execution_ready',{p_approval:approval.id,p_release:process.env.GITHUB_SHA});
+  if(ready.error||ready.data!==true)denied('Fresh capacity-successor execution claim required');
+  // Recover the latest paid run normally, never the older failed-host bridge.
+ }else if(task.external?.task4aReplacementClaimId){
   if(!task4aHistory.postpaid)denied('Replacement is only valid for original post-paid Task 4A');
   const ready=await db.rpc('task4a_replacement_authentic',{p_release:process.env.GITHUB_SHA});
   if(ready.error||ready.data!==true)denied('Exact replacement owner claim required');
@@ -203,7 +209,8 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
    denied('Replacement provenance unavailable');
   linkedEvidence=receipt.data?.proposal?.evidence;
  }
- const historicalReader=githubRecoveryReader(process.env.GITHUB_REPOSITORY);
+ const rawHistoricalReader=githubRecoveryReader(process.env.GITHUB_REPOSITORY);
+ const historicalReader=approval.developer_authority?.task4aVerifierRecovery?await task4aVerifierReader(rawHistoricalReader):rawHistoricalReader;
  const {record,diagnostics:priorDiagnostics}=linkedEvidence
   ?await loadTask4aLinkedDiagnostics({task,evidence:linkedEvidence,github:historicalReader})
   :await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:historicalReader,emptyBaselineSha:!priorRefs.length&&wipContext.baseSha===wipContext.baselineSha?wipContext.baselineSha:null});
@@ -213,6 +220,7 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
  priorCapacityObservations=Array.isArray(priorDiagnostics.capacityObservations)?priorDiagnostics.capacityObservations.slice(-64):[];
  priorLifecycleEvidence=priorDiagnostics.lifecycleEvidence??null;
  priorRepairIterations=Array.isArray(priorDiagnostics.repairIterations)?priorDiagnostics.repairIterations.slice(-64):[];
+ if(approval.developer_authority?.task4aVerifierRecovery)validateTask4aVerifierCheckpoint(record,priorDiagnostics);
  if(record){
  const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
  await validateRecoveryRecords({completedEvidence,record,task,context:wipContext,project,trialId:ordinary?null:proof.trialId,authorityKind:ordinary?'ordinary-developer':undefined,accountId:account.id,readOne});
@@ -221,19 +229,21 @@ if(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startu
 }
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
+const verificationFirstCapability=approval.developer_authority?.task4aVerifierRecovery?createTask4aFailedVerifierCapability(recoveryPlan?.record,recovery):createTask4aVerificationFirstCapability(recoveryPlan?.record,recovery);
+if(approval.developer_authority?.task4aFinalSuccessor&&!verificationFirstCapability)denied('Final successor requires exact verification-first restoration');
 let capacityRecovery=recovery;
 // Advisory only. Recovery authentication above, grants/admission below remain
 // authoritative. Forecast errors never call denied() or change phase selection.
 const capacityObservations=[...priorCapacityObservations];
 let latestCapacityForecast,forecastGrantId=null;
-const capacityCompletedStages=new Set(recovery?.phase==='repair'?['implementation','initial_review']:[]),capacityNotRequiredStages=new Set();
+const capacityCompletedStages=new Set(recovery?.phase==='repair'?['implementation','initial_review']:verificationFirstCapability?['implementation']:[]),capacityNotRequiredStages=new Set();
 const forecastCapacity=async phase=>{
  try{latestCapacityForecast=await (ordinary?readOrdinaryLifecycleCapacity:readNativeLifecycleCapacity)({db,task,project,approval,continuation,context:wipContext,recovery:capacityRecovery,phase,grantId:forecastGrantId,completedStages:[...capacityCompletedStages],notRequiredStages:[...capacityNotRequiredStages],observations:capacityObservations});}
  catch{latestCapacityForecast={version:'lifecycle-capacity-v1',kind:'forecast_not_authorization',status:'indeterminate',uncertainties:['forecast_unavailable']};}
  console.log('NATIVE_LIFECYCLE_CAPACITY='+JSON.stringify({status:latestCapacityForecast.status,shortages:latestCapacityForecast.shortages??[],phase:latestCapacityForecast.currentPhase??null}));
 };
 const recoveredAction=recovery?.lastCompleted?.adaptiveRepair?.nextAction;
-await forecastCapacity(recoveredAction==='complete'?'do_completion':recoveredAction??recovery?.phase??'implementation');
+await forecastCapacity(verificationFirstCapability?'verification':recoveredAction==='complete'?'do_completion':recoveredAction??recovery?.phase??'implementation');
 
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
@@ -317,7 +327,7 @@ const commitCandidate=(label)=>{
 };
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
 mkdirSync(sockdir,{mode:0o700});
-const perRequestCap=Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens));
+const perRequestCap=task4aSuccessorRequestCap({approval,defaultCap:Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens))});
 if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
 const upstream=createResponsesProvider({apiKey:providerKey});
 let gatewayFailure=null,capacityPhase=null,capacityReceipts=[];
@@ -326,7 +336,7 @@ const server=createNativeHttpBridge({
  onFailure:classification=>{gatewayFailure??=classification;},
  requireInputCount:true,
  db,grantToken,trialId:ordinary?null:proof.trialId,developerProjectId:ordinary?project.id:null,task4a,executionEpoch,
- providerNamespace:'openai-responses',upperTokens:perRequestCap,
+ providerNamespace:'openai-responses',upperTokens:perRequestCap,successorEnvelope:approval.developer_authority?.task4aSuccessorEnvelope,
  upstream,clientToken,fullMission:true,
  recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens,usage})=>{
   const {data,error}=await db.rpc(task4a?'task4a_native_reconcile_provider_usage':'benchmark_reconcile_provider_usage',{
@@ -468,7 +478,7 @@ try{
  };
  // Ordinary projects use verified lifecycle checkpoints from their first execution.
  const qualifiedLifecycle=ordinary||continuation?.plan?.capacityRenewal===true||continuation?.plan?.version===7;
- const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,
+ const lifecycle=await executeNativeDevelopmentLifecycle({recovery,runPhase:safelyRunPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,verificationFirstCapability,
   candidateIdentity:()=>git('rev-parse','HEAD^{tree}'),
   onIteration:evidence=>{diagnostics.repairIterations??=[];if(!diagnostics.repairIterations.some(old=>old.iteration===evidence.iteration&&old.candidateHead===evidence.candidateHead))diagnostics.repairIterations.push(evidence);diagnostics.repairIterations=diagnostics.repairIterations.slice(-64);saveDiagnostics();},
   onCompleted:(evidence,full)=>{diagnostics.lifecycleEvidence=full;lastCompleted={...lastCompleted,...evidence};if(evidence.verification?.head){const action=evidence.adaptiveRepair?.nextAction;activeWipPhase={phase:action==='repair'?'repair':action==='verification'?'review':action==='complete'?'final-review':action??'review',reviewFindings:evidence.review?.findings??'',boundary:true};preserveWip();if(recovery)capacityRecovery={...recovery,phase:activeWipPhase.phase,checkpointSha:diagnostics.wipCheckpoint?.checkpointSha??recovery.checkpointSha,lastCompleted:evidence};}if(evidence.repairPerformed!==true&&recovery?.phase!=='repair'&&evidence.review?.verdict==='pass'&&evidence.verification?.passed)capacityNotRequiredStages.add('repair');}});
