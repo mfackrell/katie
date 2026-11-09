@@ -487,7 +487,7 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   const definition=name=>unique(findNodes(node=>
     ts.isFunctionDeclaration(node)&&node.name?.text===name ||
     ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>ts.isIdentifier(declaration.name)&&declaration.name.text===name),ast),`image helper ${name}`).getText(ast).replace(/^export\s+/,'');
-  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
+  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','explicitFreshImageInspection','approvedCorrectionForImage','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
   // The route executes the real versioned visual-memory verifier; introducing
   // a new image helper must not cause these isolated production-code tests to
   // substitute a placeholder for Katie's first-person provenance contract.
