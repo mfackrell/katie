@@ -456,6 +456,12 @@ create trigger project_org_call_settle before update on mission_calls for each r
 create function project_org_native_guard() returns trigger language plpgsql security definer set search_path=public as $$
 declare n project_organization_nodes; a benchmark_budget_accounts; used bigint; total numeric; authority project_organization_authority; begin
  select * into a from benchmark_budget_accounts where id=new.account_id;
+ -- Linked mission projections are already admitted by the mission-call guard;
+ -- counting their exposure again would deny an otherwise authorized final call.
+ if tg_table_name='benchmark_budget_calls' then
+ if new.legacy_mission_call_id is not null then return new;end if;
+ elsif exists(select 1 from benchmark_budget_calls where id=new.call_id and legacy_mission_call_id is not null) then return new;
+ end if;
  select x.* into n from project_organization_nodes x join mission_assignments j on j.agent_id=x.agent_id join agent_missions m on m.id=j.mission_id and m.project_id=x.project_id where j.id=a.developer_task_id;
  if n.id is null then
  if exists(select 1 from work_projects where id=a.developer_project_id and organization_version=1) then raise exception 'Native work requires an appointed execution worker';end if;

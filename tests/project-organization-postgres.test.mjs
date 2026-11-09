@@ -135,6 +135,13 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query("update benchmark_budget_calls set state='settled',actual_tokens=800 where id=$1",[nativeCall]);
  await db.query('update benchmark_dollar_exposures set exposure_microusd=8000 where call_id=$1',[nativeCall]);
  assert.equal((await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[nativeCall])).rows[0].exposure_microusd,'8000');
+ // A mission projection is represented once, on the mission rail; the
+ // canonical projection must not consume a second organizational reservation.
+ const projected=randomUUID();
+ await db.query('begin');
+ await db.query("insert into benchmark_budget_calls values($1,$2,$3,50000,800,'settled')",[projected,account,randomUUID()]);
+ await db.query('insert into benchmark_dollar_exposures values($1,$2,1000000)',[projected,account]);
+ await db.query('rollback');
  // Native settlement is never suppressed even when actual exposure exceeds authority.
  await db.query('begin');await db.query('update benchmark_dollar_exposures set exposure_microusd=2000000 where call_id=$1',[nativeCall]);
  assert.equal((await db.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');await db.query('rollback');
