@@ -245,6 +245,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const nativeDispatchEnabled=process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled';
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
+    if(project.organizationVersion===1&&task.repository_full_name!=='mfackrell/katie')return persist(task,'blocked','This repository has no qualified native adapter for delegated project authority.');
     const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
     if(!fullBinding&&task.repository_full_name==='mfackrell/katie'){
       if(project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'){
@@ -256,6 +257,11 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
         });
         if(result.error||result.data!==true)return persist(task,'dispatching','Waiting for verified Task 4A owner, scope and native spending authority. No external work submitted.');
         return persist(task,'dispatching','Task 4A native authority prepared; existing authenticated dispatcher will submit the bounded development task.');
+      }
+      if(project.organizationVersion===1){
+        const delegated=await getSupabaseAdminClient().rpc<boolean>('project_org_prepare_native',{p_task:task.id,p_lease:assignmentLease??null});
+        if(delegated.error||delegated.data!==true)return persist(task,'blocked','Delegated native capacity or scope is unavailable; the responsible manager must resolve the exception.');
+        return persist(task,'dispatching','Native task authority derived from the original owner envelope and management delegation. Awaiting trusted dispatch.');
       }
       return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
     }
