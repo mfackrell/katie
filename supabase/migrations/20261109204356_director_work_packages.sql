@@ -81,6 +81,9 @@ begin
  insert into project_work_packages(project_id,manager_id,worker_id,writer_id,reviewer_id,milestone_index,scope_hash,contract,contract_hash,paths,token_limit,ceiling_microusd,deadline,max_attempts,commissioned_by)
  values(p.id,n.id,(c->>'workerId')::uuid,(c->>'writerId')::uuid,(c->>'reviewerId')::uuid,(c->>'milestoneIndex')::integer,p.approved_hash,contract,
  encode(sha256(convert_to(project_canonical(contract),'UTF8')),'hex'),package_paths,(c->>'tokens')::bigint,(c->>'ceilingMicrousd')::numeric,(c->>'deadline')::timestamptz,(c->>'maxAttempts')::integer,p_job) returning * into w;
+ perform project_smart_contract(p_job,p_lease,w.worker_id,'development',c->'tasks'->'development',w.id);
+ perform project_smart_contract(p_job,p_lease,w.writer_id,'compose',c->'tasks'->'compose',w.id);
+ perform project_smart_contract(p_job,p_lease,w.reviewer_id,'review',c->'tasks'->'review',w.id);
  for dep in select value::uuid from jsonb_array_elements_text(c->'dependencies') loop
  if not exists(select 1 from project_work_packages where id=dep and project_id=p.id and scope_hash=p.approved_hash and milestone_index<w.milestone_index) then raise exception 'Package dependency must precede its consumer within the approved project';end if;
  insert into project_work_package_dependencies values(w.id,dep);
@@ -174,12 +177,13 @@ create or replace function public.finish_work_project_lifecycle(p_id uuid,p_leas
    update agent_missions set token_allowance=least(120000,p.token_allowance,coalesce(wp.token_limit-(project_package_usage(wp.id)->>'tokens')::bigint,120000))::int,project_id=p.id,project_kind=kind,project_evidence=p_data->'evidence' where id=mid;perform control_mission(mid,'start');
    if kind='development' then
     contract:=p.spec->'milestones'->p.milestone_index->'contract';if contract is null then raise exception 'Approved milestone contract missing';end if;
-    binding:=jsonb_build_object('version',1,'projectId',p.id,'baseSha',coalesce(p.verified_sha,p.baseline_sha),'baselineSha',p.baseline_sha,'allowedPaths',case when wp.id is null then p.spec->'allowedPaths' else to_jsonb(wp.paths) end,'contractHash',encode(sha256(convert_to(project_canonical(contract),'UTF8')),'hex'),'contract',contract,'scopeHash',p.approved_hash);
+    binding:=jsonb_build_object('version',1,'projectId',p.id,'baseSha',coalesce(p.verified_sha,p.baseline_sha),'baselineSha',p.baseline_sha,'allowedPaths',case when wp.id is null then p.spec->'allowedPaths' else (select sc.contract->'paths' from project_worker_contracts sc where sc.package_id=wp.id and sc.role='development') end,'contractHash',encode(sha256(convert_to(project_canonical(contract),'UTF8')),'hex'),'contract',contract,'scopeHash',p.approved_hash);
     if wp.id is not null then binding:=binding||jsonb_build_object('cumulativePaths',p.spec->'allowedPaths');end if;
     update agent_missions set deadline=least(p.deadline,coalesce(wp.deadline,p.deadline)) where id=mid;
     update mission_assignments set status='completed',result='{"output":"Server-owned approved project milestone; no planning inference was claimed."}' where mission_id=mid and job_key='plan';
     lead:=agents[1];reviewer:=agents[2];dev:=agents[3];
     insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,payload) values(mid,'implement','development',dev,'Implement the approved milestone in the full mission objective. Preserve all previous verified work. Run focused checks and satisfy the approved browser contract. Deliver an isolated draft PR only.','{}','{"capability":"development"}'),(mid,'compose','compose',lead,'Report the actual verified milestone result, draft PR, immutable commit and browser checks concisely. Do not reconstruct code or invent actions.',array['implement'],'{}'),(mid,'review','review',reviewer,'Verify the actual approved milestone against its original scope and immutable external evidence.',array['compose'],'{}');
+    if wp.id is not null then update mission_assignments j set instruction=c.contract->>'instruction' from project_worker_contracts c where c.package_id=wp.id and c.role=j.role and j.mission_id=mid;end if;
     update work_projects set cycles=cycles+1 where id=p.id;
    end if;
    insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index,binding) values(p.id,mid,kind,seq,p.milestone_index,binding);
@@ -316,11 +320,12 @@ alter function project_org_prepare_native(uuid,uuid) rename to project_org_prepa
 create function project_org_prepare_native(p_task uuid,p_lease uuid) returns boolean language plpgsql security definer set search_path=public as $$
 declare j mission_assignments;w project_work_packages;r project_runs;begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ perform project_smart_admit(p_task);
  select * into j from mission_assignments where id=p_task;
  select x.* into w from project_work_packages x join project_work_package_attempts a on a.package_id=x.id where a.mission_id=j.mission_id;
  select * into r from project_runs where mission_id=j.mission_id;
  if w.id is null or w.status<>'running' or not exists(select 1 from project_organization_nodes where id=w.worker_id and agent_id=j.agent_id and parent_id=w.manager_id and kind='worker')
- or r.binding->'allowedPaths' is distinct from to_jsonb(w.paths) or r.binding->>'scopeHash' is distinct from w.scope_hash
+ or r.binding->'allowedPaths' is distinct from (select contract->'paths' from project_worker_contracts where package_id=w.id and role='development') or r.binding->>'scopeHash' is distinct from w.scope_hash
  then raise exception 'Native dispatch requires director-owned package binding';end if;
  perform project_package_admission(j.mission_id,0,0);
  return project_org_prepare_native_hierarchy(p_task,p_lease);

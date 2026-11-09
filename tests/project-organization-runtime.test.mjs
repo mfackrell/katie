@@ -91,3 +91,13 @@ test('native host authenticates package paths and predecessor before granting ex
  for(const key of Object.keys(binding))await assert.rejects(run({organization_version:1},{id:'task'},readOne,{...binding,[key]:key.endsWith('Paths')?['app/escape/']:'forged'},denied),/package dispatch context mismatch/);
  await run({organization_version:0},{id:'historical'},()=>assert.fail('Historical execution must retain its existing guard'),{},denied);
 });
+
+test('explicit management levels restrict appointments without granting technical authority',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const manager={id:'m',kind:'manager',management_level:'manager'},supervisor={id:'s',kind:'manager',management_level:'supervisor'};
+ assertManagementCommands(manager,[],[{action:'appoint',kind:'manager',managementLevel:'supervisor'},{action:'appoint',kind:'worker',managementLevel:'worker'}]);
+ assertManagementCommands(supervisor,[],[{action:'appoint',kind:'worker',managementLevel:'worker'}]);
+ assert.throws(()=>assertManagementCommands(supervisor,[],[{action:'appoint',kind:'manager',managementLevel:'manager'}]),/workers only/);
+ assert.throws(()=>assertManagementCommands(manager,[],[{action:'appoint',kind:'manager',managementLevel:'functional_director'}]),/Managers commission/);
+ assert.throws(()=>assertManagementCommands({id:'p',kind:'project_director'},[],[{action:'authorize_assignment',assignmentId:'worker-job'}]),/cannot assign/);
+});

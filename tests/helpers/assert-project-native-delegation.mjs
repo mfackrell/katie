@@ -53,32 +53,52 @@ export async function assertProjectNativeDelegation(db,rival){
  let s=await session();const rootNode=s.node;
  await assert.rejects(decide(s,[{action:'commission_package'}]),/immediate Functional Director/);
  await decide(s,[{action:'plan',purpose:'Deliver correct addition',direction:'Delegate architecture, QA and implementation',outcomes:[{criterion:'Both components accepted',verification:'Independent tests'}],milestones:[{objective:'Two components'}],organizations:['architecture','quality_assurance','development']},appoint('Architecture','manager',80000,['manage','analysis']),appoint('QA','manager',80000,['manage','analysis','research'],{area:'quality_assurance'}),appoint('Development','manager',400000,['manage','analysis','development']),{action:'ready'}]);
- for(let i=0;i<4;i++){
+ for(let i=0;i<5;i++){
   s=await session();
   if(s.node.name==='Development')await decide(s,[appoint('Implementation manager','manager',350000,['manage','analysis','development'])]);
-  else if(s.node.name==='Implementation manager')await decide(s,[appoint('Engine coder','worker',125000,['analysis','development']),appoint('View coder','worker',125000,['analysis','development']),appoint('Technical writer','worker',30000,['analysis']),appoint('Technical reviewer','worker',30000,['analysis'])]);
+  else if(s.node.name==='Implementation manager'){
+   await db.query('begin');await decide(s,[appoint('Manager direct worker','worker',10000,['analysis'])]);
+   assert.ok((await rows()).some(n=>n.name==='Manager direct worker'&&n.parent_id===s.node.id));await db.query('rollback');
+   await decide(s,[appoint('Implementation supervisor','manager',330000,['manage','analysis','development'],{managementLevel:'supervisor'})]);
+  }
+  else if(s.node.name==='Implementation supervisor')await decide(s,[appoint('Engine coder','worker',125000,['analysis','development']),appoint('View coder','worker',125000,['analysis','development']),appoint('Technical writer','worker',30000,['analysis']),appoint('Technical reviewer','worker',30000,['analysis'])]);
   else await decide(s,[appoint(s.node.name+' worker','worker',50000,['analysis'],{reuseAgentId:p.team[s.node.name==='Architecture'?0:1]})]);
  }
  const byName=name=>(awaitNodes.find(n=>n.name===name));let awaitNodes=await rows();
- const manager=byName('Implementation manager'),engine=byName('Engine coder'),view=byName('View coder'),writer=byName('Technical writer'),reviewer=byName('Technical reviewer');
+ const manager=byName('Implementation supervisor'),workstream=byName('Implementation manager'),engine=byName('Engine coder'),view=byName('View coder'),writer=byName('Technical writer'),reviewer=byName('Technical reviewer');
+ assert.equal(manager.management_level,'supervisor');assert.equal(workstream.management_level,'manager');
+ for(const leader of awaitNodes.filter(n=>n.kind!=='worker'))await assert.rejects(db.query('select project_org_assert_execution($1)',[leader.agent_id]),/cannot execute/);
+ await assert.rejects(db.query("update project_organization_nodes set management_level='worker' where id=$1",[manager.id]),/permission denied/);
+ await db.query('begin');await db.query('reset role');
+ await assert.rejects(db.query("update project_organization_nodes set management_level='manager' where id=$1",[manager.id]),/immutable/);await db.query('rollback');
  assert.notEqual(engine.agent_id,p.team[2]);assert.notEqual(view.agent_id,p.team[2]);assert.notEqual(engine.agent_id,view.agent_id);
  const contract={path:'/',scenarios:[{name:'Correct original outcome',steps:[{action:'expectText',selector:'#state',value:'5'}]}]};
  const scope='a'.repeat(64),paths=['app/pilot/'];
  const spec={name:'Director integration',summary:'Two components',requirements:['Render 2 + 3 as 5'],allowedPaths:paths,milestones:[0,1].map(i=>({title:'Component '+i,instruction:'Implement approved component',contract})),finalContract:contract};
  await db.query("update work_projects set status='awaiting_approval',phase='approval',spec=$2,approval_hash=$3,baseline_sha=$4,repository_full_name='mfackrell/katie' where id=$1",[project,spec,scope,baseline]);
  await db.query("select control_work_project($1,$2,$3,'approve',p_hash=>$4)",[project,actor,chat,scope]);
- for(let i=0;i<5;i++){
+ for(let i=0;i<6;i++){
   s=await session();
   await decide(s,(await rows()).filter(n=>n.parent_id===s.node.id).map(n=>({action:'grant_scope',nodeId:n.id,paths:n.id===engine.id?['app/pilot/engine/']:n.id===view.id?['app/pilot/view/']:paths})));
  }
  // Wake the delegated manager as an observed deterministic model turn.
  const wake=async node=>{await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=true where id=$1',[node.id]);await db.query('set role service_role');};
  await wake(manager);s=await session();assert.equal(s.node.id,manager.id);
- const commission=(i,worker,dependencies=[])=>({action:'commission_package',workerId:worker.id,writerId:writer.id,reviewerId:reviewer.id,milestoneIndex:i,objective:i?'Render the accepted engine result':'Provide correct arithmetic',deliverables:[i?'view module':'engine module'],interfaces:['sum(a,b) returns a number'],acceptance:[i?'Rendered total is 5':'sum(2,3) equals 5'],dependencies,paths:[i?'app/pilot/view/':'app/pilot/engine/'],tokens:125000,ceilingMicrousd:800000,deadline,maxAttempts:2});
+ const task=(parent,role,taskPaths=[],extra={})=>({objective:role+' one bounded component',deliverable:role+' verified artifact',instruction:'Perform '+role+' only for the explicitly inventoried component and return acceptance evidence.',parentObjective:parent.objective,capability:'analysis',acceptance:[{criterion:'Original component criterion passes',evidence:'Immutable source and executed test receipt'}],inventory:[{item:'Approved component contract and source files',contextChars:1000}],estimate:{basis:'declared_inventory',rationale:'One module and its focused test; existing interface and bounded source context',uncertainty:'Manager estimate; implementation may require rejection and bounded correction',tokens:1000,seconds:60},paths:taskPaths,tokens:role==='development'?100000:5000,maxAssignments:2,deadline,...extra});
+ const taskPaths=i=>i?['app/pilot/view/render.mjs','app/pilot/view/render.test.mjs']:['app/pilot/engine/sum.mjs','app/pilot/engine/sum.test.mjs'];
+ const commission=(i,worker,dependencies=[])=>({action:'commission_package',workerId:worker.id,writerId:writer.id,reviewerId:reviewer.id,milestoneIndex:i,objective:i?'Render the accepted engine result':'Provide correct arithmetic',deliverables:[i?'view module':'engine module'],interfaces:['sum(a,b) returns a number'],acceptance:[i?'Rendered total is 5':'sum(2,3) equals 5'],dependencies,paths:[i?'app/pilot/view/':'app/pilot/engine/'],tokens:125000,ceilingMicrousd:800000,deadline,maxAttempts:2,tasks:{development:task(manager,'development',taskPaths(i)),compose:task(manager,'compose'),review:task(manager,'review')}});
  await assert.rejects(decide(s,[{...commission(0,engine),paths:['app/pilot/view/']}]),/worker scope/);
  await assert.rejects(decide(s,[{...commission(0,engine),tokens:400000}]),/resources exceed/);
  await assert.rejects(decide(s,[{...commission(0,engine),reviewerId:engine.id}]),/Independent technical reviewer/);
  await assert.rejects(decide(s,[{...commission(0,engine),workerId:byName('QA worker').id}]),/immediately delegated/);
+ await assert.rejects(decide(s,[appoint('Forbidden manager','manager',1,['manage'])]),/Reporting level violation/);
+ await assert.rejects(decide(s,[{...commission(0,engine),tasks:{}}]),/SMART contract/);
+ const oversized=commission(0,engine);oversized.tasks.development.inventory[0].contextChars=999999;
+ await assert.rejects(decide(s,[oversized]),/decompose before dispatch/);
+ const broad=commission(0,engine);broad.tasks.development.paths=['app/pilot/engine/'];
+ await assert.rejects(decide(s,[broad]),/bounded file inventory/);
+ const wrongParent=commission(0,engine);wrongParent.tasks.development.parentObjective='Unapproved objective';
+ await assert.rejects(decide(s,[wrongParent]),/SMART contract/);
  const races=await Promise.allSettled([db,rival].map(c=>c.query('select project_org_decide($1,$2,$3)',[s.job,s.lease,JSON.stringify([commission(0,engine)])])));
  assert.equal(races.filter(x=>x.status==='fulfilled').length,1,'One concurrent commissioning decision');
  const first=(await packages())[0];
@@ -94,14 +114,27 @@ export async function assertProjectNativeDelegation(db,rival){
   const mission=(await db.query('select active_mission_id id from work_projects where id=$1',[project])).rows[0].id;
   const run=(await db.query('select * from project_runs where mission_id=$1',[mission])).rows[0];
   assert.equal(run.binding.baseSha,previousHead,'Cumulative implementation starts at the exact accepted predecessor');
-  assert.deepEqual(run.binding.allowedPaths,[milestone?'app/pilot/view/':'app/pilot/engine/']);
+  assert.deepEqual(run.binding.allowedPaths,taskPaths(milestone));
   const job=(await db.query("select * from mission_assignments where mission_id=$1 and role='development'",[mission])).rows[0];
   assert.equal(job.agent_id,(milestone?view:engine).agent_id);
   await assert.rejects(db.query('update mission_assignments set agent_id=$2 where id=$1',[job.id,(milestone?engine:view).agent_id]),/commissioned package ownership/);
   const agent=(await db.query('select * from managed_agents where id=$1',[job.agent_id])).rows[0],taskChat=randomUUID(),lease=randomUUID();
   await db.query("insert into chats(id,actor_id,title) values($1,$2,'Delegated native worker')",[taskChat,agent.actor_id]);
-  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development','Frozen approved component','Frozen approved component',$7,'mfackrell/katie',$1::text,'dispatching','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo]);
   await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[job.id,lease]);
+  const prepared=(await db.query('select prepare_mission_development($1,$2) input',[job.id,lease])).rows[0].input;
+  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development',$8,$8,$7,'mfackrell/katie',$1::text,'dispatching','{}')",[job.id,agent.id,agent.actor_id,taskChat,agent.config,agent.version,repo,prepared]);
+  await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[job.id,lease]);
+  const reviewJob=(await db.query("select id from mission_assignments where mission_id=$1 and role='review'",[mission])).rows[0].id;
+  await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[reviewJob,lease]);
+  assert.equal((await db.query('select checkpoint_mission_review_model($1,$2,$3,$4) ok',[reviewJob,lease,'b'.repeat(64),{text:'Deterministic checkpoint',sources:[],calculations:[],model:'fixture'}])).rows[0].ok,true);
+  await assert.rejects(db.query("update mission_assignments set payload=payload||'{\"development_input\":\"Forged\"}' where id=$1",[job.id]),/metadata requires authenticated/);
+  await assert.rejects(db.query("update mission_assignments set instruction='Implement the whole project' where id=$1",[job.id]),/SMART assignment is immutable/);
+  await assert.rejects(db.query("update agent_missions set objective='Bypass the contract' where id=$1",[mission]),/SMART mission context is immutable/);
+  await assert.rejects(db.query("update mission_assignments set dependencies=array['fake'] where id=$1",[job.id]),/SMART assignment is immutable/);
+  await db.query('begin');await db.query('reset role');
+  await db.query("update project_worker_contracts set deadline=now()-interval '1 second' where worker_id=$1",[(milestone?view:engine).id]);
+  await db.query('set role service_role');await assert.rejects(db.query("update mission_assignments set status='running',lease=gen_random_uuid() where id=$1",[job.id]),/SMART authority changed or expired/);await db.query('rollback');
+  await assert.rejects(db.query('select project_smart_admit($1)',[job.id]),/permission denied/);
   await assert.rejects(db.query('select project_org_prepare_native($1,$2)',[job.id,randomUUID()]),/Live delegated/);
   assert.equal((await db.query('select developer_next_initial_task($1,$2) id',[owner,chat])).rows[0].id,null);
   const race=await Promise.all([db,rival].map(c=>c.query('select project_org_prepare_native($1,$2) ok',[job.id,lease])));assert.ok(race.every(r=>r.rows[0].ok));
@@ -118,6 +151,19 @@ export async function assertProjectNativeDelegation(db,rival){
   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[linked,'deterministic-fixture-'+call,{input_tokens:3,output_tokens:2,total_tokens:5}]);
   assert.equal((await db.query('select state from benchmark_budget_calls where id=$1',[call])).rows[0].state,'settled');
   assert.ok((await db.query('select organization_exposure_microusd from mission_calls where id=$1',[linked])).rows[0].organization_exposure_microusd);
+  for(const boundary of ['expired','over_cap']){
+   await db.query('begin');
+   const pendingCall=(await db.query('select developer_native_reserve($1,$2,$3,$4,$5,100) id',[token,project,grant.executionEpoch,randomUUID(),approval.model])).rows[0].id;
+   const pendingLinked=(await db.query('select legacy_mission_call_id id from benchmark_budget_calls where id=$1',[pendingCall])).rows[0].id;
+   await db.query('reset role');
+   if(boundary==='expired')await db.query("update project_worker_contracts set deadline=now()-interval '1 second' where worker_id=$1",[(milestone?view:engine).id]);
+   else await db.query('update project_worker_contracts set token_limit=1 where worker_id=$1',[(milestone?view:engine).id]);
+   await db.query('set role service_role');
+   await db.query('select benchmark_reconcile_provider_usage($1,$2,$3,true)',[pendingLinked,'late-'+pendingCall,{input_tokens:3,output_tokens:2,total_tokens:5}]);
+   assert.equal((await db.query('select actual_tokens from mission_calls where id=$1',[pendingLinked])).rows[0].actual_tokens,5,'Actual supplier charges survive '+boundary);
+   assert.equal((await db.query('select state from benchmark_budget_calls where id=$1',[pendingCall])).rows[0].state,'settled');
+   await db.query('rollback');
+  }
   // Admission is cumulative across attempts and transactionally preserves the
   // existing reservation when package money is narrower than the project cap.
   await db.query('begin');await db.query('reset role');
@@ -207,15 +253,17 @@ export async function assertProjectNativeDelegation(db,rival){
  };
  await finishOrganization(manager);
  const development=byName('Development');
+ s=await session();assert.equal(s.node.id,workstream.id);
+ await decide(s,[{action:'certify',nodeId:manager.id,assignmentId:acceptedJobs.at(-1),checks:checks(manager,acceptedJobs.at(-1))},{action:'submit_component',assignmentId:acceptedJobs.at(-1),checks:checks(workstream,acceptedJobs.at(-1))}]);
  s=await session();assert.equal(s.node.id,development.id);
- await decide(s,[{action:'certify',nodeId:manager.id,assignmentId:acceptedJobs.at(-1),checks:checks(manager,acceptedJobs.at(-1))},{action:'submit_component',assignmentId:acceptedJobs.at(-1),checks:checks(development,acceptedJobs.at(-1))}]);
+ await decide(s,[{action:'certify',nodeId:workstream.id,assignmentId:acceptedJobs.at(-1),checks:checks(workstream,acceptedJobs.at(-1))},{action:'submit_component',assignmentId:acceptedJobs.at(-1),checks:checks(development,acceptedJobs.at(-1))}]);
  s=await session();assert.equal(s.node.id,rootNode.id);
  await decide(s,[{action:'certify',nodeId:development.id,assignmentId:acceptedJobs.at(-1),checks:checks(development,acceptedJobs.at(-1))}]);
  for(const name of ['Architecture','QA']){
   const director=byName(name),worker=byName(name+' worker');
   for(const bad of name==='QA'?[true,false]:[false]){
    await wake(director);s=await session();assert.equal(s.node.id,director.id);
-   await decide(s,[{action:'assign',nodeId:worker.id,capability:'analysis',instruction:name==='QA'?'Evaluate original integrated addition requirement':'Verify sum(a,b) interface and integration contract'}]);
+   await decide(s,[{action:'assign',nodeId:worker.id,capability:'analysis',smart:task(director,'work',[],{maxAssignments:1})}]);
    const work=await session();assert.equal(work.node.id,worker.id);
    const evidence=name==='QA'?{head:previousHead,checks:bad?failed:passed,passed:!bad}:{head:previousHead,interface:readFileSync(join(workspace,'app/pilot/engine/sum.mjs'),'utf8'),passed:true};
    await db.query('select project_org_finish_work($1,$2,$3)',[work.job,work.lease,{text:JSON.stringify(evidence),...evidence}]);
@@ -235,6 +283,33 @@ export async function assertProjectNativeDelegation(db,rival){
   }
  }
  assert.ok((await rows()).filter(n=>n.parent_id).every(n=>n.status==='accepted'));
+ // Unpackaged research/specification/assessment/revision jobs have the same
+ // immediate-manager commissioning route; queued worker suggestions grant no authority.
+ for(const phase of ['research','specification','assessment']){
+  await db.query('begin');await db.query('reset role');
+  const qa=byName('QA'),worker=byName('QA worker'),mid=randomUUID();
+  await db.query('select create_mission($1,$2,$3,20,null)',[mid,'Evaluate one approved '+phase+' artifact',[worker.agent_id]]);
+  await db.query("update agent_missions set project_id=$2,project_kind=$3,status='running',deadline=$4 where id=$1",[mid,project,phase,deadline]);
+  await db.query("update work_projects set active_mission_id=$2 where id=$1",[project,mid]);
+  const pending=(await db.query('select id from mission_assignments where mission_id=$1',[mid])).rows[0].id;
+  await db.query('set role service_role');
+  await db.query('savepoint negative');
+  await assert.rejects(db.query("update mission_assignments set payload=payload||'{\"development_input\":\"Forged before claim\"}' where id=$1",[pending]),/metadata requires authenticated/);
+  await db.query('rollback to savepoint negative');
+  await db.query('savepoint seeded_insert');
+  const seededId=(await db.query("insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,payload) values($1,'forged-checkpoint','work',$2,'Suggested worker task','{\"capability\":\"analysis\",\"development_input\":\"Forged input\"}') returning id",[mid,worker.agent_id])).rows[0].id;
+  await assert.rejects(db.query("update mission_assignments set status='running',lease=gen_random_uuid() where id=$1",[seededId]),/Preseeded SMART execution metadata/);
+  await db.query('rollback to savepoint seeded_insert');
+  const turn=await session();assert.equal(turn.node.id,qa.id,'Phase assignment returns to immediate QA director');
+  await db.query('savepoint negative');
+  await assert.rejects(decide(turn,[{action:'authorize_assignment',assignmentId:pending,smart:{}}]),/SMART contract/);
+  await db.query('rollback to savepoint negative');
+  await decide(turn,[{action:'authorize_assignment',assignmentId:pending,smart:task(qa,'plan',[],{maxAssignments:1,tokens:5000})}]);
+  await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[pending,randomUUID()]);
+  assert.equal((await db.query('select count(*)::int n from project_worker_admissions where assignment_id=$1',[pending])).rows[0].n,1);
+  await db.query('rollback');
+ }
+ console.log('SMART_MANAGEMENT_PASS: explicit Manager/Supervisor hierarchy; broad/context/capability negatives; cumulative contracts; authentic prepare/checkpoint RPCs; phase jobs locally commissioned; restart and immutable admissions');
  // Components alone never authorize final project closure or production delivery.
  await wake(rootNode);s=await session();await assert.rejects(decide(s,[{action:'close'}]),/Only the Project Director may authorize closure/);await decide(s,[{action:'ready'}]);
  assert.notEqual((await db.query('select status from work_projects where id=$1',[project])).rows[0].status,'completed');

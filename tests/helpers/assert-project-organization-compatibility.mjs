@@ -13,6 +13,7 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  await db.query(readFileSync('supabase/migrations/20261109172739_project_management_hierarchy.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261109192013_functional_director_reporting.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261109204356_director_work_packages.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261109215345_smart_worker_admission.sql','utf8'));
  assert.deepEqual(await snapshot(),before,'Historical projects, missions, spending and claims remain unchanged');
  assert.equal((await db.query('select count(*)::int n from project_organization_nodes')).rows[0].n,before.projects.length);
  assert.equal((await db.query('select count(*)::int n from work_projects where organization_version<>0')).rows[0].n,0);
