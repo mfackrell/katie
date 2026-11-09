@@ -62,3 +62,14 @@ test('dispatch preserves Functional Director authority and rejects executive wor
  assert.throws(()=>assertManagementCommands(director,nodes,[{action:'submit_component',nodeId:'manager'}]),/responsible Functional Director/);
  assert.throws(()=>assertManagementCommands(root,nodes,[{action:'reorganize',nodeId:'worker',underId:'director'}]),/immediate reporting authority/);
 });
+
+test('coding packages require immediate Functional Director authority at dispatch',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const root={id:'root',kind:'project_director'},manager={id:'manager',kind:'manager'};
+ const nodes=[root,{...manager,parent_id:root.id},{id:'coder',parent_id:manager.id},{id:'writer',parent_id:manager.id},{id:'reviewer',parent_id:manager.id}];
+ const command={action:'commission_package',workerId:'coder',writerId:'writer',reviewerId:'reviewer'};
+ assertManagementCommands(manager,nodes,[command]);
+ assert.throws(()=>assertManagementCommands(root,nodes,[command]),/cannot assign execution/);
+ for(const action of ['evaluate_package','repair_package'])assert.throws(()=>assertManagementCommands(root,nodes,[{action}]),/cannot assign execution/);
+ assert.throws(()=>assertManagementCommands(manager,nodes,[{...command,workerId:'foreign'}]),/immediate reporting/);
+});

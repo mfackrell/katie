@@ -25,7 +25,7 @@ export const projectAcceptanceSchema = z.object({
   headSha: z.string().regex(/^[a-f0-9]{40}$/), passed: z.boolean(),
   checks: z.array(z.object({ name: z.string().trim().min(1).max(200), passed: z.boolean(), detail: z.string().trim().min(1).max(2000) }).strict()).min(1).max(20),
 }).strict();
-export type ProjectAcceptanceBinding = { projectId: string; contractHash: string; scenarioNames: string[] };
+export type ProjectAcceptanceBinding = { projectId: string; contractHash: string; scenarioNames: string[]; packageScope?:{baseSha:string;paths:string[]} };
 const receiptSchema = z.object({
   version: z.literal(1), repository: z.string().max(200), run_id: z.number().int().positive(),
   issue_number: z.number().int().positive(), pr_url: z.string().max(500).nullable(), outcome: z.enum(["READY", "BLOCKED"]),
@@ -348,7 +348,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   if(project){
     const saved=await getDevelopmentProjectContext(task.id,true);
     if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
-    const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=project;
+    const {version,projectId,baseSha,baselineSha,allowedPaths,cumulativePaths,contractHash,contract,game,gameFinal}=project;
     if (project.originalUserOutcome && project.approvedMilestone) {
       approvedSource = 'ORIGINAL USER OUTCOME (authoritative; do not replace with assistant summaries):\n' +
         project.originalUserOutcome + '\n\nAPPROVED MILESTONE (source-bound):\n' +
@@ -356,7 +356,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     }
     const routed=benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
       await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
-    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,...(cumulativePaths?{cumulativePaths}:{}),contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
   const fullBody = `${marker(task)}\n\n${benchmarkHeader}${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
   let issueBody: string;
@@ -852,8 +852,8 @@ async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=
   }
   const proof:DeveloperDispatchPayload={...authority,taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
-  const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
-  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
+  const {version,projectId,baseSha,baselineSha,allowedPaths,cumulativePaths,contractHash,contract,game,gameFinal}=c;
+  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,...(cumulativePaths?{cumulativePaths}:{}),contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
@@ -1248,9 +1248,17 @@ export async function developmentEvidence(task: AgentTask, project?: ProjectAcce
     const include=Boolean(patch)&&patchBytes+size<=12000;if(include)patchBytes+=size;
     return{path:file.filename,status:file.status,additions:file.additions,deletions:file.deletions,...(include?{patch}:{patchUnavailable:true})};
   });
+  let packageDelta:{baseSha:string;headSha:string;changedFiles:Array<{path:string}>}|undefined;
+  if(project?.packageScope){
+    const delta=await client.repos.compareCommitsWithBasehead({owner:binding.owner,repo:binding.repo,basehead:project.packageScope.baseSha+'...'+testedHead,per_page:100});
+    if(!delta.data.files?.length||delta.data.files.length>=300||delta.data.status!=='ahead'||delta.data.merge_base_commit.sha!==project.packageScope.baseSha)throw Error('Incomplete or divergent package delta');
+    const paths=delta.data.files.flatMap(f=>[f.filename,...(f.previous_filename?[f.previous_filename]:[])]);
+    if(paths.some(path=>!project.packageScope!.paths.some(prefix=>path===prefix||prefix.endsWith('/')&&path.startsWith(prefix))))throw Error('Package diff escaped delegated paths');
+    packageDelta={baseSha:project.packageScope.baseSha,headSha:testedHead,changedFiles:paths.map(path=>({path}))};
+  }
   const {data:after}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
   if(!after.draft||after.state!=='open'||after.merged||after.head.sha!==testedHead||after.base.sha!==pr.base.sha||after.head.repo?.full_name!==binding.fullName||after.base.repo.full_name!==binding.fullName)throw new Error('Draft changed while collecting immutable verification evidence');
-  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,...(project?{projectAcceptance:receipt.projectAcceptance}:{}),
+  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,...(packageDelta?{packageDelta}:{}),...(project?{projectAcceptance:receipt.projectAcceptance}:{}),
     validation:{buildJob:build.html_url,conclusion:build.conclusion,excerpts,note:"Selected build-log excerpts, not the full log. Patches exceeding the 12 KB evidence allowance are explicitly omitted; the complete changed-file list is retained."}};
 }
 

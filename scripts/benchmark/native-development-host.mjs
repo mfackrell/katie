@@ -172,6 +172,12 @@ if(proof.resourceAmendmentId){
 // Inspect recovery before consuming a fresh owner grant. The service-owned
 // failed-run receipt and its immutable diagnostics authenticate the Git object.
 const wipContext=JSON.parse(execFileSync(process.execPath,[join(process.env.RUNNER_TEMP,'project-tools','project-context.mjs'),'prepare',requestFile],{encoding:'utf8',timeout:20000}));
+if(project.organization_version===1){
+ const assigned=await readOne('mission_assignments','id',task.id);
+ const run=await readOne('project_runs','mission_id',assigned.mission_id);
+ for(const key of ['projectId','baseSha','baselineSha','allowedPaths','cumulativePaths','contractHash'])
+  if(JSON.stringify(wipContext[key])!==JSON.stringify(run.binding?.[key]))denied('director package dispatch context mismatch');
+}
 const priorRefs=recoveryRefs(boundary.root,task.id);
 let recoveryPlan=null,priorCapacityObservations=[],priorRepairIterations=[],priorLifecycleEvidence=null;
 // Only this exact owner-confirmed, pre-provider native-gate failure can start
