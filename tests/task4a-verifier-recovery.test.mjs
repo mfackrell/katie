@@ -11,7 +11,7 @@ test('owner route separates capacity, replacement, paid inference and dispatch; 
  const db={from:()=>({select:()=>({eq:()=>({in:()=>({returns:async()=>({data:rows,error:null})})})})}),rpc:async(name,args)=>{
  const action=name==='task4a_verifier_proposal'||name==='task4a_verifier_authorize'?'authority':args.p_action;
  if(name.endsWith('proposal'))return {data:{ready:true,digest:action==='authority'?'a'.repeat(64):action==='replacement'?'b'.repeat(64):action==='inference'?'c'.repeat(64):'d'.repeat(64),proposal:{ownerId:'owner',checkpoint:{authenticated:true}}},error:null};
- writes.push(action);rows.push({id:action,event:events[action],data:{ownerId:'owner',result:{approvalId:'child'}}});return {data:{authorized:true,newPaidCalls:0},error:null};
+ writes.push(action);rows.push({id:action,event:events[action],data:{ownerId:'owner',result:{approvalId:'child'},proposal:{releaseSha:'e'.repeat(40)}}});return {data:{authorized:true,newPaidCalls:0},error:null};
  }};
  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>signed},'@/lib/agents/development':{
  authenticatedTask4aVerifierCheckpoint:async()=>{if(!wip)throw Error('missing WIP');return {checkpoint:{authenticated:true}};},qualifiedOrdinaryDevelopmentRelease:async()=>qualified?'e'.repeat(40):'f'.repeat(40),dispatchTask4aVerifierOnce:async()=>{dispatches++;rows.push({id:'claim',event:'task4a_verifier_execution_claimed',data:{}});throw Error('uncertain acceptance');}}});
