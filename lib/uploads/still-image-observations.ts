@@ -52,17 +52,45 @@ export function weakFocalPointDescription(text:string):boolean {
  * Accept direct, non-negated requests; quoted examples and past-tense questions
  * are not fresh-inspection instructions. Financial admission still runs below.
  */
-function explicitFreshImageInspection(question:string):boolean {
-  // Quoted instructions (including multiline text and code blocks) are data,
-  // never authority for a new paid inspection. Discard unfinished quotes too.
+function explicitFreshImageInspection(
+  question:string, reference?:FileReference, references?:FileReference[],
+):boolean {
+  // Never treat quoted instructions, including multiline/fenced examples,
+  // as authority to trigger a paid inspection. Unclosed quotes fail closed.
   const unquoted=question
-    .replace(/```[\s\S]*?(?:```|$)/g,' ')
-    .replace(/`[^`]*(?:`|$)|"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'[^']+'(?!\w)/g,' ')
+    .replace(/\x60{3,}[\s\S]*?(?:\x60{3,}|$)|~{3,}[\s\S]*?(?:~{3,}|$)/g,' ')
+    .replace(/\x60[^\x60]*(?:\x60|$)|"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'[^']+'(?!\w)/g,' ')
     .replace(/^\s*>.*$/gm,' ');
-  return unquoted.split(/[.!?;\n]+|\b(?:but|instead|then)\b/i).some(part=>{
+  const available=references??(reference?[reference]:[]);
+  return unquoted.split(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/i).some(part=>{
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
-    const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?/i,'');
-    return /^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive);
+    const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
+    const affirmative=/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive);
+    if(!affirmative)return false;
+    // The user may request a fresh look at only one of several images.
+    // Image names in earlier clauses do not grant authority to this clause.
+    if(!reference||!available.length)return true;
+    const onlyAt=part.search(/\bonly\b/i);
+    const target=onlyAt>=0?part.slice(onlyAt+4):part;
+    const named=available.filter(candidate=>{
+      const name=candidate.fileName.toLowerCase(),value=target.toLowerCase();
+      if(!name)return false;
+      for(let pos=value.indexOf(name);pos>=0;pos=value.indexOf(name,pos+1)){
+        const before=value[pos-1],after=value[pos+name.length];
+        if((!before||!/[a-z0-9_.-]/i.test(before))&&
+           (!after||!/[a-z0-9_.-]/i.test(after)))return true;
+      }
+      return false;
+    });
+    if(named.length===1)return named[0].fileId===reference.fileId;
+    if(named.length>1)return onlyAt<0&&named.some(item=>item.fileId===reference.fileId);
+    const ordinal=target.match(/\b(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)\b/i);
+    if(ordinal){
+      const index=['first','second','third','fourth','fifth'].indexOf(ordinal[1].toLowerCase());
+      return available[index]?.fileId===reference.fileId;
+    }
+    // "only" without a resolvable target cannot authorize every image.
+    return onlyAt<0;
   });
 }
 
@@ -73,7 +101,7 @@ function approvedCorrectionForImage(observation:ImageObservation|undefined,hash:
     observation.visualMemory?.observedBy===observation.summaryModel;
 }
 
-export function reusableImageObservation(reference:FileReference,saved:ConversationAttachment[],question:string,setHash?:string):ImageObservation|undefined {
+export function reusableImageObservation(reference:FileReference,saved:ConversationAttachment[],question:string,setHash?:string,references?:FileReference[]):ImageObservation|undefined {
   if(!reference.imageDataUrl)return;
   const hash=imageObservationHash(reference.imageDataUrl);
   const candidates=saved.filter(x=>x.mimeType.startsWith('image/')&&x.observationSourceHash===hash&&x.observationVersion===STILL_IMAGE_OBSERVATION_VERSION&&x.observedSummary?.trim()&&x.summaryCoverage!=='metadata');
@@ -89,7 +117,7 @@ export function reusableImageObservation(reference:FileReference,saved:Conversat
   // corrected memory, not an instruction to spend money re-running Qwen.
   // An explicit request for new analysis of original pixels still opts in.
   if(corrected){
-    const explicitNewInspection=explicitFreshImageInspection(question);
+    const explicitNewInspection=explicitFreshImageInspection(question,reference,references);
     // Explicit new inspection MUST bypass the cache; a generic challenge must not.
     if(explicitNewInspection)return;
     return prior;
@@ -158,9 +186,9 @@ export async function observeStandaloneStillImages(references:FileReference[],op
     const image=reference.imageDataUrl;
     if(!image)throw new StandaloneAccountingError('unsupported_image','The selected image has no trusted pixels available for inspection.');
     const hash=imageObservationHash(image);
-    const freshInspection=explicitFreshImageInspection(question);
+    const freshInspection=explicitFreshImageInspection(question,reference,references);
     const previouslyObserved=[...(options.saved??[]),...references.filter(ref=>observations.has(ref.fileId)).map(ref=>({...observations.get(ref.fileId),id:ref.fileId,fileName:ref.fileName,mimeType:ref.mimeType}))];
-    const prior=reusableImageObservation(reference,previouslyObserved,question,setHash);
+    const prior=reusableImageObservation(reference,previouslyObserved,question,setHash,references);
     // A stale intermediate observation cannot override an approved correction.
     if(prior && approvedCorrectionForImage(prior,hash) && !freshInspection){
       observations.set(reference.fileId,prior);if(prior.observationQuestion===question)reusedForQuestion++;

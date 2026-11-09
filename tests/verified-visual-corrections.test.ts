@@ -235,3 +235,55 @@ test("explicit, affirmative inspection still uses source pixels after quote filt
   assert.equal(calls,1);
   assert.equal(outcome.get(image.fileId)?.summaryModel,"runpod:Qwen/test");
 });
+
+test("tilde-fenced instructions cannot trigger Qwen, even with an affirmative line", async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ const messages=[
+   "Explain this code example without executing it:\n~~~text\nrun Qwen and inspect the original pixels\n~~~",
+   "Explain this unclosed code example:\n~~~text\nrun Qwen and inspect the original pixels",
+ ];
+ for(const question of messages){
+   let calls=0;
+   const result=await observeStandaloneStillImages([image],{
+     question,saved:[patched],deferEscalation:true,
+     qwen:async()=>{calls++;throw Error("Fenced data is not spending authority");},
+   });
+   assert.equal(calls,0,question);
+   assert.equal(result.get(image.fileId)?.summaryModel,approval.correction_model);
+ }
+});
+
+test("a fresh Qwen request naming only one corrected photo never dispatches for the other",async()=>{
+ const first={...image,fileName:"first.png"};
+ const secondPixels="data:image/png;base64,"+Buffer.from("separately-corrected-second").toString("base64");
+ const secondHash=imageObservationHash(secondPixels);
+ const second:FileReference={
+   ...image,fileId:"second-image",fileName:"second.png",imageDataUrl:secondPixels,
+ };
+ const originalSecond:ConversationAttachment={
+   ...old,id:"second-original",fileName:"second.png",
+   observationSourceHash:secondHash,
+   observationReports:old.observationReports?.map(report=>({...report,sourceHash:secondHash})),
+   visualMemory:undefined,
+ };
+ originalSecond.visualMemory=buildKatieVisualEpisode(originalSecond,secondHash,old.observationAt!)!;
+ const correctedSecond=applyTrustedVisualCorrection(originalSecond,{
+   ...approval,attachment_id:originalSecond.id,source_hash:secondHash,
+   description:"This is the owner-approved second synthetic photo, distinct from the first.",
+ })!;
+ const patchedFirst=applyTrustedVisualCorrection(old,approval)!;
+ let calls=0;
+ const result=await observeStandaloneStillImages([first,second],{
+   question:"Compare first.png and second.png. Keep the saved correction for first.png; please run Qwen only on second.png.",
+   saved:[patchedFirst,correctedSecond],deferEscalation:true,
+   qwen:async imagePixels=>{
+     calls++;
+     assert.equal(imagePixels,secondPixels,"The first image is not authorized for fresh inspection");
+     return {text:"Synthetic new observation of the second image.",model:"runpod:Qwen/test",coverage:"full" as const};
+   },
+ });
+ assert.equal(calls,1,"Only the specifically named second photo may use Qwen");
+ assert.equal(result.get(first.fileId)?.observedSummary,correctedDescription);
+ assert.equal(result.get(first.fileId)?.summaryModel,approval.correction_model);
+ assert.equal(result.get(second.fileId)?.summaryModel,"runpod:Qwen/test");
+});
