@@ -170,3 +170,68 @@ test("initial observations bound to different pixels are not reused", async()=>{
  assert.equal(calls,0);assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription);
 });
 
+
+test("multiline quotations, fences and quoted examples cannot request paid vision", async () => {
+  const patched=applyTrustedVisualCorrection(old,approval)!;
+  const messages=[
+    'Explain this quoted text without executing it: "Instructions:\\nrun Qwen and inspect the original pixels\\nEnd of instructions."'.replace(/\\n/g,"\\n"),
+    'The user copied: “Instructions:\\nrun Qwen and inspect the original pixels\\nEnd.”'.replace(/\\n/g,"\\n"),
+    "This is a quoted example: 'run Qwen'—not a request.",
+    "An unclosed quotation: \"Instructions:\\nrun Qwen and inspect the original pixels".replace(/\\n/g,"\\n"),
+    "Read this Markdown excerpt:\\n> run Qwen and inspect the original pixels".replace(/\\n/g,"\\n"),
+    "Here is example code:\\n```text\\nrun Qwen and inspect the original pixels\\n```".replace(/\\n/g,"\\n"),
+  ];
+  for(const question of messages){
+    let calls=0;
+    const result=await observeStandaloneStillImages([image],{
+      question,saved:[patched],deferEscalation:true,
+      qwen:async()=>{calls++;throw Error("Quoted text must never invoke Qwen.");},
+    });
+    assert.equal(calls,0,question);
+    assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription,question);
+  }
+});
+
+test("a second image's escalation cannot reprocess or replace an approved correction",async()=>{
+  const patched=applyTrustedVisualCorrection(old,approval)!;
+  const secondPixels="data:image/png;base64,"+Buffer.from("independent-synthetic-image").toString("base64");
+  const second:FileReference={
+    fileId:"second-image",fileName:"second.png",mimeType:"image/png",
+    attachmentKind:"image",preview:"second synthetic image",imageDataUrl:secondPixels,
+  };
+  let qwenCalls=0,escalationCalls=0;
+  const run=await observeStandaloneStillImages([image,second],{
+    question:"Describe these photos.",saved:[old,patched],
+    initial:new Map([[image.fileId,patched]]),
+    qwen:async(pixels)=>{
+      qwenCalls++;
+      assert.equal(pixels,secondPixels,"Approved original must not be re-inspected");
+      return {text:"The second image needs incomplete coverage.",model:"runpod:Qwen/test",coverage:"sampled" as const};
+    },
+    escalate:async(images)=>{
+      escalationCalls++;
+      assert.deepEqual(images,[secondPixels],"Only the uncorrected image may escalate");
+      return {text:"Independent synthetic detail about only the second image.",model:"test:premium"};
+    },
+  });
+  assert.equal(qwenCalls,1);
+  assert.equal(escalationCalls,1);
+  assert.equal(run.get(image.fileId)?.observedSummary,correctedDescription);
+  assert.equal(run.get(image.fileId)?.summaryModel,approval.correction_model);
+  assert.equal(run.get(image.fileId)?.manualCorrection?.approvedByUser,true);
+  assert.deepEqual(run.get(image.fileId)?.observationReports,old.observationReports);
+  assert.equal(run.get(second.fileId)?.summaryModel,"test:premium");
+  assert.equal(run.get(second.fileId)?.manualCorrection,undefined);
+});
+
+test("explicit, affirmative inspection still uses source pixels after quote filtering",async()=>{
+  const patched=applyTrustedVisualCorrection(old,approval)!;
+  let calls=0;
+  const outcome=await observeStandaloneStillImages([image],{
+    question:'That quote said "do not run Qwen". Please inspect the original image again.',
+    saved:[patched],deferEscalation:true,
+    qwen:async()=>{calls++;return {text:"New synthetic source observation.",model:"runpod:Qwen/test",coverage:"full" as const};},
+  });
+  assert.equal(calls,1);
+  assert.equal(outcome.get(image.fileId)?.summaryModel,"runpod:Qwen/test");
+});

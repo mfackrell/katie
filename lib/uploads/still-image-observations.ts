@@ -53,7 +53,12 @@ export function weakFocalPointDescription(text:string):boolean {
  * are not fresh-inspection instructions. Financial admission still runs below.
  */
 function explicitFreshImageInspection(question:string):boolean {
-  const unquoted=question.replace(/`[^`]*`|"[^"\n]*"|“[^”\n]*”/g,' ');
+  // Quoted instructions (including multiline text and code blocks) are data,
+  // never authority for a new paid inspection. Discard unfinished quotes too.
+  const unquoted=question
+    .replace(/```[\s\S]*?(?:```|$)/g,' ')
+    .replace(/`[^`]*(?:`|$)|"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'[^']+'(?!\w)/g,' ')
+    .replace(/^\s*>.*$/gm,' ');
   return unquoted.split(/[.!?;\n]+|\b(?:but|instead|then)\b/i).some(part=>{
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?/i,'');
@@ -280,7 +285,14 @@ export async function observeStandaloneStillImages(references:FileReference[],op
     })||(requiresAdditionalImageDetail(question)&&references.some(ref=>observations.get(ref.fileId)?.observationAgreement!=='policy-limited'));
   }
     escalation ||= requiresCrossImageInspection(question,references.length)&&reusedForQuestion!==references.length;
-  const priceableReferences=references.filter(ref=>observations.get(ref.fileId)?.observationAgreement!=='policy-limited');
+  // Unrequested escalation for another image may not reinspect or replace
+  // an owner-approved, source-bound correction. Explicit fresh requests run
+  // the original pixels above and yield separate provider evidence instead.
+  const priceableReferences=references.filter(ref=>{
+    const observation=observations.get(ref.fileId);
+    return observation?.observationAgreement!=='policy-limited' &&
+      !approvedCorrectionForImage(observation,imageObservationHash(ref.imageDataUrl!));
+  });
   if(escalation&&priceableReferences.length&&!options.deferEscalation){
     options.onStatus?.('Escalating image analysis for additional detail…');
     const labelled=priceableReferences.map((ref,index)=>`Image ${index+1}: ${ref.fileName} (attachment ${ref.fileId})`).join('\n');
