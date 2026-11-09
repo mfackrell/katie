@@ -49,7 +49,8 @@ function bounded(text: string) { if (text.length > 12000)
 
 async function advance(p: Project) {
     if(p.organization_version===1){
-      const management=await projectRpc<{blocked?:string;detail?:string}|null>('project_org_schedule',{p_project:p.id,p_lease:p.lease});
+      const management=await projectRpc<{blocked?:string;detail?:string;handled?:boolean}|null>('project_org_schedule',{p_project:p.id,p_lease:p.lease});
+      if(management?.handled)return;
       if(management){
         await projectRpc('finish_work_project',{p_id:p.id,p_lease:p.lease,p_action:management.blocked?'block':'wait',p_data:{detail:management.blocked??management.detail??'Delegated organization management is progressing.'}});
         return;
@@ -210,6 +211,7 @@ async function advance(p: Project) {
                     path: string;
                 }>;
                 projectAcceptance?: unknown;
+                packageDelta?:{baseSha:string;headSha:string;changedFiles:Array<{path:string}>};
             } | undefined;
             if (!r.binding || !v || v.observedHeadSha !== v.testedHeadSha || v.testedHeadSha !== v.reviewedHeadSha || !v.changedFiles.length)
                 throw Error('Immutable reviewed project increment evidence missing');
@@ -217,8 +219,12 @@ async function advance(p: Project) {
             if (!acceptance.passed || acceptance.headSha !== v.testedHeadSha || acceptance.projectId !== bound.projectId || acceptance.contractHash !== bound.contractHash || acceptance.checks.length !== bound.scenarioNames.length || acceptance.checks.some((c, i) => !c.passed || c.name !== bound.scenarioNames[i]))
                 throw Error('Original approved browser acceptance has not passed for this increment');
             for (const f of v.changedFiles)
-                if (!p.spec!.allowedPaths.some(prefix => f.path === prefix || prefix.endsWith('/') && f.path.startsWith(prefix)))
+                if (!(r.binding.cumulativePaths??p.spec!.allowedPaths).some(prefix => f.path === prefix || prefix.endsWith('/') && f.path.startsWith(prefix)))
                     throw Error('Coding diff escaped the approved project paths: ' + f.path);
+            if(r.binding.cumulativePaths){
+                const delta=v.packageDelta;
+                if(!delta||delta.baseSha!==r.binding.baseSha||delta.headSha!==v.testedHeadSha||!delta.changedFiles.length||delta.changedFiles.some(f=>!r.binding!.allowedPaths.some(prefix=>f.path===prefix||prefix.endsWith('/')&&f.path.startsWith(prefix))))throw Error('Verified package delta outside delegated authority');
+            }
             await finish('advance', { head: v.testedHeadSha, taskId: job!.id, verification: v, summary: m.result });
             return;
         }

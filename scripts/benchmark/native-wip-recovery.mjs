@@ -196,7 +196,7 @@ export async function validateRecoveryRecords({record,task,context,project,trial
  const run=await readOne('project_runs','mission_id',assignment.mission_id);
  const binding=run.binding;
  if(!binding||project.approved_hash!==project.approval_hash||project.active_mission_id!==assignment.mission_id||run.project_id!==project.id)fail('authoritative project binding unavailable');
- for(const key of ['projectId','baselineSha','baseSha','allowedPaths','contractHash'])same(context[key],binding[key],'authoritative '+key+' mismatch');
+ for(const key of ['projectId','baselineSha','baseSha','allowedPaths','cumulativePaths','contractHash'])same(context[key],binding[key],'authoritative '+key+' mismatch');
  same(binding.scopeHash,project.approved_hash,'authoritative scope hash mismatch');
  const approval=await readOne('benchmark_native_spending_approvals','id',record.approvalId);
  const grant=await readOne('benchmark_execution_grants','id',record.grantId);

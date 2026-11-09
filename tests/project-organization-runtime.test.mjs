@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
@@ -61,4 +62,42 @@ test('dispatch preserves Functional Director authority and rejects executive wor
  assert.throws(()=>assertManagementCommands(root,nodes,[{action:'submit_component'}]),/responsible Functional Director/);
  assert.throws(()=>assertManagementCommands(director,nodes,[{action:'submit_component',nodeId:'manager'}]),/responsible Functional Director/);
  assert.throws(()=>assertManagementCommands(root,nodes,[{action:'reorganize',nodeId:'worker',underId:'director'}]),/immediate reporting authority/);
+});
+
+test('coding packages require immediate Functional Director authority at dispatch',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const root={id:'root',kind:'project_director'},manager={id:'manager',kind:'manager'};
+ const nodes=[root,{...manager,parent_id:root.id},{id:'coder',parent_id:manager.id},{id:'writer',parent_id:manager.id},{id:'reviewer',parent_id:manager.id}];
+ const command={action:'commission_package',workerId:'coder',writerId:'writer',reviewerId:'reviewer'};
+ assertManagementCommands(manager,nodes,[command]);
+ assert.throws(()=>assertManagementCommands(root,nodes,[command]),/cannot assign execution/);
+ for(const action of ['evaluate_package','repair_package'])assert.throws(()=>assertManagementCommands(root,nodes,[{action}]),/cannot assign execution/);
+ assert.throws(()=>assertManagementCommands(manager,nodes,[{...command,workerId:'foreign'}]),/immediate reporting/);
+});
+
+
+test('native host authenticates package paths and predecessor before granting execution',async()=>{
+ const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+ const start=host.indexOf('if(project.organization_version===1){'),end=host.indexOf('const priorRefs=',start);
+ assert.ok(start>0&&end>start);
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('project','task','readOne','wipContext','denied',host.slice(start,end));
+ const binding={projectId:'project',baseSha:'accepted-predecessor',baselineSha:'original',allowedPaths:['app/pilot/view/'],cumulativePaths:['app/pilot/'],contractHash:'original-contract'};
+ const readOne=async(table,column,id)=>{
+  if(table==='mission_assignments'){assert.equal(column,'id');assert.equal(id,'task');return {mission_id:'mission'};}
+  assert.equal(table,'project_runs');assert.equal(column,'mission_id');assert.equal(id,'mission');return {binding};
+ };
+ const denied=message=>{throw Error(message);};
+ await run({organization_version:1},{id:'task'},readOne,binding,denied);
+ for(const key of Object.keys(binding))await assert.rejects(run({organization_version:1},{id:'task'},readOne,{...binding,[key]:key.endsWith('Paths')?['app/escape/']:'forged'},denied),/package dispatch context mismatch/);
+ await run({organization_version:0},{id:'historical'},()=>assert.fail('Historical execution must retain its existing guard'),{},denied);
+});
+
+test('explicit management levels restrict appointments without granting technical authority',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const manager={id:'m',kind:'manager',management_level:'manager'},supervisor={id:'s',kind:'manager',management_level:'supervisor'};
+ assertManagementCommands(manager,[],[{action:'appoint',kind:'manager',managementLevel:'supervisor'},{action:'appoint',kind:'worker',managementLevel:'worker'}]);
+ assertManagementCommands(supervisor,[],[{action:'appoint',kind:'worker',managementLevel:'worker'}]);
+ assert.throws(()=>assertManagementCommands(supervisor,[],[{action:'appoint',kind:'manager',managementLevel:'manager'}]),/workers only/);
+ assert.throws(()=>assertManagementCommands(manager,[],[{action:'appoint',kind:'manager',managementLevel:'functional_director'}]),/Managers commission/);
+ assert.throws(()=>assertManagementCommands({id:'p',kind:'project_director'},[],[{action:'authorize_assignment',assignmentId:'worker-job'}]),/cannot assign/);
 });
