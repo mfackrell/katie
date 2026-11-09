@@ -158,11 +158,17 @@ export function recoveryCompletedEvidence(record,diagnostics){
   for(const key of ['verification','review','initialReview']){
    const saved=last[key];if(!saved)continue;
    const value=full?.[key],field=key==='verification'?'detail':'findings',hashKey=field+'Digest';
+   // A pending checkpoint predates the verifier's failure output. Authenticate
+   // its own saved detail; later diagnostics must still describe the same
+   // unpassed candidate. Neither observation is completed verification evidence.
+   const pending=key==='verification'&&last.adaptiveRepair.nextAction==='verification'&&saved.pending===true&&saved.passed===false;
+   if(pending&&(saved.head!==record.completedCheckpointSha||typeof saved.detail!=='string'||saved.detail.length>12000||
+      digest(saved.detail)!==saved.detailDigest))fail('pending verification checkpoint missing or altered');
    if(!value||typeof (value[field]??'')!=='string'||(value[field]??'').length>12000||
-      digest(value[field]??'')!==saved[hashKey])fail('full lifecycle evidence missing or altered');
+      (!pending&&digest(value[field]??'')!==saved[hashKey]))fail('full lifecycle evidence missing or altered');
    const omit=o=>Object.fromEntries(Object.entries(o).filter(([k])=>k!==field&&k!==hashKey));
    same(omit(value),omit(saved),'full lifecycle candidate or verdict mismatch');
-   last[key]={...saved,[field]:value[field]??''};
+   if(!pending)last[key]={...saved,[field]:value[field]??''};
   }
   return last;
  }
