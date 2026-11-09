@@ -153,19 +153,44 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query("update agent_missions set status='completed',result='Independent requirements passed' where id=$1",[assessment]);
  await db.query("update mission_calls set actual_tokens=800,status='completed' where job_id=$1",[work.job.id]);
  await db.query("update project_organization_exceptions set status='resolved',resolution='Synthetic completed dependency evidence' where project_id=$1",[project]);
- await db.query("update project_organization_nodes set status='accepted',decision_needed=false,evidence=$2 where project_id=$1 and parent_id is not null",[project,{assignmentId:reviewId,scopeHash:scope,head}]);
+
+ // Seed authenticated technical outputs, then certify EVERY organization through
+ // its actual manager RPC, bottom-up. Only model/provider output is synthetic.
+ const artifacts=new Map([[qaNode,reviewId]]);
+ for(const manager of (await nodes()).filter(n=>n.kind==='manager')){
+  if((await nodes()).some(n=>n.parent_id===manager.id))continue;
+  const agent=(await db.query('select save_managed_agent(null,$1,false) a',[{name:'Component worker',instructions:'Deliver component',research:false,development:false,attachments:false,reviewMode:'always',maxActiveTasks:1,maxInputChars:16000}])).rows[0].a.id;
+  await db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,tools,token_limit,deadline,max_children,max_depth,depth,decision_needed) values($1,$2,$3,'worker','Component worker','Deliver component','[\"Verified deliverable\"]',array['analysis'],1000,$4,0,5,$5,false)",[project,manager.id,agent,deadline,manager.depth+1]);
+ }
+ for(const worker of (await nodes()).filter(n=>n.kind==='worker'&&!artifacts.has(n.id))){
+  const mid=randomUUID();await db.query('select create_mission($1,$2,$3,20,null)',[mid,'Synthetic completed component',[worker.agent_id]]);
+  await db.query("update agent_missions set project_id=$2,project_kind='organization_work',project_evidence=$3 where id=$1",[mid,project,{approvedScopeHash:scope}]);
+  const job=(await db.query("update mission_assignments set role='work',status='completed',result=$2 where mission_id=$1 returning id",[mid,{text:'Verified '+worker.name+' deliverable'}])).rows[0].id;
+  await db.query("update agent_missions set status='completed',result='Verified component' where id=$1",[mid]);artifacts.set(worker.id,job);
+ }
+ await db.query("update work_projects set active_mission_id=$2,phase='assessment',preview=$3 where id=$1",[project,assessment,preview]);
+ for(const manager of (await nodes()).filter(n=>n.kind==='manager').sort((a,b)=>b.depth-a.depth)){
+  await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=(id=$2) where project_id=$1',[project,manager.id]);
+  await db.query('set role service_role');await resetLease();const session=await management();assert.equal(session.job.agent_id,manager.agent_id);
+  const children=(await nodes()).filter(n=>n.parent_id===manager.id);
+  await db.query('select project_org_decide($1,$2,$3)',[session.job.id,session.job.lease,children.map(child=>({action:'certify',nodeId:child.id,assignmentId:artifacts.get(child.id)}))]);
+  artifacts.set(manager.id,manager.id===qa.id?reviewId:artifacts.get(children[0].id));
+ }
+ await db.query('reset role');
+
  await db.query("update project_organization_nodes set decision_needed=true where id=$1",[rootNode.id]);
  await db.query("update work_projects set active_mission_id=$2,phase='assessment',preview=$3 where id=$1",[project,assessment,preview]);
  await db.query('set role service_role');await resetLease();work=await management();assert.equal(work.job.agent_id,rootNode.agent_id);
+ const rootCerts=(await nodes()).filter(n=>n.parent_id===rootNode.id).map(n=>({action:'certify',nodeId:n.id,assignmentId:artifacts.get(n.id)}));
  await db.query('reset role');await db.query('begin');
  await db.query("update mission_assignments set result=jsonb_set(result,'{checks,0,passed}','false') where id=$1",[reviewId]);
- await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'close'}]]),/Independent original-requirement/);await db.query('rollback');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts,{action:'close'}]]),/Independent original-requirement/);await db.query('rollback');
  await db.query('begin');await db.query("update project_organization_nodes set evidence=jsonb_set(evidence,'{assignmentId}',to_jsonb($2::text)) where id=$1",[qa.id,executed.job.id]);
- await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'close'}]]),/Independent original-requirement/);await db.query('rollback');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts.map(c=>c.nodeId===qa.id?{...c,assignmentId:artifacts.get(dev.id)}:c),{action:'close'}]]),/Authenticated component|Independent original-requirement/);await db.query('rollback');
  await db.query('begin');await db.query("update benchmark_budget_calls set state='reserved' where id=$1",[nativeCall]);
- await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'close'}]]),/Unresolved native/);await db.query('rollback');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts,{action:'close'}]]),/Unresolved native/);await db.query('rollback');
  await db.query('set role service_role');
- await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'close'}]]);
+ await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts,{action:'close'}]]);
  const closure=(await db.query('select * from project_organization_closures where project_id=$1',[project])).rows[0];assert.equal(closure.director_id,rootNode.id);assert.equal(closure.receipt.nativeRecordedExposureMicrousd,8000);assert.equal(closure.receipt.settledMissionCostUpperBoundMicrousd,8000);
  // Source-bound final lifecycle completion remains independently mandatory;
  // remove the synthetic closure to exercise the director-only negative below.

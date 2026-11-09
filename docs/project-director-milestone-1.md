@@ -87,8 +87,9 @@ rejecting the provider's accounting receipt.
   races, tool/scope/resource containment, local failed-worker repair, escalation,
   persisted ownership after reconnect, authenticated component evidence, native
   admission/settlement, failed-QA rejection and director-only closure authorization.
-  Final acceptance fixtures deliberately seed completed components; this is not
-  a claim of an inferred application being built end to end.
+  Final acceptance fixtures seed technical outputs, then certify every functional
+  organization through its live manager RPC. This is not a claim of an inferred
+  application being built end to end.
 * `project-organization-runtime.test.mjs`: verified executive eligibility,
   management-only dispatch, subordinate work completion and denied coding bypass.
 * `project-organization-integration.test.mjs`: installs the new migration after
