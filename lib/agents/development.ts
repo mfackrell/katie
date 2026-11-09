@@ -1,3 +1,4 @@
+import {authenticateTask4aVerifierRelease} from '../../scripts/benchmark/task4a-verifier-release.mjs';
 import {task4aVerifierReader,validateTask4aVerifierCheckpoint} from '../../scripts/benchmark/task4a-verifier-recovery.mjs';
 import {authenticateTask4aFailedRun,loadTask4aLinkedDiagnostics} from '../../scripts/benchmark/task4a-failed-run-link.mjs';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
@@ -734,6 +735,13 @@ async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAd
 }
 
 // Dispatch only a separately authenticated, append-only owner development renewal.
+export async function qualifiedTask4aVerifierHandoffRelease(){
+ const release=process.env.VERCEL_GIT_COMMIT_SHA;
+ if(process.env.VERCEL_ENV!=='production'||!release)throw Error('Production release unavailable');
+ const client=github();
+ return authenticateTask4aVerifierRelease(release,async path=>(await client.request('GET '+path)).data);
+}
+
 export async function qualifiedOrdinaryDevelopmentRelease(){
  const release=process.env.VERCEL_GIT_COMMIT_SHA;
  if(process.env.VERCEL_ENV!=='production'||!release||!/^[a-f0-9]{40}$/.test(release))return null;

@@ -1,8 +1,9 @@
+import {verifyTask4aVerifierHandoffPostgres} from './task4a-verifier-handoff-postgres.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 const project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388',task='d0e41ff5-149e-4319-9e65-dcc605fb75da',mission='d3fd3d95-7287-4bfc-8c97-c105fde46c36';
-const account='8d94b8e8-0b7e-487b-83a7-d78fe6eded51',approval='1961239b-1722-4901-b671-8e61f4e6af49',continuation='6e4eba28-2dbe-4faa-be93-5f24861dba3a',grant='36d66bdc-c907-49ca-859d-abfed5fc334e',release='e'.repeat(40);
+const account='8d94b8e8-0b7e-487b-83a7-d78fe6eded51',approval='1961239b-1722-4901-b671-8e61f4e6af49',continuation='6e4eba28-2dbe-4faa-be93-5f24861dba3a',grant='36d66bdc-c907-49ca-859d-abfed5fc334e',release='6b70a8fd2c48c388356b5ef371c51cb096c8a853';
 const one=async(db,sql,args=[])=>(await db.query(sql,args)).rows[0];
 const rpc=async(db,name,args)=>(await one(db,'select '+name+'('+args.map((_,i)=>'$'+(i+1)).join(',')+') v',args)).v;
 const reject=async(db,fn,re)=>{await db.query('savepoint rejected_verifier');try{await assert.rejects(fn,re);}finally{await db.query('rollback to savepoint rejected_verifier');await db.query('release savepoint rejected_verifier');}};
@@ -66,15 +67,16 @@ export async function verifyTask4aVerifierPostgres(db,{connect,owner,priorChild}
  assert.equal(await rpc(db,'task4a_final_execution_claim',[release]),false,'Old consumed claim stays consumed');
  assert.equal(await rpc(db,'task4a_verifier_execution_claim',[release]),false);
  await db.query('begin');await reject(db,()=>rpc(db,'developer_issue_execution_grant',[child.approvalId,task,'a'.repeat(64),release]),/FORBIDDEN|binding/);await db.query('commit');
- for(const action of ['replacement','inference','dispatch']){
+ for(const action of ['replacement','inference']){
  const q=await rpc(db,'task4a_verifier_execution_proposal',[release,action]);assert.equal(q.ready,true,JSON.stringify(q));
  const consent=await Promise.allSettled(clients.map(c=>rpc(c,'task4a_verifier_execution_authorize',[owner,q.digest,release,action])));assert.equal(consent.filter(r=>r.status==='fulfilled').length,1);assert.equal(consent.filter(r=>r.status==='rejected').length,1);
  if(action!=='dispatch')assert.equal(await rpc(db,'task4a_verifier_execution_claim',[release]),false,'Every separate consent is required');
  }
- await db.query('begin');await db.query('reset role');await db.query("update work_projects set deadline=now()-interval '1 second' where id=$1",[project]);await db.query('set role service_role');assert.equal(await rpc(db,'task4a_verifier_execution_claim',[release]),false,'Expired consent fails closed');await db.query('rollback');
- const claimed=await Promise.all(clients.map(c=>rpc(c,'task4a_verifier_execution_claim',[release])));assert.equal(claimed.filter(Boolean).length,1);assert.equal(await rpc(db,'task4a_verifier_execution_claim',[release]),false);
- assert.equal(await rpc(db,'task4a_capacity_execution_ready',[child.approvalId,release]),true,'Inherited marker routes only this exact successor');
- const granted=await Promise.allSettled(clients.map((c,i)=>rpc(c,'developer_issue_execution_grant',[child.approvalId,task,String(i+7).repeat(64),release])));assert.equal(granted.filter(r=>r.status==='fulfilled').length,1,JSON.stringify(granted));
+ const executionRelease=await verifyTask4aVerifierHandoffPostgres(db,{clients,owner,child,release});
+ await db.query('begin');await db.query('reset role');await db.query("update work_projects set deadline=now()-interval '1 second' where id=$1",[project]);await db.query('set role service_role');assert.equal(await rpc(db,'task4a_verifier_execution_claim',[executionRelease]),false,'Expired consent fails closed');await db.query('rollback');
+ const claimed=await Promise.all(clients.map(c=>rpc(c,'task4a_verifier_execution_claim',[executionRelease])));assert.equal(claimed.filter(Boolean).length,1);assert.equal(await rpc(db,'task4a_verifier_execution_claim',[executionRelease]),false);
+ assert.equal(await rpc(db,'task4a_capacity_execution_ready',[child.approvalId,executionRelease]),true,'Inherited marker routes only this exact successor');
+ const granted=await Promise.allSettled(clients.map((c,i)=>rpc(c,'developer_issue_execution_grant',[child.approvalId,task,String(i+7).repeat(64),executionRelease])));assert.equal(granted.filter(r=>r.status==='fulfilled').length,1,JSON.stringify(granted));
  assert.deepEqual(await snapshot(),before,'All historical charges, receipts and consumed claims unchanged');
  const winner=granted.findIndex(r=>r.status==='fulfilled'),epoch=granted[winner].value.executionEpoch,token=String(winner+7).repeat(64);
  assert.ok((await one(db,'select developer_current_mission_authority($1) a',[mission])).a,'Actual mission/account binding required');
