@@ -18,11 +18,11 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
  const clients=[];let started=false;
  const run=(name,args)=>{const r=spawnSync(join(bin,name),args,{encoding:'utf8',timeout:30000});
   assert.equal(r.status,0,r.stderr||r.error?.message)};
- const connect=async()=>{const c=new pg.Client({host:root,port:55489,user:'postgres',database:'postgres',connectionTimeoutMillis:5000});
+ const connect=async()=>{const c=new pg.Client({host:process.env.KATIE_TEST_PG_TCP==='1'?'127.0.0.1':root,port:55489,user:'postgres',database:'postgres',connectionTimeoutMillis:5000});
   await c.connect();clients.push(c);return c};
  try{
   run('initdb',['-D',data,'-U','postgres','-A','trust','--no-locale','-E','UTF8']);
-  run('pg_ctl',['-D',data,'-l',join(root,'log'),'-o',`-h '' -k ${root} -p 55489`,'-w','start']);started=true;
+  run('pg_ctl',['-D',data,'-l',join(root,'log'),'-o',process.env.KATIE_TEST_PG_TCP==='1'?"-h 127.0.0.1 -k '' -p 55489":`-h '' -k ${root} -p 55489`,'-w','start']);started=true;
   const db=await connect();
   await db.query(readFileSync('tests/fixtures/project-base.sql','utf8'));
   for(const file of ['20261016211426_agent_management.sql','20261016234048_autonomous_missions.sql',

@@ -19,6 +19,7 @@ export type Context = {
 };
 export type Project = {
     profile?: 'software'|'game';
+    organization_version?:number;
     id: string;
     actor_id: string;
     chat_id: string;

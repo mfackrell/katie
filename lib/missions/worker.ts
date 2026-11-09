@@ -1,3 +1,4 @@
+import {executeManagementClaim} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
 import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission,executiveSourceGroups,executiveSourceManifest} from '@/lib/executive/source-handoff';
@@ -32,6 +33,16 @@ const BASE='You are a worker coordinated by Katie. Complete the assigned outcome
 type Child={key:string;role:string;agent_id:string;instruction:string;dependencies:string[];payload?:Record<string,unknown>};
 export async function executeClaim(claim:Claim,model=missionModel){
  const {mission,job}=claim;
+ if(mission.project_kind==='management'){await executeManagementClaim(claim,model);return;}
+ if(mission.project_kind==='organization_work'){
+   const capability=String(job.payload.capability);
+   if(!['analysis','research','writing','repository_review'].includes(capability))throw Error('Unapproved organization work capability');
+   const inspection=capability==='repository_review'?await repositoryInspection(mission,job.instruction,async input=>(await model(claim,BASE+' Select paths for read-only repository inspection.',input,'none')).text,18000):null;
+   const response=await model(claim,BASE+'\nComplete only this manager-assigned work package. Do not delegate or change your authority.',JSON.stringify({objective:mission.objective,instruction:job.instruction,evidence:mission.project_evidence,inspection}),capability==='research'?'research':'none');
+   await rpc('project_org_finish_work',{p_job:job.id,p_lease:job.lease,p_result:response});
+   return;
+ }
+
  const phaseRule=mission.project_kind==='specification'?'\nSERVER-ASSIGNED PROJECT PHASE: specification. This mission produces the complete specification JSON requested in its objective, using the supplied reviewed research. The original build goal defines requirements for that specification; implementation belongs to later approved development missions. This read-only phase does not need repository execution tools. The project controller checks the connected repository and execution prerequisites before coding approval. Do not infer that the project lacks a repository from this mission having no repository write binding, and do not claim to have inspected it. Follow this phase and the authoritative objective if a generated assignment instead requests implementation or a repository-access blocker report.':mission.project_kind==='research'?'\nSERVER-ASSIGNED PROJECT PHASE: research. Complete only the requested source-supported research. The original build goal is requirements context, not a request to implement or deliver the application in this research mission.':mission.project_kind==='assessment'?'\nSERVER-ASSIGNED PROJECT PHASE: assessment. Independently assess the ENTIRE original user outcome using the supplied integrated source, immutable commit, test, review and deployed-browser evidence in projectEvidence. This is verification of prior implementation, not a new coding assignment. The lack of a repository write binding on this read-only assessment does not mean the project has no connected repository. Do not invent execution or waive any missing requirement, source evidence or actual deployed-browser proof. A partial milestone or a passing subset of scenarios is not whole-project completion.':'';
  const frame=BASE+phaseRule+(mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'?'\n'+GAME_SPECIFICATION_FORMAT:'');
  const saved=await readMission(mission.id);
