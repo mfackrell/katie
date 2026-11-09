@@ -1,8 +1,30 @@
 import {freshNativePhaseWork} from './native-phase-profile.mjs';
+
+// The original Task 4A's successor inherits a historical pregrant-recovery
+// marker through the immutable owner approval chain. That marker is NOT
+// authority to erase or reject the later genuinely paid WIP checkpoint.
+// This pure classifier is deliberately task-specific; it never grants
+// execution, changes stored state, retries a workflow, or reads credentials.
+export function classifyTask4aRecoveryHistory({proof,approval}){
+ const original=proof?.authorityKind==='task4a-developer'&&
+  proof?.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
+  proof?.taskId==='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+ const postpaid=original&&
+  approval?.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'&&
+  approval?.id===proof.approvalId;
+ const pregrant=original&&!postpaid&&
+  approval?.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+ return Object.freeze({postpaid:Boolean(postpaid),pregrant:Boolean(pregrant)});
+}
+
 // Trusted host adapter for ordinary Developer authority. No benchmark provenance
 // is synthesized; the service snapshot authenticates the original project owner.
 export async function readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha}){
  const deny=()=>{throw Error('ORDINARY_NATIVE_AUTHORITY_DENIED');};
+ if(approval?.developer_authority&&'task4aCapacityRenewal' in approval.developer_authority){
+  const consent=await db.rpc('task4a_capacity_execution_ready',{p_approval:approval.id,p_release:releaseSha});
+  if(consent.error||consent.data!==true)deny();
+ }
  // The native host independently rejects a legacy ordinary proof for the
  // original Task 4A project, even if the GitHub workflow gate were bypassed.
  if(project?.id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&proof?.authorityKind!=='task4a-developer')deny();

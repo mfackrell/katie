@@ -48,6 +48,26 @@ export function weakFocalPointDescription(text:string):boolean {
   const detail=/\b(?:texture|contour|color|surface|orientation|position|shape|marking|fold|crease|edge|shadow|reflection|proportion)\w*\b/i.test(s);
   return (s.length<900&&!focal)||(s.length<1100&&!detail);
 }
+/** A saved correction is not permission to spend on a new observation.
+ * Accept direct, non-negated requests; quoted examples and past-tense questions
+ * are not fresh-inspection instructions. Financial admission still runs below.
+ */
+function explicitFreshImageInspection(question:string):boolean {
+  const unquoted=question.replace(/`[^`]*`|"[^"\n]*"|“[^”\n]*”/g,' ');
+  return unquoted.split(/[.!?;\n]+|\b(?:but|instead|then)\b/i).some(part=>{
+    if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
+    const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?/i,'');
+    return /^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive);
+  });
+}
+
+function approvedCorrectionForImage(observation:ImageObservation|undefined,hash:string):boolean {
+  return observation?.manualCorrection?.approvedByUser===true &&
+    Boolean(observation.summaryModel?.startsWith('manual:')) &&
+    observation.observationSourceHash===hash && observation.visualMemory?.sourceHash===hash &&
+    observation.visualMemory?.observedBy===observation.summaryModel;
+}
+
 export function reusableImageObservation(reference:FileReference,saved:ConversationAttachment[],question:string,setHash?:string):ImageObservation|undefined {
   if(!reference.imageDataUrl)return;
   const hash=imageObservationHash(reference.imageDataUrl);
@@ -64,7 +84,7 @@ export function reusableImageObservation(reference:FileReference,saved:Conversat
   // corrected memory, not an instruction to spend money re-running Qwen.
   // An explicit request for new analysis of original pixels still opts in.
   if(corrected){
-    const explicitNewInspection=/\b(?:run|use|ask)\s+qwen\b|\b(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|\b(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b/i.test(question);
+    const explicitNewInspection=explicitFreshImageInspection(question);
     // Explicit new inspection MUST bypass the cache; a generic challenge must not.
     if(explicitNewInspection)return;
     return prior;
@@ -132,8 +152,21 @@ export async function observeStandaloneStillImages(references:FileReference[],op
   for(const reference of references){
     const image=reference.imageDataUrl;
     if(!image)throw new StandaloneAccountingError('unsupported_image','The selected image has no trusted pixels available for inspection.');
+    const hash=imageObservationHash(image);
+    const freshInspection=explicitFreshImageInspection(question);
+    const previouslyObserved=[...(options.saved??[]),...references.filter(ref=>observations.has(ref.fileId)).map(ref=>({...observations.get(ref.fileId),id:ref.fileId,fileName:ref.fileName,mimeType:ref.mimeType}))];
+    const prior=reusableImageObservation(reference,previouslyObserved,question,setHash);
+    // A stale intermediate observation cannot override an approved correction.
+    if(prior && approvedCorrectionForImage(prior,hash) && !freshInspection){
+      observations.set(reference.fileId,prior);if(prior.observationQuestion===question)reusedForQuestion++;
+      options.onStatus?.('Using corrected visual memory');continue;
+    }
     const initial=options.initial?.get(reference.fileId);
-    if(initial){
+    const initialManual=approvedCorrectionForImage(initial,hash);
+    // Fresh provider output from the first stage may be reused in the second
+    // stage, but a manual cache must not swallow a fresh-inspection request.
+    if(initial && initial.observationSourceHash===hash &&
+       (initialManual ? !freshInspection : initial.observationQuestion===question)){
       observations.set(reference.fileId,initial);
       const policyLimited=initial.observationAgreement==='policy-limited';
       const alreadyEscalated=initial.observationQuestion===question&&initial.observationLimitations?.some(item=>item.startsWith('Escalated visual interpretation;'));
@@ -143,8 +176,6 @@ export async function observeStandaloneStillImages(references:FileReference[],op
       else escalation ||= insufficient(initial.observedSummary??'',initial.summaryCoverage)||requiresAdditionalImageDetail(question);
       continue;
     }
-    const previouslyObserved=[...(options.saved??[]),...references.filter(ref=>observations.has(ref.fileId)).map(ref=>({...observations.get(ref.fileId),id:ref.fileId,fileName:ref.fileName,mimeType:ref.mimeType}))];
-    const prior=reusableImageObservation(reference,previouslyObserved,question,setHash);
     if(prior){observations.set(reference.fileId,prior);if(prior.observationQuestion===question)reusedForQuestion++;
       options.onStatus?.(prior.manualCorrection?.approvedByUser===true?'Using corrected visual memory':'Using saved Qwen observation');continue;}
     const metadata={observationSourceHash:imageObservationHash(image),observationSetHash:setHash,observationQuestion:question,observationVersion:STILL_IMAGE_OBSERVATION_VERSION,observationAt:(options.now??(()=>new Date().toISOString()))()};
@@ -328,3 +359,4 @@ export async function retainNewImageObservations(
   }
   return retained;
 }
+

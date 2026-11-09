@@ -103,3 +103,70 @@ test("explicit original-pixel reinspection remains possible when deliberately re
   assert.equal(qwenCalls, 1);
   assert.match(result.get(image.fileId)?.observedSummary??"", /new inspection/);
 });
+
+
+test("failed canonical sync preserves the correction and retries on the next stored-catalog load", async () => {
+  let attempts=0;
+  const first=await reconcileActorVisualCorrections(actor,[old],async()=>{attempts++;throw Error("synthetic storage outage");},async()=>[approval]);
+  assert.equal(first[0].observedSummary,correctedDescription);
+  const next=await reconcileActorVisualCorrections(actor,[old],async()=>{attempts++;},async()=>[approval]);
+  assert.equal(next[0].observedSummary,correctedDescription);
+  assert.equal(attempts,2);
+  assert.equal(old.summaryModel,approval.original_model,"input history is not mutated");
+});
+
+test("a negated Qwen request must not authorize fresh inference", async () => {
+  const patched=applyTrustedVisualCorrection(old,approval)!;
+  let calls=0;
+  const result=await observeStandaloneStillImages([image],{
+    question:"Do not run Qwen; use my saved correction.",saved:[patched],deferEscalation:true,
+    qwen:async()=>{calls++;return {text:"A newly inspected synthetic picture of a red cup on a white table.",model:"runpod:Qwen/Qwen3-VL-8B-Instruct",coverage:"full"};},
+  });
+  assert.equal(calls,0,"negated instruction must not dispatch Qwen");
+  assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription);
+});
+
+test("fresh inspection is not skipped when a corrected initial observation was supplied", async () => {
+  const patched=applyTrustedVisualCorrection(old,approval)!;
+  let calls=0;
+  await observeStandaloneStillImages([image],{
+    question:"Please run Qwen and inspect the original pixels",saved:[patched],initial:new Map([[image.fileId,patched]]),deferEscalation:true,
+    qwen:async()=>{calls++;return {text:"A newly inspected synthetic picture of a red cup on a white table.",model:"runpod:Qwen/Qwen3-VL-8B-Instruct",coverage:"full"};},
+  });
+  assert.equal(calls,1,"explicit inspection must not be swallowed by a corrected initial cache");
+});
+
+test("approved correction outranks stale initial provider evidence", async () => {
+  const patched=applyTrustedVisualCorrection(old,approval)!;
+  const result=await observeStandaloneStillImages([image],{
+    question:"A foot? Look again, you are confused",saved:[patched],initial:new Map([[image.fileId,old]]),deferEscalation:true,
+    qwen:async()=>{throw Error("unexpected Qwen dispatch");},
+  });
+  assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription);
+});
+
+
+test("quoted, historical and negated mentions do not dispatch; direct requests do", async () => {
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ for(const question of ["Don't run Qwen; use my correction.","Never use Qwen for this; use corrected memory.","Did you run Qwen?",'The quoted example is "run Qwen".',"No need for a fresh image analysis."]){
+  let calls=0;
+  const result=await observeStandaloneStillImages([image],{question,saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;return {text:"A synthetic red cup on a white table in the newly inspected picture.",model:"runpod:Qwen/Qwen3-VL-8B-Instruct",coverage:"full"};}});
+  assert.equal(calls,0,question);assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription);
+ }
+ for(const question of ["Please run Qwen and inspect the original pixels","Could you please run Qwen?","Please perform a fresh image analysis.","Reanalyze the original image.","Inspect the original photo again.","Please inspect the original image again","Please analyze the original pixels afresh","Do not use the old report; instead run Qwen."]){
+  let calls=0;
+  const options={question,saved:[patched],deferEscalation:true,qwen:async()=>{calls++;return {text:"A synthetic red cup on a white table in the newly inspected picture.",model:"runpod:Qwen/Qwen3-VL-8B-Instruct",coverage:"full" as const};}};
+  const first=await observeStandaloneStillImages([image],options);
+  await observeStandaloneStillImages([image],{...options,initial:first});
+  assert.equal(calls,1,question+" must inspect exactly once across both stages");
+ }
+});
+
+test("initial observations bound to different pixels are not reused", async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ let calls=0;
+ const result=await observeStandaloneStillImages([image],{question:"look again",saved:[patched],initial:new Map([[image.fileId,{...old,observationSourceHash:"b".repeat(64)}]]),deferEscalation:true,qwen:async()=>{calls++;throw Error("must use corrected source");}});
+ assert.equal(calls,0);assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription);
+});
+

@@ -44,6 +44,9 @@ import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
 import { Task4aContinuationOwnerApproval } from "@/components/task4a-continuation-owner-approval";
 import { Task4aSavedSpecificationRecovery } from "@/components/task4a-saved-specification-recovery";
 import { Task4aNativeRecoveryApproval } from "@/components/task4a-native-recovery-approval";
+import { Task4aFailedDispatchRecoveryApproval } from "@/components/task4a-failed-dispatch-recovery-approval";
+import { Task4aPostpaidContinuationApproval } from "@/components/task4a-postpaid-continuation-approval";
+import { Task4aBlockedDispatchOwnerApproval } from "@/components/task4a-blocked-dispatch-owner-approval";
 import { Task4aSuccessorOwnerApproval } from "@/components/task4a-successor-owner-approval";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import { StandaloneUsage } from "@/components/standalone-usage";
@@ -3055,11 +3058,14 @@ export function ChatPanel({
         className="min-h-0 max-h-[45dvh] shrink overflow-y-auto overscroll-contain touch-pan-y px-3 py-2 empty:hidden sm:max-h-[55dvh] sm:px-6"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
-        {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
+        {chatId && chatId!=='e53defeb-16eb-457e-aa07-435141165ee8' && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aSuccessorOwnerApproval key={'task4a-successor:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aNativeRecoveryApproval key={'task4a-native:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aBlockedDispatchOwnerApproval key={'task4a-blocked-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aFailedDispatchRecoveryApproval key={'task4a-failed-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aPostpaidContinuationApproval key={'task4a-postpaid:'+chatId} chatId={chatId} /> : null}
         {resourceRecovery?.chatId===chatId && !managedAgentId ? (
           <DeveloperResourceCard proposal={resourceRecovery.proposal}
            pending={projectApprovalPending||loading} error={projectApprovalError}
