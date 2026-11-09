@@ -47,3 +47,18 @@ test('original envelope requires authenticated explicit autonomous-execution con
  authenticated=true;assert.equal((await route.POST(request({...body,autonomousExecution:false}))).status,400);assert.equal(calls.length,0);
  assert.equal((await route.POST(request(body))).status,200);assert.equal(calls[0].name,'project_org_authorize');assert.equal(calls[0].args.p_autonomous,true);
 });
+
+test('dispatch preserves Functional Director authority and rejects executive worker supervision',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const root={id:'root',kind:'project_director'},director={id:'director',kind:'manager'},manager={id:'manager',kind:'manager'};
+ const nodes=[root,{...director,parent_id:root.id},{...manager,parent_id:director.id},{id:'worker',parent_id:manager.id},{id:'direct-worker',parent_id:director.id}];
+ assertManagementCommands(root,nodes,[{action:'appoint',kind:'manager'}]);
+ for(const kind of ['worker',null,'project_director'])assert.throws(()=>assertManagementCommands(root,nodes,[{action:'appoint',kind,reuseAgentId:'existing'}]),/only Functional Directors/);
+ assert.throws(()=>assertManagementCommands(root,nodes,[{action:'assign',nodeId:'worker'}]),/cannot assign execution/);
+ assertManagementCommands(director,nodes,[{action:'appoint',kind:'worker'},{action:'appoint',kind:'manager'},{action:'assign',nodeId:'direct-worker'},{action:'submit_component'}]);
+ assertManagementCommands(manager,nodes,[{action:'assign',nodeId:'worker'}]);
+ for(const action of ['assign','certify','reject','grant_scope','replace_leader'])assert.throws(()=>assertManagementCommands(director,nodes,[{action,nodeId:'worker'}]),/immediate reporting authority/);
+ assert.throws(()=>assertManagementCommands(root,nodes,[{action:'submit_component'}]),/responsible Functional Director/);
+ assert.throws(()=>assertManagementCommands(director,nodes,[{action:'submit_component',nodeId:'manager'}]),/responsible Functional Director/);
+ assert.throws(()=>assertManagementCommands(root,nodes,[{action:'reorganize',nodeId:'worker',underId:'director'}]),/immediate reporting authority/);
+});
