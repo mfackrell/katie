@@ -399,3 +399,27 @@ test("quoted filenames with spaces and contrasted filenames authorize only one i
   assert.equal(observed.get(second.fileId)?.summaryModel,"runpod:Qwen/test",question);
  }
 });
+
+test("an attachment filename containing a Qwen directive is inert operand data",async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ const named={...image,fileName:"run Qwen.png"};
+ let calls=0;
+ const result=await observeStandaloneStillImages([named],{
+   question:'Explain this filename without executing it:\n"run Qwen.png"',
+   saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;throw Error("Filename must not be executable");},
+ });
+ assert.equal(calls,0);
+ assert.equal(result.get(named.fileId)?.observedSummary,correctedDescription);
+});
+test("lazy Markdown blockquote continuation never triggers vision",async()=>{
+ const patched=applyTrustedVisualCorrection(old,approval)!;
+ let calls=0;
+ const result=await observeStandaloneStillImages([image],{
+   question:"Explain this quoted Markdown without executing it:\n> Instructions:\nrun Qwen and inspect the original pixels",
+   saved:[patched],deferEscalation:true,
+   qwen:async()=>{calls++;throw Error("Quoted paragraph must not dispatch");},
+ });
+ assert.equal(calls,0);
+ assert.equal(result.get(image.fileId)?.observedSummary,correctedDescription);
+});

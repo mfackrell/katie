@@ -60,6 +60,7 @@ function explicitFreshImageInspection(
   // exact character and minimum closing length. Unclosed fences fail closed.
   const outside:string[]=[];
   let fence:{kind:string;length:number}|null=null;
+  let quotedParagraph=false;
   for(const line of question.split('\n')){
     const marker=line.match(/^\s{0,3}(\x60{3,}|~{3,})(?:[^\r\n]*)$/);
     if(fence){
@@ -68,7 +69,13 @@ function explicitFreshImageInspection(
       outside.push(' ');continue;
     }
     if(marker){fence={kind:marker[1][0],length:marker[1].length};outside.push(' ');continue;}
-    outside.push(/^(?: {4}|\t|\s*>)/.test(line)?' ':line);
+    if(/^\s*>/.test(line)){quotedParagraph=true;outside.push(' ');continue;}
+    if(quotedParagraph && /^\s*\S/.test(line) && !/^\s*(?:please|can|could|would|i\s+want|now)\b/i.test(line)){
+      outside.push(' ');continue;
+    }
+    if(!line.trim())quotedParagraph=false;
+    else quotedParagraph=false;
+    outside.push(/^(?: {4}|\t)/.test(line)?' ':line);
   }
   // Inline code delimiters must close with the same number of backticks.
   // Quoted directives are data; only quoted names of *selected* attachments
@@ -102,7 +109,7 @@ function explicitFreshImageInspection(
       if(close<0)break;
       const operand=source.slice(i+1,close).trim();
       const known=available.find(item=>item.fileName.toLowerCase()===operand.toLowerCase());
-      if(known)clean+=known.fileName;
+      if(known)clean+=' __image_target_'+available.indexOf(known)+'__ ';
       i=close+1;continue;
     }
     clean+=ch;i++;
@@ -116,6 +123,8 @@ function explicitFreshImageInspection(
     const scope=onlyAt>=0?part.slice(onlyAt+4):part;
     const contrasted=scope.search(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i);
     const positive=contrasted>=0?scope.slice(0,contrasted):scope;
+    const inertTargets=[...positive.matchAll(/__image_target_(\d+)__/g)].map(match=>available[Number(match[1])]).filter((item):item is FileReference=>Boolean(item));
+    if(inertTargets.length)return inertTargets.some(item=>item.fileId===reference.fileId);
     const matchName=(candidate:FileReference):boolean=>{
       const name=candidate.fileName.toLowerCase(),value=positive.toLowerCase();
       if(!name)return false;
