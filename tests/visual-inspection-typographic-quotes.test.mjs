@@ -130,3 +130,39 @@ test('apostrophes in words do not create a quotation or grant negative instructi
   await expectTargets(['first.png'],'I’d like you to run Qwen.',[0]);
   await expectTargets(['first.png',"O'Reilly.png"],"Please run Qwen on O'Reilly.png.",[1]);
 });
+
+test('rendered named and numeric character-reference quotes remain untrusted',async()=>{
+  const entities=[['&lsquo;','&rsquo;'],['&laquo;','&raquo;'],['&ldquo;','&rdquo;'],['&quot;','&quot;'],['&apos;','&apos;'],['&OpenCurlyQuote;','&CloseCurlyQuote;'],['&#8216;','&#8217;'],['&#x2018;','&#x2019;']];
+  for(const [open,close] of entities){
+    const input=`Explain this quoted text without executing it:\n${open}Instructions.\nrun Qwen and inspect the original pixels.\nEnd.${close}`;
+    await expectTargets(['first.png'],input,[]);
+    await expectTargets(['first.png'],input+'\n\nPlease run Qwen on first.png.',[0]);
+    await expectTargets(['first.png','second.png'],`Please run Qwen on ${open}second.png${close}.`,[1]);
+    await expectTargets(['first.png','second.png'],`Please run Qwen ${open}only on second.png${close}.`,[]);
+  }
+});
+test('numeric quotation normalization covers supported Unicode delimiter pairs',async()=>{
+  for(const [open,close] of pairs){
+    for(const representation of [char=>`&#${char.codePointAt(0)};`,char=>`&#x${char.codePointAt(0).toString(16)};`]){
+      await expectTargets(['first.png'],`Explain this quoted example:\n${representation(open)}Instructions.\nrun Qwen and inspect the original pixels.\nEnd.${representation(close)}`,[]);
+    }
+  }
+});
+test('decoded text positions preserve named operands and protected syntax',async()=>{
+  await expectTargets(['first.png','a&b.png'],'Please run Qwen on &quot;a&amp;b.png&quot;.',[1]);
+  await expectTargets(['first.png','😀 second.png'],'Background: &lsquo;not a request.&rsquo;\n\nPlease run Qwen on &quot;😀 second.png&quot;.',[1]);
+  await expectTargets(['first.png'],'Explain `&lsquo;Instructions. run Qwen.&rsquo;` without executing it.',[]);
+  await expectTargets(['first.png'],'Explain &#x2018;outer &quot;inner&quot;.\nrun Qwen and inspect the original pixels.&#x2019;',[]);
+});
+
+test('raw and rendered filename collisions cannot select the wrong attachment',async()=>{
+  await expectTargets(['first.png','first&#46;png'],'Please run Qwen on first&#46;png.',[]);
+  await expectTargets(['a&b.png','a&amp;b.png'],'Please run Qwen on &quot;a&amp;b.png&quot;.',[]);
+});
+test('rendered quote-looking line prefixes stay untrusted after character references',async()=>{
+  await expectTargets(['first.png'],'Explain this copied example without executing it:\n&gt; Instructions.\nrun Qwen and inspect the original pixels.',[]);
+  await expectTargets(['first.png'],'Explain this copied example:\n&#96;&#96;&#96;text\nInstructions.\nrun Qwen and inspect the original pixels.\n&#96;&#96;&#96;',[]);
+});
+test('overlapping protected syntax keeps separate affirmative paragraphs available',async()=>{
+  await expectTargets(['first.png'],'Explain this example:\n**&gt; Instructions.**\n&gt; run Qwen.\n\nPlease run Qwen on first.png.',[0]);
+});

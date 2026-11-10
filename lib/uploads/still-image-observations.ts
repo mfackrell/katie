@@ -64,10 +64,11 @@ function explicitFreshImageInspection(
   // container exits can turn an apparent closing fence into a new opening one.
   // Only literal text in top-level paragraphs can carry an instruction. Every
   // other syntax node remains unresolved data, retaining its source boundary.
-  type SyntaxNode={type:string;children?:SyntaxNode[];position?:{
+  type SyntaxNode={type:string;value?:string;children?:SyntaxNode[];position?:{
     start:{offset?:number};end:{offset?:number};
   }};
   const protectedRanges:Array<{start:number;end:number}>=[];
+  const renderedText:Array<{start:number;end:number;value:string}>=[];
   let parsed=false;
   try{
     Markdown({children:question,skipHtml:true,remarkPlugins:[remarkGfm,remarkMath,
@@ -102,7 +103,16 @@ function explicitFreshImageInspection(
             const child=pending.pop()!;
             // Preserve raw emphasis punctuation in filenames such as
             // __image_target_0__.png. It never becomes generated authority.
-            if(child.type==='text')continue;
+            if(child.type==='text'){
+              const start=child.position?.start.offset,end=child.position?.end.offset;
+              if(start===undefined||end===undefined||typeof child.value!=='string'||
+                 !Number.isInteger(start)||!Number.isInteger(end)||start<0||
+                 end<start||end>question.length)throw Error('Invalid Markdown text range');
+              if(/(?:^|\n)[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*(?:>|\x60{3,}|~{3,})/m.test(child.value))
+                protect(block);
+              renderedText.push({start,end,value:child.value});
+              continue;
+            }
             if((child.type==='emphasis'||child.type==='strong')&&child.children)
               pending.push(...child.children);
             else protect(child);
@@ -115,8 +125,59 @@ function explicitFreshImageInspection(
     ]});
   }catch{return false;}
   if(!parsed)return false;
-  protectedRanges.sort((a,b)=>a.start-b.start);
-  const source=question;
+  // Recognize the text the user actually sees, including character references
+  // and escaped punctuation. Rebuild all data offsets in the same canonical
+  // string; never combine decoded quotes with stale raw-source positions.
+  const opaqueRanges:Array<{start:number;end:number}>=[];
+  for(const range of protectedRanges.sort((a,b)=>a.start-b.start||b.end-a.end)){
+    const last=opaqueRanges[opaqueRanges.length-1];
+    if(last&&range.start<=last.end)last.end=Math.max(last.end,range.end);
+    else opaqueRanges.push({...range});
+  }
+  const edits=[
+    ...opaqueRanges.map(range=>({...range,value:'\uFFFC',opaque:true})),
+    ...renderedText.filter(text=>!opaqueRanges.some(range=>
+      text.start<range.end&&range.start<text.end)).map(text=>({...text,opaque:false})),
+  ].sort((a,b)=>a.start-b.start);
+  let source='',sourceCursor=0;
+  protectedRanges.length=0;
+  for(const edit of edits){
+    if(edit.start<sourceCursor)return false;
+    source+=question.slice(sourceCursor,edit.start);
+    if(edit.opaque)protectedRanges.push({start:source.length,end:source.length+edit.value.length});
+    source+=edit.value;
+    sourceCursor=edit.end;
+  }
+  source+=question.slice(sourceCursor);
+  // Decoding cannot silently change a raw filename into another attachment's
+  // identity. Check the at-most-five selected names with the same parser and
+  // fail closed when raw and rendered spellings identify different files.
+  for(const file of available){
+    if(!/[&\\]/.test(file.fileName)||!question.toLowerCase().includes(file.fileName.toLowerCase()))continue;
+    const leaves:Array<{start:number;end:number;value:string}>=[];
+    try{
+      Markdown({children:file.fileName,skipHtml:true,remarkPlugins:[()=> (root:SyntaxNode)=>{
+        const pending=[root];
+        while(pending.length){
+          const node=pending.pop()!;
+          if(node.type==='text'&&typeof node.value==='string'){
+            const start=node.position?.start.offset,end=node.position?.end.offset;
+            if(start===undefined||end===undefined)throw Error('Missing filename position');
+            leaves.push({start,end,value:node.value});
+          }else if(node.children)pending.push(...node.children);
+        }
+        root.children=[];
+      }]});
+    }catch{return false;}
+    leaves.sort((a,b)=>a.start-b.start);
+    let rendered='',cursor=0;
+    for(const leaf of leaves){
+      rendered+=file.fileName.slice(cursor,leaf.start)+leaf.value;cursor=leaf.end;
+    }
+    rendered+=file.fileName.slice(cursor);
+    if(rendered!==file.fileName&&available.some(other=>other.fileId!==file.fileId&&
+      other.fileName.toLowerCase()===rendered.toLowerCase()))return false;
+  }
   let protectedIndex=0;
   let clean='';
   // Authority lives in these spans, not in a magic string that user text can forge.
