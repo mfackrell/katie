@@ -101,7 +101,7 @@ jobs:
           provider_execution="$(jq -r '.authorityKind == "provider-execution"' "$RUNNER_TEMP/native-benchmark.json")"
           test "$provider_execution" = "$(jq -r '.providerExecution == true' "$RUNNER_TEMP/project-context.json")" || { echo 'Provider execution requires an authenticated native handoff'; exit 1; }
           issue_title="$(head -n 1 "$RUNNER_TEMP/original-agent-request.md")"
-          if [[ "$EXPECT_PROVIDER_EXECUTION" == true || "$issue_title" == '[agent] [provider-execution] '* ]]; then
+          if [[ "${EXPECT_PROVIDER_EXECUTION:-false}" == true || "$issue_title" == '[agent] [provider-execution] '* ]]; then
             test "$provider_execution" = true || { echo 'Provider execution handoff is missing'; exit 1; }
           fi
           if [[ "$provider_execution" == true && "$REPAIR_SMOKE" == true ]]; then
@@ -689,6 +689,7 @@ jobs:
           FINAL_HEAD: ${{ needs.final-review.outputs.head_sha }}
         run: |
           set -euo pipefail
+          PROVIDER_EXECUTION="${PROVIDER_EXECUTION:-false}"
           outcome='BLOCKED — review or tests require further work'
           if [[ "$REPAIR" == 'skipped' && "$TEST" == 'true' && "$REVIEW" == 'pass' ]]; then
             outcome='READY — awaiting owner approval'
