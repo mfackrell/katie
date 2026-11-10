@@ -1,8 +1,9 @@
 import {executiveChoices} from '@/lib/projects/organization';
+import {getAvailableProviders} from '@/lib/providers';
 import {COMPACT_GAME_INSTRUCTION} from '@/lib/projects/game-specification-transport';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {missionReviewFormat,type ReviewFormat} from './review-format';
-import {rejectedBeforeInference} from '@/lib/orchestration/request-rejection';
+import {boundedModelSupported,rejectedBeforeInference} from '@/lib/orchestration/request-rejection';
 import {shouldFallbackIncompleteReview} from './review-fallback.mjs';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
@@ -49,6 +50,33 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
+ const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,...(reviewFormat?{reviewFormat}:{}),objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
+ const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
+ const savedReview=checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
+   &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations)?checkpoint.response:null;
+ const providerControlled=claim.mission.project_id
+  ?await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id}):false;
+ if(providerControlled){
+  const boundary={p_job:claim.job.id,p_lease:claim.job.lease};
+  if(claim.mission.project_kind==='management'&&tools!=='none')throw Error('Management tools must remain disabled');
+  if(!await rpc<boolean>('project_provider_mission_live',boundary))throw Error('Trial assignment authority is unavailable');
+  if(savedReview)return savedReview;
+  const provider=getAvailableProviders().find(candidate=>candidate.name==='openai');
+  if(!provider)throw Error('Trial OpenAI connection unavailable');
+  const models=await provider.listModels().catch(async error=>{
+   await rpc('project_provider_mission_stop',boundary);
+   throw error;
+  });
+  const modelId=['gpt-5.4','gpt-5.2','gpt-5'].find(id=>models.includes(id)&&boundedModelSupported(provider.name,id));
+  if(!modelId)throw Error('No supported reasoning model is available through the trial connection');
+  const choice={provider,modelId,reasoning:'Provider-account trial with a single bounded connection'};
+  const result=await executeMissionModel(claim,instruction,input,tools,choice,missionExecutionDeadline(claim),undefined,false,reviewFormat,false,false,false,true);
+  const complete={...result,provider:provider.name,routingReason:choice.reasoning,attemptedModels:[provider.name+':'+modelId]};
+  if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))
+   throw Error('Worker no longer authorized to persist review checkpoint');
+  return complete;
+ }
  const fullBinding=await fullProjectBinding(claim);
  // One owner-approved project continuation binds research/specification/review
  // to a fixed verified-price transport. Actual atomic authorization remains
@@ -85,11 +113,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(claim.mission.project_kind==='management'&&tools!=='none')throw Error('Management tools must remain disabled');
  const effectiveTools=fullBinding?'none':tools;
  const executionDeadline=missionExecutionDeadline(claim);
- const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
- const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,...(reviewFormat?{reviewFormat}:{}),objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
- const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
- if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
-   &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
+ if(savedReview)return savedReview;
  let choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
   `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${effectiveTools}. Complete input size: ${instruction.length+input.length} characters; select a model with sufficient context capacity. `+
   (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
@@ -161,7 +185,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat,fullBenchmark=false,ordinary=false,fenced=false):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat,fullBenchmark=false,ordinary=false,fenced=false,providerControlled=false):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const specificationV2=(claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget?.version===2;
@@ -190,22 +214,37 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   delete countInput.service_tier;delete countInput.max_output_tokens;delete countInput.store;delete countInput.max_tool_calls;
   const countingTimeout=Math.min(15000,executionDeadline-Date.now()-5000);
   if(countingTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
-  const counted=await client.post('/responses/input_tokens',{body:countInput,timeout:countingTimeout}).catch(()=>null);
+  const counted=providerControlled?null:await client.post('/responses/input_tokens',{body:countInput,timeout:countingTimeout}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
-  outputTokens=await specificationRetryOutputLimit(claim,inputTokens,outputTokens);
+  if(!providerControlled)outputTokens=await specificationRetryOutputLimit(claim,inputTokens,outputTokens);
   request.max_output_tokens=outputTokens;
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):missionAttemptTimeout(executionDeadline,outputTokens);
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
-  await assertSpecificationStageCapacity(claim,reserve);
-  const admitted=fullBenchmark
-   ?await fullBenchmarkAccounting(claim,ordinary).reserve(choice.provider.name+':'+selectedModel,reserve,false,callId)
-   :await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve});
-  if(!admitted)await explainAdmissionDenial(claim,reserve);
+  if(providerControlled){
+   if(!await rpc<boolean>('project_provider_mission_live',{p_job:claim.job.id,p_lease:claim.job.lease,p_take_call:true}))
+    throw Error('Trial assignment stopped, expired, or reached its operational call limit');
+  }else{
+   await assertSpecificationStageCapacity(claim,reserve);
+   const admitted=fullBenchmark
+    ?await fullBenchmarkAccounting(claim,ordinary).reserve(choice.provider.name+':'+selectedModel,reserve,false,callId)
+    :await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve});
+   if(!admitted)await explainAdmissionDenial(claim,reserve);
+  }
   const started=Date.now();
   try{
    if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
-   const response=await client.responses.create(request,{timeout:inferenceTimeout});
+   const response=await client.responses.create(request,{timeout:inferenceTimeout}).catch(async error=>{
+    if(providerControlled)await rpc('project_provider_mission_stop',{p_job:claim.job.id,p_lease:claim.job.lease});
+    throw error;
+   });
+   if(providerControlled){
+    console.info('[Trial model usage]',{jobId:claim.job.id,model:selectedModel,requestId:response.id,usage:response.usage});
+    if(response.status==='failed'||response.error||response.incomplete_details?.reason==='content_filter'||(response.output??[]).some(item=>item&&typeof item==='object'&&'content' in item&&Array.isArray(item.content)&&item.content.some(block=>block?.type==='refusal'))){
+     await rpc('project_provider_mission_stop',{p_job:claim.job.id,p_lease:claim.job.lease});
+     throw Error('Trial provider refused execution');
+    }
+   }
    if((fullBenchmark||fenced)&&(response as {service_tier?:string}).service_tier!=='default')throw Error('Full provider service tier uncertain; reservation retained');
    let draftCheckpointFailed=false;
    if(gameSpecification&&specificationV2&&['compose','revise'].includes(claim.job.role)){
@@ -216,7 +255,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
     if(!response.id||!response.usage)throw Error('Full benchmark authoritative provider receipt missing');
     await rpc('benchmark_reconcile_provider_usage',{p_call:callId,p_provider_request:response.id,p_usage:response.usage,p_linked:true});
    }
-   else await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
+   else if(!providerControlled)await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
    if(draftCheckpointFailed)throw new MissionModelFailure('Provider specification response could not be checkpointed; no retry authorized',{checkpointFailed:true,partialText:response.output_text??''});
    if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,partialText:response.output_text??'',outputKinds:((response.output??[]) as Array<Record<string,unknown>>).flatMap(item=>Array.isArray(item.nativeAnthropic)?item.nativeAnthropic.map((block:Record<string,unknown>)=>String(block.type??'unknown')):[String(item.type??'unknown')]),provider:choice.provider.name,model:selectedModel,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';
@@ -257,7 +296,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    return{text,sources,calculations,model:selectedModel};
   }catch(error){
    if(fullBenchmark)await fullBenchmarkAccounting(claim,ordinary).finish(callId,rejectedBeforeInference(error)?0:null).catch(()=>{});
-   else await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
+   else if(!providerControlled)await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
    console.warn('[Missions] Provider attempt ended',{jobId:claim.job.id,callId,provider:choice.provider.name,model:selectedModel,durationMs:Date.now()-started,reservedTokens:reserve,countMethod:counted?'provider':'conservative-bytes',error:error instanceof Error?error.message.slice(0,350):'Unknown provider failure'});
    throw error;
   }

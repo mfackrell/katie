@@ -25,6 +25,9 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  assert.deepEqual(await snapshot(),before);
  await rival.query('set role service_role');
  await assert.rejects(rival.query("update project_organization_nodes set kind='worker'"),/permission denied/);
+ await db.query(readFileSync('supabase/migrations/20261110010000_provider_controlled_game_trial.sql','utf8'));
+ assert.deepEqual(await snapshot(),before,'Provider-controlled mode must not alter historical data');
+ await (await import('./assert-provider-controlled-game-trial.mjs')).assertProviderControlledGameTrial(db,rival);
  await (await import('./assert-project-native-delegation.mjs')).assertProjectNativeDelegation(db,rival);
  console.log('PROJECT_ORGANIZATION_COMBINED_SCHEMA_PASS: historical snapshots preserved; canonical native admission and settlement retained');
 }

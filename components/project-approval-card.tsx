@@ -2,6 +2,7 @@
 
 export type ProjectApproval = {
   hash: string;
+  providerControlled?: boolean;
   name: string;
   summary: string;
   requirements: string[];
@@ -46,7 +47,7 @@ export function ProjectApprovalCard({ approval, pending, error, onApprove, onReq
           <ol className="list-decimal space-y-1 pl-4">{approval.milestones.map((m,i)=><li key={i}>{m}</li>)}</ol>
           <p className="font-medium">Permitted paths</p>
           <p className="break-all">{approval.allowedPaths.join(", ")}</p>
-          <p>Budget ceilings: {approval.limits.modelTokens.toLocaleString()} model tokens across {approval.limits.missions} missions. GitHub coding model usage is additional and separately limited.</p>
+          <p>{approval.providerControlled ? 'Provider account controls apply.' : `Budget ceilings: ${approval.limits.modelTokens.toLocaleString()} model tokens across ${approval.limits.missions} missions. GitHub coding model usage is additional and separately limited.`}</p>
           <p>Deadline: {new Date(approval.deadline).toLocaleString()}</p>
           <details className="rounded-lg border border-white/10 p-2">
             <summary className="cursor-pointer font-medium">Full approved specification and browser tests (JSON)</summary>

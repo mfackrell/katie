@@ -18,9 +18,9 @@ import {announceBlockedRecoveryResources} from './recovery-budget';
 import {recoverSpecificationRoute} from './specification-route-recovery';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 import { projectClosure, projectImpediment, assertProjectAssessmentBinding } from './completion';
-export async function baseline(p: Project) {
+export async function baseline(p: Project, providerControlled=false) {
  let fullBaseline:string|null=null;
- if(p.profile==='game'){
+ if(!providerControlled&&p.profile==='game'){
   const binding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env);
   if(binding){
    if(!/^[a-f0-9]{40}$/.test(binding.baseline_sha)||!/^[a-f0-9]{64}$/.test(binding.benchmark_contract_hash)||binding.model!=='gpt-5.3-codex')throw Error('Full benchmark frozen project binding is invalid');
@@ -48,6 +48,8 @@ function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
 
 async function advance(p: Project) {
+    const providerControlled=p.organization_version===1
+      &&await projectRpc<boolean>('project_provider_mode',{p_project:p.id});
     if(p.organization_version===1){
       const management=await projectRpc<{blocked?:string;detail?:string;handled?:boolean}|null>('project_org_schedule',{p_project:p.id,p_lease:p.lease});
       if(management?.handled)return;
@@ -60,10 +62,10 @@ async function advance(p: Project) {
     const runs = await projectRuns(p.id);
     const game=p.profile==='game';
     let continuation:{id:string;plan_hash:string;deadline:string;plan:{version?:number;lifecycleProposalId?:string;capacityRenewal?:boolean;cumulativeTokenCap?:number;kind?:string;developmentRemainingTokens?:number;developmentSpentTokens?:number;specificationTokens:number;developmentTokens:number;assessmentTokens:number;additionalTokenCap:number}}|null=null;
-    if(game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
+    if(!providerControlled&&game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
       continuation=await projectRpc('benchmark_active_full_continuation',{p_project:p.id});
     }
-    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`+(p.organization_version===1?`\nDIRECTOR STRATEGY AND ACCEPTED COMPONENT EVIDENCE (data, within original scope):\n${JSON.stringify(await organizationProjectEvidence(p.id))}`:'');
+    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`+(p.organization_version===1?`\nDIRECTOR STRATEGY AND ACCEPTED COMPONENT EVIDENCE (data, within original scope):\n${JSON.stringify(await organizationProjectEvidence(p.id))}`:'') + (providerControlled?'\nTrial boundary: one coding milestone at /milestone-3-tic-tac-toe. Write only under app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, or tests/milestone-3-tic-tac-toe/. Browser checks stay on the trial route.':'');
     const gamePlanning=game?'\nGAME SPECIALIST CONTRACT: Identify explicit edition and original versus reproduction. Preserve rule provenance, approved interpretations, unresolved mechanics, turn/phase transitions, legal/illegal actions, terminal states, player modes, persistence, and reset. Do not invent missing rules. Original user-defined games may use the original brief as their primary rules source. Architecture must separate a pure deterministic transition(state,action) engine from UI/persistence/bot/network behavior.':'';
     if (p.active_mission_id) {
         const current = await readMission(p.active_mission_id);
@@ -91,7 +93,7 @@ async function advance(p: Project) {
             // Verification infrastructure failures must not spend another coding
             // cycle. Re-dispatch independent tests/review for the exact saved PR
             // head; keep the original mission and approval.
-            if(p.phase==='development'&&m.status==='blocked'){
+            if(!providerControlled&&p.phase==='development'&&m.status==='blocked'){
                 const failedDevelopment=current.jobs.find(j=>j.role==='development'&&j.status==='failed');
                 if(failedDevelopment){
                     try {
@@ -143,13 +145,13 @@ async function advance(p: Project) {
             // Never turn a blocked research/specification/review coordination failure
             // into another coding job. Only a failed development deliverable with
             // actionable reviewer findings is eligible for one targeted repair.
-            if (m.status === 'blocked' && p.approved_hash && p.approved_hash === p.approval_hash && currentStage && repairFindings.length &&
+            if (!providerControlled && m.status === 'blocked' && p.approved_hash && p.approved_hash === p.approval_hash && currentStage && repairFindings.length &&
                 p.cycles < p.max_cycles && attempts < 2 && (assessmentRepair ||
                     p.phase === 'development' && current.jobs.some(j => j.role === 'development' && j.status === 'completed'))) {
                 await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + repairFindings.join('\n'), findings: repairFindings, failed_mission: m.id });
                 return;
             }
-            if(m.status==='blocked'&&p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
+            if(!providerControlled&&m.status==='blocked'&&p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
             await finish('block', { detail: 'A project milestone is blocked: ' + (notes || m.detail || m.status) });
             return;
         }
@@ -170,7 +172,11 @@ async function advance(p: Project) {
         if (p.phase === 'specification') {
             const spec = validateProjectPlan(parseJSON(m.result ?? ''));
             if(game&&!spec.game)throw Error('Game specification requires source-grounded rules and registered model/browser acceptance');
-            const base = await baseline(p);
+            const base = await baseline(p,providerControlled);
+            if(providerControlled){
+                await finish('spec',{spec,baseline:base,detail:'Specification independently reviewed. Awaiting approval of the exact coding scope.'});
+                return;
+            }
             const scopeForecast=estimateProjectResources(spec,p.objective+' '+p.clarifications);
             const db=getSupabaseAdminClient();
             // Missing or unverified costs must never block reviewed requirements.
@@ -278,11 +284,11 @@ async function advance(p: Project) {
             if(result.passed){await finish('browser',result);return;}
             const failures=result.checks.filter(c=>!c.passed).map(c=>c.name+': '+c.detail).join('\n');
             const attempts=runs.filter(r=>r.kind==='development'&&r.milestone_index===p.spec!.milestones.length-1).length;
-            await finish(p.cycles<p.max_cycles&&attempts<2?'retry':'block',{detail:'Actual deployed browser acceptance failed. Repair the unmet original requirements: '+failures,findings:result.checks.filter(c=>!c.passed).map(c=>c.name+': '+c.detail)});
+            await finish(!providerControlled&&p.cycles<p.max_cycles&&attempts<2?'retry':'block',{detail:'Actual deployed browser acceptance failed. Repair the unmet original requirements: '+failures,findings:result.checks.filter(c=>!c.passed).map(c=>c.name+': '+c.detail)});
         }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message,impediment:projectImpediment(p,error.message,[`Attempted approved acceptance against ${p.preview.url}.`],`Restore access to the approved preview ${p.preview.url} through the existing authenticated connection.`)});return;}throw error;}
         return;
     }
-    const recovery=p.phase==='specification'&&!p.active_mission_id
+    const recovery=!providerControlled&&p.phase==='specification'&&!p.active_mission_id
       ? await loadSpecificationRecovery(p.id,runs,source) : null;
     if(recovery?.hasPriorDraft&&!recovery.checkpoint&&!continuation){
       await finish('block',{detail:'Saved specification artifacts fail current validation; full regeneration is not authorized.',
@@ -322,37 +328,39 @@ async function advance(p: Project) {
         }
         }
     }
-    // Do not spawn more research or planning jobs when cumulative spend has
-    // consumed the aggregate budget. SQL reservations remain authoritative.
-    const { data: spend, error: spendError } = await getSupabaseAdminClient().from('agent_missions')
-        .select('actual_tokens,reserved_tokens').eq('project_id',p.id);
-    if (spendError) throw Error('Cannot verify cumulative project budget');
-    // A mission's reserved_tokens already includes its settled actual_tokens.
-    // Match reserve_mission_call's canonical budget accounting (max per mission),
-    // rather than double-charging every completed call.
-    const charged = ((spend ?? []) as Array<{actual_tokens: number | null;reserved_tokens:number | null}>).reduce((total: number, m) => total +
-        Math.max(0, Number(m.actual_tokens ?? 0), Number(m.reserved_tokens ?? 0)), 0);
-    const assessmentTokens=p.phase==='specification'&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'
-      ?await projectRpc<number>('benchmark_project_assessment_cap',{p_project:p.id}):120000;
-    const continuationPlan=continuation?.plan;
-    if(continuation){
-      const plan=continuationPlan;
-      const renewal=plan?.kind==='development-renewal';
-      const valid=plan&&(renewal
-        ? p.phase==='assessment'&&plan.specificationTokens===0&&([120000,170000,373279].includes(plan.developmentTokens)||(plan.version===6&&plan.capacityRenewal===true&&plan.developmentTokens===448279&&plan.cumulativeTokenCap===625000)||(plan.version===7&&typeof plan.lifecycleProposalId==='string'&&/^[a-f0-9]{64}$/.test(plan.lifecycleProposalId)&&Number.isSafeInteger(plan.developmentTokens)&&plan.developmentTokens>0))&&(plan.version===7?Number.isSafeInteger(plan.assessmentTokens)&&plan.assessmentTokens>=60000:plan.assessmentTokens===60000)
-          &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
-          &&Number(plan.developmentRemainingTokens)>0&&Number(plan.developmentSpentTokens)>=0
-          &&Number(plan.developmentRemainingTokens)+Number(plan.developmentSpentTokens)===plan.developmentTokens
-          &&(plan.version===7?Number.isSafeInteger(plan.additionalTokenCap)&&plan.additionalTokenCap>0:Number(plan.developmentRemainingTokens)+plan.assessmentTokens===plan.additionalTokenCap)
-        : [plan.specificationTokens,plan.developmentTokens,plan.assessmentTokens,plan.additionalTokenCap].every(n=>Number.isInteger(n)&&n>0)
-          &&plan.specificationTokens+plan.developmentTokens+plan.assessmentTokens===plan.additionalTokenCap);
-      if(!valid)throw Error('Saved continuation stage allocations unavailable');
-    }
-    const specAdmission=p.phase==='specification'&&continuationPlan?{missionTokens:continuationPlan.specificationTokens,futureTokens:continuationPlan.developmentTokens+continuationPlan.assessmentTokens,requiredTokens:continuationPlan.additionalTokenCap,requiredMissionSlots:3}:p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1,assessmentTokens):null;
-    const requiredTokens=specAdmission?.requiredTokens??8000;
-    if (p.token_allowance - charged < requiredTokens || (specAdmission&&runs.length+specAdmission.requiredMissionSlots>p.max_missions)) {
-        await finish('block', { detail: specAdmission?`Mandatory ${p.phase} stages require ${requiredTokens} tokens; ${Math.max(0,p.token_allowance-charged)} remain of ${p.token_allowance} after ${charged} charged. Required mission slots: ${specAdmission.requiredMissionSlots}; available: ${p.max_missions-runs.length}. Prior work is retained; owner resource approval is required before a new mission.`:'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
-        return;
+    if(!providerControlled){
+        // Do not spawn more research or planning jobs when cumulative spend has
+        // consumed the aggregate budget. SQL reservations remain authoritative.
+        const { data: spend, error: spendError } = await getSupabaseAdminClient().from('agent_missions')
+            .select('actual_tokens,reserved_tokens').eq('project_id',p.id);
+        if (spendError) throw Error('Cannot verify cumulative project budget');
+        // A mission's reserved_tokens already includes its settled actual_tokens.
+        // Match reserve_mission_call's canonical budget accounting (max per mission),
+        // rather than double-charging every completed call.
+        const charged = ((spend ?? []) as Array<{actual_tokens: number | null;reserved_tokens:number | null}>).reduce((total: number, m) => total +
+            Math.max(0, Number(m.actual_tokens ?? 0), Number(m.reserved_tokens ?? 0)), 0);
+        const assessmentTokens=p.phase==='specification'&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'
+          ?await projectRpc<number>('benchmark_project_assessment_cap',{p_project:p.id}):120000;
+        const continuationPlan=continuation?.plan;
+        if(continuation){
+          const plan=continuationPlan;
+          const renewal=plan?.kind==='development-renewal';
+          const valid=plan&&(renewal
+            ? p.phase==='assessment'&&plan.specificationTokens===0&&([120000,170000,373279].includes(plan.developmentTokens)||(plan.version===6&&plan.capacityRenewal===true&&plan.developmentTokens===448279&&plan.cumulativeTokenCap===625000)||(plan.version===7&&typeof plan.lifecycleProposalId==='string'&&/^[a-f0-9]{64}$/.test(plan.lifecycleProposalId)&&Number.isSafeInteger(plan.developmentTokens)&&plan.developmentTokens>0))&&(plan.version===7?Number.isSafeInteger(plan.assessmentTokens)&&plan.assessmentTokens>=60000:plan.assessmentTokens===60000)
+              &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
+              &&Number(plan.developmentRemainingTokens)>0&&Number(plan.developmentSpentTokens)>=0
+              &&Number(plan.developmentRemainingTokens)+Number(plan.developmentSpentTokens)===plan.developmentTokens
+              &&(plan.version===7?Number.isSafeInteger(plan.additionalTokenCap)&&plan.additionalTokenCap>0:Number(plan.developmentRemainingTokens)+plan.assessmentTokens===plan.additionalTokenCap)
+            : [plan.specificationTokens,plan.developmentTokens,plan.assessmentTokens,plan.additionalTokenCap].every(n=>Number.isInteger(n)&&n>0)
+              &&plan.specificationTokens+plan.developmentTokens+plan.assessmentTokens===plan.additionalTokenCap);
+          if(!valid)throw Error('Saved continuation stage allocations unavailable');
+        }
+        const specAdmission=p.phase==='specification'&&continuationPlan?{missionTokens:continuationPlan.specificationTokens,futureTokens:continuationPlan.developmentTokens+continuationPlan.assessmentTokens,requiredTokens:continuationPlan.additionalTokenCap,requiredMissionSlots:3}:p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1,assessmentTokens):null;
+        const requiredTokens=specAdmission?.requiredTokens??8000;
+        if (p.token_allowance - charged < requiredTokens || (specAdmission&&runs.length+specAdmission.requiredMissionSlots>p.max_missions)) {
+            await finish('block', { detail: specAdmission?`Mandatory ${p.phase} stages require ${requiredTokens} tokens; ${Math.max(0,p.token_allowance-charged)} remain of ${p.token_allowance} after ${charged} charged. Required mission slots: ${specAdmission.requiredMissionSlots}; available: ${p.max_missions-runs.length}. Prior work is retained; owner resource approval is required before a new mission.`:'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
+            return;
+        }
     }
     const evidence = await milestoneEvidence(runs);
     let objective: string;
@@ -443,6 +451,7 @@ async function resumeAuthorizedDeveloperProjects(){
  .eq('profile','game').eq('phase','specification').eq('budget_authorization_source','user_approved').limit(8).returns<{id:string}>();
  if(error)throw Error('Cannot inspect authorized game project recoveries');
  for(const p of data??[]){
+  if(await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))continue;
   const {data:resumed,error:resumeError}=await db.rpc<boolean>('resume_authorized_game_project',{p_id:p.id});
   if(resumeError)throw Error('Authorized saved-project recovery failed');
   if(resumed)return true;
@@ -454,7 +463,7 @@ async function reconcileBlockedResourceApprovals(){
  const {data,error}=await db.from('work_projects').select('*').eq('status','blocked')
   .eq('profile','game').eq('phase','specification').order('updated_at',{ascending:false}).limit(5).returns<Project>();
  if(error)throw Error('Cannot inspect blocked developer projects for resource planning');
- for(const p of data??[])if(await announceBlockedRecoveryResources(p))return true;
+ for(const p of data??[])if(!await projectRpc<boolean>('project_provider_mode',{p_project:p.id})&&await announceBlockedRecoveryResources(p))return true;
  return false;
 }
 async function reconcileBlockedGameRevisions(){
@@ -467,6 +476,7 @@ async function reconcileBlockedGameRevisions(){
       .order('updated_at',{ascending:false}).limit(20);
     if(error)throw Error('Blocked game revision recovery index unavailable');
     for(const p of (data??[]) as Array<{id:string}>){
+        if(await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))continue;
         if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id}) || await projectRpc<boolean>('recover_game_specification_checkpoint',{p_id:p.id}) || await projectRpc<boolean>('resume_game_checkpoint_watchdog',{p_id:p.id}) || await projectRpc<boolean>('recover_uncharged_continuation_specification',{p_id:p.id}) || await projectRpc<boolean>('recover_verified_price_review',{p_id:p.id}) || await recoverSpecificationRoute(p.id)){
             console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
             return true;
@@ -480,6 +490,7 @@ async function reconcileBlockedInfrastructureProjects(){
       .eq('status','blocked').eq('phase','development').order('updated_at',{ascending:false}).limit(2);
     if(error)throw Error('Blocked project recovery index unavailable');
     for(const p of (data??[]) as Project[]){
+        if(await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))continue;
         if(!p.active_mission_id||!p.approved_hash||p.approved_hash!==p.approval_hash||new Date(p.deadline).getTime()<=Date.now())continue;
         const saved=await readMission(p.active_mission_id);
         if(saved.mission.status!=='blocked')continue;

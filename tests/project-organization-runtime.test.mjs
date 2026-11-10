@@ -17,7 +17,7 @@ test('management worker dispatches only durable management decisions; never tech
  const claim={mission:{id:randomUUID(),project_id:project,project_kind:'management'},job:{id:randomUUID(),agent_id:agent,lease:randomUUID(),payload:{organizationNodeId:id}}};
  let invoked=0;
  await load('@/lib/missions/worker').executeClaim(claim,async(c,instruction,input,tools)=>{invoked++;assert.equal(tools,'none');assert.match(instruction,/Never write code/);assert.doesNotMatch(instruction,/at least three|maxDepth|maxChildren/);assert.match(instruction,/replace_leader/);assert.equal(JSON.parse(input).plans[0].purpose,'Original project purpose');assert.equal(JSON.parse(input).project.objective,'Original project');return{text:'[{"action":"ready"}]',model:'synthetic-premier'};});
- assert.equal(invoked,1);assert.equal(calls.length,1);assert.equal(calls[0].name,'project_org_decide');assert.equal(calls[0].args.p_lease,claim.job.lease);
+ assert.equal(invoked,1);assert.deepEqual(calls.map(c=>c.name),['project_provider_mode','project_org_decide']);assert.equal(calls[1].args.p_lease,claim.job.lease);
 });
 test('technical work uses a separate subordinate completion receipt, never project closure',async()=>{
  const calls=[],claim={mission:{project_kind:'organization_work',objective:'Design the interface'},job:{id:randomUUID(),lease:randomUUID(),instruction:'Produce the interface contract',payload:{capability:'analysis'}}};
@@ -100,4 +100,48 @@ test('explicit management levels restrict appointments without granting technica
  assert.throws(()=>assertManagementCommands(supervisor,[],[{action:'appoint',kind:'manager',managementLevel:'manager'}]),/workers only/);
  assert.throws(()=>assertManagementCommands(manager,[],[{action:'appoint',kind:'manager',managementLevel:'functional_director'}]),/Managers commission/);
  assert.throws(()=>assertManagementCommands({id:'p',kind:'project_director'},[],[{action:'authorize_assignment',assignmentId:'worker-job'}]),/cannot assign/);
+});
+
+test('authenticated trial start and stop use the project controller without a financial approval',async()=>{
+ const calls=[],actorId=randomUUID(),chatId=randomUUID(),projectId=randomUUID();
+ let authenticated=false;
+ const load=modules({
+  '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>authenticated},
+  '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return {id:projectId,status:'running'};}},
+  '@/lib/data/persistence-store':{getMessages:async()=>[]},
+ });
+ const route=load('@/app/api/projects/organization/route');
+ const request=trialAction=>new Request('https://synthetic.test/api/projects/organization',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({actorId,chatId,trialAction})});
+ assert.equal((await route.POST(request('start'))).status,403);
+ assert.equal(calls.length,0);
+ authenticated=true;
+ assert.equal((await (await route.POST(request('start'))).json()).projectId,projectId);
+ assert.equal((await route.POST(request('stop'))).status,200);
+ assert.deepEqual(calls.map(x=>x.name),['project_provider_launch','project_provider_owner_stop']);
+ assert.equal(calls[0].args.p_chat,chatId);
+});
+
+test('trial Director can call the provider without any accounting service, and refusal is terminal',async()=>{
+ const calls=[], agent=randomUUID();
+ let refuse=false,attempts=0;
+ const load=modules({
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>{throw Error('Accounting and registry unavailable');}},
+  '@/lib/missions/store':{rpc:async(name)=>{calls.push(name);assert.match(name,/^project_provider_(mode|mission_live|mission_stop)$/);return true;}},
+  '@/lib/providers':{getAvailableProviders:()=>[{name:'openai',listModels:async()=>['gpt-5.4']},{name:'anthropic',listModels:async()=>{throw Error('Unexpected account switch');}}]},
+  '@/lib/orchestration/bounded-provider':{boundedProvider:()=>({post:async()=>{throw Error('Token accounting must not be reached');},responses:{create:async()=>{
+   attempts++;
+   if(refuse)throw Error('Provider refused trial request');
+   return {id:'fixture',status:'completed',output_text:'[{"action":"ready"}]',output:[]};
+  }}})},
+ });
+ const now=Date.now();
+ const claim={mission:{project_id:randomUUID(),project_kind:'management',objective:'Plan the game',deadline:new Date(now+3600000).toISOString(),team:[{id:agent,config:{}}]},
+  job:{id:randomUUID(),agent_id:agent,role:'work',payload:{},lease:randomUUID(),lease_until:new Date(now+360000).toISOString()}};
+ const model=load('@/lib/missions/model').missionModel;
+ assert.equal((await model(claim,'Return the decision','Verified scope')).text,'[{"action":"ready"}]');
+ assert.deepEqual(calls,['project_provider_mode','project_provider_mission_live','project_provider_mission_live']);
+ refuse=true;
+ await assert.rejects(model(claim,'Return the decision','Verified scope'),/Provider refused/);
+ assert.equal(calls.at(-1),'project_provider_mission_stop');
+ assert.equal(attempts,2);
 });

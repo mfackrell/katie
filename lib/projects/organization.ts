@@ -56,7 +56,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const results=await Promise.all([
  db.from('project_organization_nodes').select('*').eq('project_id',claim.mission.project_id),
  db.from('project_organization_exceptions').select('*').eq('project_id',claim.mission.project_id),
- db.from('work_projects').select('objective,spec,team,approved_hash,verified_sha,phase').eq('id',claim.mission.project_id).single(),
+ db.from('work_projects').select('objective,spec,team,approved_hash,verified_sha,phase,deadline').eq('id',claim.mission.project_id).single(),
  ]);
  if(results.some(r=>r.error))throw Error('Durable organization evidence unavailable');
  const nodes=results[0].data as Array<{id:string;agent_id:string;kind:string;management_level?:string;parent_id?:string|null}>;
@@ -81,7 +81,11 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   db.from('project_worker_contracts').select('*').eq('project_id',claim.mission.project_id),
  ]);
  if(grants.error||plans.error||dependencies.error||packages.error||attempts.error||workerContracts.error)throw Error('Organization scope or direction evidence unavailable');
- const response=await model(claim,MANAGEMENT_INSTRUCTION,JSON.stringify({workerContracts:workerContracts.data,workPackages:packages.data,workPackageAttempts:attempts.data,plans:plans.data,dependencies:dependencies.data,scopeGrants:grants.data,principal:node,project,executionTeam:team.data,organization:nodes,exceptions:results[1].data,assignments,evidence:evidence.data}),'none');
+ const providerControlled=await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id});
+ const instruction=providerControlled
+  ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
+  :MANAGEMENT_INSTRUCTION;
+ const response=await model(claim,instruction,JSON.stringify({workerContracts:workerContracts.data,workPackages:packages.data,workPackageAttempts:attempts.data,plans:plans.data,dependencies:dependencies.data,scopeGrants:grants.data,principal:node,project,executionTeam:team.data,organization:nodes,exceptions:results[1].data,assignments,evidence:evidence.data}),'none');
  const commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));
  assertManagementCommands(node,nodes,commands);
  await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
