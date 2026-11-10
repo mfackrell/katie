@@ -70,11 +70,10 @@ function explicitFreshImageInspection(
     }
     if(marker){fence={kind:marker[1][0],length:marker[1].length};outside.push(' ');continue;}
     if(/^\s*>/.test(line)){quotedParagraph=true;outside.push(' ');continue;}
-    if(quotedParagraph && /^\s*\S/.test(line) && !/^\s*(?:please|can|could|would|i\s+want|now)\b/i.test(line)){
+    if(quotedParagraph && line.trim()){ // Polite wording is still quoted data.
       outside.push(' ');continue;
     }
-    if(!line.trim())quotedParagraph=false;
-    else quotedParagraph=false;
+    quotedParagraph=false;
     outside.push(/^(?: {4}|\t)/.test(line)?' ':line);
   }
   // Inline code delimiters must close with the same number of backticks.
@@ -82,6 +81,9 @@ function explicitFreshImageInspection(
   // survive as inert target operands. Unclosed spans fail closed.
   const source=outside.join('\n');
   let clean='';
+  // Authority lives in these spans, not in a magic string that user text can forge.
+  // The placeholder is inert; a literal copy has no corresponding span.
+  const targets:Array<{offset:number;files:FileReference[]}>=[];
   for(let i=0;i<source.length;){
     const ch=source[i];
     if(ch==='\x60'){
@@ -108,13 +110,23 @@ function explicitFreshImageInspection(
       clean+=' ';
       if(close<0)break;
       const operand=source.slice(i+1,close).trim();
-      const known=available.find(item=>item.fileName.toLowerCase()===operand.toLowerCase());
-      if(known)clean+=' __image_target_'+available.indexOf(known)+'__ ';
+      const known=available.filter(item=>item.fileName.toLowerCase()===operand.toLowerCase());
+      if(known.length){targets.push({offset:clean.length,files:known});clean+='\uFFFC';}
       i=close+1;continue;
     }
     clean+=ch;i++;
   }
-  return clean.split(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/i).some(part=>{
+  // Preserve source positions while separating clauses, so only operands in
+  // the affirmative part of this exact clause can identify a target.
+  const clauses:Array<{offset:number;text:string}>=[];
+  let offset=0;
+  for(const boundary of clean.matchAll(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/gi)){
+    const end=boundary.index!;
+    clauses.push({offset,text:clean.slice(offset,end)});
+    offset=end+boundary[0].length;
+  }
+  clauses.push({offset,text:clean.slice(offset)});
+  return clauses.some(({offset:clauseOffset,text:part})=>{
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
     if(!/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive))return false;
@@ -123,19 +135,25 @@ function explicitFreshImageInspection(
     const scope=onlyAt>=0?part.slice(onlyAt+4):part;
     const contrasted=scope.search(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i);
     const positive=contrasted>=0?scope.slice(0,contrasted):scope;
-    const inertTargets=[...positive.matchAll(/__image_target_(\d+)__/g)].map(match=>available[Number(match[1])]).filter((item):item is FileReference=>Boolean(item));
-    if(inertTargets.length)return inertTargets.some(item=>item.fileId===reference.fileId);
+    const positiveStart=clauseOffset+(onlyAt>=0?onlyAt+4:0);
+    const operands=targets.filter(target=>target.offset>=positiveStart&&target.offset<positiveStart+positive.length);
+    // A quoted name shared by distinct attachments does not identify one image.
+    if(operands.some(target=>new Set(target.files.map(file=>file.fileId)).size!==1))return false;
+    const quotedIds=new Set(operands.flatMap(target=>target.files.map(file=>file.fileId)));
     const matchName=(candidate:FileReference):boolean=>{
       const name=candidate.fileName.toLowerCase(),value=positive.toLowerCase();
       if(!name)return false;
       for(let pos=value.indexOf(name);pos>=0;pos=value.indexOf(name,pos+1)){
+        // Generated placeholders are not raw filename characters, even if a
+        // selected filename literally contains the same Unicode character.
+        if(targets.some(target=>target.offset>=positiveStart+pos&&target.offset<positiveStart+pos+name.length))continue;
         const before=value[pos-1],after=value[pos+name.length];
         if((!before||!/[a-z0-9_.-]/i.test(before))&&
            (!after||!/[a-z0-9_.-]/i.test(after)))return true;
       }
       return false;
     };
-    const named=available.filter(matchName);
+    const named=available.filter(candidate=>quotedIds.has(candidate.fileId)||matchName(candidate));
     if(named.length===1)return named[0].fileId===reference.fileId;
     if(named.length>1)return onlyAt<0&&named.some(item=>item.fileId===reference.fileId);
     const ordinal=positive.match(/\b(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)\b/i);
