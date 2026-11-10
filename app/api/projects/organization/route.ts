@@ -8,6 +8,7 @@ const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().u
 const directorRecoveryInput=z.object({
  projectId:z.string().uuid(),trialAction:z.literal('recover_director_once'),
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),cutoff:z.string().datetime({offset:true}),
+ priorCutoff:z.string().datetime({offset:true}).optional(),
 }).strict();
 const input=z.union([financialInput,providerTrialInput,directorRecoveryInput]);
 // Neither workers nor cron can activate either kind of owner authority.
@@ -19,9 +20,10 @@ export async function POST(request:NextRequest){
  try{
  if('trialAction' in p&&p.trialAction==='recover_director_once'){
   if(p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)return NextResponse.json({error:'Recovery requires the exact active production release'},{status:409});
-  const admission=await rpc('project_admit_director_recovery',{
-   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,p_cutoff:p.cutoff,
-  });
+  const args={p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,p_cutoff:p.cutoff};
+  const admission=p.priorCutoff
+   ?await rpc('project_admit_expired_director_recovery',{...args,p_prior_cutoff:p.priorCutoff})
+   :await rpc('project_admit_director_recovery',args);
   return NextResponse.json(admission);
  }
  if('trialAction' in p){
