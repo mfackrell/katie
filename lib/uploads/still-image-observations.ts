@@ -151,9 +151,19 @@ function explicitFreshImageInspection(
   source+=question.slice(sourceCursor);
   // Decoding cannot silently change a raw filename into another attachment's
   // identity. Check the at-most-five selected names with the same parser and
-  // fail closed when raw and rendered spellings identify different files.
+  // fail closed whenever a mentioned raw filename changes its spelling.
   for(const file of available){
-    if(!/[&\\]/.test(file.fileName)||!question.toLowerCase().includes(file.fileName.toLowerCase()))continue;
+    if(!question.toLowerCase().includes(file.fileName.toLowerCase()))continue;
+    // A raw filename containing quotation syntax cannot be reinterpreted as
+    // quoting another selected filename. Use an unambiguous image ordinal.
+    for(let index=0;index<file.fileName.length;index++){
+      const char=file.fileName[index];
+      const apostrophe=["'",'’'].includes(char)&&index>0&&
+        /[\p{L}\p{N}]/u.test(file.fileName[index-1])&&
+        /[\p{L}\p{N}]/u.test(file.fileName[index+1]??'');
+      if(/\p{Quotation_Mark}/u.test(char)&&!apostrophe)return false;
+    }
+    if(!/[&\\]/.test(file.fileName))continue;
     const leaves:Array<{start:number;end:number;value:string}>=[];
     try{
       Markdown({children:file.fileName,skipHtml:true,remarkPlugins:[()=> (root:SyntaxNode)=>{
@@ -175,8 +185,10 @@ function explicitFreshImageInspection(
       rendered+=file.fileName.slice(cursor,leaf.start)+leaf.value;cursor=leaf.end;
     }
     rendered+=file.fileName.slice(cursor);
-    if(rendered!==file.fileName&&available.some(other=>other.fileId!==file.fileId&&
-      other.fileName.toLowerCase()===rendered.toLowerCase()))return false;
+    // Any changed raw filename is unresolved identity data, not new operand
+    // syntax. This includes decoded quotation/list/exclusion delimiters;
+    // a later parser must never reinterpret those as another attachment.
+    if(rendered!==file.fileName)return false;
   }
   let protectedIndex=0;
   let clean='';

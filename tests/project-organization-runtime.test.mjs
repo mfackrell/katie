@@ -231,6 +231,15 @@ test('one-shot Director recovery requires the authenticated owner, exact release
  assert.equal(calls[0].args.p_project,input.projectId);
  assert.equal(calls[0].args.p_release,input.releaseSha);
  assert.equal(calls[0].args.p_cutoff,input.cutoff);
+ const priorCutoff='2026-11-10T18:59:32.547837Z';
+ const amended={...input,priorCutoff,cutoff:'2026-11-10T21:00:00Z'};
+ assert.equal((await post({...amended,priorCutoff:'expired'})).status,400);
+ assert.equal((await post({...amended,releaseSha:'b'.repeat(40)})).status,409);
+ assert.equal(calls.length,1);
+ assert.equal((await post(amended)).status,200);
+ assert.equal(calls[1].name,'project_admit_expired_director_recovery');
+ assert.equal(calls[1].args.p_prior_cutoff,priorCutoff);
+ assert.equal(calls[1].args.p_cutoff,amended.cutoff);
 });
 
 test('one-shot Director recovery fences a mismatched runtime before inference and sanitizes unsupported commands',async()=>{
