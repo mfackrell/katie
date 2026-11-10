@@ -1,4 +1,4 @@
-import {executeManagementClaim,ManagementCommandRejection} from '@/lib/projects/organization';
+import {executeManagementClaim,ManagementCommandRejection,directorRecoveryRelease} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
 import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission,executiveSourceGroups,executiveSourceManifest} from '@/lib/executive/source-handoff';
@@ -375,7 +375,14 @@ export async function runMissionBatch(model=missionModel){
  try{await rpc('resume_compact_audit_comparison');await rpc('resume_saved_partial_audit_edits');await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
- for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
+ const release=process.env.VERCEL_ENV==='production'?process.env.VERCEL_GIT_COMMIT_SHA:null;
+ for(let i=0;i<3;i++){
+  const claim=release
+   ?await rpc<Claim|null>('claim_mission_work_release',{p_release:release})
+   :await rpc<Claim|null>('claim_mission_work');
+  if(!claim)break;
+  claims.push(claim);
+ }
  const outcomes=await Promise.all(claims.map(async claim=>{
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
   catch(error){
@@ -415,7 +422,7 @@ export async function runMissionBatch(model=missionModel){
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
    const reconcileAcceptedDevelopment=claim.job.role==='development'&&claim.job.attempts<2;
    const unresolvedProvider=error instanceof MissionModelFailure&&error.partial.providerOutcomeUnresolved===true;
-   const retry=!checkpointFailed&&!unresolvedProvider&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
+   const retry=!directorRecoveryRelease(claim)&&!checkpointFailed&&!unresolvedProvider&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...((claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))?Object.fromEntries(['rejectedSpecification','specificationValidationFeedback','specificationCharacters'].filter(key=>claim.job.result?.[key]!==undefined).map(key=>[key,claim.job.result![key]])):{}),...(claim.job.role==='review'&&claim.job.result?.sourceChecks?{sourceChecks:claim.job.result.sourceChecks}:{}),...(error instanceof MissionModelFailure?error.partial:{}),...(checkpointFailed?{checkpointFailed:true,specificationCheckpointError:specificationCheckpointError??'Provider response archival failed before settlement'}:{}),detail,diagnostic},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));

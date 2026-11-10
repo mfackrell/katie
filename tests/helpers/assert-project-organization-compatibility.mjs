@@ -38,7 +38,13 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  await assert.rejects(rival.query("update project_organization_nodes set kind='worker'"),/permission denied/);
  await db.query(readFileSync(providerMigration,'utf8'));
  assert.deepEqual(await snapshot(),before,'Provider-controlled mode must not alter historical data');
- await (await import('./assert-provider-controlled-game-trial.mjs')).assertProviderControlledGameTrial(db,rival);
+ await db.query(readFileSync('supabase/migrations/20261110180000_one_shot_director_recovery.sql','utf8'));
+ assert.deepEqual(await snapshot(),before,'Recovery migration must preserve existing records');
+ if(process.env.KATIE_TEST_DIRECTOR_ONE_SHOT==='1'){
+  await (await import('./assert-director-one-shot-recovery.mjs')).assertDirectorOneShotRecovery(db,rival);
+ }else{
+  await (await import('./assert-provider-controlled-game-trial.mjs')).assertProviderControlledGameTrial(db,rival);
+ }
  await (await import('./assert-project-native-delegation.mjs')).assertProjectNativeDelegation(db,rival);
  console.log('PROJECT_ORGANIZATION_COMBINED_SCHEMA_PASS: historical snapshots preserved; canonical native admission and settlement retained');
 }
