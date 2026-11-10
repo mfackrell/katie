@@ -64,14 +64,23 @@ function explicitFreshImageInspection(
   let fence:{kind:string;length:number}|null=null;
   let quotedParagraph=false;
   for(const line of question.split('\n')){
-    const marker=line.match(/^\s{0,3}(\x60{3,}|~{3,})(?:[^\r\n]*)$/);
+    // Quotes and fences can be nested in list containers. Unwrap only for
+    // detecting untrusted blocks; never promote list text into a directive.
+    let blockLine=line;
+    while(true){
+      const listPrefix=/^[ \t]*(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/.exec(blockLine);
+      if(!listPrefix)break;
+      blockLine=blockLine.slice(listPrefix[0].length);
+    }
+    const marker=blockLine.match(/^\s{0,3}(\x60{3,}|~{3,})(?:[^\r\n]*)$/);
     if(fence){
-      if(marker&&marker[1][0]===fence.kind&&marker[1].length>=fence.length&&
-         /^\s{0,3}(?:\x60{3,}|~{3,})\s*$/.test(line))fence=null;
+      // Inside a code block, list-looking text is literal, not a container.
+      const closing=/^[ \t]{0,3}(\x60{3,}|~{3,})[ \t]*$/.exec(line);
+      if(closing&&closing[1][0]===fence.kind&&closing[1].length>=fence.length)fence=null;
       hideLine();continue;
     }
     if(marker){fence={kind:marker[1][0],length:marker[1].length};hideLine();continue;}
-    if(/^\s*>/.test(line)){quotedParagraph=true;hideLine();continue;}
+    if(/^\s*>/.test(blockLine)){quotedParagraph=true;hideLine();continue;}
     if(quotedParagraph && line.trim()){ // Polite wording is still quoted data.
       hideLine();continue;
     }
