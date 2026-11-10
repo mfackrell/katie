@@ -37,18 +37,22 @@ test('native provider-controlled execution forwards without ledger data and stop
   return {requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex'),inputTokens:10};
  }});
  const forward=providerExecutionForwarder({assertLive:async()=>{calls.push('live');},upstream,
-  observe:()=>{calls.push('observe');throw Error('telemetry unavailable');},stop:async error=>{calls.push(error.message);}});
+  begin:async request=>{calls.push('begin:'+request.operation);},resolve:async request=>{calls.push('resolve:'+request.operation);},
+  observe:()=>{calls.push('observe');throw Error('telemetry unavailable');},stop:async error=>{calls.push(error.message);throw Error('stop write failed');}});
  const provenance=createNativeReasoningProvenance(),request={model:PROVIDER_EXECUTION_MODEL,input:'implementation'};
  assert.equal((await forward(request,provenance)).actualTokens,null);
- await assert.rejects(()=>forward(request,provenance),/GATEWAY_PROVIDER_REFUSED/);
+ await assert.rejects(()=>forward(request,provenance),/stop write failed/);
  await assert.rejects(()=>forward(request,provenance),/GATEWAY_EXECUTION_STOPPED/);
- assert.deepEqual(calls,['live','count','live','generate','observe','live','count','live','generate','observe','GATEWAY_PROVIDER_REFUSED']);
+ assert.deepEqual(calls,[
+  'live','begin:input-count','count','resolve:input-count','live','begin:inference','generate','observe','resolve:inference',
+  'live','begin:input-count','count','resolve:input-count','live','begin:inference','generate','observe','GATEWAY_PROVIDER_REFUSED',
+ ]);
 });
 
 test('native provider-controlled execution rechecks authority after input count',async()=>{
  let live=0,generated=0,stops=0;
  const upstream=Object.assign(async ()=>{generated++;},{countInputTokens:async body=>({requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex'),inputTokens:10})});
- const forward=providerExecutionForwarder({assertLive:async()=>{if(++live===2)throw Error('GATEWAY_EXECUTION_STOPPED');},upstream,stop:async()=>{stops++;}});
+ const forward=providerExecutionForwarder({assertLive:async()=>{if(++live===2)throw Error('GATEWAY_EXECUTION_STOPPED');},upstream,begin:async()=>{},resolve:async()=>{},stop:async()=>{stops++;}});
  await assert.rejects(()=>forward({model:PROVIDER_EXECUTION_MODEL,input:'implementation'},createNativeReasoningProvenance()),/EXECUTION_STOPPED/);
  assert.equal(generated,0);assert.equal(stops,0);
 });

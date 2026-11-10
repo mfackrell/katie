@@ -126,7 +126,10 @@ test('trial Director can call the provider without any accounting service, and r
  let refuse=false,attempts=0;
  const load=modules({
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>{throw Error('Accounting and registry unavailable');}},
-  '@/lib/missions/store':{rpc:async(name)=>{calls.push(name);assert.match(name,/^project_provider_(mode|mission_live|mission_stop)$/);return true;}},
+  '@/lib/missions/store':{rpc:async(name,args)=>{calls.push(name);assert.match(name,/^project_provider_(mode|mission_live|mission_stop|request)$/);
+   if(name==='project_provider_mission_stop')throw Error('503 stop write failed');
+   if(name==='project_provider_request')assert.match(args.p_hash,/^[a-f0-9]{64}$/);
+   return true;}},
   '@/lib/providers':{getAvailableProviders:()=>[{name:'openai',listModels:async()=>['gpt-5.4']},{name:'anthropic',listModels:async()=>{throw Error('Unexpected account switch');}}]},
   '@/lib/orchestration/bounded-provider':{boundedProvider:()=>({post:async()=>{throw Error('Token accounting must not be reached');},responses:{create:async()=>{
    attempts++;
@@ -139,9 +142,9 @@ test('trial Director can call the provider without any accounting service, and r
   job:{id:randomUUID(),agent_id:agent,role:'work',payload:{},lease:randomUUID(),lease_until:new Date(now+360000).toISOString()}};
  const model=load('@/lib/missions/model').missionModel;
  assert.equal((await model(claim,'Return the decision','Verified scope')).text,'[{"action":"ready"}]');
- assert.deepEqual(calls,['project_provider_mode','project_provider_mission_live','project_provider_mission_live']);
+ assert.deepEqual(calls,['project_provider_mode','project_provider_mission_live',...Array(4).fill('project_provider_request')]);
  refuse=true;
- await assert.rejects(model(claim,'Return the decision','Verified scope'),/Provider refused/);
+ await assert.rejects(model(claim,'Return the decision','Verified scope'),error=>error.message==='Provider refused trial request'&&error.partial.providerOutcomeUnresolved===true);
  assert.equal(calls.at(-1),'project_provider_mission_stop');
  assert.equal(attempts,2);
 });

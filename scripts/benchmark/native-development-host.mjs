@@ -355,8 +355,13 @@ if(!providerExecution&&(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0))
 const providerAbort=providerExecution?new AbortController():null;
 const upstream=createResponsesProvider({apiKey:providerKey,usageOptional:providerExecution,signal:providerAbort?.signal});
 let gatewayFailure=null,capacityPhase=null,capacityReceipts=[];
+const recordProviderRequest=async ({id,operation,hash},receipt)=>{
+ const {data,error}=await db.rpc('project_provider_request',{p_job:providerRun.p_task,p_attempt:providerRun.p_run,p_scope:providerRun.p_scope,
+  p_request:id,p_operation:operation,p_hash:hash,...(receipt?{p_receipt:receipt}:{})});
+ if(error||data!==true)throw Error('GATEWAY_EXECUTION_STOPPED');
+};
 const providerExecutionForward=providerExecution?providerExecutionForwarder({
- assertLive:assertProviderLive,upstream,
+ assertLive:assertProviderLive,upstream,begin:recordProviderRequest,resolve:recordProviderRequest,
  observe:({providerRequestId,actualTokens})=>{
   const usage=diagnostics.providerUsage??={responses:0,observedTokens:0,unknownUsage:0,receipts:[]};
   usage.responses++;

@@ -39,6 +39,9 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
    throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING');
   if(terminal.service_tier!=='default')throw Error('GATEWAY_PROVIDER_TIER_UNCERTAIN');
   const refusal=terminal.incomplete_details?.reason==='content_filter'||Array.isArray(terminal.output)&&terminal.output.some(item=>Array.isArray(item?.content)&&item.content.some(part=>part?.type==='refusal'));
+  if(usageOptional&&(!terminal.id||terminal.error||
+     !(refusal||terminal.status==='completed'||terminal.status==='incomplete'&&terminal.incomplete_details?.reason==='max_output_tokens')))
+   throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING');
   return {providerRequestId:terminal.id,actualTokens:observedUsage?terminal.usage.total_tokens:null,
    usage:terminal.usage,body:raw,contentType:resp.headers.get('content-type')||'text/event-stream',...(usageOptional?{refusal}:{})};
  };

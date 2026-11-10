@@ -19,7 +19,9 @@ The trial uses Katie's existing configured OpenAI connection for bounded
 mission requests and the existing isolated GitHub native host for coding and
 independent review. Technical output, context, call counts, deadlines, retry
 and execution scope checks still apply. The durable runner claim rejects
-replay. Provider refusal or uncertain transport ends further trial execution.
+replay. Each provider request is durably registered before transport. A refusal
+or uncertain outcome leaves that exact request pending across worker restarts
+and blocks further calls, even if the project stop could not be saved.
 Usage receipts are observations. The mode does not require a price record,
 spending proposal, ledger reservation, or financial reconciliation. It does
 not issue, increase, or switch credentials. Existing projects continue to use

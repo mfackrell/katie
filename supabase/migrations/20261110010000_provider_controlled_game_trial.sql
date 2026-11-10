@@ -127,8 +127,35 @@ begin
  return control_work_project(p.id,p.actor_id,p.chat_id,'approve',p_hash=>p_hash);
 end $$;
 
+-- A committed pending row survives stop-write failures, worker loss and lease expiry.
+create table public.project_provider_requests (
+ id uuid primary key,
+ project_id uuid not null references public.project_provider_execution(project_id),
+ mission_id uuid not null references public.agent_missions(id),
+ assignment_id uuid not null references public.mission_assignments(id),
+ worker_id uuid not null references public.managed_agents(id),
+ execution_attempt text not null,
+ operation text not null check(operation in ('model-list','input-count','inference')),
+ request_hash text not null check(request_hash ~ '^[0-9a-f]{64}$'),
+ started_at timestamptz not null default clock_timestamp(),
+ provider_receipt text,
+ resolved_at timestamptz,
+ check((resolved_at is null)=(provider_receipt is null))
+);
+create unique index project_provider_one_pending_request
+ on public.project_provider_requests(project_id) where resolved_at is null;
+create unique index project_provider_unique_inference
+ on public.project_provider_requests(assignment_id,execution_attempt,request_hash) where operation='inference';
+alter table public.project_provider_requests enable row level security;
+revoke all on public.project_provider_requests from public,anon,authenticated,service_role;
+
+create function public.project_provider_request_pending(p_project uuid) returns boolean
+language sql stable security definer set search_path=public as $$
+ select exists(select 1 from project_provider_requests where project_id=p_project and resolved_at is null)
+$$;
+
 -- Revalidate operational authority at the provider boundary without reserving spend.
-create function public.project_provider_mission_live(p_job uuid,p_lease uuid,p_take_call boolean default false) returns boolean
+create function public.project_provider_mission_live(p_job uuid,p_lease uuid) returns boolean
 language plpgsql security definer set search_path=public as $$
 declare j mission_assignments; m agent_missions; p work_projects;
 begin
@@ -139,13 +166,12 @@ begin
  if not project_provider_mode(p.id) or p.status<>'running' or p.active_mission_id is distinct from m.id
  or m.status<>'running' or j.status<>'running' or p.deadline<=now() or m.deadline<=now()
  or p_lease is null or j.lease is distinct from p_lease or j.lease_until<=now()
- or (p_take_call and m.calls>=m.max_calls) then return false;end if;
+ or project_provider_request_pending(p.id) then return false;end if;
  if m.project_kind='management' then
   perform project_org_principal(p_job,p_lease);
  else
   perform project_smart_admit(p_job);
  end if;
- if p_take_call then update agent_missions set calls=calls+1 where id=m.id;end if;
  return true;
 end $$;
 
@@ -197,6 +223,8 @@ language plpgsql security definer set search_path=public as $$
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  if not project_provider_dispatch_live(p_task,p_scope)
+ or exists(select 1 from project_provider_requests q join agent_missions m on m.project_id=q.project_id
+  join mission_assignments j on j.mission_id=m.id where j.id=p_task and q.resolved_at is null)
  or not exists(select 1 from agent_tasks where id=p_task and external->>'attempted'='true') then return false;end if;
  insert into project_provider_dispatches(task_id,run_id) values(p_task,p_run) on conflict do nothing;
  return found;
@@ -218,16 +246,56 @@ begin
  return true;
 end $$;
 
+-- Only the trusted mission runtime and signed native host use this boundary.
+-- A receipt resolves that exact request, never another attempt or project.
+create function public.project_provider_request(p_job uuid,p_attempt text,p_request uuid,p_operation text,p_hash text,
+ p_scope text default null,p_receipt text default null) returns boolean
+language plpgsql security definer set search_path=public as $$
+declare j mission_assignments; m agent_missions; checked_at timestamptz;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into j from mission_assignments where id=p_job;
+ select * into m from agent_missions where id=j.mission_id;
+ checked_at:=clock_timestamp();
+ if j.id is null or m.project_id is null or p_request is null or p_attempt is null
+ or p_operation is null or p_hash is null or p_hash !~ '^[0-9a-f]{64}$'
+ or m.status<>'running' or m.deadline is null or m.deadline<=checked_at
+ or not exists(select 1 from work_projects p join project_provider_execution a on a.project_id=p.id
+  where p.id=m.project_id and p.active_mission_id=m.id and p.status='running'
+  and p.deadline>checked_at and a.deadline>checked_at) then return false;end if;
+ if p_scope is null then
+  if p_operation not in ('model-list','inference') or j.lease::text is distinct from p_attempt
+  or j.status<>'running' or j.lease_until is null or j.lease_until<=checked_at then return false;end if;
+ else
+  if p_operation not in ('input-count','inference') or not project_provider_dispatch_live(j.id,p_scope)
+  or not exists(select 1 from project_provider_dispatches where task_id=j.id and run_id=p_attempt) then return false;end if;
+ end if;
+ if p_receipt is not null then
+  if length(p_receipt) not between 1 and 256 then return false;end if;
+  update project_provider_requests set provider_receipt=p_receipt,resolved_at=clock_timestamp()
+   where id=p_request and project_id=m.project_id and mission_id=m.id and assignment_id=j.id and worker_id=j.agent_id
+   and execution_attempt=p_attempt and operation=p_operation and request_hash=p_hash and resolved_at is null;
+  return found;
+ end if;
+ if p_scope is null and (not project_provider_mission_live(j.id,j.lease)
+  or (p_operation='inference' and m.calls>=m.max_calls)) then return false;end if;
+ insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash)
+  values(p_request,m.project_id,m.id,j.id,j.agent_id,p_attempt,p_operation,p_hash) on conflict do nothing;
+ if not found then return false;end if;
+ if p_scope is null and p_operation='inference' then update agent_missions set calls=calls+1 where id=m.id;end if;
+ return true;
+end $$;
+
 revoke all on function public.project_provider_mode(uuid),public.project_provider_enable(uuid,uuid,text),
  public.project_provider_launch(uuid,uuid,uuid),public.project_provider_owner_stop(uuid,uuid,uuid),
  public.project_provider_scope_guard(),public.project_provider_approve_scope(uuid,uuid,text),
- public.project_provider_mission_live(uuid,uuid,boolean),public.project_provider_mission_stop(uuid,uuid),
+ public.project_provider_mission_live(uuid,uuid),public.project_provider_mission_stop(uuid,uuid),
  public.project_provider_dispatch_live(uuid,text),public.project_provider_dispatch_start(uuid,text,text),
- public.project_provider_dispatch_stop(uuid,text,text) from public,anon,authenticated,service_role;
+ public.project_provider_dispatch_stop(uuid,text,text),public.project_provider_request_pending(uuid),public.project_provider_request(uuid,text,uuid,text,text,text,text) from public,anon,authenticated,service_role;
 grant execute on function public.project_provider_mode(uuid),public.project_provider_launch(uuid,uuid,uuid),
- public.project_provider_owner_stop(uuid,uuid,uuid),public.project_provider_approve_scope(uuid,uuid,text),public.project_provider_mission_live(uuid,uuid,boolean),
+ public.project_provider_owner_stop(uuid,uuid,uuid),public.project_provider_approve_scope(uuid,uuid,text),public.project_provider_mission_live(uuid,uuid),
  public.project_provider_mission_stop(uuid,uuid),public.project_provider_dispatch_live(uuid,text),
- public.project_provider_dispatch_start(uuid,text,text),public.project_provider_dispatch_stop(uuid,text,text) to service_role;
+ public.project_provider_dispatch_start(uuid,text,text),public.project_provider_dispatch_stop(uuid,text,text),public.project_provider_request_pending(uuid),public.project_provider_request(uuid,text,uuid,text,text,text,text) to service_role;
 
 -- Financial fields are absent for provider-controlled packages. Existing rows retain
 -- their values and all legacy commands retain their original checks.
@@ -274,7 +342,8 @@ begin
   ('public.finish_work_project_lifecycle(uuid,uuid,text,jsonb)',$old$  update work_projects set spec=p_data->'spec',repository_full_name=$old$,$new$  if project_provider_mode(p.id) then scope_data:=scope_data-'token_allowance';end if;
   update work_projects set spec=p_data->'spec',repository_full_name=$new$),
   ('public.claim_project_dispatch(uuid,uuid,text)',$old$if p_lease is null or j.lease is null or j.lease_until is null or m.deadline is null or p.deadline is null or m.calls>=m.max_calls$old$,$new$if project_provider_mode(p.id) then
- if p_lease is null or j.lease is distinct from p_lease or j.lease_until is null or j.lease_until<=now() or not project_provider_dispatch_live(p_id,p_hash) then return false;end if;
+ if p_lease is null or j.lease is distinct from p_lease or j.lease_until is null or j.lease_until<=now() or not project_provider_dispatch_live(p_id,p_hash)
+ or project_provider_request_pending(p.id) then return false;end if;
  elsif p_lease is null or j.lease is null or j.lease_until is null or m.deadline is null or p.deadline is null or m.calls>=m.max_calls$new$),
   ('public.recover_project_development_dispatch(uuid)',$old$ IF NOT FOUND OR p.phase<>'development'$old$,$new$ IF NOT FOUND OR project_provider_mode(p.id) OR p.phase<>'development'$new$),
   ('public.project_org_authorize(uuid,uuid,text,numeric,numeric,boolean)',$old$if exists(select 1 from project_organization_authority where project_id=p.id) then$old$,$new$if project_provider_mode(p.id) then raise exception 'Trial uses provider account controls';end if;

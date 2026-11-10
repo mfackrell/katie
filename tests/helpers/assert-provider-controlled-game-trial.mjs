@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import pg from 'pg';
 
 export async function assertProviderControlledGameTrial(db,rival){
  await db.query('reset role');
@@ -50,8 +51,20 @@ export async function assertProviderControlledGameTrial(db,rival){
  await db.query('alter table model_registry rename to trial_unavailable_model_registry');
  await db.query('set role service_role');
  const root=await session();
- assert.equal((await db.query('select project_provider_mission_live($1,$2,true) ok',[root.job,root.lease])).rows[0].ok,true);
- assert.equal((await db.query('select project_provider_mission_live($1,$2,true) ok',[root.job,randomUUID()])).rows[0].ok,false);
+ const requestSql='select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok';
+ const attempt=(job,execution,id,operation='inference',hash='d'.repeat(64),scope=null,receipt=null)=>
+  [job,execution,id,operation,hash,scope,receipt];
+ const request=async(c,args)=>(await c.query(requestSql,args)).rows[0].ok;
+ const firstRequests=Array.from({length:2},()=>attempt(root.job,root.lease,randomUUID()));
+ const race=await Promise.all([db,rival].map((c,i)=>request(c,firstRequests[i])));
+ assert.equal(race.filter(Boolean).length,1,'Only one concurrent provider request is admitted');
+ const winner=firstRequests[race.indexOf(true)];
+ assert.equal(await request(rival,[...winner.slice(0,6),'confirmed-response'].map((v,i)=>i===1?randomUUID():v)),false,'Wrong worker lease cannot clear the fence');
+ assert.equal(await request(rival,attempt(root.job,root.lease,randomUUID(),'model-list')),false,'Other operations cannot overlap');
+ assert.equal(await request(db,[...winner.slice(0,6),'response-max-output']),true,'Definitive bounded response clears the fence');
+ assert.equal(await request(db,attempt(root.job,root.lease,randomUUID())),false,'Resolved request cannot replay in the same execution attempt');
+ assert.equal(await request(db,attempt(root.job,randomUUID(),randomUUID())),false);
+ await assert.rejects(db.query('delete from project_provider_requests'),/permission denied/);
  assert.deepEqual(await financial(),original,'provider admission records no financial authorization or reservation');
  const decide=(s,commands)=>db.query('select project_org_decide($1,$2,$3)',[s.job,s.lease,JSON.stringify(commands)]);
  await assert.rejects(decide(root,[{action:'appoint',kind:'worker'}]),/invalid|director|appointment/i);
@@ -124,11 +137,29 @@ export async function assertProviderControlledGameTrial(db,rival){
  const run=String(runs.findIndex(r=>r.rows[0].ok)+1);
  assert.equal((await db.query('select project_provider_dispatch_start($1,$2,$3) ok',[job.id,scope,run])).rows[0].ok,false);
  assert.deepEqual(await financial(),original,'Coding dispatch did not reserve funds or issue a spending grant');
+ const count=attempt(job.id,run,randomUUID(),'input-count','e'.repeat(64),scope);
+ assert.equal(await request(db,count),true);
+ assert.equal(await request(rival,[...count.slice(0,6),'input-token-count']),true);
+ const native=attempt(job.id,run,randomUUID(),'inference','e'.repeat(64),scope);
+ assert.equal(await request(db,native),true,'Confirmed preflight permits the original native request');
  await db.query('begin');
+ assert.equal((await db.query('select project_provider_dispatch_stop($1,$2,$3) ok',[job.id,scope,run])).rows[0].ok,true);
+ await db.query('rollback');
+ assert.equal(await request(rival,attempt(job.id,run,randomUUID(),'inference','f'.repeat(64),scope)),false,'Rolled-back stop cannot reopen the native runner');
+ assert.equal(await request(rival,[...native.slice(0,6),'native-confirmed'].map((v,i)=>i===1?'999':v)),false,'Another run cannot resolve the original attempt');
+ assert.equal(await request(db,[...native.slice(0,6),'native-confirmed']),true);
+ const lost=attempt(job.id,run,randomUUID(),'inference','f'.repeat(64),scope);
+ const workerConnection=new pg.Client({host:rival.host,port:rival.port,user:rival.user,database:rival.database});
+ await workerConnection.connect();
  try{
-  assert.equal((await db.query('select project_provider_dispatch_stop($1,$2,$3) ok',[job.id,scope,run])).rows[0].ok,true);
-  assert.equal((await db.query('select project_provider_dispatch_live($1,$2) ok',[job.id,scope])).rows[0].ok,false);
- }finally{await db.query('rollback');}
+  await workerConnection.query('set role service_role');
+  assert.equal(await request(workerConnection,lost),true);
+ }finally{await workerConnection.end();}
+ // The admitting connection disappeared without a receipt. The same committed
+ // pending state covers loss before send, during transport, or before confirmation.
+ await db.query("update mission_assignments set lease_until=now()-interval '1 second' where id=$1",[job.id]);
+ assert.equal(await request(rival,lost),false,'Another connection cannot replay the abandoned request after lease expiry');
+ assert.equal(await request(rival,attempt(job.id,run,randomUUID(),'input-count','a'.repeat(64),scope)),false);
  const binding=(await db.query('select binding from project_runs where mission_id=$1',[mid])).rows[0].binding;
  const head='c'.repeat(40);
  await db.query("update mission_assignments set status='completed',result=$2 where id=$1",[job.id,{verification:{
@@ -139,8 +170,29 @@ export async function assertProviderControlledGameTrial(db,rival){
  await db.query("update agent_missions set status='completed' where id=$1",[mid]);
  const evaluator=await session();
  assert.equal(evaluator.node,functional.id);
+ assert.equal(await request(rival,attempt(evaluator.job,evaluator.lease,randomUUID())),false,'A newly scheduled manager cannot bypass an unresolved native call');
+ await db.query('reset role');
+ const pending=(await db.query('select id,project_id,mission_id,assignment_id,worker_id,execution_attempt,request_hash,resolved_at from project_provider_requests where resolved_at is null')).rows;
+ assert.deepEqual(pending,[{id:lost[2],project_id:project,mission_id:mid,assignment_id:job.id,worker_id:agent.id,execution_attempt:run,request_hash:lost[4],resolved_at:null}]);
+ await db.query('set role service_role');
  await assert.rejects(decide(evaluator,[{action:'evaluate_package',packageId:wp.id,assignmentId:job.id,accepted:true,
   checks:[{criterion:'Browser contract passes',passed:true,assignmentId:job.id,evaluation:'Forged pass'}]}]),/Verified original package acceptance required/);
+ await decide(evaluator,[{action:'evaluate_package',packageId:wp.id,assignmentId:job.id,accepted:false,
+  findings:['Independent browser criteria failed']},{action:'repair_package',packageId:wp.id}]);
+ await schedule();
+ await db.query("select finish_work_project($1,$2,'child',$3)",[project,await leaseProject(),{kind:'development',objective:'Repair the scoped game',evidence:{fixture:true}}]);
+ const replacementMission=(await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id;
+ assert.notEqual(replacementMission,mid);
+ const replacementLease=randomUUID();
+ const replacementJob=(await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where mission_id=$1 and role='development' returning id",[replacementMission,replacementLease])).rows[0].id;
+ const replacement={job:replacementJob,lease:replacementLease};
+ const replacementChat=randomUUID();
+ await db.query("insert into chats(id,actor_id,title) values($1,$2,'Trial replacement worker fixture')",[replacementChat,agent.actor_id]);
+ const replacementInput=(await db.query('select prepare_mission_development($1,$2) input',[replacement.job,replacement.lease])).rows[0].input;
+ await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,repository_full_name,request_id,status,external) values($1::uuid,$2,$3,$4,$5,$6,'development',$8,$8,$7,'mfackrell/katie',$1::text,'dispatching','{}')",[replacement.job,agent.id,agent.actor_id,replacementChat,agent.config,agent.version,p.repository_id,replacementInput]);
+ assert.equal((await db.query('select project_provider_dispatch_live($1,$2) ok',[replacement.job,scope])).rows[0].ok,true,'Replacement otherwise has valid scope and SMART authority');
+ assert.equal((await db.query('select claim_project_dispatch($1,$2,$3) ok',[replacement.job,replacement.lease,scope])).rows[0].ok,false,'Unresolved original request blocks a valid replacement before external dispatch');
+ assert.equal(await request(rival,attempt(replacement.job,randomUUID(),randomUUID())),false);
  assert.deepEqual(await financial(),original);
  assert.equal(p.organization_version,1);
  await db.query('reset role');

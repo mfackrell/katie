@@ -45,6 +45,30 @@ export function isCreditExhaustion(error:unknown):boolean{
 // Every stage and child mission routes against the active model registry. Only
 // an unchanged, draft-blind review-contract response may be reused; the worker
 // still validates its source provenance, and independently reviews the candidate.
+async function trialProviderRequest<T>(
+ claim:Claim,operation:'model-list'|'inference',requestHash:string,send:()=>Promise<T>,confirmedReceipt:(result:T)=>string|null,
+):Promise<T>{
+ const boundary={p_job:claim.job.id,p_lease:claim.job.lease};
+ const request={p_job:claim.job.id,p_attempt:claim.job.lease,p_request:randomUUID(),p_operation:operation,p_hash:requestHash};
+ try{
+  if(!await rpc<boolean>('project_provider_request',request))throw Error('Trial provider admission denied');
+ }catch{
+  throw new MissionModelFailure('Trial provider admission could not be confirmed',{providerOutcomeUnresolved:true});
+ }
+ try{
+  const result=await send();
+  const receipt=confirmedReceipt(result);
+  if(!receipt)throw Error('Trial provider refused execution or returned an uncertain response');
+  if(!await rpc<boolean>('project_provider_request',{...request,p_receipt:receipt}))
+   throw Error('Trial provider result could not be confirmed');
+  return result;
+ }catch(error){
+  // The committed fence is authoritative even if stopping the project fails.
+  await rpc('project_provider_mission_stop',boundary).catch(()=>{});
+  throw new MissionModelFailure(error instanceof Error?error.message:'Trial provider result is uncertain',{providerOutcomeUnresolved:true});
+ }
+}
+
 export async function missionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate'='none',reviewFormat?:ReviewFormat):Promise<ModelResult>{
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
@@ -64,10 +88,8 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   if(savedReview)return savedReview;
   const provider=getAvailableProviders().find(candidate=>candidate.name==='openai');
   if(!provider)throw Error('Trial OpenAI connection unavailable');
-  const models=await provider.listModels().catch(async error=>{
-   await rpc('project_provider_mission_stop',boundary);
-   throw error;
-  });
+  const models=await trialProviderRequest(claim,'model-list',createHash('sha256').update('openai:GET:/v1/models').digest('hex'),
+   ()=>provider.listModels(),result=>Array.isArray(result)&&result.every(id=>typeof id==='string')?'model-catalog':null);
   const modelId=['gpt-5.4','gpt-5.2','gpt-5'].find(id=>models.includes(id)&&boundedModelSupported(provider.name,id));
   if(!modelId)throw Error('No supported reasoning model is available through the trial connection');
   const choice={provider,modelId,reasoning:'Provider-account trial with a single bounded connection'};
@@ -221,10 +243,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):missionAttemptTimeout(executionDeadline,outputTokens);
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
-  if(providerControlled){
-   if(!await rpc<boolean>('project_provider_mission_live',{p_job:claim.job.id,p_lease:claim.job.lease,p_take_call:true}))
-    throw Error('Trial assignment stopped, expired, or reached its operational call limit');
-  }else{
+  if(!providerControlled){
    await assertSpecificationStageCapacity(claim,reserve);
    const admitted=fullBenchmark
     ?await fullBenchmarkAccounting(claim,ordinary).reserve(choice.provider.name+':'+selectedModel,reserve,false,callId)
@@ -234,17 +253,13 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const started=Date.now();
   try{
    if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
-   const response=await client.responses.create(request,{timeout:inferenceTimeout}).catch(async error=>{
-    if(providerControlled)await rpc('project_provider_mission_stop',{p_job:claim.job.id,p_lease:claim.job.lease});
-    throw error;
-   });
-   if(providerControlled){
-    console.info('[Trial model usage]',{jobId:claim.job.id,model:selectedModel,requestId:response.id,usage:response.usage});
-    if(response.status==='failed'||response.error||response.incomplete_details?.reason==='content_filter'||(response.output??[]).some(item=>item&&typeof item==='object'&&'content' in item&&Array.isArray(item.content)&&item.content.some(block=>block?.type==='refusal'))){
-     await rpc('project_provider_mission_stop',{p_job:claim.job.id,p_lease:claim.job.lease});
-     throw Error('Trial provider refused execution');
-    }
-   }
+   const send=()=>client.responses.create(request,{timeout:inferenceTimeout});
+   const response=providerControlled?await trialProviderRequest(claim,'inference',createHash('sha256').update(JSON.stringify(request)).digest('hex'),send,result=>{
+    const refused=(result.output??[]).some(item=>item&&typeof item==='object'&&'content' in item&&Array.isArray(item.content)&&item.content.some(block=>block?.type==='refusal'));
+    const definitive=result.status==='completed'||result.status==='incomplete'&&result.incomplete_details?.reason==='max_output_tokens';
+    return definitive&&!refused&&!result.error&&typeof result.id==='string'&&result.id.length>0?result.id:null;
+   }):await send();
+   if(providerControlled)console.info('[Trial model usage]',{jobId:claim.job.id,model:selectedModel,requestId:response.id,usage:response.usage});
    if((fullBenchmark||fenced)&&(response as {service_tier?:string}).service_tier!=='default')throw Error('Full provider service tier uncertain; reservation retained');
    let draftCheckpointFailed=false;
    if(gameSpecification&&specificationV2&&['compose','revise'].includes(claim.job.role)){
