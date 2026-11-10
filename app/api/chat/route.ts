@@ -1,6 +1,7 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
 import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
+import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
@@ -1873,6 +1874,27 @@ async function executeChat(request: NextRequest) {
     documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
     documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
     documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
+    // Legacy isolated route test harnesses evaluate function bodies without module
+    // imports; production bundles always supply the typed continuity module.
+    const documentBinding = typeof resolveDurableDocumentRequest === 'function'
+      ? resolveDurableDocumentRequest(message, documentProduction,
+          taskProgress.documentContract, documentSourceMessageId)
+      : { request: documentProduction, contract: undefined };
+    documentProduction = documentBinding.request;
+    if (documentBinding.contract) {
+      // Preserve the original firsthand user-message identifier. A missing
+      // provenance source may not be silently relabeled as the current user.
+      const inheritedSource = documentBinding.contract.provenance === 'inherited-user'
+        ? [...attachmentHistory].reverse().find(turn => turn.role === 'user' &&
+            documentRequest(turn.content)?.pages === documentBinding.request?.pages)?.id
+        : undefined;
+      const originalUserId = documentBinding.contract.sourceUserMessageId ||
+        inheritedSource ||
+        (documentBinding.contract.provenance === 'current-user' ? taskProgressUserMessageId : undefined);
+      if (originalUserId) taskProgress = { ...taskProgress,
+        documentContract: { ...documentBinding.contract, sourceUserMessageId: originalUserId },
+      };
+    }
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
@@ -3755,7 +3777,8 @@ ${chunkWorkflowSummary}`;
               const { deliverDocument } = await import('@/lib/documents/service');
               result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
                 params: createParams(result.model), actorId, chatId, requestId,
-                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs });
+                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs,
+                requireProfessionalAcceptance: /\\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\\b/i.test(message) });
               streamedText = result.text;
             }
 

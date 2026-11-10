@@ -7,6 +7,7 @@ import type { DocumentSpec } from './model';
 export const designActionSchema = z.enum([
   'section-separation', 'list-rhythm', 'line-rhythm',
   'heading-hierarchy', 'page-balance',
+  'compact-layout', 'natural-reflow', 'group-continuity',
 ]);
 export type DesignAction = z.infer<typeof designActionSchema>;
 
@@ -71,6 +72,15 @@ export function proposeDesignLayout(
       assessment.actions.length === 0 || !validDesign(layout) ||
       heights.length !== spec.blocks.length) return null;
 
+  // These intents change actual pagination strategy, not untrusted CSS.
+  // The producer must re-render and reject violations of page count, glyphs
+  // or visual regression before replacing its last accepted candidate.
+  if (assessment.actions.includes('natural-reflow') && layout.pages.length > 1)
+    return { ...layout, pages: [spec.blocks.map((_,i)=>i)] };
+  if (assessment.actions.includes('compact-layout') && !layout.compact)
+    return { ...layout, pages: [spec.blocks.map((_,i)=>i)], spacing: 2, compact: true };
+  if (assessment.actions.includes('group-continuity') && layout.pages.length > 1)
+    return { ...layout, pages: [spec.blocks.map((_,i)=>i)] };
   const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 12) * 96 / 72;
   // A global style change must fit the most crowded page; sum-of-pages slack
   // would incorrectly spend empty space on page 2 to overflow page 1.
