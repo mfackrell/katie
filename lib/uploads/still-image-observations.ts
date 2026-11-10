@@ -96,7 +96,9 @@ function explicitFreshImageInspection(
         if(run===count){close=j;break;}
         j+=run;
       }
-      clean+=' ';if(close<0)break;
+      // Removing inline code must not erase a restriction after a command.
+      targets.push({offset:clean.length,files:[]});clean+='\uFFFC';
+      if(close<0)break;
       i=close+count;continue;
     }
     const singleQuote=ch==="'"&&!(i>0&&/[a-z0-9]/i.test(source[i-1])&&/[a-z0-9]/i.test(source[i+1]??''));
@@ -108,10 +110,12 @@ function explicitFreshImageInspection(
         if(source[j]===closeChar){close=j;break;}
       }
       clean+=' ';
+      // Retain every quoted span, including unknown or incomplete scope.
+      // Otherwise `run Qwen "only on second.png"` becomes a bare command.
+      const operand=close<0?'':source.slice(i+1,close).trim();
+      const known=close<0?[]:available.filter(item=>item.fileName.toLowerCase()===operand.toLowerCase());
+      targets.push({offset:clean.length,files:known});clean+='\uFFFC';
       if(close<0)break;
-      const operand=source.slice(i+1,close).trim();
-      const known=available.filter(item=>item.fileName.toLowerCase()===operand.toLowerCase());
-      if(known.length){targets.push({offset:clean.length,files:known});clean+='\uFFFC';}
       i=close+1;continue;
     }
     clean+=ch;i++;
@@ -127,6 +131,9 @@ function explicitFreshImageInspection(
   }
   clauses.push({offset,text:clean.slice(offset)});
   return clauses.some(({offset:clauseOffset,text:part})=>{
+    // Unresolved quoted/code scope blocks this clause, not unrelated clauses.
+    if(targets.some(target=>target.offset>=clauseOffset&&
+      target.offset<clauseOffset+part.length&&!target.files.length))return false;
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
     const command=/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.exec(directive);
@@ -152,33 +159,56 @@ function explicitFreshImageInspection(
     const operands=targets.filter(target=>target.offset>=positiveStart&&target.offset<positiveStart+positive.length);
     // A quoted name shared by distinct attachments does not identify one image.
     if(operands.some(target=>new Set(target.files.map(file=>file.fileId)).size!==1))return false;
-    const quotedIds=new Set(operands.flatMap(target=>target.files.map(file=>file.fileId)));
-    const matchName=(candidate:FileReference):boolean=>{
-      const name=candidate.fileName.toLowerCase(),value=positive.toLowerCase();
-      if(!name)return false;
-      for(let pos=value.indexOf(name);pos>=0;pos=value.indexOf(name,pos+1)){
-        // Generated placeholders are not raw filename characters, even if a
-        // selected filename literally contains the same Unicode character.
-        if(targets.some(target=>target.offset>=positiveStart+pos&&target.offset<positiveStart+pos+name.length))continue;
-        const before=value[pos-1],after=value[pos+name.length];
-        if((!before||!/[a-z0-9_.-]/i.test(before))&&
-           (!after||!/[a-z0-9_.-]/i.test(after)))return true;
+    // Consume a complete operand list from left to right. Never search for a
+    // filename inside another name or silently ignore unresolved target words.
+    // Prefer the longest complete filename at each position; equal names with
+    // different identities remain ambiguous and cannot authorize either image.
+    const separator=/^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)/i;
+    const namedIds=(()=>{
+      const ids=new Set<string>();
+      let cursor=0;
+      while(cursor<positive.length){
+        cursor+=/^\s*/.exec(positive.slice(cursor))![0].length;
+        if(cursor===positive.length)return;
+        const quoted=operands.find(target=>target.offset===positiveStart+cursor);
+        let files:FileReference[],length:number;
+        if(quoted){files=quoted.files;length=1;}
+        else{
+          const matches=available.filter(file=>{
+            const name=file.fileName;
+            if(!name||positive.slice(cursor,cursor+name.length).toLowerCase()!==name.toLowerCase())return false;
+            if(targets.some(target=>target.offset>=positiveStart+cursor&&
+              target.offset<positiveStart+cursor+name.length))return false;
+            const tail=positive.slice(cursor+name.length);
+            return !tail.trim()||separator.test(tail);
+          });
+          if(!matches.length)return;
+          length=Math.max(...matches.map(file=>file.fileName.length));
+          files=matches.filter(file=>file.fileName.length===length);
+        }
+        const identities=new Set(files.map(file=>file.fileId));
+        if(identities.size!==1)return;
+        ids.add(files[0].fileId);
+        cursor+=length;
+        const remaining=positive.slice(cursor);
+        if(!remaining.trim())return ids;
+        const join=separator.exec(remaining);
+        if(!join)return;
+        cursor+=join[0].length;
       }
-      return false;
-    };
-    const named=available.filter(candidate=>quotedIds.has(candidate.fileId)||matchName(candidate));
-    if(named.length===1)return named[0].fileId===reference.fileId;
-    if(named.length>1)return onlyAt<0&&named.some(item=>item.fileId===reference.fileId);
-    const ordinal=positive.match(/\b(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)\b/i);
+    })();
+    if(namedIds)return (onlyAt<0||namedIds.size===1)&&namedIds.has(reference.fileId);
+    if(operands.length)return false;
+    const operand=positive.trim();
+    const ordinal=/^(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)$/i.exec(operand);
     if(ordinal){
       const index=['first','second','third','fourth','fifth'].indexOf(ordinal[1].toLowerCase());
       return available[index]?.fileId===reference.fileId;
     }
-    if(onlyAt>=0)return false;
-    const operand=positive.trim();
-    if(!operand)return false;
-    if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)\b/i.test(operand))return true;
-    return /^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)\b/i.test(operand);
+    // Unresolved exclusions cannot broaden a generic request to every image.
+    if(onlyAt>=0||contrasted>=0||!operand)return false;
+    if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)$/i.test(operand))return true;
+    return /^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)$/i.test(operand);
   });
 }
 

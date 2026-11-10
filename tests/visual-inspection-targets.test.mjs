@@ -203,3 +203,67 @@ test('quoted operator words are never parsed as command or scope words', async (
   await expectTargets(['only', 'second.png'], 'Please run Qwen on "second.png" rather than "only".', [1]);
   await expectTargets(['on', 'second.png'], 'Please run Qwen on "on".', [0]);
 });
+
+// PR #1002: scope must be fully resolved, never broadened by removal or substring matches.
+test('overlapping filenames select only the complete requested operand', async () => {
+  await expectTargets(['first.png', 'my first.png'], 'Please run Qwen on my first.png.', [1]);
+  await expectTargets(['first.png', 'my first.png'], 'Please run Qwen on first.png.', [0]);
+  await expectTargets(['first.png', 'my first.png'], 'Please run Qwen on my first.png.', [1], [1, 0]);
+});
+
+test('a quoted whole scope cannot become blanket permission', async () => {
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen "only on second.png".', []);
+});
+
+for (const wrap of [text => `"${text}"`, text => `'${text}'`, text => `“${text}”`,
+  text => '`' + text + '`', text => '``' + text + '``', text => '"' + text]) {
+  const scope = wrap('only on second.png');
+  test(`discarded or incomplete scope stays unresolved: ${scope}`, async () => {
+    await expectTargets(['first.png', 'second.png'], `Please run Qwen ${scope}.`, []);
+    await expectTargets(['first.png', 'second.png'], `Please run Qwen on first.png ${scope}.`, []);
+  });
+}
+
+test('unknown quoted filenames cannot be dropped from an otherwise valid list', async () => {
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen on first.png and "missing.png".', []);
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen "missing.png".', []);
+});
+
+test('an unresolved quoted scope in one clause does not erase a separate valid request', async () => {
+  await expectTargets(['first.png', 'second.png'],
+    'Please run Qwen "only on first.png"; please run Qwen on second.png.', [1]);
+});
+
+test('a filename embedded inside another name never selects the shorter name', async () => {
+  for (const prefix of ['my ', 'vacation 2026 ', 'the ', 'photo of ', 'α ']) {
+    const longer = prefix + 'first.png';
+    await expectTargets(['first.png', longer, 'second.png'], `Please run Qwen on ${longer}.`, [1]);
+    await expectTargets(['first.png', longer, 'second.png'], `Please run Qwen on "${longer}".`, [1]);
+    await expectTargets(['first.png', longer, 'second.png'], `Please run Qwen on ${longer} and second.png.`, [1, 2]);
+  }
+});
+
+test('explicit lists consume entire quoted and unquoted operands', async () => {
+  await expectTargets(['first.png', 'my first.png', 'second.png'],
+    'Please run Qwen on my first.png, second.png.', [1, 2]);
+  await expectTargets(['first.png', 'my first.png', 'second.png'],
+    'Please run Qwen on "my first.png" and second.png.', [1, 2]);
+  await expectTargets(['first.png', 'my first.png', 'second.png'],
+    'Please run Qwen on first.png and my first.png.', [0, 1]);
+});
+
+test('leftover target words cannot grant partial image authority', async () => {
+  for (const target of ['missing first.png', 'first.png missing.png', 'first.png plus missing.png',
+    'first.png and missing.png', 'first.png and', 'my first.png extra', 'all images missing.png']) {
+    await expectTargets(['first.png', 'my first.png'], `Please run Qwen on ${target}.`, []);
+  }
+});
+
+test('duplicate unquoted names are ambiguous, not permission for every match', async () => {
+  await expectTargets(['same.png', 'same.png'], 'Please run Qwen on same.png.', []);
+});
+
+test('a full filename containing a list conjunction has priority over shorter names', async () => {
+  await expectTargets(['first.png', 'second.png', 'first.png and second.png'],
+    'Please run Qwen on first.png and second.png.', [2]);
+});
