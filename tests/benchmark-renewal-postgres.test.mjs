@@ -9,6 +9,7 @@ import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
 import {gameFixture} from './fixtures/game-project.mjs';
 import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-renewal.mjs';
+import {installHistoricalProviderModeSchema} from './helpers/assert-project-organization-compatibility.mjs';
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
@@ -69,6 +70,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261024161000_resume_repository_review_context.sql','20261027201000_development_dispatch_recovery.sql',
    '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql','20261029185000_benchmark_zero_call_recovery_chain.sql','20261029213000_benchmark_development_owner_renewal.sql','20261029233500_benchmark_development_pregrant_recovery.sql','20261030001000_benchmark_development_paid_successor.sql','20261030004300_benchmark_owner_resource_amendment.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
+  if(process.env.KATIE_TEST_PROJECT_ORGANIZATION!=='1')await installHistoricalProviderModeSchema(db);
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
   const protocol={...config.protocol};
   await db.query('insert into actors(id,name) values($1,$2)',[actor,'Synthetic continuation fixture']);
