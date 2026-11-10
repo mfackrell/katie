@@ -16,10 +16,11 @@ async function ownedProject(actorId: string, chatId: string) {
     return projectForChat(actorId, chatId);
 }
 
-function approvalFor(p: Project | null) {
+function approvalFor(p: Project | null,providerControlled: boolean) {
     if (!p || p.status !== 'awaiting_approval' || !p.spec || !p.approval_hash || !p.repository_id) return null;
     return {
         hash: p.approval_hash,
+        providerControlled,
         name: p.spec.name,
         summary: p.spec.summary,
         requirements: p.spec.requirements,
@@ -49,13 +50,15 @@ export async function GET(request: NextRequest) {
         const p = await projectForChat(actorId, chatId);
         const messages = await getMessages(chatId);
         const executivePending = await hasPendingExecutiveDelivery(actorId, chatId, messages);
-        const resourceRecovery = p ? await recoveryResourceProposal(p) : null;
+        const providerControlled=!!(p?.organization_version===1&&await projectRpc<boolean>('project_provider_mode',{p_project:p.id}));
+        const resourceRecovery = p&&!providerControlled ? await recoveryResourceProposal(p) : null;
         return NextResponse.json({
             resourceRecovery,
             active: p?.status === 'running',
             status: p?.status ?? null,
-            approval: approvalFor(p),
-            resourceBudget: p ? {
+            approval: approvalFor(p,providerControlled),
+            trialState: providerControlled ? 'active' : !p&&!messages.length&&await verifiedProjectOwnerSession(request) ? 'available' : null,
+            resourceBudget: p&&!providerControlled ? {
                 estimatedTokens: p.estimated_tokens ?? null,
                 authorizedTokens: p.token_allowance,
                 authorizationSource: p.budget_authorization_source ?? 'legacy_default',
@@ -83,7 +86,12 @@ export async function POST(request: NextRequest) {
         if (!p) return NextResponse.json({ error: 'Project chat unavailable' }, { status: 404 });
         if (p.status !== 'awaiting_approval' || !p.spec || !p.repository_id || p.approval_hash !== input.approvalHash)
             return NextResponse.json({ error: 'This approval is no longer current. Refresh the project scope.' }, { status: 409 });
-        const updated = await projectRpc<Project>('control_work_project', {
+        const providerControlled=p.organization_version===1&&await projectRpc<boolean>('project_provider_mode',{p_project:p.id});
+        if(providerControlled&&!await verifiedProjectOwnerSession(request))
+            return NextResponse.json({error:'Sign in as Katie owner to approve this trial scope.'},{status:403});
+        const updated = providerControlled
+          ? await projectRpc<Project>('project_provider_approve_scope',{p_project:p.id,p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_hash:p.approval_hash})
+          : await projectRpc<Project>('control_work_project', {
             p_id: p.id, p_actor: input.actorId, p_chat: input.chatId,
             p_action: 'approve', p_hash: input.approvalHash,
         });

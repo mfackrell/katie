@@ -3,6 +3,7 @@ import { rpc, readMission } from '@/lib/missions/store';
 import type { ProjectPlan } from './contract';
 export type BrowserContract = ProjectPlan['finalContract'];
 export type Context = {
+    organizationVersion?:number;
     /** Authoritative owner-authored game outcome, not model-generated expansion. */
     originalUserOutcome?: string;
     approvedMilestone?: {title:string;instruction:string;requirements:unknown;allowedPaths:string[]};
@@ -13,12 +14,14 @@ export type Context = {
     baseSha: string;
     baselineSha: string;
     allowedPaths: string[];
+    cumulativePaths?: string[];
     contractHash: string;
     contract: BrowserContract;
     scopeHash: string;
 };
 export type Project = {
     profile?: 'software'|'game';
+    organization_version?:number;
     id: string;
     actor_id: string;
     chat_id: string;
@@ -80,8 +83,8 @@ export async function getDevelopmentProjectContext(jobId: string, forDispatch = 
     return null; const { data: p, error: pe } = await db.from('work_projects').select('*').eq('id', r.binding.projectId).maybeSingle<Project>(); if (pe || !p || forDispatch && (!p.approved_hash || p.approved_hash !== p.approval_hash || p.approved_hash !== r.binding.scopeHash || p.status !== 'running' || p.active_mission_id !== r.mission_id))
     throw Error('Approved project scope is unavailable or changed');
     if(forDispatch&&p.profile==='game'&&!await projectRpc<boolean>('game_project_specialist_valid',{p_id:p.id}))throw Error('Pinned game specialist changed before dispatch');
-    return {...r.binding,...(p.profile==='game'&&p.spec?.game&&p.approved_hash===p.approval_hash&&r.milestone_index>=0&&r.milestone_index<p.spec.milestones.length?{originalUserOutcome:`ORIGINAL USER OUTCOME (authoritative):\n${p.objective}\n${p.clarifications}`,approvedMilestone:{title:p.spec.milestones[r.milestone_index].title,instruction:p.spec.milestones[r.milestone_index].instruction,requirements:p.spec.requirements,allowedPaths:p.spec.allowedPaths}}:{}),...(p?.profile==='game'&&p.spec?.game?{game:p.spec.game,gameFinal:r.milestone_index===p.spec.milestones.length-1}:{})}; }
-export const acceptanceBinding = (c: Context) => ({ projectId: c.projectId, contractHash: c.contractHash, scenarioNames: c.contract.scenarios.map(s => s.name) });
+    return {...r.binding,...(p.organization_version===1?{organizationVersion:1}:{}),...(p.profile==='game'&&p.spec?.game&&p.approved_hash===p.approval_hash&&r.milestone_index>=0&&r.milestone_index<p.spec.milestones.length?{originalUserOutcome:`ORIGINAL USER OUTCOME (authoritative):\n${p.objective}\n${p.clarifications}`,approvedMilestone:{title:p.spec.milestones[r.milestone_index].title,instruction:p.spec.milestones[r.milestone_index].instruction,requirements:p.spec.requirements,allowedPaths:p.spec.allowedPaths}}:{}),...(p?.profile==='game'&&p.spec?.game?{game:p.spec.game,gameFinal:r.milestone_index===p.spec.milestones.length-1}:{})}; }
+export const acceptanceBinding = (c: Context) => ({ projectId: c.projectId, contractHash: c.contractHash, scenarioNames: c.contract.scenarios.map(s => s.name),...(c.cumulativePaths?{packageScope:{baseSha:c.baseSha,paths:c.allowedPaths}}:{}) });
 export async function milestoneEvidence(runs: Run[]) { const result = []; for (const r of runs.filter(r => r.outcome)) {
     const { mission } = await readMission(r.mission_id);
     result.push({ phase: r.kind, index: r.milestone_index, result: mission.result, missionStatus:mission.status,evidence: r.outcome });

@@ -1,3 +1,6 @@
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -29,7 +32,7 @@ class StandaloneAccountingError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 const context = {
-  createHash, process: { env: {} }, StandaloneAccountingError,
+  Markdown, remarkGfm, remarkMath, createHash, process: { env: {} }, StandaloneAccountingError,
   VeniceUnavailable: class extends Error {},
   isStandaloneAccountingError: error => error instanceof StandaloneAccountingError,
   describeImageWithRunpodQwen: unexpected, describeImageWithVenice: unexpected,

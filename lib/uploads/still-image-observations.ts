@@ -1,3 +1,6 @@
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import { createHash } from 'node:crypto';
 import type { FileReference, LlmProvider } from '@/lib/providers/types';
 import type { ConversationAttachment } from '@/lib/chat/attachment-continuity';
@@ -56,55 +59,76 @@ function explicitFreshImageInspection(
   question:string, reference?:FileReference, references?:FileReference[],
 ):boolean {
   const available=references??(reference?[reference]:[]);
-  // Strip fenced and indented code as data, honoring the opening fence's
-  // exact character and minimum closing length. Unclosed fences fail closed.
-  const outside:string[]=[];
-  const hiddenLines=new Set<number>();
-  const hideLine=()=>{hiddenLines.add(outside.length);outside.push('\uFFFC');};
-  let fence:{kind:string;length:number}|null=null;
-  let quotedParagraph=false;
-  for(const line of question.split('\n')){
-    // Quotes and fences can be nested in list containers. Unwrap only for
-    // detecting untrusted blocks; never promote list text into a directive.
-    let blockLine=line;
-    while(true){
-      const listPrefix=/^[ \t]*(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/.exec(blockLine);
-      if(!listPrefix)break;
-      blockLine=blockLine.slice(listPrefix[0].length);
-    }
-    const marker=blockLine.match(/^\s{0,3}(\x60{3,}|~{3,})(?:[^\r\n]*)$/);
-    if(fence){
-      // Inside a code block, list-looking text is literal, not a container.
-      const closing=/^[ \t]{0,3}(\x60{3,}|~{3,})[ \t]*$/.exec(line);
-      if(closing&&closing[1][0]===fence.kind&&closing[1].length>=fence.length)fence=null;
-      hideLine();continue;
-    }
-    if(marker){fence={kind:marker[1][0],length:marker[1].length};hideLine();continue;}
-    if(/^\s*>/.test(blockLine)){quotedParagraph=true;hideLine();continue;}
-    if(quotedParagraph && line.trim()){ // Polite wording is still quoted data.
-      hideLine();continue;
-    }
-    quotedParagraph=false;
-    if(/^(?: {4}|\t)/.test(line))hideLine();else outside.push(line);
-  }
-  // Inline code delimiters must close with the same number of backticks.
-  // Quoted directives are data; only quoted names of *selected* attachments
-  // survive as inert target operands. Unclosed spans fail closed.
-  const source=outside.join('\n');
-  const hiddenOffsets=new Set<number>();
-  let lineOffset=0;
-  outside.forEach((line,index)=>{
-    if(hiddenLines.has(index))hiddenOffsets.add(lineOffset);
-    lineOffset+=line.length+1;
-  });
+  // Use the same pinned CommonMark/GFM/math parser as the chat renderer.
+  // Do not reconstruct list/fence/blockquote state with regular expressions:
+  // container exits can turn an apparent closing fence into a new opening one.
+  // Only literal text in top-level paragraphs can carry an instruction. Every
+  // other syntax node remains unresolved data, retaining its source boundary.
+  type SyntaxNode={type:string;children?:SyntaxNode[];position?:{
+    start:{offset?:number};end:{offset?:number};
+  }};
+  const protectedRanges:Array<{start:number;end:number}>=[];
+  let parsed=false;
+  try{
+    Markdown({children:question,skipHtml:true,remarkPlugins:[remarkGfm,remarkMath,
+      ()=> (root:SyntaxNode)=>{
+        if(root.type!=='root'||!root.children)throw Error('Missing Markdown root');
+        const protect=(node:SyntaxNode)=>{
+          const start=node.position?.start.offset,end=node.position?.end.offset;
+          if(start===undefined||end===undefined||!Number.isInteger(start)||
+             !Number.isInteger(end)||start<0||end<start||end>question.length)
+            throw Error('Invalid Markdown source range');
+          if(end>start)protectedRanges.push({start,end});
+        };
+        let previousWasData=false;
+        for(const block of root.children){
+          if(block.type!=='paragraph'||!block.children){protect(block);previousWasData=true;continue;}
+          // CommonMark can keep malformed list/quote/code-looking lines in
+          // a paragraph. Treat that whole paragraph as unresolved data; never
+          // try to recover an executable request from its inner sentences.
+          const start=block.position?.start.offset,end=block.position?.end.offset;
+          // A container exit is not a new user instruction. Require a blank
+          // paragraph boundary before accepting prose immediately after data.
+          if(previousWasData&&!/\r?\n[ \t]*\r?\n[ \t]*$/.test(question.slice(0,start))){
+            protect(block);continue;
+          }
+          previousWasData=false;
+          const raw=question.slice(start,end);
+          if(/(?:^|\n)(?: {4}|\t|[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*(?:>|\x60{3,}|~{3,}))/m.test(raw)){
+            protect(block);continue;
+          }
+          const pending=[...block.children];
+          while(pending.length){
+            const child=pending.pop()!;
+            // Preserve raw emphasis punctuation in filenames such as
+            // __image_target_0__.png. It never becomes generated authority.
+            if(child.type==='text')continue;
+            if((child.type==='emphasis'||child.type==='strong')&&child.children)
+              pending.push(...child.children);
+            else protect(child);
+          }
+        }
+        // This call only inspects the parsed tree: do not render user content.
+        root.children=[];
+        parsed=true;
+      },
+    ]});
+  }catch{return false;}
+  if(!parsed)return false;
+  protectedRanges.sort((a,b)=>a.start-b.start);
+  const source=question;
+  let protectedIndex=0;
   let clean='';
   // Authority lives in these spans, not in a magic string that user text can forge.
   // The placeholder is inert; a literal copy has no corresponding span.
   const targets:Array<{offset:number;files:FileReference[]}>=[];
   for(let i=0;i<source.length;){
     const ch=source[i];
-    if(hiddenOffsets.has(i)){
-      targets.push({offset:clean.length,files:[]});clean+='\uFFFC';i++;continue;
+    while(protectedIndex<protectedRanges.length&&protectedRanges[protectedIndex].end<=i)protectedIndex++;
+    const protectedRange=protectedRanges[protectedIndex];
+    if(protectedRange&&protectedRange.start<=i){
+      targets.push({offset:clean.length,files:[]});clean+='\uFFFC';
+      i=protectedRange.end;continue;
     }
     if(ch==='\x60'){
       let count=1;
@@ -364,15 +388,16 @@ export async function observeStandaloneStillImages(references:FileReference[],op
     const image=reference.imageDataUrl;
     if(!image)throw new StandaloneAccountingError('unsupported_image','The selected image has no trusted pixels available for inspection.');
     const hash=imageObservationHash(image);
-    const freshInspection=explicitFreshImageInspection(question,reference,references);
     const previouslyObserved=[...(options.saved??[]),...references.filter(ref=>observations.has(ref.fileId)).map(ref=>({...observations.get(ref.fileId),id:ref.fileId,fileName:ref.fileName,mimeType:ref.mimeType}))];
+    const initial=options.initial?.get(reference.fileId);
+    const hasCorrection=approvedCorrectionForImage(initial,hash)||previouslyObserved.some(item=>approvedCorrectionForImage(item,hash));
+    const freshInspection=hasCorrection&&explicitFreshImageInspection(question,reference,references);
     const prior=reusableImageObservation(reference,previouslyObserved,question,setHash,references);
     // A stale intermediate observation cannot override an approved correction.
     if(prior && approvedCorrectionForImage(prior,hash) && !freshInspection){
       observations.set(reference.fileId,prior);if(prior.observationQuestion===question)reusedForQuestion++;
       options.onStatus?.('Using corrected visual memory');continue;
     }
-    const initial=options.initial?.get(reference.fileId);
     const initialManual=approvedCorrectionForImage(initial,hash);
     // Fresh provider output from the first stage may be reused in the second
     // stage, but a manual cache must not swallow a fresh-inspection request.

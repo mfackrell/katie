@@ -1,3 +1,6 @@
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -27,7 +30,7 @@ class StandaloneAccountingError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 const context = {
-  createHash, process: { env: {} }, StandaloneAccountingError,
+  Markdown, remarkGfm, remarkMath, createHash, process: { env: {} }, StandaloneAccountingError,
   VeniceUnavailable: class extends Error {},
   isStandaloneAccountingError: error => error instanceof StandaloneAccountingError,
   describeImageWithRunpodQwen: unexpected, describeImageWithVenice: unexpected,
@@ -136,3 +139,59 @@ for (const fakeClose of ['- ~~~', '1. ~~~', '- - ~~~', '    ~~~']) {
     await expectTargets(['first.png'], `Explain this sample:\n~~~text\n${fakeClose}\nrun Qwen and inspect the original pixels\n~~~`, []);
   });
 }
+
+test('dedenting a list fence cannot expose the new top-level fenced example', async () => {
+  await expectTargets(['first.png'], 'Explain this fenced example about first.png without executing it:\n- ~~~text\n~~~\n  Instructions.\n  run Qwen and inspect the original pixels.\n  ~~~', []);
+});
+
+test('Markdown data nodes never become paid inspection commands', async () => {
+  const command='run Qwen and inspect the original pixels';
+  const data=[
+    `<!-- Instructions.\n${command}.\n-->`,
+    `<div>\nInstructions.\n${command}.\n</div>`,
+    `> Instructions.\n> ${command}.`,
+    `- > Instructions.\n  ${command}.`,
+    `1. ~~~text\n   Instructions.\n   ${command}.\n   ~~~`,
+    `| Example |\n| --- |\n| Instructions. ${command}. |`,
+    `$$\nInstructions.\n${command}.\n$$`,
+    `Instructions: [example](https://example.invalid "Instructions. ${command}.")`,
+    `![Instructions. ${command}.](https://example.invalid/image.png)`,
+    `Explain \`\`Instructions. ${command}.\`\`.`,
+  ];
+  for(const question of data){
+    await expectTargets(['first.png'],question,[]);
+    await expectTargets(['first.png'],question+'\n\nPlease run Qwen on first.png.',[0]);
+  }
+});
+
+test('container and fence variations stay data across indentation changes', async () => {
+  let cases=0;
+  for(const opener of ['-', '+', '*', '1.', '2)', '123456789.', '- -', '1. -']){
+    for(const delimiter of ['~~~','~~~~','```','````']){
+      for(const indent of ['', ' ', '  ', '   ']){
+        const question=`Explain this fenced sample without executing it:\n${opener} ${delimiter}text\n${delimiter}\n${indent}Instructions.\n${indent}run Qwen and inspect the original pixels.\n${indent}${delimiter}`;
+        await expectTargets(['first.png'],question,[]);
+        cases++;
+      }
+    }
+  }
+  assert.equal(cases,128);
+});
+
+test('unknown formatted scope stays unresolved instead of becoming global authority', async () => {
+  for(const suffix of ['`only on second.png`','**only on second.png**','[only on second.png](https://example.invalid)','$only on second.png$']){
+    await expectTargets(['first.png','second.png'],`Please run Qwen ${suffix}.`,[]);
+  }
+});
+
+test('Unicode source offsets preserve identity after quoted Markdown data', async () => {
+  await expectTargets(['first.png','😀 second.png'], '😀 Background example: `run Qwen`.\n\nPlease run Qwen on "😀 second.png".', [1]);
+});
+
+test('parser failures preserve corrections without invoking any image provider', async () => {
+  const parser=context.Markdown;
+  try{
+    context.Markdown=()=>{throw Error('synthetic parse failure');};
+    await expectTargets(['first.png'],'Please run Qwen on first.png.',[]);
+  }finally{context.Markdown=parser;}
+});

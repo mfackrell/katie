@@ -1,3 +1,5 @@
+import {eligibleExecutiveModel,type ExecutiveModel} from '@/lib/projects/organization';
+import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {rejectedBeforeInference,boundedModelSupported} from './request-rejection';
 import {getAvailableProviders} from '@/lib/providers';
 import type {LlmProvider} from '@/lib/providers/types';
@@ -13,8 +15,11 @@ export class ProviderAvailabilityError extends Error {
 export type OrchestrationChoice={provider:LlmProvider;modelId:string;reasoning:string};
 /** Shared by EO management and ALL mission-backed child orchestrators. No saved model pins. */
 type Accounting={reserve:(model:string,tokens:number)=>Promise<string>;finish:(id:string,tokens:number|null,receipt?:{id?:string;usage?:unknown})=>Promise<void>};
-export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;synthesis?:boolean;accounting?:Accounting;fixedModel?:{provider:string;modelId:string}}):Promise<OrchestrationChoice[]>{
- const configured=getAvailableProviders();
+export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;management?:boolean;synthesis?:boolean;accounting?:Accounting;fixedModel?:{provider:string;modelId:string}}):Promise<OrchestrationChoice[]>{
+ const registry=input.management?await getSupabaseAdminClient().from('model_registry').select('provider_name,model_id,is_active,reasoning_tier,capability_status,pricing_status,routing_eligibility,capability_verified_at,pricing_verified_at'):null;
+ if(registry?.error)throw Error('Executive model verification unavailable');
+ const executiveRegistry=(registry?.data??[]) as ExecutiveModel[];
+ const configured=getAvailableProviders().filter(p=>!input.management||executiveRegistry.some(m=>m.provider_name===p.name&&eligibleExecutiveModel(m)));
  const health=await filterProvidersBySharedHealth(configured);
  const failures:ProviderAvailabilityFailure[]=(health.blocked??[]).filter(b=>!input.fixedModel||b.provider===input.fixedModel.provider).map(b=>({kind:'cooldown',provider:b.provider,reason:b.reason,retryAfter:b.blockedUntil}));
  if(input.fixedModel&&!configured.some(p=>p.name===input.fixedModel!.provider))failures.push({kind:'credentials',provider:input.fixedModel.provider});
@@ -24,7 +29,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
  const eligibleProviders=input.fixedModel?health.providers.filter(provider=>provider.name===input.fixedModel!.provider):health.providers;
  const discovered=await Promise.allSettled(eligibleProviders.map(async provider=>{
   const models=await provider.listModels();
-  return{provider,models:new Set(models.map(id=>id.replace(/^models\//,'')).filter(id=>boundedModelSupported(provider.name,id)&&(!input.fixedModel||id===input.fixedModel.modelId)))};
+  return{provider,models:new Set(models.map(id=>id.replace(/^models\//,'')).filter(id=>boundedModelSupported(provider.name,id)&&(!input.management||executiveRegistry.some(m=>m.provider_name===provider.name&&m.model_id===id&&eligibleExecutiveModel(m)))&&(!input.fixedModel||id===input.fixedModel.modelId)))};
  }));
  for(const [index,result] of discovered.entries()){
   if(result.status==='fulfilled'){
