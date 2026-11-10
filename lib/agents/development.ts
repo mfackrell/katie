@@ -251,16 +251,16 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
     if(project.organizationVersion===1&&task.repository_full_name!=='mfackrell/katie')return persist(task,'blocked','This repository has no qualified native adapter for delegated project authority.');
-    const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
     if(project.organizationVersion===1){
       const {data,error}=await getSupabaseAdminClient().from('project_provider_execution').select('deadline').eq('project_id',project.projectId).maybeSingle<{deadline:string}>();
       if(error)throw Error('Provider execution authority lookup failed closed');
       if(data){
-        if(!nativeDispatchEnabled||fullBinding||project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'||!(Date.parse(data.deadline)>Date.now()))
+        if(!nativeDispatchEnabled||project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'||!(Date.parse(data.deadline)>Date.now()))
           throw Error('Provider execution authority is expired or incompatible with this project');
         providerDeadline=data.deadline;
       }
     }
+    const fullBinding=providerDeadline?null:await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
     if(!providerDeadline&&!fullBinding&&task.repository_full_name==='mfackrell/katie'){
       if(project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'){
         // Preparation is a no-op unless the *original* project has both an
@@ -294,7 +294,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       if(dispatchError||!dispatch)throw Error('Full benchmark dispatch could not bind approved task and spending authorization');
     }
   }
-  if (project && nativeDispatchEnabled) {
+  if (project && nativeDispatchEnabled && !providerDeadline) {
     const {data:binding,error}=await getSupabaseAdminClient()
       .from('benchmark_development_dispatches')
       .select('task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status')
