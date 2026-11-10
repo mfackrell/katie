@@ -129,13 +129,26 @@ function explicitFreshImageInspection(
   return clauses.some(({offset:clauseOffset,text:part})=>{
     if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
-    if(!/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.test(directive))return false;
+    const command=/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.exec(directive);
+    if(!command)return false;
     if(!reference||!available.length)return true;
-    const onlyAt=part.search(/\bonly\b/i);
-    const scope=onlyAt>=0?part.slice(onlyAt+4):part;
+    // Resolve names only in an explicit operand, never in the command's
+    // provider name, verb or politeness prefix (all can be legal filenames).
+    const commandEnd=part.trimEnd().length-directive.length+command[0].length;
+    const remainder=part.slice(commandEnd);
+    const targetPrefix=/^\s*(?:only\s+)?(?:on|for|of)\b\s*/i.exec(remainder);
+    if(!targetPrefix){
+      // Ordinary unscoped requests remain valid, including the established
+      // "run Qwen and inspect the original pixels" form. Unresolved text
+      // is not authority to silently inspect every selected image.
+      return !remainder.trim()||/^\s*and\s+(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)(?:\s+(?:again|afresh|anew))?\s*$/i.test(remainder);
+    }
+    const operandStart=commandEnd+targetPrefix[0].length;
+    const onlyAt=part.slice(0,operandStart).search(/\bonly\b/i);
+    const scope=part.slice(operandStart);
     const contrasted=scope.search(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i);
     const positive=contrasted>=0?scope.slice(0,contrasted):scope;
-    const positiveStart=clauseOffset+(onlyAt>=0?onlyAt+4:0);
+    const positiveStart=clauseOffset+operandStart;
     const operands=targets.filter(target=>target.offset>=positiveStart&&target.offset<positiveStart+positive.length);
     // A quoted name shared by distinct attachments does not identify one image.
     if(operands.some(target=>new Set(target.files.map(file=>file.fileId)).size!==1))return false;
@@ -162,14 +175,10 @@ function explicitFreshImageInspection(
       return available[index]?.fileId===reference.fileId;
     }
     if(onlyAt>=0)return false;
-    const scopeMarker=directive.match(/\b(?:on|for|of)\b([\s\S]*)$/i);
-    if(scopeMarker){
-      const operand=scopeMarker[1].trim();
-      if(!operand)return false;
-      if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)\b/i.test(operand))return true;
-      if(!/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)\b/i.test(operand))return false;
-    }
-    return true;
+    const operand=positive.trim();
+    if(!operand)return false;
+    if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)\b/i.test(operand))return true;
+    return /^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)\b/i.test(operand);
   });
 }
 

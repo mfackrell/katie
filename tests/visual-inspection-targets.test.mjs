@@ -184,3 +184,22 @@ test('negative, quoted, historical and fenced instructions do not request inspec
 test('a generated placeholder cannot impersonate a literal placeholder filename', async () => {
   await expectTargets(['\uFFFC', 'second.png'], 'Please run Qwen on "second.png".', [1]);
 });
+
+test('provider or instruction words cannot act as raw filename target operands', async () => {
+  for (const name of ['Qwen', 'run', 'please', 'on', 'for', 'of', 'image']) {
+    await expectTargets([name, 'second.png'],
+      `Compare ${name} and second.png. Keep the saved correction for ${name}; please run Qwen on "second.png".`, [1]);
+    await expectTargets([name, 'second.png'], 'Please run Qwen on second.png.', [1]);
+  }
+});
+
+test('provider-word filenames remain selectable when they are actual operands', async () => {
+  await expectTargets(['Qwen', 'second.png'], 'Please run Qwen on Qwen rather than second.png.', [0]);
+  await expectTargets(['Qwen', 'second.png'], 'Please run Qwen on "Qwen".', [0]);
+  await expectTargets(['run', 'second.png'], 'Please run Qwen on run.', [0]);
+});
+
+test('quoted operator words are never parsed as command or scope words', async () => {
+  await expectTargets(['only', 'second.png'], 'Please run Qwen on "second.png" rather than "only".', [1]);
+  await expectTargets(['on', 'second.png'], 'Please run Qwen on "on".', [0]);
+});
