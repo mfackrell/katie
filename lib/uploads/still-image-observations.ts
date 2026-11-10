@@ -199,12 +199,14 @@ function explicitFreshImageInspection(
         target.offset<absoluteStart+text.length);
       if(operands.some(target=>new Set(target.files.map(file=>file.fileId)).size!==1))return;
       const separator=/^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)/i;
-      const namedIds=(()=>{
+      // undefined means no filename matched; null means an invalid or
+      // ambiguous filename expression and MUST NOT fall through to aliases.
+      const namedIds=(():Set<string>|null|undefined=>{
         const ids=new Set<string>();
         let cursor=0;
         while(cursor<text.length){
           cursor+=/^\s*/.exec(text.slice(cursor))![0].length;
-          if(cursor===text.length)return;
+          if(cursor===text.length)return ids.size?null:undefined;
           const quoted=operands.find(target=>target.offset===absoluteStart+cursor);
           let files:FileReference[],length:number;
           if(quoted){files=quoted.files;length=1;}
@@ -217,21 +219,23 @@ function explicitFreshImageInspection(
               const tail=text.slice(cursor+name.length);
               return !tail.trim()||separator.test(tail);
             });
-            if(!matches.length)return;
+            if(!matches.length)return ids.size?null:undefined;
             length=Math.max(...matches.map(file=>file.fileName.length));
             files=matches.filter(file=>file.fileName.length===length);
           }
           const identities=new Set(files.map(file=>file.fileId));
-          if(identities.size!==1)return;
+          if(identities.size!==1)return null;
           ids.add(files[0].fileId);
           cursor+=length;
           const remaining=text.slice(cursor);
           if(!remaining.trim())return ids;
           const join=separator.exec(remaining);
-          if(!join)return;
+          if(!join)return null;
           cursor+=join[0].length;
         }
+        return ids.size?null:undefined;
       })();
+      if(namedIds===null)return;
       if(namedIds)return namedIds;
       if(operands.length)return;
       const operand=text.trim();

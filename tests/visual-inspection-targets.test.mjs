@@ -344,3 +344,34 @@ test('negation words inside a complete selected filename remain data, not comman
     await expectTargets(['first.png', name], `Do not run Qwen on ${name}.`, []);
   }
 });
+
+test('ambiguous filename exclusion never falls through to ordinal syntax', async () => {
+  await expectTargets(['the second image', 'the second image', 'third.png'],
+    'Please run Qwen on all images except the second image.', []);
+});
+
+test('ambiguous ordinal and aggregate filenames fail closed on either side of exclusion', async () => {
+  for (const name of ['the first image', 'the second image', 'all images', 'both photos', 'these files', 'each picture']) {
+    const files = [name, name, 'third.png'];
+    await expectTargets(files, `Please run Qwen on ${name}.`, []);
+    await expectTargets(files, `Please run Qwen on all images except ${name}.`, []);
+    await expectTargets(files, `Please run Qwen on third.png excluding ${name}.`, []);
+    await expectTargets(files, `Please run Qwen on "${name}".`, []);
+  }
+});
+
+test('a unique full filename takes precedence over ordinal and aggregate words', async () => {
+  await expectTargets(['the second image', 'second.png', 'third.png'],
+    'Please run Qwen on the second image.', [0]);
+  await expectTargets(['all images', 'second.png', 'third.png'],
+    'Please run Qwen on all images.', [0]);
+  await expectTargets(['all images', 'second.png', 'third.png'],
+    'Please run Qwen on all images except third.png.', [0]);
+});
+
+test('unresolved suffixes never fall through after consuming a filename', async () => {
+  for (const text of ['first.png and', 'first.png,', 'first.png and all images', 'first.png and the second image']) {
+    await expectTargets(['first.png', 'second.png', 'third.png'], `Please run Qwen on ${text}.`, []);
+    await expectTargets(['first.png', 'second.png', 'third.png'], `Please run Qwen on all images except ${text}.`, []);
+  }
+});
