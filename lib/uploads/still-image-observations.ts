@@ -145,13 +145,30 @@ function explicitFreshImageInspection(
       if(close<0)break;
       i=close+count;continue;
     }
-    const singleQuote=ch==="'"&&!(i>0&&/[a-z0-9]/i.test(source[i-1])&&/[a-z0-9]/i.test(source[i+1]??''));
-    if(ch==='"'||ch==='“'||singleQuote){
-      const closeChar=ch==='“'?'”':ch;
+    const isWordApostrophe=(at:number)=>["'",'’'].includes(source[at])&&at>0&&
+      /[\p{L}\p{N}]/u.test(source[at-1])&&/[\p{L}\p{N}]/u.test(source[at+1]??'');
+    if(/\p{Quotation_Mark}/u.test(ch)&&!isWordApostrophe(i)){
+      // Quotation_Mark covers typographic/CJK forms as well as ASCII. Unknown
+      // or unmatched delimiters fail closed instead of exposing their contents.
+      const quotePairs:Record<string,string>={
+        '"':'"',"'":"'",'“':'”','‘':'’','«':'»','‹':'›','„':'“','‚':'‘',
+        '「':'」','『':'』','〝':'〞','﹁':'﹂','﹃':'﹄','＂':'＂','＇':'＇',
+      };
+      const closeChar=quotePairs[ch];
+      if(!closeChar)return false;
+      const closers=[closeChar];
       let close=-1;
       for(let j=i+1;j<source.length;j++){
         if(source[j]==='\\'){j++;continue;}
-        if(source[j]===closeChar){close=j;break;}
+        if(isWordApostrophe(j))continue;
+        if(source[j]===closers[closers.length-1]){
+          closers.pop();
+          if(!closers.length){close=j;break;}
+        }else if(/\p{Quotation_Mark}/u.test(source[j])){
+          const nested=quotePairs[source[j]];
+          if(!nested)return false;
+          closers.push(nested);
+        }
       }
       clean+=' ';
       // Retain every quoted span, including unknown or incomplete scope.
