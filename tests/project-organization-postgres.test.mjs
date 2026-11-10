@@ -27,6 +27,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  const start=ownerSql.indexOf('create or replace function public.standalone_verify_scope');
  await db.query(ownerSql.slice(start,ownerSql.indexOf('$$;',start)+3));
  await db.query(readFileSync(migration,'utf8'));
+ await db.query(readFileSync('supabase/migrations/20261109192013_functional_director_reporting.sql','utf8'));
  const actor=randomUUID(),chat=randomUUID(),project=randomUUID(),owner=randomUUID();
  await db.query('insert into actors(id,name) values($1,$2)',[actor,'Synthetic owner']);await db.query('insert into chats(id,actor_id,title) values($1,$2,$3)',[chat,actor,'Synthetic hierarchy']);
  await db.query('set role service_role');
@@ -50,6 +51,13 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  const deadline=new Date(Date.now()+3600000).toISOString();
  const cmd=(name,tokens=100000,kind='manager',extra={})=>({action:'appoint',kind,name,area:name.toLowerCase(),objective:'Complete '+name,acceptance:['Verified '+name+' deliverable'],tokens,deadline,tools:['manage','analysis','development'],paths:[],...extra});
  let work=await management();
+ const directWorker=cmd('Root worker',1000,'worker',{tools:['analysis']});
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[directWorker]]),/only Functional Directors/);
+ const existingWorker=(await db.query('select team from work_projects where id=$1',[project])).rows[0].team[0];
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{...directWorker,reuseAgentId:existingWorker}]]),/only Functional Directors/);
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'assign',nodeId:randomUUID(),capability:'analysis',instruction:'Executive worker assignment'}]]),/cannot assign execution/);
+ assert.equal((await nodes()).length,1,'Denied root appointments leave no organization residue');
+
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,randomUUID(),[{action:'ready'}]]),/Live management/);
  await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'plan',purpose:'Deliver the owner inventory outcome',direction:'Delegate design, implementation and independent QA',outcomes:[{criterion:'All inventory scenarios pass',verification:'Independent browser tests'}],milestones:[{objective:'Integrated inventory accepted'}],organizations:['research','development','quality_assurance']},cmd('Research'),cmd('Development'),cmd('QA',100000,'manager',{area:'quality_assurance',tools:['manage','analysis']}),{action:'ready'}]]);
  assert.equal((await nodes()).filter(n=>n.parent_id===rootNode.id).length,3);
@@ -73,6 +81,13 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  const resetLease=async()=>{await db.query('reset role');await db.query("update work_projects set lease_until=now()-interval '1 second' where id=$1",[project]);await db.query('set role service_role');};
  const coder=(await nodes()).find(n=>n.kind==='worker');
  const submanager=(await nodes()).find(n=>n.id===coder.parent_id);
+ await db.query('reset role');
+ await assert.rejects(db.query('update project_organization_nodes set parent_id=$2 where id=$1',[coder.id,rootNode.id]),/workers must report to a Functional Director/);
+ await assert.rejects(db.query("update project_organization_nodes set kind='manager' where id=$1",[coder.id]),/immutable/);
+ await assert.rejects(db.query("insert into project_organization_nodes(project_id,parent_id,agent_id,kind,name,objective,acceptance,token_limit,deadline) select project_id,$2,agent_id,'worker','Bypass','Bypass','[\"Denied\"]',1,deadline from project_organization_nodes where id=$1",[coder.id,rootNode.id]),/workers must report to a Functional Director/);
+ await assert.rejects(db.query('update project_organization_nodes set parent_id=$2 where id=$1',[submanager.id,coder.id]),/Circular|Functional Director/);
+ await db.query('set role service_role');
+
  await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=true where id=$1',[submanager.id]);await db.query('set role service_role');
  await resetLease();work=await management();assert.equal(work.job.agent_id,submanager.agent_id);
  await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'assign',nodeId:coder.id,capability:'analysis',instruction:'Design the inventory data contract with measurable acceptance.'},{action:'exception',reason:'routine',detail:'Resolve a local design inconsistency.'}]]);
@@ -95,6 +110,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'assign',nodeId:coder.id,capability:'analysis',instruction:'Repair the saved local design inconsistency using existing evidence.'}]]);
  await resetLease();work=await management();assert.equal(work.job.agent_id,coder.agent_id);
  const executed=work;
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[cmd('Worker-created manager')]]),/Live management assignment/);
  await assert.rejects(db.query('select project_org_finish_work($1,$2,$3)',[work.job.id,randomUUID(),{text:'Forged work'}]),/Live subordinate/);
  await db.query('select project_org_finish_work($1,$2,$3)',[work.job.id,work.job.lease,{text:'Verified design artifact: item identifier is unique; quantity is a nonnegative integer.'}]);
  await resetLease();let p0=(await db.query('select claim_work_project() p')).rows[0].p;await db.query('select project_org_schedule($1,$2)',[project,p0.lease]);
@@ -107,6 +123,9 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await resetLease();work=await management();assert.equal(work.job.agent_id,(await nodes()).find(n=>n.id===submanager.parent_id).agent_id);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'resolve',exceptionId:failure.id,assignmentId:executed.job.id,evidence:'Completed local repair'},{action:'resolve',exceptionId:local.id,assignmentId:executed.job.id,evidence:'Bypass reporting'}]]),/another manager/);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'close'}]]),/Only the Project Director/);
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'assign',nodeId:coder.id,capability:'analysis',instruction:'Bypass immediate manager'}]]),/outside delegated authority/);
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'submit_component',nodeId:submanager.id,assignmentId:executed.job.id,checks:[]}]]),/responsible Functional Director/);
+
  const activity=(await db.query("select j.id from mission_assignments j join project_organization_assignments b on b.assignment_id=j.id join agent_missions m on m.id=j.mission_id where b.node_id=$1 and m.project_kind='management' and j.status='completed' limit 1",[submanager.id])).rows[0];
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'certify',nodeId:submanager.id,assignmentId:activity.id,checks:[]}]]),/Authenticated component evidence/);
  // Real admission reserves use verified registry prices and inherited token limits.
@@ -183,7 +202,7 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
   await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=(id=$2) where project_id=$1',[project,manager.id]);
   await db.query('set role service_role');await resetLease();const session=await management();assert.equal(session.job.agent_id,manager.agent_id);
   const children=(await nodes()).filter(n=>n.parent_id===manager.id);
-  await db.query('select project_org_decide($1,$2,$3)',[session.job.id,session.job.lease,children.map(child=>({action:'certify',nodeId:child.id,assignmentId:artifacts.get(child.id),checks:child.acceptance.map(criterion=>({criterion,passed:true,assignmentId:artifacts.get(child.id),evaluation:'Verified the component artifact against the delegated criterion'}))}))]);
+  await db.query('select project_org_decide($1,$2,$3)',[session.job.id,session.job.lease,[...children.map(child=>({action:'certify',nodeId:child.id,assignmentId:artifacts.get(child.id),checks:child.acceptance.map(criterion=>({criterion,passed:true,assignmentId:artifacts.get(child.id),evaluation:'Verified the component artifact against the delegated criterion'}))})),{action:'submit_component',assignmentId:manager.id===qa.id?reviewId:artifacts.get(children[0].id),checks:manager.acceptance.map(criterion=>({criterion,passed:true,assignmentId:manager.id===qa.id?reviewId:artifacts.get(children[0].id),evaluation:'Certify the entire delegated organization objective against its original contract'}))}]]);
   artifacts.set(manager.id,manager.id===qa.id?reviewId:artifacts.get(children[0].id));
  }
  await db.query('reset role');
@@ -192,9 +211,35 @@ test('durable organization: real PostgreSQL hierarchy, authority, concurrency an
  await db.query("update work_projects set active_mission_id=$2,phase='assessment',preview=$3 where id=$1",[project,assessment,preview]);
  await db.query('set role service_role');await resetLease();work=await management();assert.equal(work.job.agent_id,rootNode.agent_id);
  const rootCerts=(await nodes()).filter(n=>n.parent_id===rootNode.id).map(n=>({action:'certify',nodeId:n.id,assignmentId:artifacts.get(n.id),checks:n.acceptance.map(criterion=>({criterion,passed:true,assignmentId:artifacts.get(n.id),evaluation:'Verified the organization outcome against its delegated criterion'}))}));
+ // The superior cannot replace a Functional Director's own attestation.
+ const submitted=(await nodes()).filter(n=>n.parent_id===rootNode.id);
+ assert.ok(submitted.every(n=>n.completion_submission&&n.status==='active'),'Own certification submits but does not accept a directorate');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'submit_component',assignmentId:reviewId,checks:[]}]]),/responsible Functional Director/);
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'assign',nodeId:coder.id,capability:'analysis',instruction:'Bypass directorate'}]]),/cannot assign execution/);
+ for(const patch of [null,{...submitted[0].completion_submission,leaderId:randomUUID()},{...submitted[0].completion_submission,scopeHash:'stale'},{...submitted[0].completion_submission,subtreeHash:'forged'}]){
+  await db.query('reset role');await db.query('begin');
+  await db.query('update project_organization_nodes set completion_submission=$2 where id=$1',[submitted[0].id,patch]);
+  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,rootCerts]),/responsible director component submission/);
+  await db.query('rollback');
+ }
+ await db.query('begin');
+ await db.query("update mission_assignments set result=jsonb_build_object('text','Changed source after director certification') where id=$1",[submitted[0].completion_submission.assignmentId]);
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,rootCerts]),/responsible director component submission/);await db.query('rollback');
+ await db.query('begin');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{...rootCerts[0],checks:[]}]]),/Every original delegated criterion/);await db.query('rollback');
+ await db.query('begin');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'reject',nodeId:submitted[0].id,findings:'Incomplete original contract'},...rootCerts]]),/responsible director component submission/);await db.query('rollback');
+ await db.query('begin');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[{action:'replace_leader',nodeId:submitted[0].id,reason:'Require new leadership to reaffirm completion'},...rootCerts]]),/responsible director component submission/);await db.query('rollback');
  await db.query('reset role');await db.query('begin');
+ // Accept valid director submissions first, then independently test the final QA
+ // gate in a new executive session after the original requirement check fails.
+ await db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,rootCerts]);
+ await db.query('update project_organization_nodes set decision_needed=true where id=$1',[rootNode.id]);
+ await resetLease();const qaClosureSession=await management();
+ await db.query('reset role');
  await db.query("update mission_assignments set result=jsonb_set(result,'{checks,0,passed}','false') where id=$1",[reviewId]);
- await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts,{action:'close'}]]),/Independent original-requirement/);await db.query('rollback');
+ await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[qaClosureSession.job.id,qaClosureSession.job.lease,[{action:'close'}]]),/Independent original-requirement/);await db.query('rollback');
  await db.query('begin');await db.query("update project_organization_nodes set evidence=jsonb_set(evidence,'{assignmentId}',to_jsonb($2::text)) where id=$1",[qa.id,executed.job.id]);
  await assert.rejects(db.query('select project_org_decide($1,$2,$3)',[work.job.id,work.job.lease,[...rootCerts.map(c=>c.nodeId===qa.id?{...c,assignmentId:artifacts.get(dev.id)}:c),{action:'close'}]]),/Authenticated component|Independent original-requirement/);await db.query('rollback');
  await db.query('begin');await db.query("update benchmark_budget_calls set state='reserved' where id=$1",[nativeCall]);

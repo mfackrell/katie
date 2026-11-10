@@ -41,7 +41,7 @@ jobs:
       - name: Validate private acceptance runner syntax without reading private data
         run: |
           node --check scripts/document-phase2-private-acceptance.mjs
-          node --test tests/document-page-continuity.test.mjs
+          node --test tests/document-page-continuity.test.mjs tests/document-independent-review.test.mjs
       - name: Compile offline qualification suites
         run: |
           node node_modules/typescript/bin/tsc -p tsconfig.tests.json

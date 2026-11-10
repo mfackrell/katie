@@ -69,6 +69,7 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
  const c={mission:{id:'mission',project_id:'project',project_kind:'specification',project_evidence:{projectProfile:'game'},objective:'Original game requirements',team:[{id:'agent',config:{research:true}}],deadline:new Date(Date.now()+600000).toISOString()},job:{id:'job',agent_id:'agent',role:'compose',instruction:'Write the complete specification',lease:'lease',lease_until:new Date(Date.now()+360000).toISOString(),payload:{}}};
  const load=modules({
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from:table=>{assert.ok(['benchmark_full_project_bindings','project_continuation_authorizations'].includes(table));const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:null,error:null})};return q;}})},
+  '@/lib/providers':{getAvailableProviders:()=>assert.fail('Legacy routing owns provider selection')},
   'openai':unusedOpenAI,'openai/helpers/zod':{zodTextFormat:()=>({})},
   '@/lib/projects/contract':{projectPlanSchema:{omit:()=>({})}},
   [resolve('scripts/project-game-rules.mjs')]:{GAME_RULE_CATEGORIES:['setup','action']},
@@ -76,6 +77,7 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
   '@/lib/orchestration/routing':{orchestrationChoices:async input=>{routes++;events.push({kind:'route',planning:input.planning});return choices;},orchestrationFailure:async()=> 'provider'},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    events.push({kind:name,...args});
+   if(name==='project_provider_mode')return false;
    if(name==='developer_bound_mission_authority')return null;
    if(name==='reserve_mission_call'){
     if(!authorized||used+args.p_tokens>remaining){denials++;return false;}

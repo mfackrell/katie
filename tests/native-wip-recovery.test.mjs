@@ -104,10 +104,16 @@ test('actual workflow completion accepts trusted deterministic repair without fa
   runPhase:async (phase,_findings,binding)=>({phase,reviewedHeadSha:binding?.candidateHead,verdict:'pass',findings:'PASS independent source review'}),
   commitCandidate:()=> (++commits===1?'a':'b').repeat(40),verifyCandidate:async()=>({passed:checks++>0,detail:'synthetic deterministic result'})});
  const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
- const predicate=workflow.match(/jq -e --arg head "\$TEST_HEAD" --arg project "\$PROJECT_ID" '([\s\S]+?)'\s+"\$evidence"/)?.[1];assert.ok(predicate);
+ const predicate=workflow.match(/jq -e --arg head "\$TEST_HEAD" --arg project "\$PROJECT_ID" --arg mode "\$PROVIDER_EXECUTION" '([\s\S]+?)'\s+"\$evidence"/)?.[1];assert.ok(predicate);
  const evidence={version:1,metered:true,completed:true,projectId:'project',reviewedHeadSha:lifecycle.candidateHead,...lifecycle};
- const accepted=value=>{try{execFileSync('jq',['-e','--arg','head',lifecycle.candidateHead,'--arg','project','project',predicate],{input:JSON.stringify(value),stdio:['pipe','pipe','pipe']});return true;}catch{return false;}};
+ const accepted=(value,mode='false')=>{try{execFileSync('jq',['-e','--arg','head',lifecycle.candidateHead,'--arg','project','project','--arg','mode',mode,predicate],{input:JSON.stringify(value),stdio:['pipe','pipe','pipe']});return true;}catch{return false;}};
  assert.equal(evidence.review.verdict,'pass');assert.equal(accepted(evidence),true);
+ const trial={...evidence,metered:false,authorityKind:'provider-execution'};
+ assert.equal(accepted(trial,'true'),true);
+ assert.equal(accepted(trial),false,'The legacy path still requires metered evidence');
+ assert.equal(accepted(evidence,'true'),false,'The trial requires its own trusted receipt type');
+ assert.equal(accepted({...trial,finalReview:{...trial.finalReview,verdict:'changes_requested'}},'true'),false);
+
  assert.match(workflow,/REVIEW="\$\(jq -r '\.review.verdict' "\$evidence"\)"/);
  for(const alter of [e=>delete e.repairVerification,e=>e.repairVerification.before.passed=true,e=>e.repairVerification.before.head=e.reviewedHeadSha,
   e=>e.repairVerification.after.head='c'.repeat(40),e=>e.repairVerification.after.passed=false,e=>e.finalReview.verdict='changes_requested']){

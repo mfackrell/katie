@@ -44,8 +44,8 @@
     },
     {
       "id": "PAGE_COMPOSITION",
-      "status": "pending_independent",
-      "evidence": "Final exact rendered resume, report and agreement images are prepared. No reviewer other than the implementation agent has issued an artifact-hash-bound professional design verdict. Mechanical PASS cannot close this gate."
+      "status": "passed",
+      "evidence": "Owner-provided separate AI review of all 12 final pages across Chromium, LibreOffice 24 and LibreOffice 26: PASS. Original review and report retained verbatim; 80-entry private archive manifest and every reviewed image hash verified. Current integrated engine and dependencies match reviewed implementation. This is not human-professional or cryptographically signed certification."
     },
     {
       "id": "DELIVERY_SEPARATION",
@@ -61,5 +61,17 @@
   "private_source_available_only_outside_public_ci": true,
   "release_allowed": false,
   "mechanical_evidence_file": "fixtures/documents/phase2-mechanical-evidence.json",
-  "independent_visual_review": "PENDING"
+  "independent_visual_review": "PASS",
+  "independent_review_record": {
+    "path": "fixtures/documents/independent-review/pr997-independent-review-8c4bf882.json",
+    "sha256": "8eb8a4723d51750e0584591f5769b7e756ae2f83bebf77ec3459a1240ff27e19",
+    "report_path": "fixtures/documents/independent-review/pr997-independent-review-8c4bf882.md",
+    "report_sha256": "5ecd3774f455a687aa1545aee7de0eada91d3a004b8dca11023b265429246747",
+    "reviewed_candidate_sha": "8c4bf88279533d7ec7dca5ab975195056b8b8e80",
+    "accepted_review_type": "independent_ai_visual",
+    "owner_direction_date": "2026-11-10",
+    "owner_direction": "Incorporate this assessment into PR #997, reconcile latest main, and requalify; do not merge yet.",
+    "cryptographic_signature": false,
+    "human_professional_review": false
+  }
 }

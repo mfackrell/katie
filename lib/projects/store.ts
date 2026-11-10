@@ -14,6 +14,7 @@ export type Context = {
     baseSha: string;
     baselineSha: string;
     allowedPaths: string[];
+    cumulativePaths?: string[];
     contractHash: string;
     contract: BrowserContract;
     scopeHash: string;
@@ -83,7 +84,7 @@ export async function getDevelopmentProjectContext(jobId: string, forDispatch = 
     throw Error('Approved project scope is unavailable or changed');
     if(forDispatch&&p.profile==='game'&&!await projectRpc<boolean>('game_project_specialist_valid',{p_id:p.id}))throw Error('Pinned game specialist changed before dispatch');
     return {...r.binding,...(p.organization_version===1?{organizationVersion:1}:{}),...(p.profile==='game'&&p.spec?.game&&p.approved_hash===p.approval_hash&&r.milestone_index>=0&&r.milestone_index<p.spec.milestones.length?{originalUserOutcome:`ORIGINAL USER OUTCOME (authoritative):\n${p.objective}\n${p.clarifications}`,approvedMilestone:{title:p.spec.milestones[r.milestone_index].title,instruction:p.spec.milestones[r.milestone_index].instruction,requirements:p.spec.requirements,allowedPaths:p.spec.allowedPaths}}:{}),...(p?.profile==='game'&&p.spec?.game?{game:p.spec.game,gameFinal:r.milestone_index===p.spec.milestones.length-1}:{})}; }
-export const acceptanceBinding = (c: Context) => ({ projectId: c.projectId, contractHash: c.contractHash, scenarioNames: c.contract.scenarios.map(s => s.name) });
+export const acceptanceBinding = (c: Context) => ({ projectId: c.projectId, contractHash: c.contractHash, scenarioNames: c.contract.scenarios.map(s => s.name),...(c.cumulativePaths?{packageScope:{baseSha:c.baseSha,paths:c.allowedPaths}}:{}) });
 export async function milestoneEvidence(runs: Run[]) { const result = []; for (const r of runs.filter(r => r.outcome)) {
     const { mission } = await readMission(r.mission_id);
     result.push({ phase: r.kind, index: r.milestone_index, result: mission.result, missionStatus:mission.status,evidence: r.outcome });

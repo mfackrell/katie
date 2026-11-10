@@ -11,3 +11,18 @@ test('publishing rejects staged and cumulative out-of-scope code, CI/deployment 
  git('add','.github/workflows/escape.yml');git('commit','-qm','simulate inherited scope violation');file('app/pilot/page.tsx','next approved increment');git('add','app/pilot/page.tsx');assert.throws(()=>assertProjectScope(request,repo),/unapproved path|protected configuration/);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('narrow package delta preserves cumulative accepted files but cannot edit them',()=>{
+ const root=mkdtempSync(join(tmpdir(),'package-scope-')),repo=join(root,'repo'),request=join(root,'request');mkdirSync(repo);
+ const git=(...args)=>execFileSync('git',args,{cwd:repo,encoding:'utf8',stdio:'pipe'}).trim();
+ const file=(p,text)=>{mkdirSync(dirname(join(repo,p)),{recursive:true});writeFileSync(join(repo,p),text);};
+ try{
+  git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.test');file('README.md','baseline');git('add','.');git('commit','-qm','base');const baseline=git('rev-parse','HEAD');
+  file('app/pilot/engine/sum.mjs','export const sum=(a,b)=>a+b');git('add','.');git('commit','-qm','accepted package A');const base=git('rev-parse','HEAD');
+  const contract={path:'/',scenarios:[{name:'total',steps:[{action:'expectText',selector:'#total',value:'5'}]}]};
+  const context={version:1,projectId:'11111111-1111-4111-8111-111111111111',baseSha:base,baselineSha:baseline,allowedPaths:['app/pilot/view/'],cumulativePaths:['app/pilot/'],contractHash:contractHash(contract),contract};
+  writeFileSync(request,projectMarker(context));file('app/pilot/view/render.mjs','export const render=()=>5');git('add','.');assert.equal(assertProjectScope(request,repo).length,2);
+  file('app/pilot/engine/sum.mjs','export const sum=()=>0');git('add','.');assert.throws(()=>assertProjectScope(request,repo),/Package publishing denied/);
+  assert.throws(()=>projectMarker({...context,cumulativePaths:['app/other/']}),/exceeds original project scope/);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

@@ -34,7 +34,7 @@ test('host recovery checks record/release and uses only recovery grant endpoint'
  // This legacy pre-grant fixture has no capacity-renewal continuation.
  // These authority fixtures represent tasks with no saved WIP. The full host
  // preflight tests separately exercise restoration rejection before grants.
- const recoveryFixture="const requestFile='/trusted/request',boundary={root:'/fixture'};const execFileSync=()=> '{}',join=(...parts)=>parts.join('/'),recoveryRefs=()=>[];";
+ const recoveryFixture="const providerExecution=false;const project={organization_version:0};const requestFile='/trusted/request',boundary={root:'/fixture'};const execFileSync=()=> '{}',join=(...parts)=>parts.join('/'),recoveryRefs=()=>[];";
  const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','approval','createTask4aVerificationFirstCapability','classifyTask4aRecoveryHistory','continuation','const ordinary=false;'+recoveryFixture+host.slice(start,end)+'return {grantId,executionEpoch};');
  const proof={pregrantRecoveryId:'recovery',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task'};
  for(const wrong of [false,true]){

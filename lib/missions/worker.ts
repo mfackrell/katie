@@ -1,4 +1,4 @@
-import {executeManagementClaim} from '@/lib/projects/organization';
+import {executeManagementClaim,ManagementCommandRejection} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
 import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission,executiveSourceGroups,executiveSourceManifest} from '@/lib/executive/source-handoff';
@@ -378,7 +378,18 @@ export async function runMissionBatch(model=missionModel){
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
  const outcomes=await Promise.all(claims.map(async claim=>{
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
-  catch(error){const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
+  catch(error){
+   if(error instanceof ManagementCommandRejection){
+    const result={detail:error.message,managementCommandRejection:error.evidence};
+    const terminal={p_id:claim.job.id,p_lease:claim.job.lease,p_result:result,p_children:[],p_status:'failed',p_mission_status:'blocked',p_final:null};
+    // Repeat only the identical lease-fenced write if its acknowledgement is lost.
+    // Never send a rejected command or re-enter inference to reconstruct it.
+    const write=()=>rpc<boolean>('commit_mission_work',terminal);
+    const saved=await write().catch(()=>write()).catch(()=>false);
+    if(!saved)console.error('[Missions] Management rejection persistence unconfirmed',{jobId:claim.job.id,...result});
+    return {jobId:claim.job.id,status:saved?'blocked':'failure_record_unconfirmed'};
+   }
+   const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
    const candidate=error instanceof Error?error.message:typeof raw?.message==='string'?raw.message:typeof error==='string'?error:'';
    const detail=(candidate&&candidate!=='Unknown error: {}'?candidate:'Unclassified development integration failure') .slice(0,600);
    const diagnostic={...(error instanceof ProviderAvailabilityError?{providerAvailability:error.failures}:{}),stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};
@@ -403,7 +414,8 @@ export async function runMissionBatch(model=missionModel){
    const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
    const reconcileAcceptedDevelopment=claim.job.role==='development'&&claim.job.attempts<2;
-   const retry=!checkpointFailed&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
+   const unresolvedProvider=error instanceof MissionModelFailure&&error.partial.providerOutcomeUnresolved===true;
+   const retry=!checkpointFailed&&!unresolvedProvider&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...((claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))?Object.fromEntries(['rejectedSpecification','specificationValidationFeedback','specificationCharacters'].filter(key=>claim.job.result?.[key]!==undefined).map(key=>[key,claim.job.result![key]])):{}),...(claim.job.role==='review'&&claim.job.result?.sourceChecks?{sourceChecks:claim.job.result.sourceChecks}:{}),...(error instanceof MissionModelFailure?error.partial:{}),...(checkpointFailed?{checkpointFailed:true,specificationCheckpointError:specificationCheckpointError??'Provider response archival failed before settlement'}:{}),detail,diagnostic},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));
