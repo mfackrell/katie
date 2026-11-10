@@ -1,4 +1,4 @@
-import {executeManagementClaim} from '@/lib/projects/organization';
+import {executeManagementClaim,ManagementCommandRejection} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
 import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission,executiveSourceGroups,executiveSourceManifest} from '@/lib/executive/source-handoff';
@@ -378,7 +378,18 @@ export async function runMissionBatch(model=missionModel){
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
  const outcomes=await Promise.all(claims.map(async claim=>{
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
-  catch(error){const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
+  catch(error){
+   if(error instanceof ManagementCommandRejection){
+    const result={detail:error.message,managementCommandRejection:error.evidence};
+    const terminal={p_id:claim.job.id,p_lease:claim.job.lease,p_result:result,p_children:[],p_status:'failed',p_mission_status:'blocked',p_final:null};
+    // Repeat only the identical lease-fenced write if its acknowledgement is lost.
+    // Never send a rejected command or re-enter inference to reconstruct it.
+    const write=()=>rpc<boolean>('commit_mission_work',terminal);
+    const saved=await write().catch(()=>write()).catch(()=>false);
+    if(!saved)console.error('[Missions] Management rejection persistence unconfirmed',{jobId:claim.job.id,...result});
+    return {jobId:claim.job.id,status:saved?'blocked':'failure_record_unconfirmed'};
+   }
+   const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
    const candidate=error instanceof Error?error.message:typeof raw?.message==='string'?raw.message:typeof error==='string'?error:'';
    const detail=(candidate&&candidate!=='Unknown error: {}'?candidate:'Unclassified development integration failure') .slice(0,600);
    const diagnostic={...(error instanceof ProviderAvailabilityError?{providerAvailability:error.failures}:{}),stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};

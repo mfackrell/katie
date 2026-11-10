@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {rpc} from '@/lib/missions/store';
 import type {Claim} from '@/lib/missions/types';
@@ -82,31 +83,61 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  ]);
  if(grants.error||plans.error||dependencies.error||packages.error||attempts.error||workerContracts.error)throw Error('Organization scope or direction evidence unavailable');
  const providerControlled=await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id});
+ if(providerControlled&&claim.mission.calls>0)throw Error('Trial management inference was already admitted for this mission');
  const instruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
  const response=await model(claim,instruction,JSON.stringify({workerContracts:workerContracts.data,workPackages:packages.data,workPackageAttempts:attempts.data,plans:plans.data,dependencies:dependencies.data,scopeGrants:grants.data,principal:node,project,executionTeam:team.data,organization:nodes,exceptions:results[1].data,assignments,evidence:evidence.data}),'none');
- const commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));
+ let commands:unknown;
+ try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
+ catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
  assertManagementCommands(node,nodes,commands);
  await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
 }
 
+const managementActions=new Set(['plan','appoint','grant_scope','authorize_assignment','assign','commission_package','evaluate_package','repair_package','dependency','exception','resolve','escalate','submit_component','certify','reject','replace_leader','reorganize','ready','close']);
+type ReportingNode={id:string;parent_id?:string|null};
+type ReportingTarget={field:string;status:'missing'|'malformed'|'unknown'|'direct_report'|'not_direct_report';id?:string;idHash?:string};
+
+export class ManagementCommandRejection extends Error {
+ readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number};
+ constructor(message:string,code:string,position:number|null=null,action:unknown=null,targets:ReportingTarget[]=[],priorAppointments=0){
+  super(message);
+  this.name='ManagementCommandRejection';
+  this.evidence={code,reason:message,position,action:typeof action==='string'&&managementActions.has(action)?action:null,targets,priorAppointments};
+ }
+}
+
+function reportingTarget(field:string,value:unknown,principalId:string,nodes:ReportingNode[]):ReportingTarget{
+ if(value==null)return {field,status:'missing'};
+ if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))return {field,status:'malformed'};
+ const node=nodes.find(n=>n.id===value);
+ if(!node)return {field,status:'unknown',idHash:createHash('sha256').update(value).digest('hex')};
+ return {field,status:node.parent_id===principalId?'direct_report':'not_direct_report',id:node.id};
+}
+
 // Dispatch checks complement the authoritative lease-bound database decisions.
 // Never infer authority from a model-provided role or node identifier.
-export function assertManagementCommands(principal:{id:string;kind:string;management_level?:string},nodes:Array<{id:string;parent_id?:string|null}>,commands:unknown){
- if(!Array.isArray(commands)||commands.length<1||commands.length>16)throw Error('Bounded management commands required');
- for(const c of commands){
-  if(!c||typeof c!=='object')throw Error('Invalid management command');
-  if(c.action==='appoint'&&principal.management_level==='manager'&&c.managementLevel==='functional_director')throw Error('Managers commission managers, supervisors or workers');
-  if(c.action==='appoint'&&principal.management_level==='supervisor'&&c.kind!=='worker')throw Error('Supervisors commission workers only');
-  if(c.action==='appoint'&&principal.kind==='project_director'&&c.managementLevel!=null&&c.managementLevel!=='functional_director')throw Error('Project Director commissions Functional Directors only');
-  if(principal.kind==='project_director'&&((c.action==='appoint'&&c.kind!=='manager')||['assign','authorize_assignment','commission_package','evaluate_package','repair_package'].includes(c.action)))throw Error('Project Director commissions only Functional Directors and cannot assign execution work');
-  if(c.action==='commission_package'&&[c.workerId,c.writerId,c.reviewerId].some(id=>!nodes.some(n=>n.id===id&&n.parent_id===principal.id)))throw Error('Management decisions require immediate reporting authority');
-  if(c.action==='submit_component'&&(principal.kind!=='manager'||c.nodeId!=null))throw Error('Only the responsible Functional Director may submit its own component');
-  if(['assign','certify','reject','grant_scope','reorganize','replace_leader','dependency'].includes(c.action)){
-   const targets=[c.nodeId,...(c.action==='reorganize'?[c.underId]:c.action==='dependency'?[c.dependsOn]:[])];
-   if(targets.some(id=>!nodes.some(n=>n.id===id&&n.parent_id===principal.id)))throw Error('Management decisions require immediate reporting authority');
-  }
+export function assertManagementCommands(principal:{id:string;kind:string;management_level?:string},nodes:ReportingNode[],commands:unknown){
+ if(!Array.isArray(commands)||commands.length<1||commands.length>16)throw new ManagementCommandRejection('Bounded management commands required','invalid_batch');
+ let priorAppointments=0;
+ for(const [index,c] of commands.entries()){
+  if(!c||typeof c!=='object')throw new ManagementCommandRejection('Invalid management command','invalid_command',index+1);
+  const reject=(message:string,code:string,fields:string[]=[])=>{
+   throw new ManagementCommandRejection(message,code,index+1,c.action,fields.map(field=>reportingTarget(field,c[field],principal.id,nodes)),priorAppointments);
+  };
+  if(c.action==='appoint'&&principal.management_level==='manager'&&c.managementLevel==='functional_director')reject('Managers commission managers, supervisors or workers','manager_appointment');
+  if(c.action==='appoint'&&principal.management_level==='supervisor'&&c.kind!=='worker')reject('Supervisors commission workers only','supervisor_appointment');
+  if(c.action==='appoint'&&principal.kind==='project_director'&&c.managementLevel!=null&&c.managementLevel!=='functional_director')reject('Project Director commissions Functional Directors only','director_appointment');
+  if(principal.kind==='project_director'&&((c.action==='appoint'&&c.kind!=='manager')||['assign','authorize_assignment','commission_package','evaluate_package','repair_package'].includes(c.action)))reject('Project Director commissions only Functional Directors and cannot assign execution work','director_execution',
+   c.action==='commission_package'?['workerId','writerId','reviewerId']:c.action==='assign'?['nodeId']:
+   c.action==='authorize_assignment'?['assignmentId']:['evaluate_package','repair_package'].includes(c.action)?['packageId']:[]);
+  if(c.action==='submit_component'&&(principal.kind!=='manager'||c.nodeId!=null))reject('Only the responsible Functional Director may submit its own component','component_authority',['nodeId']);
+  const fields=c.action==='commission_package'?['workerId','writerId','reviewerId']:
+   ['assign','certify','reject','grant_scope','reorganize','replace_leader','dependency'].includes(c.action)
+    ?['nodeId',...(c.action==='reorganize'?['underId']:c.action==='dependency'?['dependsOn']:[])]:[];
+  if(fields.some(field=>!nodes.some(n=>n.id===c[field]&&n.parent_id===principal.id)))reject('Management decisions require immediate reporting authority','immediate_reporting_authority',fields);
+  if(c.action==='appoint')priorAppointments++;
  }
 }
 

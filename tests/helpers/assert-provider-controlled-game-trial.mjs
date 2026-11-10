@@ -69,6 +69,20 @@ export async function assertProviderControlledGameTrial(db,rival){
  const decide=(s,commands)=>db.query('select project_org_decide($1,$2,$3)',[s.job,s.lease,JSON.stringify(commands)]);
  await assert.rejects(decide(root,[{action:'appoint',kind:'worker'}]),/invalid|director|appointment/i);
  await assert.rejects(decide(root,[{action:'close'}]),/incomplete|QA|closure/i);
+ // Exercise the existing production write path on a separate transaction, then
+ // roll back so the rest of this fixture still proves the authorized lifecycle.
+ const rejection={code:'immediate_reporting_authority',reason:'Management decisions require immediate reporting authority',
+  position:3,action:'dependency',targets:[{field:'nodeId',status:'missing'}],priorAppointments:1};
+ const terminal='select commit_mission_work($1,$2,$3,$4,$5,$6,$7) ok';
+ await db.query('begin');
+ try{
+  const args=[root.job,root.lease,{detail:rejection.reason,managementCommandRejection:rejection},'[]','failed','blocked',null];
+  assert.equal((await db.query(terminal,[args[0],randomUUID(),...args.slice(2)])).rows[0].ok,false);
+  assert.equal((await db.query(terminal,args)).rows[0].ok,true);
+  const record=(await db.query('select status,result from mission_assignments where id=$1',[root.job])).rows[0];
+  assert.equal(record.status,'failed');assert.deepEqual(record.result.managementCommandRejection,rejection);
+  assert.equal((await db.query(terminal,args)).rows[0].ok,false,'Committed failure cannot be replayed with a consumed lease');
+ }finally{await db.query('rollback');}
  const deadline=new Date(activation.deadline.getTime()-1000).toISOString();
  await decide(root,[{action:'plan',purpose:'Deliver the scoped game',direction:'Commission implementation and independent QA',outcomes:[{criterion:'Playable game',verification:'Browser and rules checks'}],milestones:[{objective:'Playable game'}],organizations:['development','quality_assurance']},
   ...['development','quality_assurance'].map(area=>({action:'appoint',kind:'manager',name:area,area,objective:'Own '+area,
