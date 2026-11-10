@@ -308,3 +308,39 @@ test('multiple corrected originals require explicit targets even across blank pa
   await expectTargets(['first.png', 'second.png'], 'Please run Qwen on all images.', [0, 1]);
   await expectTargets(['first.png', 'second.png'], 'Please run Qwen on both selected photos.', [0, 1]);
 });
+
+test('named target lists subtract every explicitly excluded identity', async () => {
+  const files = ['first.png', 'second.png', 'third.png'];
+  for (const op of ['except', 'excluding', 'but not', 'rather than', 'instead of']) {
+    await expectTargets(files, `Please run Qwen on first.png, second.png and third.png ${op} second.png.`, [0, 2]);
+    await expectTargets(files, `Please run Qwen on "first.png", "second.png" and third.png ${op} "second.png".`, [0, 2]);
+  }
+  await expectTargets(files, 'Please run Qwen on first.png and second.png except first.png and second.png.', []);
+});
+
+test('only restricts a resolved set without requiring that set to have one image', async () => {
+  await expectTargets(['first.png', 'second.png', 'third.png'], 'Please run Qwen only on first.png and second.png.', [0, 1]);
+  await expectTargets(['first.png', 'second.png', 'third.png'], 'Please only run Qwen on "first.png" and second.png.', [0, 1]);
+  await expectTargets(['first.png', 'second.png', 'third.png'], 'Please run Qwen only on first.png, second.png and third.png except second.png.', [0, 2]);
+});
+
+test('aggregate and ordinal targets use the same exclusion semantics as named sets', async () => {
+  const files = ['first.png', 'second.png', 'third.png'];
+  await expectTargets(files, 'Please run Qwen on all images except second.png.', [0, 2]);
+  await expectTargets(files, 'Please run Qwen on all images excluding the second image.', [0, 2]);
+  await expectTargets(files, 'Please run Qwen on the first image except first.png.', []);
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen on both selected photos except "first.png".', [1]);
+});
+
+test('unknown or ambiguous exclusions fail closed before any paid image callback', async () => {
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen on first.png and second.png except missing.png.', []);
+  await expectTargets(['same.png', 'same.png'], 'Please run Qwen on all images except same.png.', []);
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen on first.png and second.png except.', []);
+});
+
+test('negation words inside a complete selected filename remain data, not commands', async () => {
+  for (const name of ['not.png', 'never.png', 'no need.png', 'without sugar.png', 'do not run Qwen.png']) {
+    await expectTargets(['first.png', name], `Please run Qwen on ${name}.`, [1]);
+    await expectTargets(['first.png', name], `Do not run Qwen on ${name}.`, []);
+  }
+});

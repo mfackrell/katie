@@ -168,8 +168,8 @@ function explicitFreshImageInspection(
     // Unresolved quoted/code scope blocks this clause, not unrelated clauses.
     if(targets.some(target=>target.offset>=clauseOffset&&
       target.offset<clauseOffset+part.length&&!target.files.length))return false;
-    const affirmativePart=part.split(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i)[0];
-    if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(affirmativePart))return false;
+    // The anchored affirmative grammar rejects negated requests. Filename
+    // operands may themselves contain words such as "not" or "never".
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
     const command=/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.exec(directive);
     if(!command)return false;
@@ -188,67 +188,74 @@ function explicitFreshImageInspection(
       return available.length===1&&(!remainder.trim()||/^\s*and\s+(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)(?:\s+(?:again|afresh|anew))?\s*$/i.test(remainder));
     }
     const operandStart=commandEnd+targetPrefix[0].length;
-    const onlyAt=part.slice(0,operandStart).search(/\bonly\b/i);
     const scope=part.slice(operandStart);
     const contrast=[...scope.matchAll(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/gi)]
       .find(match=>!insideRawName(clauseOffset+operandStart+match.index!,
         clauseOffset+operandStart+match.index!+match[0].length));
-    const contrasted=contrast?.index??-1;
-    const positive=contrasted>=0?scope.slice(0,contrasted):scope;
-    const positiveStart=clauseOffset+operandStart;
-    const operands=targets.filter(target=>target.offset>=positiveStart&&target.offset<positiveStart+positive.length);
-    // A quoted name shared by distinct attachments does not identify one image.
-    if(operands.some(target=>new Set(target.files.map(file=>file.fileId)).size!==1))return false;
-    // Consume a complete operand list from left to right. Never search for a
-    // filename inside another name or silently ignore unresolved target words.
-    // Prefer the longest complete filename at each position; equal names with
-    // different identities remain ambiguous and cannot authorize either image.
-    const separator=/^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)/i;
-    const namedIds=(()=>{
-      const ids=new Set<string>();
-      let cursor=0;
-      while(cursor<positive.length){
-        cursor+=/^\s*/.exec(positive.slice(cursor))![0].length;
-        if(cursor===positive.length)return;
-        const quoted=operands.find(target=>target.offset===positiveStart+cursor);
-        let files:FileReference[],length:number;
-        if(quoted){files=quoted.files;length=1;}
-        else{
-          const matches=available.filter(file=>{
-            const name=file.fileName;
-            if(!name||positive.slice(cursor,cursor+name.length).toLowerCase()!==name.toLowerCase())return false;
-            if(targets.some(target=>target.offset>=positiveStart+cursor&&
-              target.offset<positiveStart+cursor+name.length))return false;
-            const tail=positive.slice(cursor+name.length);
-            return !tail.trim()||separator.test(tail);
-          });
-          if(!matches.length)return;
-          length=Math.max(...matches.map(file=>file.fileName.length));
-          files=matches.filter(file=>file.fileName.length===length);
+    // Resolve positive and excluded operands with the exact same complete
+    // grammar. No early return may authorize an identity before subtraction.
+    const resolveOperands=(text:string,absoluteStart:number):Set<string>|undefined=>{
+      const operands=targets.filter(target=>target.offset>=absoluteStart&&
+        target.offset<absoluteStart+text.length);
+      if(operands.some(target=>new Set(target.files.map(file=>file.fileId)).size!==1))return;
+      const separator=/^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)/i;
+      const namedIds=(()=>{
+        const ids=new Set<string>();
+        let cursor=0;
+        while(cursor<text.length){
+          cursor+=/^\s*/.exec(text.slice(cursor))![0].length;
+          if(cursor===text.length)return;
+          const quoted=operands.find(target=>target.offset===absoluteStart+cursor);
+          let files:FileReference[],length:number;
+          if(quoted){files=quoted.files;length=1;}
+          else{
+            const matches=available.filter(file=>{
+              const name=file.fileName;
+              if(!name||text.slice(cursor,cursor+name.length).toLowerCase()!==name.toLowerCase())return false;
+              if(targets.some(target=>target.offset>=absoluteStart+cursor&&
+                target.offset<absoluteStart+cursor+name.length))return false;
+              const tail=text.slice(cursor+name.length);
+              return !tail.trim()||separator.test(tail);
+            });
+            if(!matches.length)return;
+            length=Math.max(...matches.map(file=>file.fileName.length));
+            files=matches.filter(file=>file.fileName.length===length);
+          }
+          const identities=new Set(files.map(file=>file.fileId));
+          if(identities.size!==1)return;
+          ids.add(files[0].fileId);
+          cursor+=length;
+          const remaining=text.slice(cursor);
+          if(!remaining.trim())return ids;
+          const join=separator.exec(remaining);
+          if(!join)return;
+          cursor+=join[0].length;
         }
-        const identities=new Set(files.map(file=>file.fileId));
-        if(identities.size!==1)return;
-        ids.add(files[0].fileId);
-        cursor+=length;
-        const remaining=positive.slice(cursor);
-        if(!remaining.trim())return ids;
-        const join=separator.exec(remaining);
-        if(!join)return;
-        cursor+=join[0].length;
+      })();
+      if(namedIds)return namedIds;
+      if(operands.length)return;
+      const operand=text.trim();
+      const ordinal=/^(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)$/i.exec(operand);
+      if(ordinal){
+        const index=['first','second','third','fourth','fifth'].indexOf(ordinal[1].toLowerCase());
+        return available[index]?new Set([available[index].fileId]):undefined;
       }
-    })();
-    if(namedIds)return (onlyAt<0||namedIds.size===1)&&namedIds.has(reference.fileId);
-    if(operands.length)return false;
-    const operand=positive.trim();
-    const ordinal=/^(?:the\s+)?(first|second|third|fourth|fifth)\s+(?:image|photo|picture|file|attachment)$/i.exec(operand);
-    if(ordinal){
-      const index=['first','second','third','fourth','fifth'].indexOf(ordinal[1].toLowerCase());
-      return available[index]?.fileId===reference.fileId;
+      if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)$/i.test(operand)){
+        if(/^both\b/i.test(operand)&&available.length!==2)return;
+        return new Set(available.map(file=>file.fileId));
+      }
+      if(available.length===1&&/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)$/i.test(operand))return new Set([available[0].fileId]);
+    };
+    const positive=contrast?scope.slice(0,contrast.index!):scope;
+    const included=resolveOperands(positive,clauseOffset+operandStart);
+    if(!included)return false;
+    if(contrast){
+      const excludedStart=contrast.index!+contrast[0].length;
+      const excluded=resolveOperands(scope.slice(excludedStart),clauseOffset+operandStart+excludedStart);
+      if(!excluded)return false;
+      for(const id of excluded)included.delete(id);
     }
-    // Unresolved exclusions cannot broaden a generic request to every image.
-    if(onlyAt>=0||contrasted>=0||!operand)return false;
-    if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)$/i.test(operand))return !/^both\b/i.test(operand)||available.length===2;
-    return available.length===1&&/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)$/i.test(operand);
+    return included.has(reference.fileId);
   });
 }
 
