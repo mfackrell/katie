@@ -267,3 +267,44 @@ test('a full filename containing a list conjunction has priority over shorter na
   await expectTargets(['first.png', 'second.png', 'first.png and second.png'],
     'Please run Qwen on first.png and second.png.', [2]);
 });
+
+test('complete raw filenames survive clause and exclusion words inside the name', async () => {
+  for (const name of ['first.png then second.png', 'first.png. copy.png',
+    'first.png rather than second.png', 'first.png instead of second.png',
+    'first.png but second.png', 'first.png except second.png']) {
+    await expectTargets(['first.png', name, 'second.png'], `Please run Qwen on ${name}.`, [1]);
+    await expectTargets(['first.png', name, 'second.png'], `Please run Qwen on "${name}".`, [1]);
+  }
+});
+
+test('line-wrapped scope stays attached to its command', async () => {
+  for (const question of ['Please run Qwen\nonly on second.png.',
+    'Please run Qwen\non\nsecond.png.', 'Please run Qwen on\n"second.png".',
+    'Please run\nQwen only on second.png.']) {
+    await expectTargets(['first.png', 'second.png'], question, [1]);
+  }
+});
+
+test('wrapped negations and ambiguous connective restrictions never broaden authority', async () => {
+  for (const question of ['Do not\nrun Qwen.', 'Please run Qwen\nbut only on second.png.',
+    'Please run Qwen\n"only on second.png".', 'Please run Qwen\n`only on second.png`.']) {
+    await expectTargets(['first.png', 'second.png'], question, []);
+  }
+});
+
+test('fenced or quoted block scope cannot be removed after a bare command', async () => {
+  for (const question of ['Please run Qwen\n> only on second.png',
+    'Please run Qwen\n~~~text\nonly on second.png\n~~~',
+    'Please run Qwen\n    only on second.png']) {
+    await expectTargets(['first.png', 'second.png'], question, []);
+  }
+});
+
+test('multiple corrected originals require explicit targets even across blank paragraphs', async () => {
+  for (const question of ['Please run Qwen.', 'Please run Qwen\n\nonly on second.png.',
+    'Please run Qwen on the original image.', 'Please inspect the original image again.']) {
+    await expectTargets(['first.png', 'second.png'], question, []);
+  }
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen on all images.', [0, 1]);
+  await expectTargets(['first.png', 'second.png'], 'Please run Qwen on both selected photos.', [0, 1]);
+});

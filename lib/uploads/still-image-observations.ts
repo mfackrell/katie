@@ -59,6 +59,8 @@ function explicitFreshImageInspection(
   // Strip fenced and indented code as data, honoring the opening fence's
   // exact character and minimum closing length. Unclosed fences fail closed.
   const outside:string[]=[];
+  const hiddenLines=new Set<number>();
+  const hideLine=()=>{hiddenLines.add(outside.length);outside.push('\uFFFC');};
   let fence:{kind:string;length:number}|null=null;
   let quotedParagraph=false;
   for(const line of question.split('\n')){
@@ -66,26 +68,35 @@ function explicitFreshImageInspection(
     if(fence){
       if(marker&&marker[1][0]===fence.kind&&marker[1].length>=fence.length&&
          /^\s{0,3}(?:\x60{3,}|~{3,})\s*$/.test(line))fence=null;
-      outside.push(' ');continue;
+      hideLine();continue;
     }
-    if(marker){fence={kind:marker[1][0],length:marker[1].length};outside.push(' ');continue;}
-    if(/^\s*>/.test(line)){quotedParagraph=true;outside.push(' ');continue;}
+    if(marker){fence={kind:marker[1][0],length:marker[1].length};hideLine();continue;}
+    if(/^\s*>/.test(line)){quotedParagraph=true;hideLine();continue;}
     if(quotedParagraph && line.trim()){ // Polite wording is still quoted data.
-      outside.push(' ');continue;
+      hideLine();continue;
     }
     quotedParagraph=false;
-    outside.push(/^(?: {4}|\t)/.test(line)?' ':line);
+    if(/^(?: {4}|\t)/.test(line))hideLine();else outside.push(line);
   }
   // Inline code delimiters must close with the same number of backticks.
   // Quoted directives are data; only quoted names of *selected* attachments
   // survive as inert target operands. Unclosed spans fail closed.
   const source=outside.join('\n');
+  const hiddenOffsets=new Set<number>();
+  let lineOffset=0;
+  outside.forEach((line,index)=>{
+    if(hiddenLines.has(index))hiddenOffsets.add(lineOffset);
+    lineOffset+=line.length+1;
+  });
   let clean='';
   // Authority lives in these spans, not in a magic string that user text can forge.
   // The placeholder is inert; a literal copy has no corresponding span.
   const targets:Array<{offset:number;files:FileReference[]}>=[];
   for(let i=0;i<source.length;){
     const ch=source[i];
+    if(hiddenOffsets.has(i)){
+      targets.push({offset:clean.length,files:[]});clean+='\uFFFC';i++;continue;
+    }
     if(ch==='\x60'){
       let count=1;
       while(source[i+count]==='\x60')count++;
@@ -120,12 +131,35 @@ function explicitFreshImageInspection(
     }
     clean+=ch;i++;
   }
+  // A complete raw filename can itself contain punctuation or words such as
+  // "then" or "rather than". Do not truncate it into a different shorter target
+  // before operand resolution. Command words that equal a whole filename are
+  // not protected operators: only boundaries inside a complete name qualify.
+  const rawNames:Array<{start:number;end:number}>=[];
+  for(const file of available){
+    if(!file.fileName)continue;
+    const escaped=file.fileName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    for(const match of clean.matchAll(new RegExp(escaped,'gi'))){
+      const start=match.index!,end=start+match[0].length;
+      if(targets.some(target=>target.offset>=start&&target.offset<end))continue;
+      const before=clean[start-1],after=clean[end];
+      if((!before||!/[a-z0-9_.-]/i.test(before))&&
+         (!after||!/[a-z0-9_.-]/i.test(after)||after==='.'&&
+          (end+1===clean.length||/\s/.test(clean[end+1]))))rawNames.push({start,end});
+    }
+  }
+  const insideRawName=(start:number,end:number)=>rawNames.some(name=>name.start<start&&end<=name.end);
   // Preserve source positions while separating clauses, so only operands in
   // the affirmative part of this exact clause can identify a target.
   const clauses:Array<{offset:number;text:string}>=[];
   let offset=0;
-  for(const boundary of clean.matchAll(/(?:[!?;]|\.(?=\s|$)|\n)+|\b(?:but|instead|then)\b/gi)){
+  for(const boundary of clean.matchAll(/(?:[!?;]|\.(?=\s|$)|\n[ \t]*\n)+|\b(?:but|instead|then)\b/gi)){
     const end=boundary.index!;
+    if(insideRawName(end,end+boundary[0].length))continue;
+    // A wrapped line or a restrictive connective is still the same request.
+    // Separate a connective only when another affirmative request follows.
+    if(/^(?:but|instead|then)$/i.test(boundary[0])&&
+      !/^\s+(?:(?:please|now|also)\s+)?(?:run|use|ask|inspect|analy[sz]e|examine|reinspect|re-?analy[sz]e|perform|do|start|get|request|could|would|can|will|i)\b/i.test(clean.slice(end+boundary[0].length)))continue;
     clauses.push({offset,text:clean.slice(offset,end)});
     offset=end+boundary[0].length;
   }
@@ -134,7 +168,8 @@ function explicitFreshImageInspection(
     // Unresolved quoted/code scope blocks this clause, not unrelated clauses.
     if(targets.some(target=>target.offset>=clauseOffset&&
       target.offset<clauseOffset+part.length&&!target.files.length))return false;
-    if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(part))return false;
+    const affirmativePart=part.split(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i)[0];
+    if(/\b(?:not|never|without|avoid|skip|stop|don['’]t|no\s+need)\b/i.test(affirmativePart))return false;
     const directive=part.trim().replace(/^(?:(?:please|yes|now|also|and)\s+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:i\s+want|i['’]d\s+like|i\s+would\s+like)\s+(?:you\s+)?(?:to\s+)?)?(?:only\s+)?/i,'');
     const command=/^(?:(?:run|use|ask)\s+qwen\b|(?:(?:perform|run|do|start|get|request)\s+)?(?:a\s+)?(?:fresh|new)\s+(?:vision|visual|image)\s+(?:analysis|inspection)\b|(?:reinspect|re-?analy[sz]e)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\b|(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)\s+(?:again|afresh|anew)\b)/i.exec(directive);
     if(!command)return false;
@@ -148,12 +183,17 @@ function explicitFreshImageInspection(
       // Ordinary unscoped requests remain valid, including the established
       // "run Qwen and inspect the original pixels" form. Unresolved text
       // is not authority to silently inspect every selected image.
-      return !remainder.trim()||/^\s*and\s+(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)(?:\s+(?:again|afresh|anew))?\s*$/i.test(remainder);
+      // Multiple corrected originals require explicit targets or an aggregate
+      // operand; a detached restriction cannot turn a bare command into all.
+      return available.length===1&&(!remainder.trim()||/^\s*and\s+(?:inspect|analy[sz]e|examine)\s+(?:the\s+)?(?:original|actual|raw)\s+(?:image|photo|pixels)(?:\s+(?:again|afresh|anew))?\s*$/i.test(remainder));
     }
     const operandStart=commandEnd+targetPrefix[0].length;
     const onlyAt=part.slice(0,operandStart).search(/\bonly\b/i);
     const scope=part.slice(operandStart);
-    const contrasted=scope.search(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/i);
+    const contrast=[...scope.matchAll(/\b(?:rather\s+than|instead\s+of|except|excluding|but\s+not)\b/gi)]
+      .find(match=>!insideRawName(clauseOffset+operandStart+match.index!,
+        clauseOffset+operandStart+match.index!+match[0].length));
+    const contrasted=contrast?.index??-1;
     const positive=contrasted>=0?scope.slice(0,contrasted):scope;
     const positiveStart=clauseOffset+operandStart;
     const operands=targets.filter(target=>target.offset>=positiveStart&&target.offset<positiveStart+positive.length);
@@ -207,8 +247,8 @@ function explicitFreshImageInspection(
     }
     // Unresolved exclusions cannot broaden a generic request to every image.
     if(onlyAt>=0||contrasted>=0||!operand)return false;
-    if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)$/i.test(operand))return true;
-    return /^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)$/i.test(operand);
+    if(/^(?:all|both|each|these)\s+(?:selected\s+)?(?:images|photos|pictures|files)$/i.test(operand))return !/^both\b/i.test(operand)||available.length===2;
+    return available.length===1&&/^(?:the\s+)?(?:original|raw|actual)\s+(?:pixels|image|photo)$/i.test(operand);
   });
 }
 
