@@ -206,3 +206,43 @@ test('management rejection retries only a failed terminal write and fences infer
   assert.equal(modelCalls,1);
  }
 });
+
+test('one-shot Director recovery requires the authenticated owner, exact release and explicit cutoff',async t=>{
+ const prior=process.env.VERCEL_GIT_COMMIT_SHA;
+ const release='a'.repeat(40);
+ process.env.VERCEL_GIT_COMMIT_SHA=release;
+ t.after(()=>{if(prior===undefined)delete process.env.VERCEL_GIT_COMMIT_SHA;else process.env.VERCEL_GIT_COMMIT_SHA=prior;});
+ let authenticated=false;
+ const calls=[];
+ const route=modules({
+  '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>authenticated},
+  '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return {missionId:'receipt'};}},
+ })('@/app/api/projects/organization/route');
+ const input={projectId:randomUUID(),trialAction:'recover_director_once',releaseSha:release,cutoff:'2026-11-10T18:58:00Z'};
+ const post=value=>route.POST(new Request('https://synthetic.test/api/projects/organization',{method:'POST',body:JSON.stringify(value)}));
+ assert.equal((await post(input)).status,403);
+ authenticated=true;
+ assert.equal((await post({...input,cutoff:undefined})).status,400);
+ assert.equal((await post({...input,releaseSha:'b'.repeat(40)})).status,409);
+ assert.deepEqual(calls,[]);
+ assert.deepEqual(await (await post(input)).json(),{missionId:'receipt'});
+ assert.equal(calls.length,1);
+ assert.equal(calls[0].name,'project_admit_director_recovery');
+ assert.equal(calls[0].args.p_project,input.projectId);
+ assert.equal(calls[0].args.p_release,input.releaseSha);
+ assert.equal(calls[0].args.p_cutoff,input.cutoff);
+});
+
+test('one-shot Director recovery fences a mismatched runtime before inference and sanitizes unsupported commands',async()=>{
+ const {executeManagementClaim,assertManagementCommands}=modules()('@/lib/projects/organization');
+ const claim={mission:{project_evidence:{directorRecoveryRelease:'a'.repeat(40)}}};
+ await assert.rejects(executeManagementClaim(claim,()=>assert.fail('Provider must not be reached')),/production worker/);
+ const root={id:randomUUID(),kind:'project_director'};
+ assertManagementCommands(root,[],[{action:'plan'},{action:'appoint',kind:'manager',managementLevel:'functional_director'},{action:'ready'}],true);
+ assert.throws(()=>assertManagementCommands(root,[],[{action:'ready'},{action:'dependency',nodeId:'secret-like input'}],true),error=>{
+  assert.equal(error.evidence.code,'director_recovery_action');
+  assert.equal(error.evidence.position,2);
+  assert.deepEqual(JSON.parse(JSON.stringify(error.evidence.targets)),[{field:'nodeId',status:'malformed'},{field:'dependsOn',status:'missing'}]);
+  return true;
+ });
+});
