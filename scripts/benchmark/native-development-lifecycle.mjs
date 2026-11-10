@@ -3,7 +3,7 @@ import {task4aVerificationFirstTree} from './native-wip-recovery.mjs';
 
 // Shared trusted control path. runPhase owns fresh authority/capacity admission;
 // neither this controller nor recovery can grant authority or mutate accounting.
-export async function executeNativeDevelopmentLifecycle({recovery,verificationFirstCapability,runPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,onCompleted=()=>{},candidateIdentity=head=>head,onIteration=()=>{}}){
+export async function executeNativeDevelopmentLifecycle({recovery,verificationFirstCapability,runPhase,commitCandidate,verifyCandidate,qualifiedLifecycle,maxRepairIterations=Infinity,onCompleted=()=>{},candidateIdentity=head=>head,onIteration=()=>{}}){
  const restoredTree=task4aVerificationFirstTree(recovery,verificationFirstCapability);
  const summary=value=>Buffer.from(String(value??''),'utf8').subarray(0,1600).toString('utf8');
  const findingsOf=review=>review?.verdict==='changes_requested'?String(review.findings).split('\n').map(s=>s.trim()).filter(Boolean).slice(0,32).map(s=>s.slice(0,240)):[];
@@ -73,6 +73,7 @@ export async function executeNativeDevelopmentLifecycle({recovery,verificationFi
  }
  while(decision?.verdict!=='pass'||!verification?.passed){
   if(verification?.kind==='infrastructure')throw Error('NATIVE_VERIFICATION_INFRASTRUCTURE: trustworthy tests unavailable');
+  if(iteration>=maxRepairIterations){publish({stopReason:'management_correction_required'});throw Error('NATIVE_MANAGEMENT_CORRECTION_REQUIRED: independent findings preserved for the responsible manager');}
   const source=await candidateIdentity(candidateHead);
   const failure=digest({findings:decision?.verdict==='pass'?'':decision?.findings,verification:verification?.passed?null:verification?.detail});
   const signature=digest({source,failure});

@@ -135,7 +135,7 @@ test('timed-out game revision recovery is bounded, review-grounded and does not 
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
   '@/lib/projects/store':{projectRpc:async(name,args)=>{
    events.push({name,args});
-   if(name==='project_dispatch_recovery_candidates')return[];
+   if(name==='project_dispatch_recovery_candidates')return[];if(name==='project_provider_mode')return false;
    if(name==='claim_work_project')return null;
    if(name==='recover_game_revision_timeout')return true;
    throw Error('Unexpected mutation');
@@ -151,7 +151,7 @@ test('timed-out game revision recovery is bounded, review-grounded and does not 
 test('uncharged continuation replacement is checked after existing same-mission recovery',async()=>{
  const events=[];const db={from:table=>({select(){return this;},eq(){return this;},order(){return this;},limit:async()=>({data:table==='work_projects'?[{id:owner.id}]:[],error:null})})};
  const {runProjectBatch}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/projects/store':{projectRpc:async(name,args)=>{
-  events.push({name,args});if(name==='project_dispatch_recovery_candidates')return[];if(name==='claim_work_project')return null;
+  events.push({name,args});if(name==='project_dispatch_recovery_candidates')return[];if(name==='project_provider_mode')return false;if(name==='claim_work_project')return null;
   if(name==='recover_uncharged_continuation_specification')return true;
   if(name.startsWith('recover_')||name==='resume_game_checkpoint_watchdog')return false;
   throw Error('Unexpected mutation');

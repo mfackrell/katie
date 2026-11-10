@@ -103,6 +103,8 @@ export async function handleProjectChat(input: {
             contextual=latestAssistant.content===projectMessage(p.id,p.status,saved);
         }
         if (explicit || contextual) {
+            if(p.organization_version===1&&await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))
+                return reply(p,'Use the project approval card while signed in as Katie owner to approve this exact trial scope.');
             if (p.status !== 'awaiting_approval' || !p.approval_hash || explicit?.[1] && !p.approval_hash.startsWith(explicit[1]))
                 return reply(p, 'That approval does not match a pending saved scope. Ask for project status to inspect the current proposal.');
             if (!tracked)

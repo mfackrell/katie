@@ -9,4 +9,5 @@ test('organization migration composes with installed ordinary authority and nati
  });
  assert.equal(result.code,0,result.output);
  assert.match(result.output,/PROJECT_ORGANIZATION_COMBINED_SCHEMA_PASS/);
+ assert.match(result.output,/PROVIDER_CONTROLLED_TRIAL_POSTGRES_PASS/);
 });

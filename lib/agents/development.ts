@@ -4,6 +4,7 @@ import {authenticateTask4aFailedRun,loadTask4aLinkedDiagnostics} from '../../scr
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
+import {encodeProviderExecutionHandoff,providerExecutionRequestHash} from '../../scripts/benchmark/provider-execution-handoff.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
@@ -33,6 +34,9 @@ const receiptSchema = z.object({
   tested_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
   reviewed_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
   projectAcceptance: projectAcceptanceSchema.optional(),
+  providerExecutionEvidence:z.object({failure:z.string().max(400),findings:z.string().max(3200),verification:z.string().max(3200),
+    candidateHead:z.string().regex(/^[a-f0-9]{40}$/).nullable(),responses:z.number().int().nonnegative(),
+    observedTokens:z.number().int().nonnegative(),unknownUsage:z.number().int().nonnegative()}).strict().optional(),
 }).strict();
 export function parseCompletionReceipt(value: unknown, repo: string, issue: number, runId: number, conclusion: string | null, project?: ProjectAcceptanceBinding) {
   const receipt = receiptSchema.parse(value);
@@ -236,18 +240,28 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const persist=(current:AgentTask,status:string,detail:string|null,external=current.external)=>save(current,status,detail,external,assignmentLease);
   // Project metadata must eventually be appended by a DB-bound project
   // dispatcher. Ordinary/model-authored assignments cannot mint this authority.
-  if (/<!--\s*katie-project\b/.test(task.input + '\n' + task.snapshot.instructions)) {
+  if (/<!--\s*(?:katie-project\b|katie-native-provider\b)/.test(task.input + '\n' + task.snapshot.instructions)) {
     return persist(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
   let benchmarkHeader=''; let benchmarkModel=''; let benchmarkRepository='';let benchmarkContractHash='';
+  let providerDeadline:string|null=null;
   // Benchmark engineering enters at the EXISTING durable dispatch boundary.
   // No alternate scheduler or issue path is authorized by this feature gate.
   const nativeDispatchEnabled=process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled';
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
     if(project.organizationVersion===1&&task.repository_full_name!=='mfackrell/katie')return persist(task,'blocked','This repository has no qualified native adapter for delegated project authority.');
-    const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
-    if(!fullBinding&&task.repository_full_name==='mfackrell/katie'){
+    if(project.organizationVersion===1){
+      const {data,error}=await getSupabaseAdminClient().from('project_provider_execution').select('deadline').eq('project_id',project.projectId).maybeSingle<{deadline:string}>();
+      if(error)throw Error('Provider execution authority lookup failed closed');
+      if(data){
+        if(!nativeDispatchEnabled||project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'||!(Date.parse(data.deadline)>Date.now()))
+          throw Error('Provider execution authority is expired or incompatible with this project');
+        providerDeadline=data.deadline;
+      }
+    }
+    const fullBinding=providerDeadline?null:await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
+    if(!providerDeadline&&!fullBinding&&task.repository_full_name==='mfackrell/katie'){
       if(project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'){
         // Preparation is a no-op unless the *original* project has both an
         // authenticated continuation and a separately approved coding scope.
@@ -280,7 +294,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       if(dispatchError||!dispatch)throw Error('Full benchmark dispatch could not bind approved task and spending authorization');
     }
   }
-  if (project && nativeDispatchEnabled) {
+  if (project && nativeDispatchEnabled && !providerDeadline) {
     const {data:binding,error}=await getSupabaseAdminClient()
       .from('benchmark_development_dispatches')
       .select('task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status')
@@ -354,11 +368,24 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
         project.originalUserOutcome + '\n\nAPPROVED MILESTONE (source-bound):\n' +
         JSON.stringify(project.approvedMilestone) + '\n\n';
     }
-    const routed=benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
+    const routed=providerDeadline?{codingModel:'gpt-5.3-codex',reviewModel:'gpt-5.3-codex'}:benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
       await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
-    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,...(cumulativePaths?{cumulativePaths}:{}),contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,...(cumulativePaths?{cumulativePaths}:{}),contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...(providerDeadline?{providerExecution:true}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
-  const fullBody = `${marker(task)}\n\n${benchmarkHeader}${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  const requestBody = `${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  let providerExecutionRelease:string|null=null;
+  if(providerDeadline&&project){
+    const releaseSha=await qualifiedOrdinaryDevelopmentRelease();
+    const key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+    if(!releaseSha||!key)throw Error('Trusted provider execution release or signing authority unavailable');
+    const proof={authorityKind:'provider-execution' as const,taskId:task.id,projectId:project.projectId,scopeHash:project.scopeHash,
+      contractHash:project.contractHash,baselineSha:project.baselineSha,releaseSha,requestHash:providerExecutionRequestHash(requestBody),
+      expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(providerDeadline))};
+    const productionRuntime=sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key);
+    benchmarkHeader=encodeProviderExecutionHandoff({...proof,productionRuntime},key)+'\n\n';
+    providerExecutionRelease=releaseSha;
+  }
+  const fullBody = `${marker(task)}\n\n${benchmarkHeader}${requestBody}`;
   let issueBody: string;
   try {
     issueBody = packDevelopmentRequest(fullBody, marker(task));
@@ -382,10 +409,10 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   } catch (error) { return persist(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner.",{...task.external,dispatchFailure:dispatchFailure(error)}); }
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
-  task = { ...task, external: { ...task.external, attempted: true,dispatchStartedAt:new Date().toISOString(), ...(project?{projectId:project.projectId}:{}) } };
+  task = { ...task, external: { ...task.external, attempted: true,dispatchStartedAt:new Date().toISOString(), ...(project?{projectId:project.projectId}:{}), ...(providerExecutionRelease?{providerExecutionRelease}:{}) } };
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
-      title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
+      title: providerExecutionRelease?`[agent] [provider-execution] Scoped project assignment ${task.id}`:`[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
       body: issueBody,
     });
     return persist(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
@@ -1178,6 +1205,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   for (const run of runs.data.workflow_runs) {
     if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
     if(typeof task.external.developerDispatchSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.developerDispatchSince)||run.head_sha!==task.external.developerReleaseSha||(task.external.lifecycleProposalId&&(run.event!=='workflow_dispatch'||run.id===(task.external.receipt as {run_id?:number}|undefined)?.run_id))))continue;
+    if(typeof task.external.providerExecutionRelease==='string'&&run.head_sha!==task.external.providerExecutionRelease)continue;
     if(!task.external.ownerSuccessorConsentId&&typeof task.external.resourceAmendmentSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.resourceAmendmentSince)||run.head_sha!==task.external.resourceAmendmentRelease||run.event!=='workflow_dispatch'))continue;
     if((!task.external.resourceAmendmentId||task.external.ownerSuccessorConsentId)&&typeof task.external.paidSuccessorSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.paidSuccessorSince)||run.head_sha!==task.external.paidSuccessorRelease||run.event!=='workflow_dispatch'))continue;
     if(!task.external.resourceAmendmentId&&!task.external.paidSuccessorId&&typeof task.external.pregrantRecoverySince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.pregrantRecoverySince)||run.head_sha!==task.external.pregrantRecoveryRelease||run.event!=='workflow_dispatch'))continue;
@@ -1194,7 +1222,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     if (!parsed.success || parsed.data.issue_number !== issueNumber) continue;
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
     const updated=await persist(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
-    if(receipt.outcome!=='READY'&&project){
+    if(receipt.outcome!=='READY'&&project&&!task.external.providerExecutionRelease&&!receipt.providerExecutionEvidence){
       // Nonbillable only: emit a recoverable owner proposal before any new execution.
       // Accounting/worker transitions may still be settling; owner reads revalidate.
       try{await prepareLifecycleOwnerProposal(updated.id);}catch{/* Preserve the terminal receipt; unavailable evidence never grants authority. */}

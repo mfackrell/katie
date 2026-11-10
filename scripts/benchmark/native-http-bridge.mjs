@@ -23,11 +23,11 @@ export function nativeChildInterruptionRetryable(outcome,gatewayFailure){
 // The caller must supply a server-owned grant and DB client. This bridge
 // deliberately does not forward model requests unless all dependencies exist.
 export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
- providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false,developerProjectId=null,task4a=false,successorEnvelope=null,onFailure=()=>{},requireInputCount=false,beforeRequest=()=>{}}){
- if(!db||!grantToken||(!trialId&&!developerProjectId)||(trialId&&developerProjectId)||!upstream||!recordReceipt||
+ providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false,developerProjectId=null,task4a=false,successorEnvelope=null,onFailure=()=>{},requireInputCount=false,beforeRequest=()=>{},providerExecutionForward}){
+ if((!providerExecutionForward&&(!db||!grantToken||(!trialId&&!developerProjectId)||(trialId&&developerProjectId)||!upstream||!recordReceipt))||
     typeof clientToken!=='string'||clientToken.length<12)
   throw Error('NATIVE_GATEWAY_NOT_CONFIGURED');
- const reasoningProvenance=createNativeReasoningProvenance();
+ const reasoningProvenance=createNativeReasoningProvenance({usageOptional:Boolean(providerExecutionForward)});
  return createServer(async(req,res)=>{
   if(req.method!=='POST'||req.url!=='/v1/responses'){
    res.writeHead(404);res.end();return;
@@ -51,7 +51,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    // Preserve completed tool writes BEFORE admission can reject the next call.
    // This callback has no authority to reserve tokens or issue execution grants.
    await beforeRequest();
-   const result=await forwardAuthorizedModelRequest({
+   const result=providerExecutionForward?await providerExecutionForward(body,reasoningProvenance):await forwardAuthorizedModelRequest({
     db,grantToken,trialId,developerProjectId,task4a,executionEpoch,model:body.model,
     requestBody:body,upperTokens,successorEnvelope,upstream,providerNamespace,recordReceipt,reasoningProvenance,
     fullMission:typeof fullMission==='function'?fullMission():fullMission,requireInputCount

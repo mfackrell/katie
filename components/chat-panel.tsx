@@ -813,6 +813,8 @@ export function ChatPanel({
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   useEffect(() => { setDeleteCandidate(null); setDeleteFailure(null); }, [chatId]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
+  const [gameTrialRefresh, setGameTrialRefresh] = useState(0);
+  const [gameTrial, setGameTrial] = useState<{chatId:string;mode:'start'|'stop'}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
   const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
   const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
@@ -1207,17 +1209,20 @@ export function ChatPanel({
     if(!chatId||!actorId||loading)return;
     let cancelled=false,inFlight=false,done=false;
     setProjectApproval(null);
+    setGameTrial(null);
     setResourceRecovery(null);
     setProjectApprovalError(null);
     const refresh=async()=>{
       if(cancelled||inFlight||done||document.visibilityState==='hidden')return;
       inFlight=true;
       try {
-        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
+        const bearer=await ownerSessionBearer();
+        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store',...(bearer?{headers:{Authorization:`Bearer ${bearer}`}}:{})});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;trialState?:'active'|'available'|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
+        setGameTrial(p.trialState==='available'?{chatId,mode:'start'}:p.trialState==='active'&&p.status!=='completed'&&p.status!=='stopped'?{chatId,mode:'stop'}:null);
         setResourceRecovery(p.resourceRecovery?{chatId,proposal:p.resourceRecovery}:null);
         // Executive missions can deliver after the immediate chat reply, even
         // without a software project (or after its completion). Stop only when
@@ -1235,15 +1240,18 @@ export function ChatPanel({
     document.addEventListener('visibilitychange',resume);
     void refresh();
     return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume);};
-  },[actorId,chatId,loading,projectProgressSignature]);
+  },[actorId,chatId,loading,projectProgressSignature,gameTrialRefresh]);
 
   async function approveProject(hash:string) {
     if(!chatId||!actorId||projectApprovalPending||loading)return;
     setProjectApprovalPending(true);
     setProjectApprovalError(null);
     try {
+      const ownerOnly=projectApproval?.approval.providerControlled;
+      const bearer=ownerOnly?await ownerSessionBearer():null;
+      if(ownerOnly&&!bearer)throw Error('Sign in as Katie owner to approve the trial scope.');
       const response=await fetch('/api/projects',{
-        method:'POST',headers:{'Content-Type':'application/json'},
+        method:'POST',headers:{'Content-Type':'application/json',...(bearer?{Authorization:`Bearer ${bearer}`}:{})},
         body:JSON.stringify({actorId,chatId,approvalHash:hash}),
       });
       const result=await response.json() as {error?:string;status?:string;messages?:Message[]};
@@ -1257,6 +1265,31 @@ export function ChatPanel({
     }catch(error){
       setProjectApprovalError(error instanceof Error?error.message:'Approval failed. Refresh the project scope.');
     }finally {setProjectApprovalPending(false);}
+  }
+
+  async function controlGameTrial(){
+    if(!gameTrial||gameTrial.chatId!==chatId||!actorId||!chatId||projectApprovalPending||loading)return;
+    const trialAction=gameTrial.mode;
+    setProjectApprovalPending(true);setProjectApprovalError(null);
+    try{
+      const bearer=await ownerSessionBearer();
+      if(!bearer)throw Error('Sign in as Katie owner to control the trial.');
+      const response=await fetch('/api/projects/organization',{
+        method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},
+        body:JSON.stringify({actorId,chatId,trialAction})
+      });
+      const result=await response.json() as {projectId?:string;error?:string;messages?:Message[]};
+      if(!response.ok||!result.projectId)throw Error(result.error??'Trial control failed.');
+      if(Array.isArray(result.messages)){
+        setMessages(result.messages);
+        setMessagesByChatId(current=>({...current,[chatId]:result.messages!}));
+      }
+      setGameTrial(trialAction==='start'?{chatId,mode:'stop'}:null);
+      setGameTrialRefresh(value=>value+1);
+      setStatusMessage(trialAction==='start'?'Trial started. Katie will prepare the game scope for review.':'Trial stopped.');
+    }catch(error){
+      setProjectApprovalError(error instanceof Error?error.message:'Trial control failed.');
+    }finally{setProjectApprovalPending(false);}
   }
 
   async function approveRecovery(hash:string,ceiling:number,hours:48|72){
@@ -3070,6 +3103,14 @@ export function ChatPanel({
           <DeveloperResourceCard proposal={resourceRecovery.proposal}
            pending={projectApprovalPending||loading} error={projectApprovalError}
            onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
+        ):null}
+        {gameTrial?.chatId===chatId && !managedAgentId ? (
+          <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3">
+            <button type="button" className="min-h-11 font-semibold" disabled={projectApprovalPending||loading} onClick={()=>void controlGameTrial()}>
+              {gameTrial.mode==='start'?'Start the two-hour tic-tac-toe trial':'Stop the tic-tac-toe trial'}
+            </button>
+            {projectApprovalError && <p role="alert">{projectApprovalError}</p>}
+          </aside>
         ):null}
         {projectApproval?.chatId===chatId && !managedAgentId ? (
           <ProjectApprovalCard
