@@ -148,3 +148,61 @@ test('trial Director can call the provider without any accounting service, and r
  assert.equal(calls.at(-1),'project_provider_mission_stop');
  assert.equal(attempts,2);
 });
+
+test('management rejection locates a premature dependency without storing model prose or foreign IDs',()=>{
+ const {assertManagementCommands,ManagementCommandRejection}=modules()('@/lib/projects/organization');
+ const root={id:randomUUID(),kind:'project_director'};
+ const foreign=randomUUID(),secret='secret-from-model-should-never-be-stored';
+ const commands=[{action:'plan'},{action:'appoint',kind:'manager'},{action:'dependency',nodeId:foreign,dependsOn:secret}];
+ assert.throws(()=>assertManagementCommands(root,[root],commands),error=>{
+  assert.ok(error instanceof ManagementCommandRejection);
+  const e=error.evidence;
+  assert.equal(e.position,3);assert.equal(e.action,'dependency');assert.equal(e.priorAppointments,1);
+  assert.equal(e.code,'immediate_reporting_authority');
+  assert.equal(e.targets[0].field,'nodeId');assert.equal(e.targets[0].status,'unknown');assert.match(e.targets[0].idHash,/^[a-f0-9]{64}$/);
+  assert.equal(e.targets[1].field,'dependsOn');assert.equal(e.targets[1].status,'malformed');
+  assert.ok(!JSON.stringify(e).includes(secret)&&!JSON.stringify(e).includes(foreign));
+  return true;
+ });
+ const branch={id:randomUUID(),parent_id:root.id},descendant={id:randomUUID(),parent_id:branch.id};
+ assert.throws(()=>assertManagementCommands(root,[root,branch,descendant],[{action:'certify',nodeId:descendant.id}]),error=>{
+  assert.equal(error.evidence.targets[0].status,'not_direct_report');
+  assert.equal(error.evidence.targets[0].id,descendant.id);
+  return true;
+ });
+ assert.doesNotThrow(()=>assertManagementCommands(root,[root],[{action:'plan'},{action:'appoint',kind:'manager'}]));
+});
+
+test('management rejection retries only a failed terminal write and fences inference after a lost receipt',async()=>{
+ for(const mode of ['success','throw-once','false','throw-twice']){
+  const id=randomUUID(),agent=randomUUID(),project=randomUUID(),writes=[];
+  const rows={project_organization_nodes:[{id,agent_id:agent,kind:'project_director'}],work_projects:{objective:'Game',team:[]}};
+  const db={from(table){const q={select(){return q;},eq(){return q;},in(){return q;},single(){return q;},then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}};return q;}};
+  const claim={mission:{id:randomUUID(),project_id:project,project_kind:'management',calls:0},job:{id:randomUUID(),agent_id:agent,lease:randomUUID(),attempts:1,payload:{organizationNodeId:id}}};
+  let next=claim,modelCalls=0;
+  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/missions/store':{rpc:async(name,args)=>{
+   if(name==='claim_mission_work'){const result=next;next=null;return result;}
+   if(name==='project_org_decide')assert.fail('Rejected command reached the dispatch RPC');
+   if(name==='commit_mission_work'){
+    writes.push(args);
+    if(mode==='throw-twice'||mode==='throw-once'&&writes.length===1)throw Error('503 test write failure');
+    return mode!=='false';
+   }
+   return true;
+  }}});
+  const worker=load('@/lib/missions/worker');
+  const model=async()=>{modelCalls++;return{text:'[{"action":"dependency","nodeId":"unbound"}]'};};
+  const result=await worker.runMissionBatch(model);
+  assert.equal(result.outcomes[0].status,['false','throw-twice'].includes(mode)?'failure_record_unconfirmed':'blocked');
+  assert.equal(modelCalls,1);
+  assert.equal(writes.length,['throw-once','throw-twice'].includes(mode)?2:1);
+  for(const write of writes){
+   assert.equal(write.p_id,claim.job.id);assert.equal(write.p_lease,claim.job.lease);
+   assert.equal(write.p_status,'failed');assert.equal(write.p_mission_status,'blocked');
+   assert.equal(write.p_result.managementCommandRejection.action,'dependency');
+  }
+  if(writes.length===2)assert.deepEqual(writes[0],writes[1]);
+  await assert.rejects(worker.executeClaim({...claim,mission:{...claim.mission,calls:1},job:{...claim.job,lease:randomUUID(),attempts:2}},model),/already admitted/);
+  assert.equal(modelCalls,1);
+ }
+});
