@@ -14,6 +14,9 @@ export async function assertDirectorOneShotRecovery(db,rival){
  const cutoff=new Date(Date.now()+10*60*1000).toISOString();
  const admit=(c=db,who=owner,id=project.id,sha=release,end=cutoff)=>
   sql(c,'select project_admit_director_recovery($1,$2,$3,$4) value',[who,id,sha,end]);
+ const renew=(c,who,prior,end=cutoff,sha=release)=>
+  sql(c,'select project_admit_expired_director_recovery($1,$2,$3,$4,$5) value',[who,project.id,sha,prior,end]);
+ const deadlines=()=>sql(db,"select jsonb_build_array(p.deadline,a.deadline) value from work_projects p join project_provider_execution a on a.project_id=p.id where p.id=$1",[project.id]);
  const claim=(c=db,sha=release)=>sql(c,'select claim_mission_work_release($1) value',[sha]);
  const provider=(c,args)=>sql(c,'select project_provider_request($1,$2,$3,$4,$5,$6,$7) value',args);
  const args=(job,operation)=>[job.id,job.lease,randomUUID(),operation,'d'.repeat(64),null,null];
@@ -62,11 +65,38 @@ export async function assertDirectorOneShotRecovery(db,rival){
  await assert.rejects(db.query('select project_org_schedule_before_director_recovery($1,$2)',[project.id,projectLease]),/permission denied/);
  await assert.rejects(db.query("select project_org_decide_before_director_recovery($1,$2,'[]')",[randomUUID(),randomUUID()]),/permission denied/);
  await assert.rejects(db.query("select project_provider_request_before_director_recovery($1,'x',$2,'inference',$3)",[randomUUID(),randomUUID(),'d'.repeat(64)]),/permission denied/);
- const admissions=await Promise.all([admit(db),admit(rival)]);
+ const originalCutoffs=await deadlines();
+ await assert.rejects(renew(db,owner,originalCutoffs[0]),/Exact expired cutoff/);
+ await db.query('begin');
+ try{
+  assert.equal((await admit()).existing,false,'Original unexpired admission still works');
+ }finally{await db.query('rollback');}
+
+ // Expire only the fixture's original project/provider deadline. Leave its
+ // failed attempts, provider receipts and Director authority unchanged.
+ await db.query('reset role');
+ const prior=await sql(db,"update project_provider_execution set deadline=now()-interval '1 minute' where project_id=$1 returning deadline::text value",[project.id]);
+ await db.query('update work_projects set deadline=$2 where id=$1',[project.id,prior]);
+ await db.query('set role service_role');
+ const expired=await deadlines();
+ await assert.rejects(admit(),/within the existing trial deadline/);
+ await assert.rejects(renew(db,randomUUID(),prior),/Authenticated trial owner/);
+ await assert.rejects(renew(db,owner,cutoff),/Exact expired cutoff/);
+ await assert.rejects(renew(db,owner,prior,prior),/Exact expired cutoff/);
+ await assert.rejects(renew(db,owner,prior,new Date(Date.now()+3*60*60*1000).toISOString()),/within two hours/);
+ await assert.rejects(renew(db,owner,prior,cutoff,'invalid'),/Exact release/);
+ assert.deepEqual(await deadlines(),expired,'Rejected admission rolls back both deadline writes');
+ const admissions=await Promise.all([renew(db,owner,prior),renew(rival,owner,prior)]);
  assert.equal(admissions.filter(r=>!r.existing).length,1);
  const recovery=admissions[0];
  assert.equal(recovery.assignmentId,admissions[1].assignmentId);
  assert.equal(recovery.missionId,admissions[1].missionId);
+ const renewal=(await db.query('select prior_cutoff,cutoff from project_director_recoveries where project_id=$1',[project.id])).rows[0];
+ assert.equal(renewal.prior_cutoff.toISOString(),new Date(prior).toISOString());
+ assert.equal(renewal.cutoff.toISOString(),cutoff);
+ assert.deepEqual((await deadlines()).map(d=>new Date(d).toISOString()),[cutoff,cutoff]);
+ await assert.rejects(renew(db,owner,cutoff),/already admitted/);
+ await assert.rejects(renew(db,owner,prior,new Date(Date.now()+60000).toISOString()),/already admitted/);
  await assert.rejects(admit(db,owner,project.id,otherRelease),/already admitted/);
  assert.deepEqual(await Promise.all([schedule(db),schedule(rival)]),[{handled:true},{handled:true}]);
  await db.query("update mission_assignments set created_at='2000-01-01' where id=$1",[recovery.assignmentId]);

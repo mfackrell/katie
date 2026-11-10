@@ -39,7 +39,8 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  await db.query(readFileSync(providerMigration,'utf8'));
  assert.deepEqual(await snapshot(),before,'Provider-controlled mode must not alter historical data');
  await db.query(readFileSync('supabase/migrations/20261110180000_one_shot_director_recovery.sql','utf8'));
- assert.deepEqual(await snapshot(),before,'Recovery migration must preserve existing records');
+ await db.query(readFileSync('supabase/migrations/20261110190600_director_recovery_cutoff_amendment.sql','utf8'));
+ assert.deepEqual(await snapshot(),before,'Recovery migrations must preserve existing records');
  if(process.env.KATIE_TEST_DIRECTOR_ONE_SHOT==='1'){
   await (await import('./assert-director-one-shot-recovery.mjs')).assertDirectorOneShotRecovery(db,rival);
  }else{
