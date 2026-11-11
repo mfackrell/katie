@@ -19,7 +19,7 @@ function chat({status=null,loading=false,executivePending=true}={}){
  const document={visibilityState:'visible',addEventListener(){},removeEventListener(){}};
  const context={actorId:'actor',chatId:'chat',loading,projectProgressSignature:'',gameTrialRefresh:0,document,
   window:{setInterval(fn){tick=fn;return 1;},clearInterval(){tick=null;},addEventListener(){},removeEventListener(){}},
-  useEffect(fn){cleanup=fn();},setProjectApproval(){},setGameTrial(){},ownerSessionBearer:async()=>null,setResourceRecovery(){},setProjectApprovalError(){},
+  useEffect(fn){cleanup=fn();},setProjectApproval(){},setGameTrial(){},setDirectorRecovery(){},ownerSessionBearer:async()=>null,setResourceRecovery(){},setProjectApprovalError(){},
   setMessages(fn){current=fn(current);},setMessagesByChatId(fn){cache=fn(cache);},
   async fetch(){requests++;if(pending)await pending;return {ok:true,json:async()=>({status,executivePending:executivePending&&requests===1,approval:null,messages:requests===1?[receipt]:[receipt,answer]})};}
  };

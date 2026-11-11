@@ -21,6 +21,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Use signed Ubuntu archive mirror
+        run: |
+          # Ubuntu hosts fail DNS on this image; prefer the Kernel Archives mirror.
+          # APT still requires Ubuntu signatures; retain the image's existing fallbacks.
+          if test -f /etc/apt/apt-mirrors.txt; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+            sudo sed -i '1i https://mirrors.kernel.org/ubuntu/\tpriority:1' /etc/apt/apt-mirrors.txt
+            grep -Eq '^https?://(archive|security)\.ubuntu\.com/ubuntu/?([[:space:]]|$)' /etc/apt/apt-mirrors.txt
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -162,6 +172,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Use signed Ubuntu archive mirror
+        run: |
+          # Ubuntu hosts fail DNS on this image; prefer the Kernel Archives mirror.
+          # APT still requires Ubuntu signatures; retain the image's existing fallbacks.
+          if test -f /etc/apt/apt-mirrors.txt; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+            sudo sed -i '1i https://mirrors.kernel.org/ubuntu/\tpriority:1' /etc/apt/apt-mirrors.txt
+            grep -Eq '^https?://(archive|security)\.ubuntu\.com/ubuntu/?([[:space:]]|$)' /etc/apt/apt-mirrors.txt
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22

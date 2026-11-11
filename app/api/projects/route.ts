@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
+import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { recoveryResourceProposal } from '@/lib/projects/recovery-budget';
@@ -39,6 +41,26 @@ function approvalFor(p: Project | null,providerControlled: boolean) {
     };
 }
 
+async function directorRecoveryFor(p: Project | null, request: NextRequest, providerControlled: boolean): Promise<DirectorRecoveryOffer | null> {
+    if (!p || p.id !== 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe' || !providerControlled
+        || !await verifiedProjectOwnerSession(request)) return null;
+    const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
+    if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
+    const cutoff = '2026-11-12T00:00:00Z';
+    const priorCutoff = '2026-11-10T18:59:32.547837Z';
+    const { data, error } = await getSupabaseAdminClient().from('project_director_recoveries')
+        .select('mission_id,assignment_id,cutoff').eq('project_id', p.id).maybeSingle<{
+            mission_id: string; assignment_id: string; cutoff: string;
+        }>();
+    if (error) throw Error('Director recovery admission state unavailable');
+    if (!data && (p.status !== 'blocked' || p.phase !== 'research'
+        || Date.now() >= Date.parse(cutoff) || Date.parse(p.deadline) !== Date.parse(priorCutoff))) return null;
+    return {
+        projectId: p.id, releaseSha: releaseSha!, cutoff, priorCutoff,
+        receipt: data ? {projectId: p.id, missionId: data.mission_id, assignmentId: data.assignment_id, cutoff: data.cutoff, existing: true} : null,
+    };
+}
+
 export async function GET(request: NextRequest) {
     try {
         const { actorId, chatId } = projectIdentity.parse({
@@ -54,6 +76,7 @@ export async function GET(request: NextRequest) {
         const resourceRecovery = p&&!providerControlled ? await recoveryResourceProposal(p) : null;
         return NextResponse.json({
             resourceRecovery,
+            directorRecovery: await directorRecoveryFor(p, request, providerControlled),
             active: p?.status === 'running',
             status: p?.status ?? null,
             approval: approvalFor(p,providerControlled),
