@@ -11,7 +11,7 @@ export async function assertDirectorOneShotRecovery(db,rival){
  await db.query('set role service_role');
  const project=await sql(db,'select project_provider_launch($1,$2,$3) value',[owner,actor,chat]);
  const release='a'.repeat(40),otherRelease='b'.repeat(40);
- const cutoff=new Date(Date.now()+10*60*1000).toISOString();
+ let cutoff=new Date(Date.now()+10*60*1000).toISOString();
  const admit=(c=db,who=owner,id=project.id,sha=release,end=cutoff)=>
   sql(c,'select project_admit_director_recovery($1,$2,$3,$4) value',[who,id,sha,end]);
  const renew=(c,who,prior,end=cutoff,sha=release)=>
@@ -79,11 +79,12 @@ export async function assertDirectorOneShotRecovery(db,rival){
  await db.query('update work_projects set deadline=$2 where id=$1',[project.id,prior]);
  await db.query('set role service_role');
  const expired=await deadlines();
+ cutoff=new Date(Date.now()+23*60*60*1000).toISOString();
  await assert.rejects(admit(),/within the existing trial deadline/);
  await assert.rejects(renew(db,randomUUID(),prior),/Authenticated trial owner/);
  await assert.rejects(renew(db,owner,cutoff),/Exact expired cutoff/);
  await assert.rejects(renew(db,owner,prior,prior),/Exact expired cutoff/);
- await assert.rejects(renew(db,owner,prior,new Date(Date.now()+3*60*60*1000).toISOString()),/within two hours/);
+ await assert.rejects(renew(db,owner,prior,new Date(Date.now()+25*60*60*1000).toISOString()),/within twenty-four hours/);
  await assert.rejects(renew(db,owner,prior,cutoff,'invalid'),/Exact release/);
  assert.deepEqual(await deadlines(),expired,'Rejected admission rolls back both deadline writes');
  const admissions=await Promise.all([renew(db,owner,prior),renew(rival,owner,prior)]);
