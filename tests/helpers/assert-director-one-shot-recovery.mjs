@@ -165,7 +165,7 @@ export async function assertDirectorOneShotRecovery(db,rival){
  assert.equal(await sql(db,'select status value from work_projects where id=$1',[project.id]),'blocked');
  assert.equal(await sql(db,"select count(*)::int value from project_organization_nodes where project_id=$1 and management_level='functional_director'",[project.id]),1);
  assert.equal(await sql(db,'select count(*)::int value from project_work_packages where project_id=$1',[project.id]),0);
- assert.notEqual((await claim())?.job.id,job.id);
+ await save(async()=>assert.notEqual((await claim())?.job.id,job.id));
  assert.equal((await admit()).assignmentId,job.id);
  await db.query('reset role');
  const after=await snapshot();

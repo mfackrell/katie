@@ -61,7 +61,7 @@ export async function assertProviderProjectContinuation(db,rival,{project,owner,
  const stale=await sql(db,'select claim_mission_work_release($1) value',[release]);
  assert.notEqual(stale?.mission.id,scheduled.missionId);await db.query('rollback');
  const claims=await Promise.all([sql(db,'select claim_mission_work_release($1) value',[nextRelease]),sql(rival,'select claim_mission_work_release($1) value',[nextRelease])]);
- const wins=claims.filter(x=>x?.mission.id===scheduled.missionId);assert.equal(wins.length,1);
+ const wins=claims.filter(x=>x?.mission.id===scheduled.missionId);assert.equal(wins.length,1,'Exactly one scheduler claims the admitted Functional Director');
  const fd=wins[0].job;
  const request=[fd.id,fd.lease,randomUUID(),'model-list','e'.repeat(64),null,null];
  const provider=(c,args)=>sql(c,'select project_provider_request($1,$2,$3,$4,$5,$6,$7) value',args);
@@ -69,12 +69,12 @@ export async function assertProviderProjectContinuation(db,rival,{project,owner,
  assert.equal(await provider(rival,[...request.slice(0,2),randomUUID(),...request.slice(3)]),false,'Unresolved provider call stays fenced');
  assert.equal(await provider(db,[...request.slice(0,-1),'fixture resolved receipt']),true);
  assert.equal(await sql(db,'select project_provider_continued_assignment($1) value',[job.id]),false,'Recovery never enters normal execution');
- await assert.rejects(sql(db,"select project_org_decide($1,$2,$3) value",[fd.id,fd.lease,[{action:'appoint',kind:'manager',managementLevel:'project_director'}]]),/director|appointment|reporting/i);
- assert.equal(await sql(db,'select project_org_decide($1,$2,$3) value',[fd.id,fd.lease,[{action:'ready'}]]),true);
+ await assert.rejects(sql(db,"select project_org_decide($1,$2,$3) value",[fd.id,fd.lease,JSON.stringify([{action:'appoint',kind:'manager',managementLevel:'project_director'}])]),/director|appointment|reporting/i);
+ assert.equal(await sql(db,'select project_org_decide($1,$2,$3) value',[fd.id,fd.lease,JSON.stringify([{action:'ready'}])]),true);
  assert.equal(await sql(db,"select commit_mission_work($1,$2,'{\"output\":\"Fixture management decision\"}','[]','completed','completed',null) value",[fd.id,fd.lease]),false,'Management decision already consumed its lease');
  const controllerLease=randomUUID();
  await db.query("update work_projects set lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[project.id,controllerLease]);
- assert.equal(await sql(db,"select finish_work_project_lifecycle($1,$2,'child',$3) value",[project.id,controllerLease,{kind:'research',objective:'Review the unchanged approved objective',evidence:{}}]),true);
+ assert.equal(await sql(db,"select finish_work_project($1,$2,'child',$3) value",[project.id,controllerLease,{kind:'research',objective:'Review the unchanged approved objective',evidence:{}}]),true);
  const controllerMission=await sql(db,'select active_mission_id value from work_projects where id=$1',[project.id]);
  const controllerMembership=await sql(db,'select bool_and(project_provider_continued_assignment(id)) value from mission_assignments where mission_id=$1',[controllerMission]);
  assert.equal(controllerMembership,true,'Existing controller-created children enter the same authorized stage');
