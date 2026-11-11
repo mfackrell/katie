@@ -117,6 +117,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+      - name: Use existing Ubuntu fallback mirrors
+        run: |
+          # The image's Azure mirror fails DNS; retain its existing signed Ubuntu fallbacks.
+          if test -f /etc/apt/apt-mirrors.txt; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+            grep -Eq '^https?://(archive|security)\.ubuntu\.com/ubuntu/?([[:space:]]|$)' /etc/apt/apt-mirrors.txt
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
