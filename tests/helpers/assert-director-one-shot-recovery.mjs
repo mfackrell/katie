@@ -157,7 +157,7 @@ export async function assertDirectorOneShotRecovery(db,rival){
   {action:'plan',purpose:'Deliver the original game',direction:'Verify rules independently',
    outcomes:[{criterion:'Playable game',verification:'Browser checks'}],milestones:[{objective:'Build the scoped game'}],organizations:['development']},
   {action:'appoint',kind:'manager',managementLevel:'functional_director',name:'Development',area:'development',
-   objective:'Own gameplay implementation',acceptance:['Rules pass'],tokens:1,deadline:cutoff,paths:[],tools:['manage','analysis']},
+   objective:'Own gameplay implementation',acceptance:['Rules pass'],tokens:20000,deadline:cutoff,paths:[],tools:['manage','analysis']},
   {action:'ready'},
  ];
  assert.equal(await decide(commands),true);
@@ -176,4 +176,5 @@ export async function assertDirectorOneShotRecovery(db,rival){
  assert.deepEqual([after.missions.length,after.assignments.length,after.requests.length],[3,3,6]);
  await db.query('set role service_role');
  console.log('DIRECTOR_ONE_SHOT_POSTGRES_PASS');
+ await (await import('./assert-provider-project-continuation.mjs')).assertProviderProjectContinuation(db,rival,{project,owner,cutoff,release,recovery,job});
 }
