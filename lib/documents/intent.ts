@@ -79,6 +79,34 @@ export function inheritDocumentPageConstraint(
   return current;
 }
 
+/** A retained PDF is already the requested output. Pure export/re-export must
+ * preserve the selected source instead of authorizing a model rewrite. */
+export function sourcePreservingPdfExportRequest(message: string): boolean {
+  if (!documentRequest(message) || !/\bpdf\b/i.test(message)) return false;
+  if (/\b(?:revise|edit|update|rewrite|tailor|change|correct|improve|summari[sz]e|summary|translate|extract|combine|merge|redact|annotate|fill|sign|add|remove|replace)\b/i.test(message))
+    return false;
+  return /\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|re-?export|reissue|give\s+me)\b/i.test(message);
+}
+
+/** Professional document identities fail closed when independent visual review
+ * is unresolved. Technical-only delivery remains available for other document
+ * classes and is never mislabeled as professionally accepted. */
+export function retainedPdfExportFileId(
+  message: string, attachments: Array<{fileId:string; mimeType:string}>,
+  hasRetainedSource: (fileId:string)=>boolean,
+): string | null {
+  if (!sourcePreservingPdfExportRequest(message)) return null;
+  const pdfs = attachments.filter(file => file.mimeType === 'application/pdf');
+  if (pdfs.length !== 1 || !hasRetainedSource(pdfs[0].fileId)) return null;
+  return pdfs[0].fileId;
+}
+
+export function requiresProfessionalDocumentAcceptance(message: string, identity?: string | null): boolean {
+  if (/\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\b/i.test(message))
+    return true;
+  return new Set(['resume','financial-report','agreement','proposal']).has(identity ?? '');
+}
+
 export function answeredDocumentRequest(progress: {
   lastUserIntent?: string; objective: { text: string; userMessageId: string } | null;
   answered: Array<{ taskId?: string; userMessageId: string }>;

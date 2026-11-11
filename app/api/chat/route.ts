@@ -1,5 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, retainedPdfExportFileId as resolveRetainedPdfExportFileId, requiresProfessionalDocumentAcceptance, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
@@ -41,7 +41,7 @@ import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { recalledKatieVisualMemoryContext } from "@/lib/chat/visual-memory";
-import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
+import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentSource, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest, currentTurnImageGroundingContext } from "@/lib/uploads/still-image-observations";
 import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
@@ -2438,6 +2438,10 @@ ${savedProjectSourceWarning.retainedObjective}`;
               if (freshPdfSelection && attachment.mimeType === "application/pdf" && !freshPdfSelection.fileIds.has(attachment.fileId)) excludedPdfSourceIds.add(saved.id);
               else attachmentSourceIds.add(saved.id);
             }
+            const retainedPdfExportFileId = documentProduction
+              ? resolveRetainedPdfExportFileId(message, attachments, fileId => Boolean(pdfSources.get(fileId)?.hasOriginal))
+              : null;
+            const retainedPdfExportAttachment = retainedPdfExportFileId ? pdfSources.get(retainedPdfExportFileId) ?? null : null;
             if (timelineActive && temporalIntent) {
               const timelineSource = timelineSelection.clarification ? undefined : freshVideoReferences.length
                 ? (timelineSelection.source ? persistedVideoSourceByFileId.get(timelineSelection.source.id) : undefined)
@@ -2507,7 +2511,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
               pdf.nativeInspectionRequired=false;
             }
             for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
-              if (attachmentDecision.clarification) continue;
+              if (retainedPdfExportAttachment || attachmentDecision.clarification) continue;
               const source=pdfSources.get(pdf.fileId);
               if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
               try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName),pdf.pdfSourceOccurrence),async id=>(await getChatById(id))?.actorId===actorId,pdfSourceTask); }
@@ -2643,6 +2647,9 @@ ${chunkWorkflowSummary}`;
                  Boolean(process.env.RUNPOD_API_KEY) && isTechnicalImageFailure(error) &&
                  !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")),
               runAttempt: async (candidate, attemptIndex) => {
+                if (retainedPdfExportAttachment) {
+                  return { text: 'SOURCE_PDF_PRESERVED', provider: candidate.provider.name, model: candidate.modelId };
+                }
                 if (verifyingSavedDraft && pendingReviewClarification) {
                   // Verification retries review the saved candidate verbatim;
                   // they must not draft a replacement answer to a short "yes".
@@ -3774,11 +3781,21 @@ ${chunkWorkflowSummary}`;
             }
 
             if (documentProduction && !reviewHasPendingClarification) {
-              const { deliverDocument } = await import('@/lib/documents/service');
-              result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
-                params: createParams(result.model), actorId, chatId, requestId,
-                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs,
-                requireProfessionalAcceptance: /\\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\\b/i.test(message) });
+              const { deliverDocument, deliverRetainedPdfSource } = await import('@/lib/documents/service');
+              if (retainedPdfExportAttachment) {
+                const sourceChatId = retainedPdfExportAttachment.chatId ?? chatId;
+                const owner = await getChatById(sourceChatId);
+                if (!owner || owner.actorId !== actorId) throw new Error('Selected PDF source is unavailable to this actor.');
+                const source = await loadConversationAttachmentSource(sourceChatId, retainedPdfExportAttachment, actorId);
+                if (source.mimeType !== 'application/pdf') throw new Error('Selected source is not a PDF.');
+                result = await deliverRetainedPdfSource({ result, sourcePdf: source.bytes, sourceSha256: source.sha256,
+                  actorId, chatId, requestId });
+              } else {
+                result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
+                  params: createParams(result.model), actorId, chatId, requestId,
+                  targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs,
+                  requireProfessionalAcceptance: requiresProfessionalDocumentAcceptance(message, documentBinding.contract?.identity) });
+              }
               streamedText = result.text;
             }
 
