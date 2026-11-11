@@ -70,14 +70,25 @@ export async function assertProviderProjectContinuation(db,rival,{project,owner,
  assert.equal(await provider(db,[...request.slice(0,-1),'fixture resolved receipt']),true);
  assert.equal(await sql(db,'select project_provider_continued_assignment($1) value',[job.id]),false,'Recovery never enters normal execution');
  await assert.rejects(sql(db,"select project_org_decide($1,$2,$3) value",[fd.id,fd.lease,JSON.stringify([{action:'appoint',kind:'manager',managementLevel:'project_director'}])]),/director|appointment|reporting/i);
- assert.equal(await sql(db,'select project_org_decide($1,$2,$3) value',[fd.id,fd.lease,JSON.stringify([{action:'ready'}])]),true);
+ assert.equal(await sql(db,'select project_org_decide($1,$2,$3) value',[fd.id,fd.lease,JSON.stringify([...['Researcher','Writer','Reviewer'].map(name=>({action:'appoint',kind:'worker',name,area:'development',objective:'Deliver bounded '+name+' evidence',acceptance:['Reviewed evidence'],tools:['analysis'],tokens:1,deadline:cutoff,paths:[]})),{action:'ready'}])]),true);
  assert.equal(await sql(db,"select commit_mission_work($1,$2,'{\"output\":\"Fixture management decision\"}','[]','completed','completed',null) value",[fd.id,fd.lease]),false,'Management decision already consumed its lease');
+ // Seed the existing controller team from the FD's authenticated appointments.
+ const team=(await db.query("select agent_id from project_organization_nodes where project_id=$1 and kind='worker' order by name",[project.id])).rows.map(n=>n.agent_id);
+ assert.equal(team.length,3);
+ await db.query('update work_projects set team=$2 where id=$1',[project.id,team]);
+ // Generic software-controller membership is tested separately from the legacy
+ // game's specialist pin. Changing a test profile is not a live game proof.
  const controllerLease=randomUUID();
  await db.query("update work_projects set lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[project.id,controllerLease]);
+ await assert.rejects(sql(db,"select finish_work_project($1,$2,'child',$3) value",[project.id,controllerLease,{kind:'research',objective:'Review the unchanged approved objective',evidence:{}}]),/Pinned game specialist/);
+ await db.query('reset role');await db.query('begin');
+ await db.query("update work_projects set profile='software' where id=$1",[project.id]);
+ await db.query('set local role service_role');
  assert.equal(await sql(db,"select finish_work_project($1,$2,'child',$3) value",[project.id,controllerLease,{kind:'research',objective:'Review the unchanged approved objective',evidence:{}}]),true);
  const controllerMission=await sql(db,'select active_mission_id value from work_projects where id=$1',[project.id]);
  const controllerMembership=await sql(db,'select bool_and(project_provider_continued_assignment(id)) value from mission_assignments where mission_id=$1',[controllerMission]);
- assert.equal(controllerMembership,true,'Existing controller-created children enter the same authorized stage');
+ assert.equal(controllerMembership,true,'Generic controller-created children enter the same authorized stage');
+ await db.query('rollback');await db.query('set role service_role');
  }finally{await earlyScheduler.end();}
  console.log('PROVIDER_PROJECT_CONTINUATION_POSTGRES_PASS: owner admission race, historical preservation, scheduler membership, release binding and provider replay fencing');
 }
