@@ -104,8 +104,8 @@ function harness({
     openai: Transport,
     "@/lib/data/persistence-store": store,
     "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => admin },
-    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch: (provider, activity) => {
-      events.push({ name: "accounting", provider, activity });
+    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch: (provider, activity, policy) => {
+      events.push({ name: "accounting", provider, activity, timeoutCode: policy?.timeoutCode, timeoutMsType: typeof policy?.timeoutMs });
       return async () => { throw Error("Network disallowed in tests"); };
     } },
     "@/lib/standalone-accounting/context": { isStandaloneAccountingError: accountingError },
@@ -135,7 +135,8 @@ test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () =>
   assert.ok(h.calls.every(x => x.text?.format?.type === "json_schema" && x.store === false));
   assert.equal(h.constructors[0].baseURL, "https://api.x.ai/v1");
   assert.equal(h.constructors[0].maxRetries, 0);
-  assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary"));
+  assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary" &&
+    x.timeoutCode === "memory_timeout" && x.timeoutMsType === "function"));
   assert.match(source, /claude-sonnet-5-5/);
   assert.match(source, /SUMMARY_TIMEOUT_MS = 90_000/);
 });
@@ -316,11 +317,14 @@ test("accounting denial, ambiguous provider failure and concurrency remain bound
   assert.equal(shared.writes.length, 1);
 });
 
-test("uncertain Grok outcome defers and the next request uses Anthropic without advancing the cursor", async () => {
+test("memory transport timeout defers and the next request uses Anthropic without advancing the cursor", async () => {
+  const timeout = Object.assign(new Error("Intermediate memory provider transmission timed out at the accounting boundary."), {
+    code: "standalone_memory_timeout", terminal: true,
+  });
   const h = harness({
     fallbackConfigured: true,
     responses: (n, body, provider) => {
-      if (provider === "grok") throw new Error("400 The previous provider outcome is unavailable. Its full exposure is authorized and retained. This operation was not retransmitted; use the next safe fallback.");
+      if (provider === "grok") throw timeout;
       return n % 2 === 0 ? selected() : retained();
     },
   });

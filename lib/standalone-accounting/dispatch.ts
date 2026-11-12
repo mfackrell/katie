@@ -12,6 +12,16 @@ import type { ResponseCheckpoint } from './types';
 
 const hosts: Record<AccountingProvider, string> = { openai: 'api.openai.com', anthropic: 'api.anthropic.com', google: 'generativelanguage.googleapis.com', grok: 'api.x.ai' };
 const activeTransmissions = new Map<string, AbortController>();
+const DEFAULT_PROVIDER_TRANSMISSION_TIMEOUT_MS = 180_000;
+export type AccountingTransmissionPolicy = {
+  timeoutMs?: number | (() => number);
+  timeoutCode?: string;
+  timeoutMessage?: string | ((timeoutMs: number) => string);
+  uncertaintyReason?: string | ((timeoutMs: number) => string);
+};
+function policyText(value: string | ((timeoutMs: number) => string) | undefined, timeoutMs: number, fallback: string): string {
+  return typeof value === 'function' ? value(timeoutMs) : value ?? fallback;
+}
 /** Owner binding is checked durably before aborting an in-flight local request. */
 export async function cancelStandaloneAttempt(ownerId: string, attemptId: string) {
   const attempt = await createStandaloneLedger().cancel(ownerId, attemptId);
@@ -258,7 +268,7 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
 
 /** Every actual paid HTTP transmission passes here, after SDK serialization.
  * The injected transport and ledger factory allow isolated tests with no paid calls. */
-export function createAccountingFetch(provider: AccountingProvider, transport: typeof fetch = globalThis.fetch.bind(globalThis), ledgerFactory = createStandaloneLedger): typeof fetch {
+export function createAccountingFetch(provider: AccountingProvider, transport: typeof fetch = globalThis.fetch.bind(globalThis), ledgerFactory = createStandaloneLedger, transmissionPolicy: AccountingTransmissionPolicy = {}): typeof fetch {
   return async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
@@ -482,7 +492,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     headers.delete('content-length');
     const controller = new AbortController();
-    const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(180_000)]);
+    const configuredTimeout = typeof transmissionPolicy.timeoutMs === 'function'
+      ? transmissionPolicy.timeoutMs() : transmissionPolicy.timeoutMs ?? DEFAULT_PROVIDER_TRANSMISSION_TIMEOUT_MS;
+    if (!Number.isFinite(configuredTimeout) || configuredTimeout <= 0)
+      throw failure('transport_policy', 'Provider accounting received an invalid transmission timeout policy.');
+    const transmissionTimeoutMs = Math.max(1, Math.floor(configuredTimeout));
+    const timeoutSignal = AbortSignal.timeout(transmissionTimeoutMs);
+    const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), timeoutSignal]);
     const activeKey = `${context.userId}:${attempt.id}`;
     activeTransmissions.set(activeKey, controller);
     let pollingCancellation = false;
@@ -506,10 +522,33 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if(reconciled?.state==='uncertain'&&!safeUncertainCheckpoint(checkpoint,provider,prepared.endpoint))return unavailableUncertainResponse();
       return restore(checkpoint);
     } catch (error) {
-      await ledger.markUncertain(context.userId, attempt.id, error instanceof StandaloneAccountingError ? error.message : 'Transmission or response reconciliation did not complete; reservation remains held.').catch(() => undefined);
+      const timedOut = timeoutSignal.aborted;
+      const timeoutError = timedOut && transmissionPolicy.timeoutCode
+        ? failure(transmissionPolicy.timeoutCode, policyText(
+            transmissionPolicy.timeoutMessage, transmissionTimeoutMs,
+            `Provider transmission timed out after ${transmissionTimeoutMs}ms; provider cancellation was requested and billing outcome is unknown.`,
+          ))
+        : null;
+      const uncertaintyReason = timedOut
+        ? policyText(
+            transmissionPolicy.uncertaintyReason, transmissionTimeoutMs,
+            `Provider transmission timed out after ${transmissionTimeoutMs}ms; reservation remains held because billing outcome is unknown.`,
+          )
+        : error instanceof StandaloneAccountingError
+          ? error.message
+          : 'Transmission or response reconciliation did not complete; reservation remains held.';
+      await ledger.markUncertain(context.userId, attempt.id, uncertaintyReason).catch(() => undefined);
+      if (timeoutError) throw Object.assign(timeoutError, { cause: error, attemptId: attempt.id });
       if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))return unavailableUncertainResponse();
       if (error instanceof StandaloneAccountingError) throw Object.assign(error, { attemptId: attempt.id });
       throw Object.assign(failure('outcome_unknown', 'The provider outcome is uncertain. Spending exposure remains reserved; automatic retry stopped.'), { cause: error, attemptId: attempt.id });
     } finally { clearInterval(cancellationPoll); activeTransmissions.delete(activeKey); }
   };
+}
+
+
+/** Activity-specific callers may override only the transmission boundary policy.
+ * Admission, exact-payload accounting, uncertainty retention, and replay rules remain unchanged. */
+export function createAccountingFetchWithPolicy(provider: AccountingProvider, policy: AccountingTransmissionPolicy): typeof fetch {
+  return createAccountingFetch(provider, globalThis.fetch.bind(globalThis), createStandaloneLedger, policy);
 }

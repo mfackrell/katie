@@ -35,46 +35,39 @@ export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "de
 
 const grokApiKey = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? process.env["grok_api_key"];
 const anthropicApiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
-const grokClient = grokApiKey ? new OpenAI({
-  apiKey: grokApiKey,
-  baseURL: "https://api.x.ai/v1",
-  maxRetries: 0,
-  fetch: createActivityAccountingFetch("grok", "memory-summary"),
-}) : null;
-const anthropicClient = anthropicApiKey ? new OpenAI({
-  apiKey: anthropicApiKey,
-  baseURL: "https://api.anthropic.com/v1/",
-  maxRetries: 0,
-  defaultHeaders: { Authorization: null, "x-api-key": anthropicApiKey, "anthropic-version": "2023-06-01" },
-  fetch: createActivityAccountingFetch("anthropic", "memory-summary"),
-}) : null;
 
 function configuredProviders():SummaryProvider[] {
-  return [...(grokClient ? ["grok" as const] : []), ...(anthropicClient ? ["anthropic" as const] : [])];
-}
-class SummaryTimeoutError extends Error {
-  constructor(){ super(`Intermediate memory summarization exceeded ${SUMMARY_TIMEOUT_MS}ms`); this.name="SummaryTimeoutError"; }
-}
-async function withinSummaryDeadline<T>(deadline:number, work:(signal:AbortSignal)=>Promise<T>):Promise<T> {
-  const remaining=deadline-Date.now();
-  if(remaining<=0) throw new SummaryTimeoutError();
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),remaining);
-  try { return await work(controller.signal); }
-  catch(error) { if(controller.signal.aborted) throw new SummaryTimeoutError(); throw error; }
-  finally { clearTimeout(timer); }
+  return [...(grokApiKey ? ["grok" as const] : []), ...(anthropicApiKey ? ["anthropic" as const] : [])];
 }
 function shouldUseNextProvider(error:unknown):boolean {
   const value=error as {code?:string};
   const message=error instanceof Error ? error.message : String(error);
-  return value?.code==="standalone_outcome_unknown" ||
-    /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message) ||
-    error instanceof SummaryTimeoutError;
+  return value?.code==="standalone_memory_timeout" || value?.code==="standalone_outcome_unknown" ||
+    /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message);
 }
-function providerClient(provider:SummaryProvider):OpenAI {
-  const selected=provider==="grok" ? grokClient : anthropicClient;
-  if(!selected) throw new Error(`Intermediate memory ${provider} provider unavailable`);
-  return selected;
+function providerClient(provider:SummaryProvider,deadline:number):OpenAI {
+  const apiKey=provider==="grok" ? grokApiKey : anthropicApiKey;
+  if(!apiKey) throw new Error(`Intermediate memory ${provider} provider unavailable`);
+  const fetch=createActivityAccountingFetch(provider,"memory-summary",{
+    // Resolve the remaining single 90-second ITM budget at the actual paid
+    // transmission boundary. Stage two therefore cannot start a fresh timeout.
+    timeoutMs:()=>Math.max(1,deadline-Date.now()),
+    timeoutCode:"memory_timeout",
+    timeoutMessage:timeoutMs=>`Intermediate memory provider transmission timed out after ${timeoutMs}ms within the ${SUMMARY_TIMEOUT_MS}ms total summarization deadline.`,
+    uncertaintyReason:timeoutMs=>`Memory-summary provider transmission timed out after ${timeoutMs}ms within the ${SUMMARY_TIMEOUT_MS}ms total deadline; provider outcome is uncertain and reservation remains held.`,
+  });
+  return provider==="grok" ? new OpenAI({
+    apiKey,
+    baseURL:"https://api.x.ai/v1",
+    maxRetries:0,
+    fetch,
+  }) : new OpenAI({
+    apiKey,
+    baseURL:"https://api.anthropic.com/v1/",
+    maxRetries:0,
+    defaultHeaders:{ Authorization:null,"x-api-key":apiKey,"anthropic-version":"2023-06-01" },
+    fetch,
+  });
 }
 
 type ChatSummaryResponse = {
@@ -178,14 +171,13 @@ function completedResponsesText(response: GrokResponsesResponse, phase: string, 
 }
 
 async function grokStructuredResponse(
+  client: OpenAI,
   messages: Array<{ role: "system" | "user"; content: string }>,
   maxOutputTokens: number,
   schemaName: string,
   schema: Record<string, unknown>,
-  signal: AbortSignal,
 ): Promise<GrokResponsesResponse> {
-  if (!grokClient) throw new Error("Intermediate memory Grok provider unavailable");
-  return await grokClient.post("/responses", {
+  return await client.post("/responses", {
     body: {
       model: SUMMARY_MODELS.grok,
       input: messages,
@@ -201,7 +193,6 @@ async function grokStructuredResponse(
         },
       },
     },
-    signal,
   }) as GrokResponsesResponse;
 }
 
@@ -269,7 +260,7 @@ function parseGroundedEpisodes(raw: string, messages: Message[]): string[] {
 }
 
 /** Preserve the conversational storyline using only cited, attributed facts. */
-async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, signal:AbortSignal): Promise<string[]> {
+async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, client:OpenAI): Promise<string[]> {
   const prompt = [
     { role: "system" as const, content: [
       "Produce concise, FACTUAL EPISODIC SUMMARIES of what was discussed in Katie's conversation. Katie is one assistant across different model engines; attribute her prior statements to Katie, not to Grok, Claude, or an external narrator.",
@@ -286,14 +277,14 @@ async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, 
     { role: "user" as const, content: "NEW ROLE-ATTRIBUTED MESSAGES:\n" + formatTranscript(messages) },
   ];
   if (provider === "grok") {
-    const response = await grokStructuredResponse(prompt, SUMMARY_MAX_TOKENS, "itm_episodes", EPISODE_RESPONSE_SCHEMA, signal);
+    const response = await grokStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, "itm_episodes", EPISODE_RESPONSE_SCHEMA);
     return parseGroundedEpisodes(completedResponsesText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
   }
-  const response = await providerClient(provider).chat.completions.create({
+  const response = await client.chat.completions.create({
     model: SUMMARY_MODELS[provider],
     max_tokens: SUMMARY_MAX_TOKENS,
     messages: prompt,
-  }, { signal });
+  });
   return parseGroundedEpisodes(completedText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
 }
 
@@ -334,7 +325,7 @@ function parseRetentionPlan(raw: string, priorCount: number): number[] {
   return obj.keep as number[];
 }
 
-async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, signal:AbortSignal): Promise<number[]> {
+async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI): Promise<number[]> {
   const indexed = prior.map((text, id) => ({
     id, content: text.length > ITM_EPISODE_MAX_CHARACTERS
       ? text.slice(0, ITM_EPISODE_MAX_CHARACTERS - 1) + "…" : text,
@@ -356,14 +347,14 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
   ];
   let raw: string;
   if (provider === "grok") {
-    const response = await grokStructuredResponse(prompt, RECONCILE_MAX_TOKENS, "itm_retention", RETENTION_RESPONSE_SCHEMA, signal);
+    const response = await grokStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, "itm_retention", RETENTION_RESPONSE_SCHEMA);
     raw = completedResponsesText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   } else {
-    const response = await providerClient(provider).chat.completions.create({
+    const response = await client.chat.completions.create({
       model: SUMMARY_MODELS[provider],
       max_tokens: RECONCILE_MAX_TOKENS,
       messages: prompt,
-    }, { signal });
+    });
     raw = completedText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
   const keep = parseRetentionPlan(raw, prior.length);
@@ -509,10 +500,11 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   });
 
   const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
+  const client=providerClient(provider,deadline);
   try {
-    const newSummary = await withinSummaryDeadline(deadline, signal => summarizeNewBatch(batch,provider!,signal));
+    const newSummary = await summarizeNewBatch(batch,provider,client);
     const episodes = legacyEpisodes(summary);
-    const keep = await withinSummaryDeadline(deadline, signal => reconcileEpisodePlan(episodes, newSummary,provider!,signal));
+    const keep = await reconcileEpisodePlan(episodes,newSummary,provider,client);
     const revisedSummary = assembleEpisodePlan(episodes, keep, newSummary);
     const payload = {
       version: 2,
