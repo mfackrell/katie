@@ -50,7 +50,8 @@ test('saved content finalizes and closes the user stream before memory followup 
 });
 
 test('post-answer processing and accounting remain durable and can report failures',()=>{
- assert.match(route,/progress\("memory", "Answer delivered; checking conversation memory\."/);
+ assert.match(route,/Post-answer memory persistence start/);
+ assert.doesNotMatch(route,/progress\("memory"/);
  assert.match(workflow,/const notice=await settle\(collected\(\)\)/);
  assert.match(workflow,/type:'processing_update',stage:'accounting'/);
  assert.match(workflow,/if\(notice&&!disconnected\)controller\.enqueue/);

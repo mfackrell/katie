@@ -4,7 +4,7 @@ import {readFileSync} from "node:fs";
 
 const code=readFileSync("lib/memory/summarizer.ts","utf8");
 test("ITM source cursor advances only after source-cited Grok factual episodes and retention",()=>{
-  assert.ok(code.indexOf("summarizeNewBatch(batch)") < code.indexOf("reconcileEpisodePlan(episodes, newSummary)"));
+  assert.ok(code.indexOf("summarizeNewBatch(batch,provider!,signal)") < code.indexOf("reconcileEpisodePlan(episodes, newSummary,provider!,signal)"));
   assert.ok(code.indexOf("parseGroundedEpisodes") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
   assert.match(code,/parseGroundedEpisodes\(completedText\(response, "factual episodes"/);
   assert.match(code,/choice\?\.finish_reason !== "stop"/);
@@ -21,5 +21,5 @@ test("failed source batches preserve the checkpoint and only a later request may
   assert.match(code,/SUMMARY_TIMEOUT_MS = 90_000/);
   assert.match(code,/processorVersion\(candidate\)/);
   assert.match(code,/return nextProvider \? "deferred" : "blocked"/);
-  assert.match(code,/if \(isStandaloneAccountingError\(error\)\) throw error/);
+  assert.match(code,/if \(isStandaloneAccountingError\(error\) && !shouldUseNextProvider\(error\)\) throw error/);
 });
