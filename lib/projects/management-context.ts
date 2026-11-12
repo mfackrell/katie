@@ -95,7 +95,10 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const chosen=new Set(chosenIds);
  const evidenceById=new Map(input.evidence.map(e=>[String(e.id),e]));
  required(evidenceById.size===input.evidence.length,'duplicate selected evidence');
- for(const id of chosenIds)required(evidenceById.has(id),'selected assignment evidence '+id);
+ for(const id of chosenIds){
+  required(evidenceById.has(id),'selected assignment evidence '+id);
+  required(evidenceById.get(id)?.status===input.statuses.find(s=>s.id===id)?.status,'assignment status changed while assembling evidence '+id);
+ }
  const statusMap=new Map(input.statuses.map(s=>[s.id,s.status]));
  const counts=scope.decisionIds.map(nodeId=>{
   const rows=input.bindings.filter(b=>b.node_id===nodeId);
@@ -110,21 +113,34 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
   .map(d=>{const node=topology.find(n=>n.id===d.depends_on);
    required(node,'unknown dependency target '+String(d.depends_on));
    return {id:node.id,kind:node.kind,area:node.area,status:node.status,parentId:node.parent_id};});
- const activePackages=input.workPackages.filter(p=>p.status!=='accepted');
+ const retiredPackages=new Set(['accepted','cancelled','canceled','closed']);
+ const activePackages=input.workPackages.filter(p=>!retiredPackages.has(String(p.status)));
  const acceptedPackages=input.workPackages.filter(p=>p.status==='accepted');
  const activePackageIds=new Set(activePackages.map(p=>String(p.id)));
  const attempts=sortedLatest(input.workPackageAttempts.filter(a=>activePackageIds.has(String(a.package_id))))
   .filter((a,i,all)=>all.findIndex(x=>x.package_id===a.package_id)===i);
- const currentWork=input.work.filter(w=>!['completed','accepted','cancelled'].includes(String(w.status)));
+ const currentWork=input.work.filter(w=>!['completed','accepted','cancelled','canceled','closed'].includes(String(w.status)));
  const activeWorkIds=new Set(currentWork.map(w=>String(w.id)));
  const currentContracts=sortedLatest(input.workerContracts.filter(c=>
    (!c.package_id&&!c.work_id)||activePackageIds.has(String(c.package_id))||activeWorkIds.has(String(c.work_id))))
   .filter((c,i,all)=>all.findIndex(x=>x.worker_id===c.worker_id&&x.role===c.role&&x.package_id===c.package_id&&x.work_id===c.work_id)===i);
  const directLineage=scope.ancestorIds.map(id=>{const n=topology.find(x=>x.id===id)!;
   return {id:n.id,kind:n.kind,area:n.area,status:n.status,parentId:n.parent_id};});
+ // Parent historical submissions and project roster IDs are not authority or
+ // decision evidence for this manager. Keep the exact current parent contract.
+ const parent=scope.principal.parent_id?scoped.get(scope.principal.parent_id):null;
+ const immediateSuperior=parent?{
+  id:parent.id,parent_id:parent.parent_id,kind:parent.kind,management_level:parent.management_level,
+  area:parent.area,name:parent.name,objective:parent.objective,acceptance:parent.acceptance,
+  tools:parent.tools,scope_paths:parent.scope_paths,scope_hash:parent.scope_hash,
+  token_limit:parent.token_limit,deadline:parent.deadline,status:parent.status,
+  management_contract:parent.management_contract,
+ }:null;
+ const currentProject={objective:project.objective,phase:project.phase,approved_hash:project.approved_hash,
+  verified_sha:project.verified_sha,deadline:project.deadline};
  const payload={
-  project,principal,
-  reporting:{immediateSuperior:scope.principal.parent_id?scoped.get(scope.principal.parent_id):null,
+  project:currentProject,principal,
+  reporting:{immediateSuperior,
    ancestors:directLineage,directReportIds:scope.directIds,organizationNodeCount:topology.length},
   organization:immediate,
   executionTeam:input.executionTeam.map(a=>({id:a.id,
@@ -142,7 +158,8 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
    byNode:counts,selectedAssignmentIds:chosenIds,
    omittedHistoricalAssignments:input.bindings.length-chosenIds.length,
    archivedWorkerContracts:input.workerContracts.length-currentContracts.length,
-   archivedPackageAttempts:input.workPackageAttempts.length-attempts.length}
+   archivedPackageAttempts:input.workPackageAttempts.length-attempts.length,
+   retiredPackageCount:input.workPackages.length-activePackages.length}
  };
  const serialized=JSON.stringify(payload);
  required(Number.isSafeInteger(limit)&&limit>0,'configured management input limit');
