@@ -138,12 +138,22 @@ test('retired package history never consumes the current decision window; active
   {id:'accepted',manager_id:'game',status:'accepted',evidence:'archived acceptance '.repeat(4000)},
   {id:'cancelled',manager_id:'game',status:'cancelled',findings:'discarded '.repeat(4000)},
   {id:'open',manager_id:'game',status:'rejected',contract_hash:'contract-sha'}];
- x.workPackageAttempts=[{id:'old',package_id:'accepted',attempt:1},{id:'a',package_id:'open',attempt:1},{id:'b',package_id:'open',attempt:2}];
+ // Use the actual PostgreSQL row shape: no id or timestamp field.
+ x.workPackageAttempts=[
+  {package_id:'accepted',attempt:1,mission_id:'archived-mission',base_sha:'archived'},
+  {package_id:'open',attempt:1,mission_id:'first-mission',base_sha:'first'},
+  {package_id:'open',attempt:2,mission_id:'latest-mission',base_sha:'latest'},
+ ];
  const context=JSON.parse(buildManagementDecisionContext(x));
  assert.deepEqual(context.workPackages.map(p=>p.id),['open']);
  assert.equal(context.acceptedPackageCount,1);
  assert.equal(context.historyReferences.retiredPackageCount,2);
  assert.equal(context.workPackageAttempts.length,1);
  assert.equal(context.workPackageAttempts[0].attempt,2);
+ assert.equal(context.workPackageAttempts[0].mission_id,'latest-mission');
+ x.workPackageAttempts.reverse();
+ assert.equal(JSON.parse(buildManagementDecisionContext(x)).workPackageAttempts[0].attempt,2);
+ x.workPackageAttempts.push({package_id:'open',attempt:0,mission_id:'invalid',base_sha:'invalid'});
+ assert.throws(()=>buildManagementDecisionContext(x),/invalid package attempt ordinal/);
  assert.ok(!JSON.stringify(context).includes('archived acceptance'));
 });
