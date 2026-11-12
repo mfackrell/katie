@@ -119,7 +119,7 @@ export function DirectorRecoveryControl({
       {recovery.continuation&&(
         expired?
           <div>
-            <p>The execution window has expired. Enter a new cutoff to explicitly authorize renewal of inherited management deadlines and continuation. The Project Director's existing authority remains the ceiling.</p>
+            <p>The execution window has expired. Enter a new cutoff to explicitly authorize renewal of inherited management deadlines and continuation. The Project Director&apos;s existing authority remains the ceiling.</p>
             {recovery.continuation.maxCutoff&&<p>Project Director deadline: {new Date(recovery.continuation.maxCutoff).toLocaleString()}.</p>}
             <label>New project cutoff (your local time)<input type="datetime-local" aria-label="New project cutoff (your local time)" value={newCutoff} onChange={event=>setNewCutoff(event.target.value)} disabled={pending}/></label>
             <button type="button" className="min-h-11 font-semibold" disabled={pending||!newCutoff} onClick={()=>void recover(true,true)}>
