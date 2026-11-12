@@ -44,7 +44,7 @@ export async function assertOrganizationalContractAmendments(db,rival,{project,o
  const scoped=JSON.parse(context);
  assert.ok(context.length<=48000);
  assert.equal(scoped.project.objective,current[0].objective);
- assert.deepEqual(scoped.organization.map(n=>n.id).sort(),scope.directIds.sort());
+ assert.deepEqual(scoped.organization.map(n=>n.id).sort(),[...scope.directIds].sort());
  assert.equal(scoped.principal.id,root.id);
  assert.equal(scoped.reporting.directReportIds.length,2);
  await db.query('set role service_role');
