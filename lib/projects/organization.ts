@@ -63,7 +63,7 @@ export function directorRecoveryRelease(claim:Claim):string|undefined {
 // can silently omit the very assignment or direct report needed for a decision.
 // Stable keyset ordering plus bounded pages keep complete indexing out of the
 // model prompt without dropping required evidence.
-async function completeManagementRows<T>(factory:()=>any,columns:string|string[]):Promise<T[]>{
+export async function completeManagementRows<T>(factory:()=>any,columns:string|string[]):Promise<T[]>{
  const pageSize=200,all:T[]=[];
  for(let offset=0;;offset+=pageSize){
   let q=factory();
