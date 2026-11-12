@@ -255,3 +255,13 @@ test('one-shot Director recovery fences a mismatched runtime before inference an
   return true;
  });
 });
+
+test('delegation amendments require immediate reporting authority and never enter one-shot recovery',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const root={id:randomUUID(),kind:'project_director',management_level:'project_director'};
+ const direct={id:randomUUID(),parent_id:root.id},other={id:randomUUID(),parent_id:randomUUID()};
+ const command={action:'amend_delegation',nodeId:direct.id,expectedTools:['manage','analysis'],expectedDeadline:'2030-01-01T00:00:00Z',tools:['manage','analysis','development'],reason:'Bounded inherited capability'};
+ assert.doesNotThrow(()=>assertManagementCommands(root,[direct,other],[command]));
+ assert.throws(()=>assertManagementCommands(root,[direct,other],[{...command,nodeId:other.id}]),e=>e.evidence?.action==='amend_delegation'&&e.evidence?.code==='immediate_reporting_authority');
+ assert.throws(()=>assertManagementCommands(root,[direct],[command],true),/Recovery permits/);
+});

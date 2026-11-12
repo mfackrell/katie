@@ -42,22 +42,42 @@ function approvalFor(p: Project | null,providerControlled: boolean) {
 }
 
 async function directorRecoveryFor(p: Project | null, request: NextRequest, providerControlled: boolean): Promise<DirectorRecoveryOffer | null> {
-    if (!p || p.id !== 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe' || !providerControlled
+    if (!p || !providerControlled
         || !await verifiedProjectOwnerSession(request)) return null;
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     const cutoff = '2026-11-12T00:00:00Z';
     const priorCutoff = '2026-11-10T18:59:32.547837Z';
     const { data, error } = await getSupabaseAdminClient().from('project_director_recoveries')
-        .select('mission_id,assignment_id,cutoff').eq('project_id', p.id).maybeSingle<{
+        .select('mission_id,assignment_id,cutoff').eq('project_id', p.id).eq('owner_id',process.env.KATIE_OWNER_AUTH_USER_ID).maybeSingle<{
             mission_id: string; assignment_id: string; cutoff: string;
         }>();
     if (error) throw Error('Director recovery admission state unavailable');
-    if (!data && (p.status !== 'blocked' || p.phase !== 'research'
-        || Date.now() >= Date.parse(cutoff) || Date.parse(p.deadline) !== Date.parse(priorCutoff))) return null;
+    let continuation: DirectorRecoveryOffer['continuation'];
+    const window=await projectRpc<{decisionId:string;admittedAt:string|null;cutoff:string;maxCutoff:string;authorizationId?:string;authorizedAt?:string}|null>('project_org_owner_window_offer',{
+            p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.id,
+    });
+    const windowReceipt=window&&typeof window==='object'&&typeof window.authorizationId==='string'&&typeof window.authorizedAt==='string'?{authorizationId:window.authorizationId,authorizedAt:window.authorizedAt}:{};
+    if(!data){
+        if(window&&typeof window==='object'&&typeof window.decisionId==='string'
+            &&(Date.now()>=Date.parse(window.cutoff)||window.admittedAt))
+            continuation={decisionId:window.decisionId,admittedAt:window.admittedAt,maxCutoff:window.maxCutoff,...windowReceipt};
+    }
+    if(!data&&!continuation&&(p.id!=='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'||p.status!=='blocked'||p.phase!=='research'
+        ||Date.now()>=Date.parse(cutoff)||Date.parse(p.deadline)!==Date.parse(priorCutoff)))return null;
+    if(data){
+        const db=getSupabaseAdminClient();
+        const [decision,authority]=await Promise.all([
+            db.from('project_organization_decisions').select('id').eq('project_id',p.id).eq('assignment_id',data.assignment_id).maybeSingle<{id:string}>(),
+            db.from('project_provider_execution').select('continued_at').eq('project_id',p.id).single<{continued_at:string|null}>(),
+        ]);
+        if(decision.error||authority.error)throw Error('Project continuation state unavailable');
+        if(decision.data)continuation={decisionId:decision.data.id,admittedAt:authority.data?.continued_at??null,...(window&&typeof window==='object'&&window.maxCutoff?{maxCutoff:window.maxCutoff}:{}),...windowReceipt};
+    }
     return {
-        projectId: p.id, releaseSha: releaseSha!, cutoff, priorCutoff,
+        projectId: p.id, releaseSha: releaseSha!, cutoff:continuation?p.deadline:cutoff, priorCutoff,
         receipt: data ? {projectId: p.id, missionId: data.mission_id, assignmentId: data.assignment_id, cutoff: data.cutoff, existing: true} : null,
+        ...(continuation?{continuation}:{}),
     };
 }
 

@@ -284,6 +284,17 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
   return { counts, chunks, generationInputs, reviews, ...state };
 }
 
+test('actual route ordinary generation remains executable after retained-PDF export integration', async () => {
+  assert.doesNotMatch(runAttempt, /retainedPdfExportAttachment/,
+    'ordinary generation must not capture the retained-PDF binding');
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  const selected = await select(f, { message: SHORT_REPLY, messageId: REPLY_ID, priorTaskProgress: progress, history });
+  const result = await runPipeline(f, selected, { history });
+  assert.equal(result.counts.provider, 1);
+  assert.equal(result.chunks.find(chunk => chunk.type === 'content').text, EXPLANATION);
+});
+
 test('actual route rejects the old October pending task and answers the 97-character clarification directly', async () => {
   assert.equal(SHORT_REPLY.length, 97);
   const f = fixture();

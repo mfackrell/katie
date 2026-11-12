@@ -23,13 +23,16 @@ jobs:
 
       - name: Use signed Ubuntu archive mirror
         run: |
-          # Ubuntu hosts fail DNS on this image; prefer the Kernel Archives mirror.
-          # APT still requires Ubuntu signatures; retain the image's existing fallbacks.
+          # The previously preferred kernel.org mirror stalled both hosted jobs.
+          # Use official Ubuntu archives; retain the runner's signed APT sources.
+          test -f /etc/apt/sources.list.d/ubuntu.sources
+          test -f /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          grep -Fq 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' /etc/apt/sources.list.d/ubuntu.sources
           if test -f /etc/apt/apt-mirrors.txt; then
-            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
-            sudo sed -i '1i https://mirrors.kernel.org/ubuntu/\tpriority:1' /etc/apt/apt-mirrors.txt
-            grep -Eq '^https?://(archive|security)\.ubuntu\.com/ubuntu/?([[:space:]]|$)' /etc/apt/apt-mirrors.txt
+            printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           fi
+          # Fail promptly on network trouble rather than exhausting the job timer.
+          printf 'Acquire::Retries "2";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/90-katie-ci-apt >/dev/null
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -174,13 +177,16 @@ jobs:
           fetch-depth: 0
       - name: Use signed Ubuntu archive mirror
         run: |
-          # Ubuntu hosts fail DNS on this image; prefer the Kernel Archives mirror.
-          # APT still requires Ubuntu signatures; retain the image's existing fallbacks.
+          # The previously preferred kernel.org mirror stalled both hosted jobs.
+          # Use official Ubuntu archives; retain the runner's signed APT sources.
+          test -f /etc/apt/sources.list.d/ubuntu.sources
+          test -f /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          grep -Fq 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' /etc/apt/sources.list.d/ubuntu.sources
           if test -f /etc/apt/apt-mirrors.txt; then
-            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
-            sudo sed -i '1i https://mirrors.kernel.org/ubuntu/\tpriority:1' /etc/apt/apt-mirrors.txt
-            grep -Eq '^https?://(archive|security)\.ubuntu\.com/ubuntu/?([[:space:]]|$)' /etc/apt/apt-mirrors.txt
+            printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           fi
+          # Fail promptly on network trouble rather than exhausting the job timer.
+          printf 'Acquire::Retries "2";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/90-katie-ci-apt >/dev/null
       - uses: actions/setup-node@v4
         with:
           node-version: 22

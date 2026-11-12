@@ -87,6 +87,7 @@ export async function assertDirectorOneShotRecovery(db,rival){
  await assert.rejects(renew(db,owner,prior,new Date(Date.now()+25*60*60*1000).toISOString()),/within twenty-four hours/);
  await assert.rejects(renew(db,owner,prior,cutoff,'invalid'),/Exact release/);
  assert.deepEqual(await deadlines(),expired,'Rejected admission rolls back both deadline writes');
+ if(process.env.KATIE_TEST_ORG_AMENDMENTS==='1')cutoff=new Date(Date.now()+15000).toISOString();
  const admissions=await Promise.all([renew(db,owner,prior),renew(rival,owner,prior)]);
  assert.equal(admissions.filter(r=>!r.existing).length,1);
  const recovery=admissions[0];
@@ -153,19 +154,21 @@ export async function assertDirectorOneShotRecovery(db,rival){
  assert.equal(await provider(rival,args(job,'inference')),false,'Resolved inference still consumes the decision');
  await assert.rejects(decide([{action:'dependency'}]),/Functional Director appointments only/);
  await assert.rejects(decide([{action:'appoint',kind:'worker'}]),/invalid|director|appointment/i);
+ const amendments=process.env.KATIE_TEST_ORG_AMENDMENTS==='1';
  const commands=[
   {action:'plan',purpose:'Deliver the original game',direction:'Verify rules independently',
-   outcomes:[{criterion:'Playable game',verification:'Browser checks'}],milestones:[{objective:'Build the scoped game'}],organizations:['development']},
+   outcomes:[{criterion:'Playable game',verification:'Browser checks'}],milestones:[{objective:'Build the scoped game'}],organizations:amendments?['development','quality_assurance']:['development']},
   {action:'appoint',kind:'manager',managementLevel:'functional_director',name:'Development',area:'development',
-   objective:'Own gameplay implementation',acceptance:['Rules pass'],tokens:1,deadline:cutoff,paths:[],tools:['manage','analysis']},
+   objective:'Own gameplay implementation',acceptance:['Rules pass'],tokens:20000,deadline:cutoff,paths:[],tools:['manage','analysis']},
+  ...(amendments?[{action:'appoint',kind:'manager',managementLevel:'functional_director',name:'Independent QA',area:'quality_assurance',objective:'Verify the original requirements independently',acceptance:['Independent evidence'],tokens:10000,deadline:cutoff,paths:[],tools:['manage','analysis','research','repository_review']}]:[]),
   {action:'ready'},
  ];
  assert.equal(await decide(commands),true);
  await assert.rejects(decide(commands),/Live management assignment required/);
  assert.equal(await sql(db,'select status value from work_projects where id=$1',[project.id]),'blocked');
- assert.equal(await sql(db,"select count(*)::int value from project_organization_nodes where project_id=$1 and management_level='functional_director'",[project.id]),1);
+ assert.equal(await sql(db,"select count(*)::int value from project_organization_nodes where project_id=$1 and management_level='functional_director'",[project.id]),amendments?2:1);
  assert.equal(await sql(db,'select count(*)::int value from project_work_packages where project_id=$1',[project.id]),0);
- assert.notEqual((await claim())?.job.id,job.id);
+ await save(async()=>assert.notEqual((await claim())?.job.id,job.id));
  assert.equal((await admit()).assignmentId,job.id);
  await db.query('reset role');
  const after=await snapshot();
@@ -176,4 +179,8 @@ export async function assertDirectorOneShotRecovery(db,rival){
  assert.deepEqual([after.missions.length,after.assignments.length,after.requests.length],[3,3,6]);
  await db.query('set role service_role');
  console.log('DIRECTOR_ONE_SHOT_POSTGRES_PASS');
+ if(amendments)await (await import('./assert-organizational-contract-amendments.mjs')).assertFirstRenewalAdmission(db,{project,owner,cutoff,job});
+ if(amendments){await db.query('reset role');await db.query("update project_organization_nodes set created_at='2000-01-01' where project_id=$1 and area='development' and kind='manager'",[project.id]);await db.query('set role service_role');}
+ await (await import('./assert-provider-project-continuation.mjs')).assertProviderProjectContinuation(db,rival,{project,owner,cutoff,release,recovery,job});
+ if(amendments)await (await import('./assert-organizational-contract-amendments.mjs')).assertOrganizationalContractAmendments(db,rival,{project,owner,cutoff,release,recovery,job});
 }

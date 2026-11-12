@@ -2365,6 +2365,9 @@ ${savedProjectSourceWarning.retainedObjective}`;
     });
 
     const imageGenerationRequested = resolvedRequestIntent === "image-generation";
+    // Bound once per request. Assigned only after exact attachment selection,
+    // persistence, ownership, and retained-source checks succeed.
+    let retainedPdfExportAttachment: ConversationAttachment | null = null;
     let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -2441,7 +2444,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const retainedPdfExportFileId = documentProduction
               ? resolveRetainedPdfExportFileId(message, attachments, fileId => Boolean(pdfSources.get(fileId)?.hasOriginal))
               : null;
-            const retainedPdfExportAttachment = retainedPdfExportFileId ? pdfSources.get(retainedPdfExportFileId) ?? null : null;
+            retainedPdfExportAttachment = retainedPdfExportFileId ? pdfSources.get(retainedPdfExportFileId) ?? null : null;
             if (timelineActive && temporalIntent) {
               const timelineSource = timelineSelection.clarification ? undefined : freshVideoReferences.length
                 ? (timelineSelection.source ? persistedVideoSourceByFileId.get(timelineSelection.source.id) : undefined)
@@ -2631,7 +2634,12 @@ ${chunkWorkflowSummary}`;
 
             // Keep completed evidence through both provider errors and refusal reroutes.
             let collaborationResumeState: CollaborationResumeState | undefined;
-            const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
+            const generationAttempt = retainedPdfExportAttachment
+              ? {
+                  result: { text: 'SOURCE_PDF_PRESERVED', provider: provider.name, model: modelId } as ProviderResponse,
+                  attempt: { provider, modelId, routingSource: "initial" as const } as GenerationAttempt,
+                }
+              : await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
               retryExplicitContentRefusal: !stillImageVisionRequest,
@@ -2647,9 +2655,6 @@ ${chunkWorkflowSummary}`;
                  Boolean(process.env.RUNPOD_API_KEY) && isTechnicalImageFailure(error) &&
                  !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")),
               runAttempt: async (candidate, attemptIndex) => {
-                if (retainedPdfExportAttachment) {
-                  return { text: 'SOURCE_PDF_PRESERVED', provider: candidate.provider.name, model: candidate.modelId };
-                }
                 if (verifyingSavedDraft && pendingReviewClarification) {
                   // Verification retries review the saved candidate verbatim;
                   // they must not draft a replacement answer to a short "yes".
@@ -3588,6 +3593,7 @@ ${chunkWorkflowSummary}`;
               }
             });
             result = generationAttempt.result;
+            if (result.text === 'SOURCE_PDF_PRESERVED') reviewCompleted = true;
             provider = generationAttempt.attempt.provider;
             modelId = generationAttempt.attempt.runpodImageFallback || generationAttempt.attempt.runpodStillVisionFallback
               ? generationAttempt.result.model : generationAttempt.attempt.modelId;
@@ -3630,7 +3636,8 @@ ${chunkWorkflowSummary}`;
               console.warn("[ResponsePolicy] Unexpected substantive output requires review", { requestId });
             }
             if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) &&
-                !pendingVideoAssistantMessageId && !selectedDocumentSource) {
+                !pendingVideoAssistantMessageId && !selectedDocumentSource &&
+                result.text !== 'SOURCE_PDF_PRESERVED') {
               // Explicit export preserves the owner's selected source exactly;
               // the existing final file rendering/visual inspection still applies.
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;

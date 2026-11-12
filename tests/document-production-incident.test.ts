@@ -131,5 +131,11 @@ test('route integration preserves exact source bytes before drafting and keeps a
   assert.ok(providerCall===-1 || providerCall>sentinel,'retained-source guard must execute before provider drafting');
   assert.match(route,/runWithRefusalFallback/);
   assert.match(route,/executeStandaloneWorkflow/);
+  assert.match(route,/let retainedPdfExportAttachment: ConversationAttachment \| null = null/);
+  assert.match(route,/retainedPdfExportAttachment = retainedPdfExportFileId/);
+  assert.match(route,/const generationAttempt = retainedPdfExportAttachment/);
+  assert.doesNotMatch(route.slice(route.indexOf('runAttempt: async'), route.indexOf('result = generationAttempt.result')),
+    /if \(retainedPdfExportAttachment\)/,
+    'provider drafting callback must not capture the retained-PDF binding');
   assert.match(route,/retainedPdfExportAttachment \|\| attachmentDecision\.clarification/);
 });

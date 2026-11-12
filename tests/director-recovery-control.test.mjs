@@ -11,25 +11,28 @@ const releaseSha='06d63710c1caec8d500ce4cad788f8100c8288d9';
 const cutoff='2026-11-12T00:00:00Z',priorCutoff='2026-11-10T18:59:32.547837Z';
 const now=Date.parse('2026-11-11T14:00:00Z');
 const offer={projectId,releaseSha,cutoff,priorCutoff,receipt:null};
+const decisionId='33333333-3333-4333-8333-333333333333';
+const continuedReceipt={projectId,releaseSha,decisionId,cutoff,admittedAt:'2026-11-11T14:00:00Z',existing:false};
 const receipt={projectId,missionId:'11111111-1111-4111-8111-111111111111',assignmentId:'22222222-2222-4222-8222-222222222222',cutoff,existing:false};
 
 test('recovery offer is restricted to the authenticated owner project and preserves consumed receipts',async t=>{
  const savedNow=Date.now,savedSha=process.env.VERCEL_GIT_COMMIT_SHA;
  Date.now=()=>now;process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;
  t.after(()=>{Date.now=savedNow;if(savedSha===undefined)delete process.env.VERCEL_GIT_COMMIT_SHA;else process.env.VERCEL_GIT_COMMIT_SHA=savedSha;});
- let owner=true,provider=true,lookup=0,stored=null,lookupError=null;
+ let owner=true,provider=true,lookup=0,stored=null,lookupError=null,windowOffer=null;
  let project={id:projectId,status:'blocked',phase:'research',organization_version:1,deadline:priorCutoff};
- const db={from(table){assert.equal(table,'project_director_recoveries');return {
-  select(columns){assert.equal(columns,'mission_id,assignment_id,cutoff');return this;},
-  eq(column,id){assert.equal(column,'project_id');assert.equal(id,projectId);return this;},
-  async maybeSingle(){lookup++;return {data:stored,error:lookupError};},
+ const db={from(table){assert.ok(['project_director_recoveries','project_organization_decisions','project_provider_execution'].includes(table));return {
+  select(){return this;},
+  eq(){return this;},
+  async maybeSingle(){lookup++;return {data:table==='project_director_recoveries'?stored:null,error:lookupError};},
+  async single(){return {data:{continued_at:null},error:null};},
  };}};
  const actor='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
  const loadWithOwner=modules({
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
   '@/lib/data/persistence-store':{getChatById:async()=>({actorId:actor}),getMessages:async()=>[]},
-  '@/lib/projects/store':{projectForChat:async()=>project,projectRpc:async()=>provider},
+  '@/lib/projects/store':{projectForChat:async()=>project,projectRpc:async(name)=>name==='project_org_owner_window_offer'?windowOffer:provider},
   '@/lib/projects/recovery-budget':{recoveryResourceProposal:async()=>null},
   '@/lib/executive/delivery':{hasPendingExecutiveDelivery:async()=>false},
  });
@@ -56,6 +59,13 @@ test('recovery offer is restricted to the authenticated owner project and preser
  assert.equal((await (await current()).json()).directorRecovery.releaseSha,'f'.repeat(40),'Offer uses the deployment that must authorize its request');
  Date.now=()=>Date.parse(cutoff)+1000;stored=null;
  assert.equal((await (await current()).json()).directorRecovery,null);
+ const genericId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+ project={...original,id:genericId,deadline:cutoff};
+ windowOffer={decisionId,admittedAt:null,cutoff,maxCutoff:'2026-11-13T00:00:00Z'};
+ const generic=(await (await current()).json()).directorRecovery;
+ assert.equal(generic.projectId,genericId);assert.equal(generic.receipt,null);
+ assert.deepEqual(generic.continuation,{decisionId,admittedAt:null,maxCutoff:windowOffer.maxCutoff});
+ owner=false;assert.equal((await (await current()).json()).directorRecovery,null);
  assert.ok(lookup>0);
 });
 
@@ -70,14 +80,16 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
  const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js'].map(f=>readFileSync('node_modules/'+f,'utf8')).join('\n');
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
  try{
-  const context=await browser.newContext();
-  for(const scenario of ['success','403','409','no-owner','malformed','consumed','expired','other-chat','managed-agent']){
-   const page=await context.newPage();let posts=0,releaseResponse;
+  const context=await browser.newContext({timezoneId:'UTC'});
+  for(const scenario of ['success','403','409','no-owner','malformed','consumed','expired','other-chat','managed-agent','continue-success','continue-403','continue-409','continue-malformed','renew-success','renew-403','renew-409','renew-malformed','renew-nonce','renew-no-owner','renew-missing','renew-expired','renew-generic']){
+   const page=await context.newPage();let posts=0,releaseResponse,authorizationId;
    page.on('pageerror',error=>console.error(scenario,error.message));
    const responseGate=new Promise(resolve=>{releaseResponse=resolve;});
-   const data={...offer,receipt:scenario==='consumed'?{...receipt,existing:true}:null};
-   const code='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=>'+(scenario==='no-owner'?'null':'"synthetic-owner"')+'};'
-    +'Date.now=()=>'+(scenario==='expired'?Date.parse(cutoff)+1000:now)+';window.refreshes=0;'+js
+   const renewing=scenario.startsWith('renew-'),continuing=renewing||scenario.startsWith('continue-');
+   const renewedCutoff='2026-11-12T01:00:00.000Z';
+   const data={...offer,receipt:scenario==='renew-generic'?null:scenario==='consumed'||continuing?{...receipt,existing:true}:null,...(continuing?{continuation:{decisionId,admittedAt:null}}:{})};
+   const code='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=>'+(scenario.endsWith('no-owner')?'null':'"synthetic-owner"')+'};'
+    +'Date.now=()=>'+(scenario==='expired'||renewing?Date.parse(cutoff)+1000:now)+';window.refreshes=0;'+js
     +';const RecoveryHarness=(()=>{'+harness+';return RecoveryHarness;})();'
     +';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(RecoveryHarness,{directorRecovery:{chatId:"project-chat",offer:'+JSON.stringify(data)+'},chatId:'+(scenario==='other-chat'?'"another-chat"':'"project-chat"')+',actorId:"owner-actor",managedAgentId:'+(scenario==='managed-agent'?'"worker"':'null')+'}));';
    await page.route('http://localhost/**',async route=>{
@@ -85,9 +97,10 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
     if(new URL(req.url()).pathname==='/control')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<html><head><meta charset="utf-8"></head><div id="root"></div><script>'+react+'</script><script>'+code+'</script></html>'});
     assert.equal(new URL(req.url()).pathname,'/api/projects/organization');
     assert.equal(req.method(),'POST');assert.equal(req.headers().authorization,'Bearer synthetic-owner');
-    assert.deepEqual(req.postDataJSON(),{trialAction:'recover_director_once',projectId,releaseSha,cutoff,priorCutoff});posts++;
+    authorizationId=req.postDataJSON().authorizationId;if(renewing)assert.match(authorizationId,/^[a-f0-9-]{36}$/);
+    assert.deepEqual(req.postDataJSON(),renewing?{trialAction:'renew_continue',projectId,releaseSha,cutoff:renewedCutoff,priorCutoff:cutoff,decisionId,authorizationId}:continuing?{trialAction:'continue',projectId,releaseSha,cutoff,decisionId}:{trialAction:'recover_director_once',projectId,releaseSha,cutoff,priorCutoff});posts++;
     await responseGate;
-    return route.fulfill({status:scenario==='403'?403:scenario==='409'?409:200,json:scenario==='403'||scenario==='409'?{error:'Exact server rejection '+scenario}:scenario==='malformed'?{}:receipt});
+    return route.fulfill({status:scenario.endsWith('403')?403:scenario.endsWith('409')?409:200,json:scenario.endsWith('403')||scenario.endsWith('409')?{error:'Exact server rejection '+scenario}:scenario.endsWith('malformed')?{}:renewing?{...continuedReceipt,cutoff:renewedCutoff,priorCutoff:cutoff,authorizationId:scenario==='renew-nonce'?'wrong':authorizationId,authorizedAt:'2026-11-12T00:00:01Z'}:continuing?continuedReceipt:receipt});
    });
    await page.goto('http://localhost/control');
    if(scenario==='other-chat'||scenario==='managed-agent'){
@@ -98,35 +111,71 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
    }else if(scenario==='expired'){
     await page.getByText('The authorized Director recovery cutoff has expired.').waitFor();
     assert.equal(await page.getByRole('button').count(),0);
+   }else if(scenario==='renew-missing'){
+    assert.equal(await page.getByRole('button',{name:'Authorize deadline and continue project'}).isDisabled(),true);
+   }else if(scenario==='renew-expired'){
+    await page.getByLabel('New project cutoff (your local time)').fill('2026-11-11T23:00');
+    await page.getByRole('button',{name:'Authorize deadline and continue project'}).click();
+    await page.getByRole('alert').filter({hasText:'Choose an explicit future cutoff'}).waitFor();
    }else{
-    const button=page.getByRole('button',{name:'Recover Project Director',exact:true});
+    if(renewing)await page.getByLabel('New project cutoff (your local time)').fill('2026-11-12T01:00');
+    const button=page.getByRole('button',{name:renewing?'Authorize deadline and continue project':continuing?'Continue approved project':'Recover Project Director',exact:true});
     await button.waitFor();
-    const posted=scenario==='no-owner'?null:page.waitForRequest(request=>request.method()==='POST');
+    const posted=scenario.endsWith('no-owner')?null:page.waitForRequest(request=>request.method()==='POST');
     await button.evaluate(el=>{el.click();el.click();});
     if(posted)await posted;
-    if(scenario==='no-owner'){
+    if(scenario.endsWith('no-owner')){
      await page.getByRole('alert').filter({hasText:'Sign in as Katie owner'}).waitFor();
     }else{
-     await page.getByRole('button',{name:'Submitting Director recovery…',exact:true}).waitFor({timeout:5000}).catch(async error=>{throw Error(scenario+': '+await page.locator('body').innerText(),{cause:error});});
+     await page.getByRole('button',{name:renewing?'Submitting deadline authorization…':continuing?'Submitting project continuation…':'Submitting Director recovery…',exact:true}).waitFor({timeout:5000}).catch(async error=>{throw Error(scenario+': '+await page.locator('body').innerText(),{cause:error});});
      assert.equal(await page.getByRole('button').isDisabled(),true);
-     assert.equal(await page.getByRole('status').count(),0,'No success before server confirmation');
+     assert.equal(await page.getByRole('status').filter({hasText:continuing?'Project continuation admitted':'Director recovery admitted'}).count(),0,'No success before server confirmation');
      assert.equal(posts,1);
      releaseResponse();
-     if(scenario==='success'){
-      await page.getByRole('status').filter({hasText:receipt.assignmentId}).waitFor();
+     if(scenario==='success'||scenario==='continue-success'||scenario==='renew-success'||scenario==='renew-generic'){
+      await page.getByRole('status').filter({hasText:continuing?decisionId:receipt.assignmentId}).waitFor();
       assert.equal(await page.getByRole('button').count(),0);
       assert.equal(await page.evaluate(()=>window.refreshes),1);
+      if(renewing)await page.getByText('Deadline authorization '+authorizationId+'.',{exact:true}).waitFor();
      }else{
       await page.getByRole('alert').waitFor();
       const error=await page.getByRole('alert').innerText();
-      assert.equal(error,scenario==='malformed'?'Recovery admission receipt was not confirmed. Refresh the project before continuing.':'Exact server rejection '+scenario);
-      assert.equal(await page.getByRole('status').count(),0);
+      assert.equal(error,scenario==='renew-nonce'?'Deadline authorization receipt was not confirmed. Refresh the project before continuing.':scenario.endsWith('malformed')?(continuing?'Project continuation receipt was not confirmed. Refresh the project before continuing.':'Recovery admission receipt was not confirmed. Refresh the project before continuing.'):'Exact server rejection '+scenario);
+      assert.equal(await page.getByRole('status').filter({hasText:continuing?'Project continuation admitted':'Director recovery admitted'}).count(),0);
       assert.equal(await page.evaluate(()=>window.refreshes),0);
      }
     }
    }
-   assert.equal(posts,['no-owner','consumed','expired','other-chat','managed-agent'].includes(scenario)?0:1);
+   assert.equal(posts,['no-owner','renew-no-owner','renew-missing','renew-expired','consumed','expired','other-chat','managed-agent'].includes(scenario)?0:1);
    await page.close();
   }
  }finally{await browser.close();}
 });
+
+ test('continuation API requires owner, production release and exact decision binding',async t=>{
+ const saved={sha:process.env.VERCEL_GIT_COMMIT_SHA,env:process.env.VERCEL_ENV};
+ process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;process.env.VERCEL_ENV='production';
+ t.after(()=>{for(const [k,v] of [['VERCEL_GIT_COMMIT_SHA',saved.sha],['VERCEL_ENV',saved.env]])if(v===undefined)delete process.env[k];else process.env[k]=v;});
+ let owner=true,calls=[];
+ const load=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+ '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return continuedReceipt;}},
+ '@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ const send=async(p)=>load('@/app/api/projects/organization/route').POST(new Request('https://synthetic.test/api/projects/organization',{method:'POST',body:JSON.stringify(p)}));
+ const input={trialAction:'continue',projectId,releaseSha,cutoff,decisionId};
+ owner=false;assert.equal((await send(input)).status,403);assert.equal(calls.length,0);owner=true;
+ assert.equal((await send({...input,releaseSha:'f'.repeat(40)})).status,409);
+ process.env.VERCEL_ENV='preview';assert.equal((await send(input)).status,409);process.env.VERCEL_ENV='production';
+ assert.equal((await send({...input,decisionId:'invalid'})).status,400);assert.equal(calls.length,0);
+ const result=await send(input);assert.equal(result.status,200);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'project_provider_continue',args:{...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_cutoff:cutoff}}]);
+ assert.deepEqual(await result.json(),continuedReceipt);
+ const authorizationId='aaaaaaaa-1111-4111-8111-111111111111';
+ const renewal={...input,trialAction:'renew_continue',priorCutoff:cutoff,cutoff:'2026-11-12T01:00:00.000Z',authorizationId};
+ calls=[];owner=false;assert.equal((await send(renewal)).status,403);assert.equal(calls.length,0);owner=true;
+ assert.equal((await send({...renewal,authorizationId:undefined})).status,400);
+ assert.equal((await send({...renewal,ownerId:'forged'})).status,400);
+ assert.equal((await send({...renewal,releaseSha:'f'.repeat(40)})).status,409);assert.equal(calls.length,0);
+ assert.equal((await send(renewal)).status,200);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'project_org_renew_continue',args:{...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_cutoff:renewal.cutoff,p_prior_cutoff:cutoff,p_authorization:authorizationId}}]);
+
+ });
