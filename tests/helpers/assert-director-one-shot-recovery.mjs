@@ -157,7 +157,7 @@ export async function assertDirectorOneShotRecovery(db,rival){
   {action:'plan',purpose:'Deliver the original game',direction:'Verify rules independently',
    outcomes:[{criterion:'Playable game',verification:'Browser checks'}],milestones:[{objective:'Build the scoped game'}],organizations:['development']},
   {action:'appoint',kind:'manager',managementLevel:'functional_director',name:'Development',area:'development',
-   objective:'Own gameplay implementation',acceptance:['Rules pass'],tokens:1,deadline:cutoff,paths:[],tools:['manage','analysis']},
+   objective:'Own gameplay implementation',acceptance:['Rules pass'],tokens:20000,deadline:cutoff,paths:[],tools:['manage','analysis']},
   {action:'ready'},
  ];
  assert.equal(await decide(commands),true);
@@ -165,7 +165,7 @@ export async function assertDirectorOneShotRecovery(db,rival){
  assert.equal(await sql(db,'select status value from work_projects where id=$1',[project.id]),'blocked');
  assert.equal(await sql(db,"select count(*)::int value from project_organization_nodes where project_id=$1 and management_level='functional_director'",[project.id]),1);
  assert.equal(await sql(db,'select count(*)::int value from project_work_packages where project_id=$1',[project.id]),0);
- assert.notEqual((await claim())?.job.id,job.id);
+ await save(async()=>assert.notEqual((await claim())?.job.id,job.id));
  assert.equal((await admit()).assignmentId,job.id);
  await db.query('reset role');
  const after=await snapshot();
@@ -176,4 +176,5 @@ export async function assertDirectorOneShotRecovery(db,rival){
  assert.deepEqual([after.missions.length,after.assignments.length,after.requests.length],[3,3,6]);
  await db.query('set role service_role');
  console.log('DIRECTOR_ONE_SHOT_POSTGRES_PASS');
+ await (await import('./assert-provider-project-continuation.mjs')).assertProviderProjectContinuation(db,rival,{project,owner,cutoff,release,recovery,job});
 }

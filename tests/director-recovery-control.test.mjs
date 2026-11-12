@@ -11,6 +11,8 @@ const releaseSha='06d63710c1caec8d500ce4cad788f8100c8288d9';
 const cutoff='2026-11-12T00:00:00Z',priorCutoff='2026-11-10T18:59:32.547837Z';
 const now=Date.parse('2026-11-11T14:00:00Z');
 const offer={projectId,releaseSha,cutoff,priorCutoff,receipt:null};
+const decisionId='33333333-3333-4333-8333-333333333333';
+const continuedReceipt={projectId,releaseSha,decisionId,cutoff,admittedAt:'2026-11-11T14:00:00Z',existing:false};
 const receipt={projectId,missionId:'11111111-1111-4111-8111-111111111111',assignmentId:'22222222-2222-4222-8222-222222222222',cutoff,existing:false};
 
 test('recovery offer is restricted to the authenticated owner project and preserves consumed receipts',async t=>{
@@ -19,10 +21,11 @@ test('recovery offer is restricted to the authenticated owner project and preser
  t.after(()=>{Date.now=savedNow;if(savedSha===undefined)delete process.env.VERCEL_GIT_COMMIT_SHA;else process.env.VERCEL_GIT_COMMIT_SHA=savedSha;});
  let owner=true,provider=true,lookup=0,stored=null,lookupError=null;
  let project={id:projectId,status:'blocked',phase:'research',organization_version:1,deadline:priorCutoff};
- const db={from(table){assert.equal(table,'project_director_recoveries');return {
-  select(columns){assert.equal(columns,'mission_id,assignment_id,cutoff');return this;},
-  eq(column,id){assert.equal(column,'project_id');assert.equal(id,projectId);return this;},
-  async maybeSingle(){lookup++;return {data:stored,error:lookupError};},
+ const db={from(table){assert.ok(['project_director_recoveries','project_organization_decisions','project_provider_execution'].includes(table));return {
+  select(){return this;},
+  eq(){return this;},
+  async maybeSingle(){lookup++;return {data:table==='project_director_recoveries'?stored:null,error:lookupError};},
+  async single(){return {data:{continued_at:null},error:null};},
  };}};
  const actor='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
  const loadWithOwner=modules({
@@ -71,11 +74,12 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
  try{
   const context=await browser.newContext();
-  for(const scenario of ['success','403','409','no-owner','malformed','consumed','expired','other-chat','managed-agent']){
+  for(const scenario of ['success','403','409','no-owner','malformed','consumed','expired','other-chat','managed-agent','continue-success','continue-403','continue-409','continue-malformed']){
    const page=await context.newPage();let posts=0,releaseResponse;
    page.on('pageerror',error=>console.error(scenario,error.message));
    const responseGate=new Promise(resolve=>{releaseResponse=resolve;});
-   const data={...offer,receipt:scenario==='consumed'?{...receipt,existing:true}:null};
+   const continuing=scenario.startsWith('continue-');
+   const data={...offer,receipt:scenario==='consumed'||continuing?{...receipt,existing:true}:null,...(continuing?{continuation:{decisionId,admittedAt:null}}:{})};
    const code='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=>'+(scenario==='no-owner'?'null':'"synthetic-owner"')+'};'
     +'Date.now=()=>'+(scenario==='expired'?Date.parse(cutoff)+1000:now)+';window.refreshes=0;'+js
     +';const RecoveryHarness=(()=>{'+harness+';return RecoveryHarness;})();'
@@ -85,9 +89,9 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
     if(new URL(req.url()).pathname==='/control')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<html><head><meta charset="utf-8"></head><div id="root"></div><script>'+react+'</script><script>'+code+'</script></html>'});
     assert.equal(new URL(req.url()).pathname,'/api/projects/organization');
     assert.equal(req.method(),'POST');assert.equal(req.headers().authorization,'Bearer synthetic-owner');
-    assert.deepEqual(req.postDataJSON(),{trialAction:'recover_director_once',projectId,releaseSha,cutoff,priorCutoff});posts++;
+    assert.deepEqual(req.postDataJSON(),continuing?{trialAction:'continue',projectId,releaseSha,cutoff,decisionId}:{trialAction:'recover_director_once',projectId,releaseSha,cutoff,priorCutoff});posts++;
     await responseGate;
-    return route.fulfill({status:scenario==='403'?403:scenario==='409'?409:200,json:scenario==='403'||scenario==='409'?{error:'Exact server rejection '+scenario}:scenario==='malformed'?{}:receipt});
+    return route.fulfill({status:scenario.endsWith('403')?403:scenario.endsWith('409')?409:200,json:scenario.endsWith('403')||scenario.endsWith('409')?{error:'Exact server rejection '+scenario}:scenario.endsWith('malformed')?{}:continuing?continuedReceipt:receipt});
    });
    await page.goto('http://localhost/control');
    if(scenario==='other-chat'||scenario==='managed-agent'){
@@ -99,7 +103,7 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
     await page.getByText('The authorized Director recovery cutoff has expired.').waitFor();
     assert.equal(await page.getByRole('button').count(),0);
    }else{
-    const button=page.getByRole('button',{name:'Recover Project Director',exact:true});
+    const button=page.getByRole('button',{name:continuing?'Continue approved project':'Recover Project Director',exact:true});
     await button.waitFor();
     const posted=scenario==='no-owner'?null:page.waitForRequest(request=>request.method()==='POST');
     await button.evaluate(el=>{el.click();el.click();});
@@ -107,20 +111,20 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
     if(scenario==='no-owner'){
      await page.getByRole('alert').filter({hasText:'Sign in as Katie owner'}).waitFor();
     }else{
-     await page.getByRole('button',{name:'Submitting Director recovery…',exact:true}).waitFor({timeout:5000}).catch(async error=>{throw Error(scenario+': '+await page.locator('body').innerText(),{cause:error});});
+     await page.getByRole('button',{name:continuing?'Submitting project continuation…':'Submitting Director recovery…',exact:true}).waitFor({timeout:5000}).catch(async error=>{throw Error(scenario+': '+await page.locator('body').innerText(),{cause:error});});
      assert.equal(await page.getByRole('button').isDisabled(),true);
-     assert.equal(await page.getByRole('status').count(),0,'No success before server confirmation');
+     assert.equal(await page.getByRole('status').filter({hasText:continuing?'Project continuation admitted':'Director recovery admitted'}).count(),0,'No success before server confirmation');
      assert.equal(posts,1);
      releaseResponse();
-     if(scenario==='success'){
-      await page.getByRole('status').filter({hasText:receipt.assignmentId}).waitFor();
+     if(scenario==='success'||scenario==='continue-success'){
+      await page.getByRole('status').filter({hasText:continuing?decisionId:receipt.assignmentId}).waitFor();
       assert.equal(await page.getByRole('button').count(),0);
       assert.equal(await page.evaluate(()=>window.refreshes),1);
      }else{
       await page.getByRole('alert').waitFor();
       const error=await page.getByRole('alert').innerText();
-      assert.equal(error,scenario==='malformed'?'Recovery admission receipt was not confirmed. Refresh the project before continuing.':'Exact server rejection '+scenario);
-      assert.equal(await page.getByRole('status').count(),0);
+      assert.equal(error,scenario.endsWith('malformed')?(continuing?'Project continuation receipt was not confirmed. Refresh the project before continuing.':'Recovery admission receipt was not confirmed. Refresh the project before continuing.'):'Exact server rejection '+scenario);
+      assert.equal(await page.getByRole('status').filter({hasText:continuing?'Project continuation admitted':'Director recovery admitted'}).count(),0);
       assert.equal(await page.evaluate(()=>window.refreshes),0);
      }
     }
@@ -130,3 +134,22 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
   }
  }finally{await browser.close();}
 });
+
+ test('continuation API requires owner, production release and exact decision binding',async t=>{
+ const saved={sha:process.env.VERCEL_GIT_COMMIT_SHA,env:process.env.VERCEL_ENV};
+ process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;process.env.VERCEL_ENV='production';
+ t.after(()=>{for(const [k,v] of [['VERCEL_GIT_COMMIT_SHA',saved.sha],['VERCEL_ENV',saved.env]])if(v===undefined)delete process.env[k];else process.env[k]=v;});
+ let owner=true,calls=[];
+ const load=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+ '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return continuedReceipt;}},
+ '@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ const send=async(p)=>load('@/app/api/projects/organization/route').POST(new Request('https://synthetic.test/api/projects/organization',{method:'POST',body:JSON.stringify(p)}));
+ const input={trialAction:'continue',projectId,releaseSha,cutoff,decisionId};
+ owner=false;assert.equal((await send(input)).status,403);assert.equal(calls.length,0);owner=true;
+ assert.equal((await send({...input,releaseSha:'f'.repeat(40)})).status,409);
+ process.env.VERCEL_ENV='preview';assert.equal((await send(input)).status,409);process.env.VERCEL_ENV='production';
+ assert.equal((await send({...input,decisionId:'invalid'})).status,400);assert.equal(calls.length,0);
+ const result=await send(input);assert.equal(result.status,200);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'project_provider_continue',args:{...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_cutoff:cutoff}}]);
+ assert.deepEqual(await result.json(),continuedReceipt);
+ });

@@ -55,9 +55,20 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     if (error) throw Error('Director recovery admission state unavailable');
     if (!data && (p.status !== 'blocked' || p.phase !== 'research'
         || Date.now() >= Date.parse(cutoff) || Date.parse(p.deadline) !== Date.parse(priorCutoff))) return null;
+    let continuation: DirectorRecoveryOffer['continuation'];
+    if(data){
+        const db=getSupabaseAdminClient();
+        const [decision,authority]=await Promise.all([
+            db.from('project_organization_decisions').select('id').eq('project_id',p.id).eq('assignment_id',data.assignment_id).maybeSingle<{id:string}>(),
+            db.from('project_provider_execution').select('continued_at').eq('project_id',p.id).single<{continued_at:string|null}>(),
+        ]);
+        if(decision.error||authority.error)throw Error('Project continuation state unavailable');
+        if(decision.data)continuation={decisionId:decision.data.id,admittedAt:authority.data?.continued_at??null};
+    }
     return {
         projectId: p.id, releaseSha: releaseSha!, cutoff, priorCutoff,
         receipt: data ? {projectId: p.id, missionId: data.mission_id, assignmentId: data.assignment_id, cutoff: data.cutoff, existing: true} : null,
+        ...(continuation?{continuation}:{}),
     };
 }
 

@@ -17,6 +17,7 @@ export type DirectorRecoveryOffer = {
   cutoff: string;
   priorCutoff: string;
   receipt: DirectorRecoveryReceipt | null;
+  continuation?: {decisionId:string;admittedAt:string|null};
 };
 
 export function DirectorRecoveryControl({
@@ -30,11 +31,12 @@ export function DirectorRecoveryControl({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<DirectorRecoveryReceipt | null>(null);
+  const [continued, setContinued] = useState<string | null>(null);
   const receipt = confirmed ?? recovery.receipt;
   const expired = Date.now() >= Date.parse(recovery.cutoff);
 
-  async function recover() {
-    if (submitting.current || receipt || Date.now() >= Date.parse(recovery.cutoff)) return;
+  async function recover(continuation=false) {
+    if (submitting.current || (!continuation&&receipt) || (continuation&&(!recovery.continuation||continued||recovery.continuation.admittedAt)) || Date.now() >= Date.parse(recovery.cutoff)) return;
     submitting.current = true;
     setPending(true);
     setError(null);
@@ -44,7 +46,10 @@ export function DirectorRecoveryControl({
       const response = await fetch("/api/projects/organization", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}` },
-        body: JSON.stringify({
+        body: JSON.stringify(continuation?{
+          trialAction:'continue',projectId:recovery.projectId,releaseSha:recovery.releaseSha,
+          cutoff:recovery.cutoff,decisionId:recovery.continuation!.decisionId,
+        }:{
           trialAction: "recover_director_once",
           projectId: recovery.projectId,
           releaseSha: recovery.releaseSha,
@@ -54,6 +59,13 @@ export function DirectorRecoveryControl({
       });
       const result = await response.json();
       if (!response.ok) throw Error(typeof result.error === "string" ? result.error : `Recovery request failed (HTTP ${response.status}).`);
+      if(continuation){
+        if(!result||result.projectId!==recovery.projectId||result.decisionId!==recovery.continuation!.decisionId
+          ||result.releaseSha!==recovery.releaseSha||Date.parse(result.cutoff)!==Date.parse(recovery.cutoff)
+          ||typeof result.existing!=='boolean'||typeof result.admittedAt!=='string'||!Number.isFinite(Date.parse(result.admittedAt)))
+          throw Error('Project continuation receipt was not confirmed. Refresh the project before continuing.');
+        setContinued(result.admittedAt);onRefresh();return;
+      }
       if (!result || result.projectId !== recovery.projectId
         || Date.parse(result.cutoff) !== Date.parse(recovery.cutoff)
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(result.missionId ?? "") || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(result.assignmentId ?? "")
@@ -72,7 +84,7 @@ export function DirectorRecoveryControl({
 
   return (
     <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3" aria-label="Project Director recovery">
-      <p>One Project Director decision. Downstream execution stays paused.</p>
+      <p>{recovery.continuation?'Continue the accepted organization within the existing approved scope and cutoff.':'One Project Director decision. Downstream execution stays paused.'}</p>
       {receipt ? (
         <div role="status">
           <p>Director recovery admitted{receipt.existing ? " previously" : ""}.</p>
@@ -89,6 +101,13 @@ export function DirectorRecoveryControl({
         <button type="button" className="min-h-11 font-semibold" disabled={pending} onClick={() => void recover()}>
           {pending ? "Submitting Director recovery…" : "Recover Project Director"}
         </button>
+      )}
+      {receipt&&recovery.continuation&&(
+        continued||recovery.continuation.admittedAt?
+          <p role="status">Project continuation admitted. Decision {recovery.continuation.decisionId}. Admission {continued??recovery.continuation.admittedAt}.</p>:
+          !expired&&<button type="button" className="min-h-11 font-semibold" disabled={pending} onClick={()=>void recover(true)}>
+            {pending?'Submitting project continuation…':'Continue approved project'}
+          </button>
       )}
       {error && <p role="alert">{error}</p>}
     </aside>
