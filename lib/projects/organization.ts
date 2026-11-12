@@ -5,7 +5,7 @@ import type {Claim} from '@/lib/missions/types';
 import type {ModelResult} from '@/lib/missions/model';
 import type {OrchestrationChoice} from '@/lib/orchestration/routing';
 import {missionInputLimit} from '@/lib/missions/request-budget';
-import {managementScope,selectManagementEvidenceIds,buildManagementDecisionContext,type ManagementNode,type AssignmentBinding,type AssignmentStatus} from './management-context';
+import {managementScope,selectManagementEvidenceIds,buildManagementDecisionContext,type ManagementNode,type ManagementRow,type AssignmentBinding,type AssignmentStatus} from './management-context';
 
 export type ExecutiveModel = {
  provider_name:string;model_id:string;is_active:boolean;reasoning_tier:string|null;
@@ -99,13 +99,14 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  if(statusQuery.error)throw Error('Management assignment status unavailable');
  const statuses=(statusQuery.data??[]) as AssignmentStatus[];
  const selectedIds=selectManagementEvidenceIds(bindings,statuses,scope.decisionIds);
+ const packageRows=(packages.data??[]) as Array<{id:string}>;
  const [evidence,attempts]=await Promise.all([
   selectedIds.length?db.from('mission_assignments').select('id,status,result,detail,mission_id,role,agent_id,instruction,payload,dependencies').in('id',selectedIds):Promise.resolve({data:[],error:null}),
-  (packages.data??[]).length?db.from('project_work_package_attempts').select('*').in('package_id',(packages.data??[]).map((p:{id:string})=>p.id)):Promise.resolve({data:[],error:null}),
+  packageRows.length?db.from('project_work_package_attempts').select('*').in('package_id',packageRows.map(p=>p.id)):Promise.resolve({data:[],error:null}),
  ]);
  if(evidence.error||attempts.error)throw Error('Selected management evidence or work-package attempts unavailable');
- const exceptions=[...(ownedExceptions.data??[]),...(originExceptions.data??[])]
-  .filter((e:{id:string},i:number,a:Array<{id:string}>)=>a.findIndex(v=>v.id===e.id)===i);
+ const exceptions=[...((ownedExceptions.data??[]) as Array<{id:string}>),...((originExceptions.data??[]) as Array<{id:string}>)]
+  .filter((e,i,a)=>a.findIndex(v=>v.id===e.id)===i);
  const providerControlled=await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id});
  if(providerControlled&&claim.mission.calls>0)throw Error('Trial management inference was already admitted for this mission');
  const baseInstruction=providerControlled
@@ -116,16 +117,16 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   :baseInstruction;
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:(focused.data??[]) as ManagementNode[],project,
-  executionTeam:team.data??[],exceptions,bindings,statuses,
-  evidence:evidence.data??[],plans:plans.data??[],dependencies:dependencies.data??[],
-  scopeGrants:grants.data??[],workerContracts:workerContracts.data??[],
-  workPackages:packages.data??[],workPackageAttempts:attempts.data??[],work:work.data??[],
+  executionTeam:(team.data??[]) as ManagementRow[],exceptions,bindings,statuses,
+  evidence:(evidence.data??[]) as ManagementRow[],plans:(plans.data??[]) as ManagementRow[],dependencies:(dependencies.data??[]) as ManagementRow[],
+  scopeGrants:(grants.data??[]) as ManagementRow[],workerContracts:(workerContracts.data??[]) as ManagementRow[],
+  workPackages:(packages.data??[]) as ManagementRow[],workPackageAttempts:(attempts.data??[]) as ManagementRow[],work:(work.data??[]) as ManagementRow[],
  },missionInputLimit(claim));
  const response=await model(claim,instruction,input,'none');
  let commands:unknown;
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
- assertManagementCommands(node,nodes,commands,Boolean(recovery));
+ assertManagementCommands(node,topology,commands,Boolean(recovery));
  await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
 }
 
