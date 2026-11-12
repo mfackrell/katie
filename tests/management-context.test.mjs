@@ -75,7 +75,7 @@ test('unresolved owned exceptions, external dependency statuses and current acti
  const x=fixture();
  x.exceptions.push({id:'unrelated',origin_id:'qa-deep',owner_id:'someone-else',status:'open',detail:'Not this reporting chain'});
  x.dependencies.push({node_id:'game',depends_on:'external'});
- x.topology.push(node('external','root','manager',{status:'blocked'}));
+ x.topology.push(node('external','game','manager',{status:'blocked'}));
  x.bindings.push({assignment_id:'pending',node_id:'qa',created_at:'2026-11-12T04:00:00Z'});
  x.statuses.push({id:'pending',status:'running'});
  x.evidence.push({id:'pending',status:'running',mission_id:'mission-running'});
