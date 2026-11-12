@@ -2,7 +2,7 @@
 // The PostgreSQL source tables remain the authority: this view is never an approval.
 export type ManagementRow=Record<string,unknown>;
 export type ManagementNode=ManagementRow&{
- id:string;agent_id?:string;parent_id?:string|null;kind?:string;
+ id:string;agent_id?:string;parent_id?:string|null;kind:string;
  management_level?:string;area?:string;status?:string;depth?:number;
 };
 export type AssignmentBinding={assignment_id:string;node_id:string;created_at?:string};
