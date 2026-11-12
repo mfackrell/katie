@@ -117,7 +117,18 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const activePackages=input.workPackages.filter(p=>!retiredPackages.has(String(p.status)));
  const acceptedPackages=input.workPackages.filter(p=>p.status==='accepted');
  const activePackageIds=new Set(activePackages.map(p=>String(p.id)));
- const attempts=sortedLatest(input.workPackageAttempts.filter(a=>activePackageIds.has(String(a.package_id))))
+ // Attempt rows have a numeric ordinal but no created_at, updated_at or id.
+ // Date/ID ordering would silently choose attempt 1 instead of the latest retry.
+ const packageAttempts=input.workPackageAttempts.filter(a=>activePackageIds.has(String(a.package_id)));
+ const attemptKeys=new Set<string>();
+ for(const a of packageAttempts){
+  required(Number.isSafeInteger(a.attempt)&&Number(a.attempt)>0,'invalid package attempt ordinal');
+  const key=String(a.package_id)+':'+String(a.attempt);
+  required(!attemptKeys.has(key),'duplicate package attempt ordinal');
+  attemptKeys.add(key);
+ }
+ const attempts=[...packageAttempts]
+  .sort((a,b)=>String(a.package_id).localeCompare(String(b.package_id))||Number(b.attempt)-Number(a.attempt))
   .filter((a,i,all)=>all.findIndex(x=>x.package_id===a.package_id)===i);
  const currentWork=input.work.filter(w=>!['completed','accepted','cancelled','canceled','closed'].includes(String(w.status)));
  const activeWorkIds=new Set(currentWork.map(w=>String(w.id)));
