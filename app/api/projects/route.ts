@@ -11,6 +11,10 @@ import { hasPendingExecutiveDelivery } from '@/lib/executive/delivery';
 
 const projectIdentity = z.object({ actorId: z.string().uuid(), chatId: z.string().uuid() });
 const approvalInput = projectIdentity.extend({ approvalHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const scopeRatificationInput = projectIdentity.extend({
+    proposalId: z.string().uuid(),
+    approvalHash: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
 
 async function ownedProject(actorId: string, chatId: string) {
     const c = await getChatById(chatId);
@@ -143,6 +147,32 @@ export async function POST(request: NextRequest) {
         });
     } catch {
         return NextResponse.json({ error: 'Approval could not be saved. Refresh the scope and try again.' }, { status: 409 });
+    }
+}
+
+// Scope ratification is deliberately separate from ordinary project approval.
+// The client supplies only the immutable proposal identity and exact digest;
+// specification content and file paths cannot be substituted at approval time.
+export async function PUT(request: NextRequest) {
+    let input: z.infer<typeof scopeRatificationInput>;
+    try { input = scopeRatificationInput.parse(await request.json()); }
+    catch { return NextResponse.json({ error: 'Invalid scope ratification approval' }, { status: 400 }); }
+    if (!await verifiedProjectOwnerSession(request))
+        return NextResponse.json({ error: 'Authenticated Katie owner session required for scope ratification' }, { status: 403 });
+    try {
+        const p = await ownedProject(input.actorId, input.chatId);
+        if (!p) return NextResponse.json({ error: 'Project chat unavailable' }, { status: 404 });
+        const ownerId = process.env.KATIE_OWNER_AUTH_USER_ID;
+        if (!ownerId || !/^[a-f0-9-]{36}$/i.test(ownerId))
+            return NextResponse.json({ error: 'Owner scope identity unavailable' }, { status: 503 });
+        const updated = await projectRpc<Project>('project_org_ratify_scope', {
+            p_owner: ownerId, p_proposal: input.proposalId, p_hash: input.approvalHash,
+        });
+        return NextResponse.json({ status: updated.status, approvedScopeHash: updated.approved_hash, messages: await getMessages(input.chatId) }, {
+            headers: { 'Cache-Control': 'no-store' },
+        });
+    } catch {
+        return NextResponse.json({ error: 'Scope ratification is stale, unauthorized, or could not be committed atomically.' }, { status: 409 });
     }
 }
 

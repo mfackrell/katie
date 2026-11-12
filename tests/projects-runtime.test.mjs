@@ -670,3 +670,32 @@ test('resource authorization rejects unverified owner, forged actor/chat and cro
   for(const [key,value] of Object.entries(saved))if(value===undefined)delete process.env[key];else process.env[key]=value;
  }
 });
+
+
+test('scope ratification API requires owner authentication and accepts only immutable proposal identity plus hash',async()=>{
+ const saved=process.env.KATIE_OWNER_AUTH_USER_ID;const ownerId=randomUUID(),proposalId=randomUUID(),scopeHash='a'.repeat(64);
+ process.env.KATIE_OWNER_AUTH_USER_ID=ownerId;let verified=false,calls=[];
+ const p={...owner,status:'blocked',phase:'research',organization_version:1,spec:null,approval_hash:null,approved_hash:null};
+ try{
+  const {PUT}=modules({
+   'next/server':{NextResponse:{json:(value,options)=>Response.json(value,options)}},
+   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>verified},
+   '@/lib/data/persistence-store':{getChatById:async chosen=>chosen===chat?{actorId:actor}:null,getMessages:async()=>[]},
+   '@/lib/projects/store':{projectForChat:async()=>p,projectRpc:async(name,args)=>{calls.push({name,args});return {...p,status:'running',phase:'development',approved_hash:scopeHash};}},
+   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({})},
+   '@/lib/projects/recovery-budget':{recoveryResourceProposal:async()=>null},
+   '@/lib/executive/delivery':{hasPendingExecutiveDelivery:async()=>false},
+   '@/components/director-recovery-control':{},
+  })('@/app/api/projects/route');
+  const request=(body)=>new Request('https://katie.test/api/projects',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  assert.equal((await PUT(request({actorId:actor,chatId:chat,proposalId,approvalHash:scopeHash,specification:{allowedPaths:['app/']}}))).status,400,
+    'client cannot substitute specification or paths at approval time');
+  assert.equal((await PUT(request({actorId:actor,chatId:chat,proposalId,approvalHash:scopeHash}))).status,403);assert.equal(calls.length,0);
+  verified=true;
+  assert.equal((await PUT(request({actorId:randomUUID(),chatId:chat,proposalId,approvalHash:scopeHash}))).status,404);assert.equal(calls.length,0);
+  const response=await PUT(request({actorId:actor,chatId:chat,proposalId,approvalHash:scopeHash}));
+  assert.equal(response.status,200);assert.equal(calls.length,1);assert.equal(calls[0].name,'project_org_ratify_scope');
+  assert.deepEqual(calls[0].args,{p_owner:ownerId,p_proposal:proposalId,p_hash:scopeHash});
+  assert.equal((await response.json()).approvedScopeHash,scopeHash);
+ }finally{if(saved===undefined)delete process.env.KATIE_OWNER_AUTH_USER_ID;else process.env.KATIE_OWNER_AUTH_USER_ID=saved;}
+});
