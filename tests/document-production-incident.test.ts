@@ -137,5 +137,5 @@ test('route integration preserves exact source bytes before drafting and keeps a
   assert.doesNotMatch(route.slice(route.indexOf('runAttempt: async'), route.indexOf('result = generationAttempt.result')),
     /if \(retainedPdfExportAttachment\)/,
     'provider drafting callback must not capture the retained-PDF binding');
-  assert.match(route,/retainedPdfExportAttachment \|\| attachmentDecision\.clarification/);
+  assert.match(route,/typeof retainedPdfExportAttachment !== 'undefined'.*attachmentDecision\.clarification/);
 });
