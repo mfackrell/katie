@@ -6,8 +6,9 @@ const code=readFileSync("lib/memory/summarizer.ts","utf8");
 test("ITM source cursor advances only after source-cited Grok factual episodes and retention",()=>{
   assert.ok(code.indexOf("summarizeNewBatch(batch,provider!,signal)") < code.indexOf("reconcileEpisodePlan(episodes, newSummary,provider!,signal)"));
   assert.ok(code.indexOf("parseGroundedEpisodes") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
-  assert.match(code,/parseGroundedEpisodes\(completedText\(response, "factual episodes"/);
-  assert.match(code,/choice\?\.finish_reason !== "stop"/);
+  assert.match(code,/parseGroundedEpisodes\(completedResponsesText\(response, "factual episodes"/);
+  assert.match(code,/response\.status !== "completed"/);
+  assert.match(code,/grokClient\.post<GrokResponsesResponse>\("\/responses"/);
   assert.match(code,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.match(code,/getMessages\(chatId\)/);
   assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);

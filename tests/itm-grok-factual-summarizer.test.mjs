@@ -37,9 +37,22 @@ function harness({
       const provider = options.baseURL?.includes("anthropic") ? "anthropic" : "grok";
       this.chat = { completions: { create: async body => {
         const n = calls.length + 1;
-        calls.push({ ...copy(body), __provider: provider });
+        calls.push({ ...copy(body), __provider: provider, __transport: "chat" });
         return responses(n, body, provider);
       } } };
+      this.post = async (path, options) => {
+        assert.equal(path, "/responses");
+        const body = options.body;
+        const n = calls.length + 1;
+        calls.push({ ...copy(body), __provider: provider, __transport: "responses" });
+        const simulated = await responses(n, body, provider);
+        const choice = simulated?.choices?.[0];
+        return {
+          status: choice?.finish_reason === "stop" ? "completed" : "incomplete",
+          incomplete_details: choice?.finish_reason === "stop" ? null : { reason: choice?.finish_reason ?? "missing" },
+          output: [{ type: "message", content: [{ type: "output_text", text: choice?.message?.content ?? "" }] }],
+        };
+      };
     }
   }
   const admin = {
@@ -117,7 +130,9 @@ test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () =>
   const h = harness();
   assert.equal(await h.run(), "committed");
   assert.deepEqual(h.calls.map(x => x.model), ["grok-4.7", "grok-4.7"]);
-  assert.deepEqual(h.calls.map(x => x.response_format), [{ type: "json_object" }, { type: "json_object" }]);
+  assert.deepEqual(h.calls.map(x => x.__transport), ["responses", "responses"]);
+  assert.deepEqual(h.calls.map(x => x.reasoning), [{ effort: "low" }, { effort: "low" }]);
+  assert.ok(h.calls.every(x => x.text?.format?.type === "json_schema" && x.store === false));
   assert.equal(h.constructors[0].baseURL, "https://api.x.ai/v1");
   assert.equal(h.constructors[0].maxRetries, 0);
   assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary"));
@@ -180,8 +195,8 @@ test("later correction supersedes the obsolete older assertion without inventing
   assert.equal(await h.run(), "committed");
   assert.ok(h.memory().summary.includes(summary));
   assert.doesNotMatch(h.memory().summary, /Katie previously stated she could never/);
-  assert.match(h.calls[1].messages[0].content, /DROP the stale old episode/);
-  assert.match(h.calls[1].messages[1].content, /NEW SOURCE-CITED FACTUAL EPISODES/);
+  assert.match(h.calls[1].input[0].content, /DROP the stale old episode/);
+  assert.match(h.calls[1].input[1].content, /NEW SOURCE-CITED FACTUAL EPISODES/);
 });
 
 test("fabricated evidence, wrong message, duplicates and unsupported structure fail closed", async () => {
@@ -340,7 +355,7 @@ test("atomic cursor prevents stale writes and preserves previous memory", async 
 test("model prompts require factual narratives and prohibit interpretive memory", async () => {
   const h = harness();
   assert.equal(await h.run(), "committed");
-  const prompts = h.calls.map(x => x.messages[0].content);
+  const prompts = h.calls.map(x => (x.input ?? x.messages)[0].content);
   assert.match(prompts[0], /FACTUAL EPISODIC SUMMARIES/);
   assert.match(prompts[0], /WHO SAID or DID WHAT IN THE CONVERSATION/);
   assert.match(prompts[0], /Do NOT infer motives/);
