@@ -876,3 +876,36 @@ test('actual route response-policy inputs ignore legacy companion pending obliga
   assert.equal(selected.taskProgressContext, '');
   assert.equal(selected.requiredReviewForRequest, false);
 });
+
+
+test('actual route admits retained source only for PDF-only output and blocks mixed PDF plus Word', async () => {
+  const start=routeSource.indexOf('const retainedPdfExportFileId = documentProduction');
+  const end=routeSource.indexOf('if (timelineActive && temporalIntent)',start);
+  assert.ok(start>0 && end>start,'retained PDF admission block must exist in production route');
+  const productionBlock=routeSource.slice(start,end);
+  const intentExports={};
+  vm.runInNewContext(compile(readFileSync('lib/documents/intent.ts','utf8')),{
+    exports:intentExports,require:nativeRequire,Set,Map,
+  });
+  const run=async(message,hasOriginal=true)=>{
+    const attachment={fileId:'resume-pdf',id:'stored-resume',mimeType:'application/pdf',fileName:'resume.pdf'};
+    const context={
+      message,attachments:[attachment],documentProduction:{},pdfSources:new Map([['resume-pdf',{...attachment,hasOriginal}]]),
+      retainedPdfExportAttachment:null,retainedPdfDualFormatAttachment:null,
+      resolveRetainedPdfExportFileId:intentExports.retainedPdfExportFileId,
+      resolveRetainedPdfDualFormatFileId:intentExports.retainedPdfDualFormatFileId,
+    };
+    return plain(await vm.runInNewContext(compile(`(async()=>{${productionBlock}
+      return {
+        pdfOnly:retainedPdfExportAttachment?.fileId ?? null,
+        dual:retainedPdfDualFormatAttachment?.fileId ?? null,
+      };})()`),context));
+  };
+  assert.deepEqual(await run('create a pdf of my resume'),{pdfOnly:'resume-pdf',dual:null});
+  assert.deepEqual(await run('create a PDF of my resume and a Word document'),{pdfOnly:null,dual:'resume-pdf'});
+  assert.deepEqual(await run('export my resume as PDF and DOCX'),{pdfOnly:null,dual:'resume-pdf'});
+  assert.deepEqual(await run('create a one-page pdf of my resume'),{pdfOnly:null,dual:null});
+  assert.deepEqual(await run('create a pdf of my resume',false),{pdfOnly:null,dual:null});
+  assert.match(routeSource,/SOURCE_PDF_DUAL_FORMAT_UNSUPPORTED/);
+  assert.match(routeSource,/No files were generated\. Request PDF only/);
+});

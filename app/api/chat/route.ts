@@ -1,5 +1,5 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, retainedPdfExportFileId as resolveRetainedPdfExportFileId, requiresProfessionalDocumentAcceptance, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, retainedPdfExportFileId as resolveRetainedPdfExportFileId, retainedPdfDualFormatFileId as resolveRetainedPdfDualFormatFileId, requiresProfessionalDocumentAcceptance, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
 import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
@@ -2368,6 +2368,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
     // Bound once per request. Assigned only after exact attachment selection,
     // persistence, ownership, and retained-source checks succeed.
     let retainedPdfExportAttachment: ConversationAttachment | null = null;
+    let retainedPdfDualFormatAttachment: ConversationAttachment | null = null;
     let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -2444,7 +2445,11 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const retainedPdfExportFileId = documentProduction
               ? resolveRetainedPdfExportFileId(message, attachments, fileId => Boolean(pdfSources.get(fileId)?.hasOriginal))
               : null;
+            const retainedPdfDualFormatFileId = documentProduction
+              ? resolveRetainedPdfDualFormatFileId(message, attachments, fileId => Boolean(pdfSources.get(fileId)?.hasOriginal))
+              : null;
             retainedPdfExportAttachment = retainedPdfExportFileId ? pdfSources.get(retainedPdfExportFileId) ?? null : null;
+            retainedPdfDualFormatAttachment = retainedPdfDualFormatFileId ? pdfSources.get(retainedPdfDualFormatFileId) ?? null : null;
             if (timelineActive && temporalIntent) {
               const timelineSource = timelineSelection.clarification ? undefined : freshVideoReferences.length
                 ? (timelineSelection.source ? persistedVideoSourceByFileId.get(timelineSelection.source.id) : undefined)
@@ -2514,7 +2519,8 @@ ${savedProjectSourceWarning.retainedObjective}`;
               pdf.nativeInspectionRequired=false;
             }
             for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
-              if ((typeof retainedPdfExportAttachment !== 'undefined' && retainedPdfExportAttachment !== null) || attachmentDecision.clarification) continue;
+              if ((typeof retainedPdfExportAttachment !== 'undefined' && retainedPdfExportAttachment !== null) ||
+                  (typeof retainedPdfDualFormatAttachment !== 'undefined' && retainedPdfDualFormatAttachment !== null) || attachmentDecision.clarification) continue;
               const source=pdfSources.get(pdf.fileId);
               if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
               try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName),pdf.pdfSourceOccurrence),async id=>(await getChatById(id))?.actorId===actorId,pdfSourceTask); }
@@ -2634,12 +2640,17 @@ ${chunkWorkflowSummary}`;
 
             // Keep completed evidence through both provider errors and refusal reroutes.
             let collaborationResumeState: CollaborationResumeState | undefined;
-            const generationAttempt = retainedPdfExportAttachment
+            const generationAttempt = retainedPdfDualFormatAttachment
               ? {
-                  result: { text: 'SOURCE_PDF_PRESERVED', provider: provider.name, model: modelId } as ProviderResponse,
+                  result: { text: 'SOURCE_PDF_DUAL_FORMAT_UNSUPPORTED', provider: provider.name, model: modelId } as ProviderResponse,
                   attempt: { provider, modelId, routingSource: "initial" as const } as GenerationAttempt,
                 }
-              : await runWithRefusalFallback<GenerationAttempt>({
+              : retainedPdfExportAttachment
+                ? {
+                    result: { text: 'SOURCE_PDF_PRESERVED', provider: provider.name, model: modelId } as ProviderResponse,
+                    attempt: { provider, modelId, routingSource: "initial" as const } as GenerationAttempt,
+                  }
+                : await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
               retryExplicitContentRefusal: !stillImageVisionRequest,
@@ -3593,7 +3604,7 @@ ${chunkWorkflowSummary}`;
               }
             });
             result = generationAttempt.result;
-            if (result.text === 'SOURCE_PDF_PRESERVED') reviewCompleted = true;
+            if (result.text === 'SOURCE_PDF_PRESERVED' || result.text === 'SOURCE_PDF_DUAL_FORMAT_UNSUPPORTED') reviewCompleted = true;
             provider = generationAttempt.attempt.provider;
             modelId = generationAttempt.attempt.runpodImageFallback || generationAttempt.attempt.runpodStillVisionFallback
               ? generationAttempt.result.model : generationAttempt.attempt.modelId;
@@ -3637,7 +3648,7 @@ ${chunkWorkflowSummary}`;
             }
             if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) &&
                 !pendingVideoAssistantMessageId && !selectedDocumentSource &&
-                result.text !== 'SOURCE_PDF_PRESERVED') {
+                !['SOURCE_PDF_PRESERVED', 'SOURCE_PDF_DUAL_FORMAT_UNSUPPORTED'].includes(result.text ?? '')) {
               // Explicit export preserves the owner's selected source exactly;
               // the existing final file rendering/visual inspection still applies.
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
@@ -3789,7 +3800,9 @@ ${chunkWorkflowSummary}`;
 
             if (documentProduction && !reviewHasPendingClarification) {
               const { deliverDocument, deliverRetainedPdfSource } = await import('@/lib/documents/service');
-              if (retainedPdfExportAttachment) {
+              if (result.text === 'SOURCE_PDF_DUAL_FORMAT_UNSUPPORTED') {
+                result = { ...result, text: 'The selected source can be returned unchanged as PDF, but this request also requires Word/DOCX. Katie does not have an authorized lossless PDF-to-Word conversion for this retained source, and reconstructing it could change approved content. No files were generated. Request PDF only, or explicitly authorize a reconstructed Word document.' };
+              } else if (retainedPdfExportAttachment) {
                 const sourceChatId = retainedPdfExportAttachment.chatId ?? chatId;
                 const owner = await getChatById(sourceChatId);
                 if (!owner || owner.actorId !== actorId) throw new Error('Selected PDF source is unavailable to this actor.');

@@ -81,7 +81,7 @@ export function inheritDocumentPageConstraint(
 
 /** A retained PDF is already the requested output. Pure export/re-export must
  * preserve the selected source instead of authorizing a model rewrite. */
-export function sourcePreservingPdfExportRequest(message: string): boolean {
+function retainedPdfSourceExportBaseRequest(message: string): boolean {
   const request = documentRequest(message);
   if (!request || request.pages !== undefined || !/\bpdf\b/i.test(message)) return false;
   if (/\b(?:revise|edit|update|rewrite|tailor|change|correct|improve|summari[sz]e|summary|translate|extract|combine|merge|redact|annotate|fill|sign|add|remove|replace)\b/i.test(message))
@@ -104,10 +104,43 @@ export function sourcePreservingPdfExportRequest(message: string): boolean {
 
   // Require language that identifies the requested PDF as the source document
   // itself. "Create a PDF cover letter based on my résumé" intentionally fails.
-  const sameDocument =
+  return (
     /\bpdf\b[^.!?\n]{0,80}\b(?:of|from)\s+(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b/i.test(message) ||
-    /\b(?:convert|export|save|re-?export|reissue|deliver|give\s+me)\b[^.!?\n]{0,100}\b(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b[^.!?\n]{0,80}\b(?:to|as|in)\s+(?:a\s+)?pdf\b/i.test(message);
-  return sameDocument;
+    /\b(?:convert|export|save|re-?export|reissue|deliver|give\s+me)\b[^.!?\n]{0,100}\b(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b[^.!?\n]{0,80}\b(?:to|as|in)\s+(?:a\s+)?pdf\b/i.test(message)
+  );
+}
+
+const WORD_OUTPUT_REFERENCE = /\b(?:docx|word(?:\s+(?:document|file|version|copy))?)\b/i;
+
+export function sourcePreservingPdfExportRequest(message: string): boolean {
+  return retainedPdfSourceExportBaseRequest(message) && !WORD_OUTPUT_REFERENCE.test(message);
+}
+
+/** A retained PDF cannot satisfy a simultaneous Word/DOCX request without
+ * reconstructing content. Detect that case so the route can fail closed rather
+ * than silently omit Word or authorize an unintended rewrite. */
+export function retainedPdfDualFormatRequest(message: string): boolean {
+  return retainedPdfSourceExportBaseRequest(message) && WORD_OUTPUT_REFERENCE.test(message);
+}
+
+export function retainedPdfExportFileId(
+  message: string, attachments: Array<{fileId:string; mimeType:string}>,
+  hasRetainedSource: (fileId:string)=>boolean,
+): string | null {
+  if (!sourcePreservingPdfExportRequest(message)) return null;
+  const pdfs = attachments.filter(file => file.mimeType === 'application/pdf');
+  if (pdfs.length !== 1 || !hasRetainedSource(pdfs[0].fileId)) return null;
+  return pdfs[0].fileId;
+}
+
+export function retainedPdfDualFormatFileId(
+  message: string, attachments: Array<{fileId:string; mimeType:string}>,
+  hasRetainedSource: (fileId:string)=>boolean,
+): string | null {
+  if (!retainedPdfDualFormatRequest(message)) return null;
+  const pdfs = attachments.filter(file => file.mimeType === 'application/pdf');
+  if (pdfs.length !== 1 || !hasRetainedSource(pdfs[0].fileId)) return null;
+  return pdfs[0].fileId;
 }
 
 /** Professional document identities fail closed when independent visual review

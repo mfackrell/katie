@@ -133,68 +133,188 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
   } finally { await context.close(); }
 }
 
+export const PDF_RASTER_LIMITS = {
+  scale: 1.5,
+  maxPageDimensionPt: 1600,
+  maxRasterDimensionPx: 2400,
+  maxPagePixels: 4_000_000,
+  maxTotalPixels: 16_000_000,
+  maxPageRgbaBytes: 16_000_000,
+  maxTotalRgbaBytes: 64_000_000,
+  timeoutMs: 15_000,
+} as const;
+
+export function validatePdfRasterPageGeometry(widthPt: number, heightPt: number, priorPixels = 0) {
+  if (![widthPt, heightPt, priorPixels].every(Number.isFinite) || widthPt <= 0 || heightPt <= 0 ||
+      priorPixels < 0 || !Number.isSafeInteger(priorPixels))
+    throw new Error('Invalid PDF page geometry.');
+  if (widthPt > PDF_RASTER_LIMITS.maxPageDimensionPt || heightPt > PDF_RASTER_LIMITS.maxPageDimensionPt)
+    throw new Error('PDF page dimensions exceed rendering bounds.');
+  const widthPx = Math.ceil(widthPt * PDF_RASTER_LIMITS.scale);
+  const heightPx = Math.ceil(heightPt * PDF_RASTER_LIMITS.scale);
+  if (!Number.isSafeInteger(widthPx) || !Number.isSafeInteger(heightPx) ||
+      widthPx < 1 || heightPx < 1 ||
+      widthPx > PDF_RASTER_LIMITS.maxRasterDimensionPx || heightPx > PDF_RASTER_LIMITS.maxRasterDimensionPx)
+    throw new Error('PDF raster dimensions exceed rendering bounds.');
+  const pagePixels = widthPx * heightPx;
+  const totalPixels = priorPixels + pagePixels;
+  const pageRgbaBytes = pagePixels * 4;
+  const totalRgbaBytes = totalPixels * 4;
+  if (!Number.isSafeInteger(pagePixels) || pagePixels > PDF_RASTER_LIMITS.maxPagePixels ||
+      pageRgbaBytes > PDF_RASTER_LIMITS.maxPageRgbaBytes)
+    throw new Error('PDF page raster exceeds inspection budget.');
+  if (!Number.isSafeInteger(totalPixels) || totalPixels > PDF_RASTER_LIMITS.maxTotalPixels ||
+      totalRgbaBytes > PDF_RASTER_LIMITS.maxTotalRgbaBytes)
+    throw new Error('Document raster exceeds inspection budget.');
+  return { widthPx, heightPx, pagePixels, totalPixels, pageRgbaBytes, totalRgbaBytes };
+}
+
+export async function withRasterDeadline<T>(operation: Promise<T>, timeoutMs = PDF_RASTER_LIMITS.timeoutMs): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > PDF_RASTER_LIMITS.timeoutMs)
+    throw new Error('Invalid PDF raster deadline.');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('PDF rasterization timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Rasterize the actual PDF bytes and extract their text, not screenshots of the source DOM. */
-export async function rasterizePdf(browser: Browser, pdf: Buffer) {
+export async function rasterizePdf(browser: Browser, pdf: Buffer, options?: { deadlineMs?: number }) {
   if (pdf.length > 8_000_000 || !pdf.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('Invalid or oversized PDF.');
+  const deadlineMs = options?.deadlineMs ?? PDF_RASTER_LIMITS.timeoutMs;
   const context = await browser.newContext({ serviceWorkers: 'block' });
   await context.route('**/*', route => route.abort());
   const page = await context.newPage();
   try {
     const [main, worker] = await Promise.all([script('pdfjs-dist/build/pdf.min.mjs'), script('pdfjs-dist/build/pdf.worker.min.mjs')]);
-    const pages = await page.evaluate(async ({ main, worker, data, maxPages }) => {
-      const url = URL.createObjectURL(new Blob([main], { type: 'text/javascript' }));
-      const workerUrl = URL.createObjectURL(new Blob([worker], { type: 'text/javascript' }));
-      // Dynamic import runs only a pinned local dependency, never user-provided code.
-      const pdfjs = await new Function('url', 'return import(url)')(url);
-      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-      const document = await pdfjs.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)), isEvalSupported: false }).promise;
-      if (document.numPages > maxPages || document.numPages < 1) throw new Error('PDF page count exceeds rendering bounds.');
-      const results: Array<{ png: string; text: string; fragments: PdfTextFragment[]; fontSizesPt: number[]; overflow: boolean; blank: boolean }> = [];
-      for (let i = 1; i <= document.numPages; i++) {
-        const p = await document.getPage(i), viewport = p.getViewport({ scale: 1.5 });
-        const canvas = window.document.createElement('canvas'); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-        const ctx = canvas.getContext('2d')!;
-        await p.render({ canvasContext: ctx, viewport }).promise;
-        const content = await p.getTextContent();
-        const items = content.items.filter((item: { str?: string }) => typeof item.str === 'string');
-        type GlyphItem = { str: string; hasEOL?: boolean; transform?: number[]; width?: number; height?: number };
-        const fragments: PdfTextFragment[] = new Array(items.length);
-        let nextVisible: GlyphItem | null = null;
-        for (let j = items.length - 1; j >= 0; j--) {
-          const item = items[j] as GlyphItem;
-          const x = item.transform?.[4], y = item.transform?.[5];
-          const nextX = nextVisible?.transform?.[4], nextY = nextVisible?.transform?.[5];
-          // Chromium occasionally fails to mark a physical wrap with hasEOL.
-          // Require BOTH a lower baseline and a horizontal reset before treating
-          // whitespace at the item boundary as PDF.js wrap padding.
-          const lineBreakAfter = typeof x === 'number' && typeof y === 'number' &&
-            typeof nextX === 'number' && typeof nextY === 'number' &&
-            Number.isFinite(x) && Number.isFinite(y) &&
-            Number.isFinite(nextX) && Number.isFinite(nextY) &&
-            y - nextY > Math.max(3, (item.height ?? 0) * 0.35) &&
-            nextX + 1 < x + Math.max(2, item.width ?? 0);
-          fragments[j] = { str: item.str, hasEOL: Boolean(item.hasEOL), ...(lineBreakAfter ? { lineBreakAfter: true } : {}) };
-          if (item.str.trim()) nextVisible = item;
+    const pages = await withRasterDeadline((async () => {
+      // Preflight parses page geometry only. No canvas is created until every
+      // page has passed finite-dimension, per-page, aggregate-pixel and RGBA
+      // memory budgets in the server process.
+      const preflight = await page.evaluate(async ({ main, worker, data, maxPages }) => {
+        const url = URL.createObjectURL(new Blob([main], { type: 'text/javascript' }));
+        const workerUrl = URL.createObjectURL(new Blob([worker], { type: 'text/javascript' }));
+        const pdfjs = await new Function('url', 'return import(url)')(url);
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        let pdfDocument: any;
+        try {
+          pdfDocument = await pdfjs.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)), isEvalSupported: false }).promise;
+          if (pdfDocument.numPages > maxPages || pdfDocument.numPages < 1) throw new Error('PDF page count exceeds rendering bounds.');
+          const dimensions: Array<{ widthPt: number; heightPt: number }> = [];
+          for (let i = 1; i <= pdfDocument.numPages; i++) {
+            const pdfPage = await pdfDocument.getPage(i);
+            try {
+              const natural = pdfPage.getViewport({ scale: 1 });
+              dimensions.push({ widthPt: natural.width, heightPt: natural.height });
+            } finally {
+              pdfPage.cleanup();
+            }
+          }
+          return dimensions;
+        } finally {
+          if (pdfDocument) await pdfDocument.destroy().catch(() => undefined);
+          URL.revokeObjectURL(url);
+          URL.revokeObjectURL(workerUrl);
         }
-        // Vertical em-vector magnitude in PDF points, not glyph ink height.
-        // Bullet markers are numbering decoration; all body/heading/cell text
-        // is subject to the original strict minimum without rounding.
-        const fontSizesPt = items.filter((item: { str: string }) =>
-          item.str.trim() && !/^[•●]$/.test(item.str.trim())
-        ).map((item: { transform: number[] }) => Math.hypot(item.transform[2], item.transform[3]));
-        const natural = p.getViewport({ scale: 1 });
-        const overflow = items.some((item: { str: string; transform: number[]; width: number; height: number }) => {
-          const x = item.transform[4], y = item.transform[5];
-          return item.str.trim() && (x < 1 || y < 1 || x + item.width > natural.width + 1 || y + item.height > natural.height + 1);
-        });
-        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let ink = 0; for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 180 && pixels[offset + 1] < 180 && pixels[offset + 2] < 180) ink++;
-        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), fragments, fontSizesPt, overflow, blank: ink < 40 });
-        canvas.width = canvas.height = 1; p.cleanup();
-      }
-      await document.destroy(); URL.revokeObjectURL(url); URL.revokeObjectURL(workerUrl);
-      return results;
-    }, { main, worker, data: pdf.toString('base64'), maxPages: PAGE.maxPages });
+      }, { main, worker, data: pdf.toString('base64'), maxPages: PAGE.maxPages });
+
+      let totalPixels = 0;
+      const expected = preflight.map(({ widthPt, heightPt }) => {
+        const checked = validatePdfRasterPageGeometry(widthPt, heightPt, totalPixels);
+        totalPixels = checked.totalPixels;
+        return { widthPt, heightPt, widthPx: checked.widthPx, heightPx: checked.heightPx };
+      });
+
+      return page.evaluate(async ({ main, worker, data, maxPages, limits, expected }) => {
+        const url = URL.createObjectURL(new Blob([main], { type: 'text/javascript' }));
+        const workerUrl = URL.createObjectURL(new Blob([worker], { type: 'text/javascript' }));
+        const pdfjs = await new Function('url', 'return import(url)')(url);
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        let pdfDocument: any;
+        try {
+          pdfDocument = await pdfjs.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)), isEvalSupported: false }).promise;
+          if (pdfDocument.numPages !== expected.length || pdfDocument.numPages > maxPages || pdfDocument.numPages < 1)
+            throw new Error('PDF page count changed after geometry preflight.');
+          const results: Array<{ png: string; text: string; fragments: PdfTextFragment[]; fontSizesPt: number[]; overflow: boolean; blank: boolean }> = [];
+          for (let i = 1; i <= pdfDocument.numPages; i++) {
+            const pdfPage = await pdfDocument.getPage(i);
+            let canvas: HTMLCanvasElement | null = null;
+            try {
+              const expectedPage = expected[i - 1];
+              const natural = pdfPage.getViewport({ scale: 1 });
+              if (!Number.isFinite(natural.width) || !Number.isFinite(natural.height) ||
+                  Math.abs(natural.width - expectedPage.widthPt) > 0.01 ||
+                  Math.abs(natural.height - expectedPage.heightPt) > 0.01)
+                throw new Error('PDF page geometry changed after preflight.');
+              const viewport = pdfPage.getViewport({ scale: limits.scale });
+              const canvasWidth = Math.ceil(viewport.width), canvasHeight = Math.ceil(viewport.height);
+              if (!Number.isSafeInteger(canvasWidth) || !Number.isSafeInteger(canvasHeight) ||
+                  canvasWidth !== expectedPage.widthPx || canvasHeight !== expectedPage.heightPx)
+                throw new Error('PDF raster geometry changed after preflight.');
+
+              // Allocation happens only after the preflight and exact geometry
+              // recheck above have passed.
+              canvas = window.document.createElement('canvas');
+              canvas.width = canvasWidth;
+              canvas.height = canvasHeight;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) throw new Error('PDF canvas allocation failed.');
+              await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+              const content = await pdfPage.getTextContent();
+              const items = content.items.filter((item: { str?: string }) => typeof item.str === 'string');
+              type GlyphItem = { str: string; hasEOL?: boolean; transform?: number[]; width?: number; height?: number };
+              const fragments: PdfTextFragment[] = new Array(items.length);
+              let nextVisible: GlyphItem | null = null;
+              for (let j = items.length - 1; j >= 0; j--) {
+                const item = items[j] as GlyphItem;
+                const x = item.transform?.[4], y = item.transform?.[5];
+                const nextX = nextVisible?.transform?.[4], nextY = nextVisible?.transform?.[5];
+                const lineBreakAfter = typeof x === 'number' && typeof y === 'number' &&
+                  typeof nextX === 'number' && typeof nextY === 'number' &&
+                  Number.isFinite(x) && Number.isFinite(y) &&
+                  Number.isFinite(nextX) && Number.isFinite(nextY) &&
+                  y - nextY > Math.max(3, (item.height ?? 0) * 0.35) &&
+                  nextX + 1 < x + Math.max(2, item.width ?? 0);
+                fragments[j] = { str: item.str, hasEOL: Boolean(item.hasEOL), ...(lineBreakAfter ? { lineBreakAfter: true } : {}) };
+                if (item.str.trim()) nextVisible = item;
+              }
+              const fontSizesPt = items.filter((item: { str: string }) =>
+                item.str.trim() && !/^[•●]$/.test(item.str.trim())
+              ).map((item: { transform: number[] }) => Math.hypot(item.transform[2], item.transform[3]));
+              const overflow = items.some((item: { str: string; transform: number[]; width: number; height: number }) => {
+                const x = item.transform[4], y = item.transform[5];
+                return item.str.trim() && (x < 1 || y < 1 || x + item.width > natural.width + 1 || y + item.height > natural.height + 1);
+              });
+              const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+              let ink = 0;
+              for (let offset = 0; offset < pixels.length; offset += 4)
+                if (pixels[offset] < 180 && pixels[offset + 1] < 180 && pixels[offset + 2] < 180) ink++;
+              results.push({
+                png: canvas.toDataURL('image/png'),
+                text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''),
+                fragments, fontSizesPt, overflow, blank: ink < 40,
+              });
+            } finally {
+              if (canvas) canvas.width = canvas.height = 1;
+              pdfPage.cleanup();
+            }
+          }
+          return results;
+        } finally {
+          if (pdfDocument) await pdfDocument.destroy().catch(() => undefined);
+          URL.revokeObjectURL(url);
+          URL.revokeObjectURL(workerUrl);
+        }
+      }, { main, worker, data: pdf.toString('base64'), maxPages: PAGE.maxPages, limits: PDF_RASTER_LIMITS, expected });
+    })(), deadlineMs);
+
     const images = pages.map(p => Buffer.from(p.png.split(',')[1], 'base64'));
     if (images.reduce((sum, b) => sum + b.length, 0) > 12_000_000) throw new Error('Document raster exceeds inspection budget.');
     return { images, pageTexts: pages.map(p=>p.text), fontMeasurements: pages.map((p,i)=>({ page:i+1, minimumPt: p.fontSizesPt.length ? Math.min(...p.fontSizesPt) : null, sizesPt:[...new Set(p.fontSizesPt)] })), text: pages.map(p => p.text).join('\n'), fragments: pages.flatMap((p, i) => i === 0 ? p.fragments : [{str:'',hasEOL:true},...p.fragments]), findings: pages.flatMap((p, i): Finding[] => [
@@ -202,5 +322,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
       ...(p.overflow ? [{ rule: 'overflow' as const, page: i + 1, detail: 'PDF text lies outside page bounds.' }] : []),
       ...(p.blank ? [{ rule: 'whitespace' as const, page: i + 1, detail: 'Rasterized PDF page has no readable ink.' }] : []),
     ]) };
-  } finally { await context.close(); }
+  } finally {
+    await context.close();
+  }
 }

@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  documentRequest, retainedPdfExportFileId, sourcePreservingPdfExportRequest,
-  requiresProfessionalDocumentAcceptance,
+  documentRequest, retainedPdfExportFileId, retainedPdfDualFormatFileId, sourcePreservingPdfExportRequest,
+  retainedPdfDualFormatRequest, requiresProfessionalDocumentAcceptance,
 } from '../lib/documents/intent';
 import { resolveDurableDocumentRequest } from '../lib/documents/continuity';
 import { parseDocument } from '../lib/documents/model';
 import { DEFAULT_DESIGN, designAssessmentSchema, proposeDesignLayout } from '../lib/documents/design';
 import { createDocumentStore, documentLinks, hash, type DocumentScope } from '../lib/documents/storage';
+import { PDF_RASTER_LIMITS, rasterizePdf, validatePdfRasterPageGeometry, withRasterDeadline } from '../lib/documents/render';
 
 const scope: DocumentScope = {
   ownerId:'11111111-1111-4111-8111-111111111111',
@@ -70,6 +71,14 @@ test('new document attachment selection is exact and editing requests do not mas
   assert.equal(sourcePreservingPdfExportRequest('export my resume as a pdf'),true);
   assert.equal(sourcePreservingPdfExportRequest('create a PDF cover letter based on my resume'),false);
   assert.equal(sourcePreservingPdfExportRequest('create a one-page pdf of my resume'),false);
+  assert.equal(sourcePreservingPdfExportRequest('create a PDF of my resume and a Word document'),false);
+  assert.equal(sourcePreservingPdfExportRequest('export my resume as PDF and DOCX'),false);
+  assert.equal(retainedPdfDualFormatRequest('create a PDF of my resume and a Word document'),true);
+  assert.equal(retainedPdfDualFormatRequest('export my resume as PDF and DOCX'),true);
+  assert.equal(retainedPdfDualFormatFileId('create a PDF of my resume and a Word document',
+    [{fileId:'resume',mimeType:'application/pdf'}],()=>true),'resume');
+  assert.equal(retainedPdfDualFormatFileId('create a pdf of my resume',
+    [{fileId:'resume',mimeType:'application/pdf'}],()=>true),null);
   assert.equal(retainedPdfExportFileId('create a pdf of my resume',[{fileId:'new',mimeType:'application/pdf'}],()=>false),null);
 });
 
@@ -146,4 +155,40 @@ test('route integration preserves exact source bytes before drafting and keeps a
     /if \(retainedPdfExportAttachment\)/,
     'provider drafting callback must not capture the retained-PDF binding');
   assert.match(route,/typeof retainedPdfExportAttachment !== 'undefined'.*attachmentDecision\.clarification/);
+});
+
+
+test('PDF raster geometry rejects oversized MediaBox and malformed dimensions before allocation', () => {
+  const letter=validatePdfRasterPageGeometry(612,792,0);
+  assert.equal(letter.widthPx,918);
+  assert.equal(letter.heightPx,1188);
+  const legal=validatePdfRasterPageGeometry(612,1008,letter.totalPixels);
+  assert.ok(legal.totalPixels < PDF_RASTER_LIMITS.maxTotalPixels);
+  assert.doesNotThrow(()=>validatePdfRasterPageGeometry(842,595,0),'A4 landscape remains supported');
+  assert.doesNotThrow(()=>validatePdfRasterPageGeometry(1008,612,0),'Legal landscape remains supported');
+  assert.throws(()=>validatePdfRasterPageGeometry(300000,300000,0),/dimensions exceed rendering bounds/);
+  for (const bad of [
+    [Number.NaN,792],[Number.POSITIVE_INFINITY,792],[0,792],[-1,792],[612,Number.NaN],[612,0],
+  ] as Array<[number,number]>) assert.throws(()=>validatePdfRasterPageGeometry(bad[0],bad[1],0),/Invalid PDF page geometry/);
+  assert.throws(()=>validatePdfRasterPageGeometry(612,1008,PDF_RASTER_LIMITS.maxTotalPixels-1),
+    /Document raster exceeds inspection budget/);
+  const source=readFileSync('lib/documents/render.ts','utf8');
+  const raster=source.slice(source.indexOf('export async function rasterizePdf'));
+  assert.ok(raster.indexOf('validatePdfRasterPageGeometry(') >= 0);
+  assert.ok(raster.indexOf('validatePdfRasterPageGeometry(') < raster.indexOf("createElement('canvas')"),
+    'geometry and aggregate budgets must pass before canvas allocation');
+});
+
+test('PDF raster deadline is bounded and stalled inspection still closes its browser context', async () => {
+  await assert.rejects(withRasterDeadline(new Promise<never>(()=>undefined),5),/timed out/);
+  let closed=0;
+  const browser={
+    newContext: async()=>({
+      route: async()=>undefined,
+      newPage: async()=>({ evaluate: async()=>new Promise<never>(()=>undefined) }),
+      close: async()=>{ closed++; },
+    }),
+  } as any;
+  await assert.rejects(rasterizePdf(browser,Buffer.from('%PDF-1.7\n% stalled'),{deadlineMs:5}),/timed out/);
+  assert.equal(closed,1,'raster failure must close the isolated browser context');
 });
