@@ -71,8 +71,8 @@ export function selectManagementEvidenceIds(bindings:AssignmentBinding[],statuse
    required(typeof status==='string'&&status.length>0,'missing assignment status');
    if(!terminal.has(status))selected.add(b.assignment_id);
   }
-  const latestComplete=[...history].reverse().find(b=>byStatus.get(b.assignment_id)?.status==='completed');
-  const latestFailure=[...history].reverse().find(b=>['failed','blocked','stopped'].includes(byStatus.get(b.assignment_id)?.status??''));
+  const latestComplete=history.find(b=>byStatus.get(b.assignment_id)?.status==='completed');
+  const latestFailure=history.find(b=>['failed','blocked','stopped'].includes(byStatus.get(b.assignment_id)?.status??''));
   // Completed management decisions are already in the durable decision ledger.
   // A manager sees its own unresolved failure, not its entire past transcript.
   if(id!==decisionIds[0]&&latestComplete)selected.add(latestComplete.assignment_id);
