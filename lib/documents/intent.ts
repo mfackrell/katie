@@ -82,10 +82,32 @@ export function inheritDocumentPageConstraint(
 /** A retained PDF is already the requested output. Pure export/re-export must
  * preserve the selected source instead of authorizing a model rewrite. */
 export function sourcePreservingPdfExportRequest(message: string): boolean {
-  if (!documentRequest(message) || !/\bpdf\b/i.test(message)) return false;
+  const request = documentRequest(message);
+  if (!request || request.pages !== undefined || !/\bpdf\b/i.test(message)) return false;
   if (/\b(?:revise|edit|update|rewrite|tailor|change|correct|improve|summari[sz]e|summary|translate|extract|combine|merge|redact|annotate|fill|sign|add|remove|replace)\b/i.test(message))
     return false;
-  return /\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|re-?export|reissue|give\s+me)\b/i.test(message);
+
+  // Source preservation is a conversion operation, not a shortcut for drafting
+  // a different document from the selected source. Multiple document identities
+  // make that relationship ambiguous (for example, a cover letter based on a
+  // résumé), so the normal drafting/clarification path must remain in control.
+  const identities = new Set<string>();
+  const identityPatterns: Array<[string, RegExp]> = [
+    ['resume', /\b(?:resume|résumé|cv|curriculum vitae)\b/i],
+    ['report', /\b(?:financial|quarterly|operating)?\s*report\b/i],
+    ['agreement', /\b(?:agreement|contract|statement of work)\b/i],
+    ['proposal', /\bproposal\b/i],
+    ['letter', /\b(?:cover\s+letter|letter)\b/i],
+  ];
+  for (const [identity, pattern] of identityPatterns) if (pattern.test(message)) identities.add(identity);
+  if (identities.size > 1) return false;
+
+  // Require language that identifies the requested PDF as the source document
+  // itself. "Create a PDF cover letter based on my résumé" intentionally fails.
+  const sameDocument =
+    /\bpdf\b[^.!?\n]{0,80}\b(?:of|from)\s+(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b/i.test(message) ||
+    /\b(?:convert|export|save|re-?export|reissue|deliver|give\s+me)\b[^.!?\n]{0,100}\b(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b[^.!?\n]{0,80}\b(?:to|as|in)\s+(?:a\s+)?pdf\b/i.test(message);
+  return sameDocument;
 }
 
 /** Professional document identities fail closed when independent visual review
