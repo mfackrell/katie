@@ -8,7 +8,7 @@ test("ITM source cursor advances only after source-cited Grok factual episodes a
   assert.ok(code.indexOf("parseGroundedEpisodes") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
   assert.match(code,/parseGroundedEpisodes\(completedResponsesText\(response, "factual episodes"/);
   assert.match(code,/response\.status !== "completed"/);
-  assert.match(code,/grokClient\.post<GrokResponsesResponse>\("\/responses"/);
+  assert.match(code,/grokClient\.post\("\/responses"/);
   assert.match(code,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.match(code,/getMessages\(chatId\)/);
   assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);
