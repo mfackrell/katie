@@ -14,9 +14,12 @@ test("ITM source cursor advances only after source-cited Grok factual episodes a
   assert.match(code,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
   assert.match(code,/if \(existing\?\.summarizedThroughMessageId\)/);
 });
-test("failed or insufficient source batches preserve stored checkpoint without paid retry",()=>{
+test("failed source batches preserve the checkpoint and only a later request may use the next provider",()=>{
   assert.match(code,/if \(remaining < SUMMARY_BATCH_MESSAGES\)/);
   assert.match(code,/if \(claim\.data === "blocked"\)/);
-  assert.match(code,/Previously failed batch blocked without another provider call/);
+  assert.match(code,/Provider attempt already blocked; checking next safe provider/);
+  assert.match(code,/SUMMARY_TIMEOUT_MS = 90_000/);
+  assert.match(code,/processorVersion\(candidate\)/);
+  assert.match(code,/return nextProvider \? "deferred" : "blocked"/);
   assert.match(code,/if \(isStandaloneAccountingError\(error\)\) throw error/);
 });

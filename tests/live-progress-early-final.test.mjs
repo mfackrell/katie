@@ -22,7 +22,7 @@ test('streamed answer tokens never masquerade as reasoning',()=>{
 
 test('progress messages reflect observable actions rather than text-length scores',()=>{
  assert.match(route,/type: "processing_update", stage, message/);
- for(const stage of ['context','generation','save','post_answer','memory']){
+ for(const stage of ['context','generation','save','post_answer']){
    assert.match(route,new RegExp('progress\\("'+stage+'"'));
  }
  assert.match(panel,/if \(chunk\.type === "processing_update"\)/);
@@ -33,12 +33,13 @@ test('progress messages reflect observable actions rather than text-length score
  assert.doesNotMatch(activity,/Live response preview|streamingAnswer\.slice/);
 });
 
-test('saved content provides durable ID, followed by final answer event before followup work',()=>{
+test('saved content finalizes and closes the user stream before memory followup work',()=>{
  const save=route.indexOf('await saveMessage(chatId, {\n              id: assistantMessageId');
  const content=route.indexOf('type: "content",\n              messageId: assistantMessageId',save);
  const final=route.indexOf('emitChunk(finalAnswerEvent)',content);
+ const close=route.indexOf('controller.close();',final);
  const memory=route.indexOf('await scheduleMemoryPersistence(',final);
- assert.ok(save>0&&content>save&&final>content&&memory>final);
+ assert.ok(save>0&&content>save&&final>content&&close>final&&memory>close);
  assert.match(panel,/const commitSavedAnswer = \(\) =>/);
  assert.match(panel,/!savedAssistantMessageId \|\| !sawPersistedContent/);
  assert.match(panel,/if \(chunk\.type === "final_answer"\) commitSavedAnswer\(\)/);

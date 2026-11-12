@@ -24,7 +24,7 @@ const selected = (messageId = "m0", quote = "Historical detail from turn 0",
 const retained = (keep = []) => reply(JSON.stringify({ keep }));
 
 function harness({
-  history = messageHistory(90), prior = {}, configured = true,
+  history = messageHistory(90), prior = {}, configured = true, fallbackConfigured = false,
   responses = n => n % 2 ? selected() : retained(),
   missingChat = false, commitResult = true,
 } = {}) {
@@ -34,10 +34,11 @@ function harness({
   class Transport {
     constructor(options) {
       constructors.push(options);
+      const provider = options.baseURL?.includes("anthropic") ? "anthropic" : "grok";
       this.chat = { completions: { create: async body => {
         const n = calls.length + 1;
-        calls.push(copy(body));
-        return responses(n, body);
+        calls.push({ ...copy(body), __provider: provider });
+        return responses(n, body, provider);
       } } };
     }
   }
@@ -100,15 +101,19 @@ function harness({
   };
   runInNewContext(compiled, {
     module, exports: module.exports,
-    process: { env: configured ? { GROK_API_KEY: "test-only-key" } : {} },
+    process: { env: configured ? {
+      GROK_API_KEY: "test-only-key",
+      ...(fallbackConfigured ? { CLAUDE_API_KEY: "test-only-claude-key" } : {}),
+    } : {} },
     console: Object.fromEntries(["warn", "info", "error"].map(level => [level, (...args) => logs.push({ level, args })])),
+    AbortController, setTimeout, clearTimeout, Date,
     require: name => { assert.ok(name in deps, "Unknown dependency " + name); return deps[name]; },
   });
   return { run: () => module.exports.maybeUpdateSummary("chat"),
     calls, writes, events, logs, constructors, memory: () => memory };
 }
 
-test("Grok 4.7 remains the exclusive metered, non-retrying ITM model", async () => {
+test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () => {
   const h = harness();
   assert.equal(await h.run(), "committed");
   assert.deepEqual(h.calls.map(x => x.model), ["grok-4.7", "grok-4.7"]);
@@ -116,7 +121,8 @@ test("Grok 4.7 remains the exclusive metered, non-retrying ITM model", async () 
   assert.equal(h.constructors[0].baseURL, "https://api.x.ai/v1");
   assert.equal(h.constructors[0].maxRetries, 0);
   assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary"));
-  assert.doesNotMatch(source, /CLAUDE_API_KEY|claude-sonnet|api\.anthropic\.com/);
+  assert.match(source, /claude-sonnet-5-5/);
+  assert.match(source, /SUMMARY_TIMEOUT_MS = 90_000/);
 });
 
 test("ITM preserves factual narrative, Katie ownership, original quote and timestamp", async () => {
@@ -295,7 +301,26 @@ test("accounting denial, ambiguous provider failure and concurrency remain bound
   assert.equal(shared.writes.length, 1);
 });
 
-test("no Grok key means skip with no fallbacks or persisted mutation", async () => {
+test("uncertain Grok outcome defers and the next request uses Anthropic without advancing the cursor", async () => {
+  const h = harness({
+    fallbackConfigured: true,
+    responses: (n, body, provider) => {
+      if (provider === "grok") throw new Error("400 The previous provider outcome is unavailable. Its full exposure is authorized and retained. This operation was not retransmitted; use the next safe fallback.");
+      return n % 2 === 0 ? selected() : retained();
+    },
+  });
+  assert.equal(await h.run(), "deferred");
+  assert.equal(h.memory().summarizedThroughMessageId ?? null, null);
+  assert.deepEqual(h.calls.map(x => x.__provider), ["grok"]);
+  assert.equal(await h.run(), "committed");
+  assert.deepEqual(h.calls.map(x => x.__provider), ["grok", "anthropic", "anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId, "m29");
+  assert.ok(h.events.some(x => x.name === "finish_intermediate_memory_batch" &&
+    x.args.p_state === "blocked" && /:grok$/.test(x.args.p_processor_version)));
+  assert.ok(h.events.some(x => x.name === "commit_intermediate_memory_checkpoint"));
+});
+
+test("no configured memory provider means skip with no persisted mutation", async () => {
   const h = harness({ configured: false });
   assert.equal(await h.run(), "skipped");
   assert.equal(h.calls.length, 0);

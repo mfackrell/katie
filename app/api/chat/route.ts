@@ -3954,9 +3954,9 @@ ${chunkWorkflowSummary}`;
 
             // The assistant answer is durably saved and final_answer has already
             // been emitted. End the user-facing stream before memory maintenance.
+            answerStreamFinalized = true;
             if (!streamCancelled) {
               controller.close();
-              answerStreamFinalized = true;
             } else {
               console.log("[Chat API] generation completed after client disconnect", {
                 requestId,
