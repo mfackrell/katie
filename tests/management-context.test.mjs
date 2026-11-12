@@ -60,7 +60,7 @@ test('completed history grows without changing the manager input; latest accepte
  assert.equal(ctx.historyReferences.byNode.find(n=>n.nodeId==='game').completed,2502);
 });
 test('nested management depth preserves exact ancestors and only the immediate superior/direct reports',()=>{
- const root=node('root',null,'project_director'),a=node('a','root'),b=node('b','a'),c=node('c','b'),worker=node('worker','c','worker');
+ const root=node('root',null,'project_director'),a=node('a','root'),b=node('b','a','manager',{evidence:'Archived parent result '.repeat(5000)}),c=node('c','b'),worker=node('worker','c','worker');
  const x=fixture();x.principalId='c';x.topology=[root,a,b,c,worker];x.scopedNodes=[b,c,worker];
  x.bindings=[];x.statuses=[];x.evidence=[];x.dependencies=[];x.exceptions=[];x.plans=[];
  const ctx=JSON.parse(buildManagementDecisionContext(x));
@@ -69,6 +69,8 @@ test('nested management depth preserves exact ancestors and only the immediate s
  assert.deepEqual(ctx.reporting.ancestors.map(n=>n.id),['b','a','root']);
  assert.deepEqual(ctx.reporting.directReportIds,['worker']);
  assert.deepEqual(ctx.organization.map(n=>n.id),['worker']);
+ assert.ok(!JSON.stringify(ctx).includes('Archived parent result'));
+ assert.ok(JSON.stringify(ctx).length<48000);
  assert.ok(!ctx.organization.some(n=>n.id==='a'||n.id==='root'));
 });
 test('unresolved owned exceptions, external dependency statuses and current activity cannot silently disappear',()=>{
@@ -128,4 +130,20 @@ test('paginated management evidence loads every historical row and fails closed 
  assert.equal(rows[0].id,'0000');
  assert.equal(rows.at(-1).id,'0420');
  await assert.rejects(completeManagementRows(()=>({then(resolve){return Promise.resolve({data:null,error:{message:'incomplete'}}).then(resolve);}}),'id'),/database page unavailable/);
+});
+
+test('retired package history never consumes the current decision window; active contract and latest attempt remain',()=>{
+ const x=fixture();
+ x.workPackages=[
+  {id:'accepted',manager_id:'game',status:'accepted',evidence:'archived acceptance '.repeat(4000)},
+  {id:'cancelled',manager_id:'game',status:'cancelled',findings:'discarded '.repeat(4000)},
+  {id:'open',manager_id:'game',status:'rejected',contract_hash:'contract-sha'}];
+ x.workPackageAttempts=[{id:'old',package_id:'accepted',attempt:1},{id:'a',package_id:'open',attempt:1},{id:'b',package_id:'open',attempt:2}];
+ const context=JSON.parse(buildManagementDecisionContext(x));
+ assert.deepEqual(context.workPackages.map(p=>p.id),['open']);
+ assert.equal(context.acceptedPackageCount,1);
+ assert.equal(context.historyReferences.retiredPackageCount,2);
+ assert.equal(context.workPackageAttempts.length,1);
+ assert.equal(context.workPackageAttempts[0].attempt,2);
+ assert.ok(!JSON.stringify(context).includes('archived acceptance'));
 });
