@@ -185,7 +185,7 @@ async function grokStructuredResponse(
   signal: AbortSignal,
 ): Promise<GrokResponsesResponse> {
   if (!grokClient) throw new Error("Intermediate memory Grok provider unavailable");
-  return grokClient.post<GrokResponsesResponse>("/responses", {
+  return await grokClient.post("/responses", {
     body: {
       model: SUMMARY_MODELS.grok,
       input: messages,
@@ -202,7 +202,7 @@ async function grokStructuredResponse(
       },
     },
     signal,
-  });
+  }) as GrokResponsesResponse;
 }
 
 /**
