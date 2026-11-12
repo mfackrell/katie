@@ -12,7 +12,7 @@ test('executive selection requires verified fresh OpenAI or Anthropic reasoning;
 test('management worker dispatches only durable management decisions; never technical execution',async()=>{
  const id=randomUUID(),agent=randomUUID(),project=randomUUID(),calls=[];
  const rows={project_organization_nodes:[{id,agent_id:agent,kind:'project_director'}],project_organization_exceptions:[],project_organization_assignments:[],project_organization_scope_grants:[],project_organization_plans:[{purpose:'Original project purpose',direction:'Delegated outcomes'}],project_organization_dependencies:[],work_projects:{objective:'Original project',team:[],phase:'research'}};
- const db={from(table){const q={select(){return q;},eq(){return q;},in(){return q;},single(){return q;},then(ok){return Promise.resolve({data:rows[table],error:null}).then(ok);}};return q;}};
+ const db={from(table){const q={select(){return q;},eq(){return q;},in(){return q;},single(){return q;},then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}};return q;}};
  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return true;},readMission:async()=>{throw Error('Technical mission dispatch reached');}}});
  const claim={mission:{id:randomUUID(),project_id:project,project_kind:'management'},job:{id:randomUUID(),agent_id:agent,lease:randomUUID(),payload:{organizationNodeId:id}}};
  let invoked=0;
