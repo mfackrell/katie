@@ -113,3 +113,19 @@ test('selected evidence retains active assignments and only the latest terminal 
  assert.deepEqual([...selectManagementEvidenceIds(bs,states,['root','child'])],['three','two','five'].sort());
  assert.throws(()=>selectManagementEvidenceIds(bs,states.slice(1),['root','child']),/unreadable assignment status/);
 });
+
+test('paginated management evidence loads every historical row and fails closed on a broken page',async()=>{
+ const {completeManagementRows}=modules()('@/lib/projects/organization');
+ const source=Array.from({length:421},(_,i)=>({id:String(i).padStart(4,'0'),value:'verified'}));
+ let calls=0;
+ const factory=()=>{let from=0,to=199;const q={
+  order(){return q;},range(a,b){from=a;to=b;return q;},
+  then(resolve,reject){calls++;return Promise.resolve({data:source.slice(from,to+1),error:null}).then(resolve,reject);}
+ };return q;};
+ const rows=await completeManagementRows(factory,'id');
+ assert.equal(rows.length,421);
+ assert.equal(calls,3);
+ assert.equal(rows[0].id,'0000');
+ assert.equal(rows.at(-1).id,'0420');
+ await assert.rejects(completeManagementRows(()=>({then(resolve){return Promise.resolve({data:null,error:{message:'incomplete'}}).then(resolve);}}),'id'),/database page unavailable/);
+});
