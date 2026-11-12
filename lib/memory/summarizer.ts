@@ -12,7 +12,12 @@ import { SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages } from "@/lib/memory/short-term";
 import type { Message } from "@/lib/types/chat";
 
-const SUMMARY_MODEL = "grok-4.7";
+type SummaryProvider = "grok" | "anthropic";
+const SUMMARY_MODELS: Record<SummaryProvider,string> = {
+  grok: "grok-4.7",
+  anthropic: "claude-sonnet-5-5",
+};
+const SUMMARY_TIMEOUT_MS = 90_000;
 const SUMMARY_BATCH_MESSAGES = 30; // Fifteen complete user-assistant exchanges.
 // Character count, including spaces/punctuation, is the ITM size contract.
 const ITM_TARGET_CHARACTERS = 6500;
@@ -24,17 +29,53 @@ const SUMMARY_MAX_TOKENS = 2300; // First prompt: new source batch only.
 const BATCH_SUMMARY_MAX_CHARACTERS = 7500;
 // Semantic reconciliation is now a small edit plan rather than a full rewrite.
 // Earlier paid attempt records remain intact and no retries are automatic.
-const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v9-grok-grounded-factual-episodes";
+const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v10-grounded-factual-provider-fallback";
+const processorVersion = (provider:SummaryProvider) => `${ITM_PROCESSOR_VERSION}:${provider}`;
 export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "deferred";
 
-// Grok alone compiles ITM. No Anthropic or other-model fallback is permitted.
-const apiKey = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? process.env["grok_api_key"];
-const client = apiKey ? new OpenAI({
-  apiKey,
+const grokApiKey = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? process.env["grok_api_key"];
+const anthropicApiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
+const grokClient = grokApiKey ? new OpenAI({
+  apiKey: grokApiKey,
   baseURL: "https://api.x.ai/v1",
   maxRetries: 0,
   fetch: createActivityAccountingFetch("grok", "memory-summary"),
 }) : null;
+const anthropicClient = anthropicApiKey ? new OpenAI({
+  apiKey: anthropicApiKey,
+  baseURL: "https://api.anthropic.com/v1/",
+  maxRetries: 0,
+  defaultHeaders: { Authorization: null, "x-api-key": anthropicApiKey, "anthropic-version": "2023-06-01" },
+  fetch: createActivityAccountingFetch("anthropic", "memory-summary"),
+}) : null;
+
+function configuredProviders():SummaryProvider[] {
+  return [...(grokClient ? ["grok" as const] : []), ...(anthropicClient ? ["anthropic" as const] : [])];
+}
+class SummaryTimeoutError extends Error {
+  constructor(){ super(`Intermediate memory summarization exceeded ${SUMMARY_TIMEOUT_MS}ms`); this.name="SummaryTimeoutError"; }
+}
+async function withinSummaryDeadline<T>(deadline:number, work:(signal:AbortSignal)=>Promise<T>):Promise<T> {
+  const remaining=deadline-Date.now();
+  if(remaining<=0) throw new SummaryTimeoutError();
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),remaining);
+  try { return await work(controller.signal); }
+  catch(error) { if(controller.signal.aborted) throw new SummaryTimeoutError(); throw error; }
+  finally { clearTimeout(timer); }
+}
+function shouldUseNextProvider(error:unknown):boolean {
+  const value=error as {code?:string};
+  const message=error instanceof Error ? error.message : String(error);
+  return value?.code==="standalone_outcome_unknown" ||
+    /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message) ||
+    error instanceof SummaryTimeoutError;
+}
+function providerClient(provider:SummaryProvider):OpenAI {
+  const selected=provider==="grok" ? grokClient : anthropicClient;
+  if(!selected) throw new Error(`Intermediate memory ${provider} provider unavailable`);
+  return selected;
+}
 
 type GrokSummaryResponse = {
   choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }>;
@@ -132,12 +173,10 @@ function parseGroundedEpisodes(raw: string, messages: Message[]): string[] {
 }
 
 /** Preserve the conversational storyline using only cited, attributed facts. */
-async function summarizeNewBatch(messages: Message[]): Promise<string[]> {
-  if (!client) throw new Error("Intermediate memory Grok provider unavailable");
-  const response = await client.chat.completions.create({
-    model: SUMMARY_MODEL,
+async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, signal:AbortSignal): Promise<string[]> {
+  const response = await providerClient(provider).chat.completions.create({
+    model: SUMMARY_MODELS[provider],
     max_tokens: SUMMARY_MAX_TOKENS,
-    response_format: { type: "json_object" },
     messages: [
       { role: "system", content: [
         "Produce concise, FACTUAL EPISODIC SUMMARIES of what was discussed in Katie's conversation. Katie is one assistant across different model engines; attribute her prior statements to Katie, not to Grok, Claude, or an external narrator.",
@@ -153,7 +192,8 @@ async function summarizeNewBatch(messages: Message[]): Promise<string[]> {
       ].join("\n") },
       { role: "user", content: "NEW ROLE-ATTRIBUTED MESSAGES:\n" + formatTranscript(messages) },
     ],
-  });
+    ...(provider==="grok" ? { response_format: { type: "json_object" as const } } : {}),
+  }, { signal });
   return parseGroundedEpisodes(completedText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
 }
 
@@ -194,16 +234,14 @@ function parseRetentionPlan(raw: string, priorCount: number): number[] {
   return obj.keep as number[];
 }
 
-async function reconcileEpisodePlan(prior: string[], newExcerpts: string[]): Promise<number[]> {
-  if (!client) throw new Error("Intermediate memory Grok provider unavailable");
+async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, signal:AbortSignal): Promise<number[]> {
   const indexed = prior.map((text, id) => ({
     id, content: text.length > ITM_EPISODE_MAX_CHARACTERS
       ? text.slice(0, ITM_EPISODE_MAX_CHARACTERS - 1) + "…" : text,
   }));
-  const response = await client.chat.completions.create({
-    model: SUMMARY_MODEL,
+  const response = await providerClient(provider).chat.completions.create({
+    model: SUMMARY_MODELS[provider],
     max_tokens: RECONCILE_MAX_TOKENS,
-    response_format: { type: "json_object" },
     messages: [
       { role: "system", content: [
         "You select which existing intermediate-memory episodes are still useful. You are NOT allowed to rewrite any episode or compose new memory text.",
@@ -219,7 +257,8 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[]): Pro
           "\n\nNEW SOURCE-CITED FACTUAL EPISODES (always included):\n" + JSON.stringify(newExcerpts) +
           "\n\nReturn only old indexes to keep; omit superseded or contradictory old assertions." },
     ],
-  });
+    ...(provider==="grok" ? { response_format: { type: "json_object" as const } } : {}),
+  }, { signal });
   const keep = parseRetentionPlan(completedText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS), prior.length);
   if (keep.some(id => prior[id].length > ITM_EPISODE_MAX_CHARACTERS))
     throw new Error("Oversized old ITM episode requires a separate verified rebuild");
@@ -285,7 +324,8 @@ function parseV2(memory: Record<string, unknown>): IntermediateMemoryV2 | null {
  * Repaired algorithms require an explicit processor version change.
  */
 export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUpdateResult> {
-  if (!client) return "skipped";
+  const providers=configuredProviders();
+  if (!providers.length) return "skipped";
   const chat = await getChatById(chatId);
   if (!chat) return "skipped";
 
@@ -332,30 +372,40 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   const checkpoint = batch[batch.length - 1];
   const expectedCursor = existing?.summarizedThroughMessageId ?? null;
   const admin = getSupabaseAdminClient();
-  const claim = await admin.rpc<string>("claim_intermediate_memory_batch", {
-    p_actor_id: chat.actorId,
-    p_chat_id: chatId,
-    p_expected_cursor: expectedCursor,
-    p_batch_end_message_id: checkpoint.id,
-    p_processor_version: ITM_PROCESSOR_VERSION,
-  });
-  if (claim.error) throw new Error("Intermediate memory batch claim unavailable: " + claim.error.message);
-  if (claim.data === "stale" || claim.data === "processing") return "deferred";
-  if (claim.data === "blocked") {
-    console.warn("[Summarizer] Previously failed batch blocked without another provider call", {
-      chatId, sourceEnd: checkpoint.id, pending: remaining,
+  let provider:SummaryProvider|undefined;
+  for(const candidate of providers){
+    const claim = await admin.rpc<string>("claim_intermediate_memory_batch", {
+      p_actor_id: chat.actorId,
+      p_chat_id: chatId,
+      p_expected_cursor: expectedCursor,
+      p_batch_end_message_id: checkpoint.id,
+      p_processor_version: processorVersion(candidate),
     });
+    if (claim.error) throw new Error("Intermediate memory batch claim unavailable: " + claim.error.message);
+    if (claim.data === "stale" || claim.data === "processing") return "deferred";
+    if (claim.data === "blocked") {
+      console.warn("[Summarizer] Provider attempt already blocked; checking next safe provider", {
+        chatId, sourceEnd: checkpoint.id, provider:candidate, pending:remaining,
+      });
+      continue;
+    }
+    if (claim.data !== "claimed") throw new Error("Unrecognized intermediate memory claim state");
+    provider=candidate;
+    break;
+  }
+  if(!provider){
+    console.error("[Summarizer] All configured providers blocked without checkpoint advance", {chatId,sourceEnd:checkpoint.id});
     return "blocked";
   }
-  if (claim.data !== "claimed") throw new Error("Unrecognized intermediate memory claim state");
   console.info("[Summarizer] Thirty-message batch admitted", {
-    chatId, sourceEnd: checkpoint.id, backlog: remaining, algorithm: ITM_PROCESSOR_VERSION,
+    chatId, sourceEnd: checkpoint.id, backlog: remaining, algorithm: ITM_PROCESSOR_VERSION, provider,
   });
 
+  const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
   try {
-    const newSummary = await summarizeNewBatch(batch);
+    const newSummary = await withinSummaryDeadline(deadline, signal => summarizeNewBatch(batch,provider!,signal));
     const episodes = legacyEpisodes(summary);
-    const keep = await reconcileEpisodePlan(episodes, newSummary);
+    const keep = await withinSummaryDeadline(deadline, signal => reconcileEpisodePlan(episodes, newSummary,provider!,signal));
     const revisedSummary = assembleEpisodePlan(episodes, keep, newSummary);
     const payload = {
       version: 2,
@@ -376,7 +426,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     }
     const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
       p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
-      p_processor_version: ITM_PROCESSOR_VERSION, p_state: "completed", p_reason: null,
+      p_processor_version: processorVersion(provider), p_state: "completed", p_reason: null,
     });
     if (recorded.error || recorded.data !== true) {
       console.error("[Summarizer] Committed but failed to record batch completion", { chatId });
@@ -387,19 +437,20 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     });
     return "committed";
   } catch (error) {
-    if (isStandaloneAccountingError(error)) throw error;
+    if (isStandaloneAccountingError(error) && !shouldUseNextProvider(error)) throw error;
     const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
       p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
-      p_processor_version: ITM_PROCESSOR_VERSION, p_state: "blocked",
+      p_processor_version: processorVersion(provider), p_state: "blocked",
       p_reason: error instanceof Error ? error.message.slice(0,160) : "Summary stage failed",
     });
     if (recorded.error || recorded.data !== true) {
-      console.error("[Summarizer] Failed to persist failure circuit breaker", { chatId, sourceEnd: checkpoint.id });
+      console.error("[Summarizer] Failed to persist failure circuit breaker", { chatId, sourceEnd: checkpoint.id, provider });
     }
-    console.error("[Summarizer] Batch blocked without checkpoint advance", {
-      chatId, sourceEnd: checkpoint.id,
+    const nextProvider=providers[providers.indexOf(provider)+1];
+    console.error("[Summarizer] Batch provider attempt blocked without checkpoint advance", {
+      chatId, sourceEnd: checkpoint.id, provider, nextProvider:nextProvider??null,
       reason: error instanceof Error ? error.message : String(error),
     });
-    return "blocked";
+    return nextProvider ? "deferred" : "blocked";
   }
 }
