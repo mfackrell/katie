@@ -59,6 +59,33 @@ export function directorRecoveryRelease(claim:Claim):string|undefined {
  return (claim.mission.project_evidence as {directorRecoveryRelease?:string}|null)?.directorRecoveryRelease;
 }
 
+// PostgREST applies a server-side maximum row count. An unpaged history read
+// can silently omit the very assignment or direct report needed for a decision.
+// Stable keyset ordering plus bounded pages keep complete indexing out of the
+// model prompt without dropping required evidence.
+async function completeManagementRows<T>(factory:()=>any,columns:string|string[]):Promise<T[]>{
+ const pageSize=200,all:T[]=[];
+ for(let offset=0;;offset+=pageSize){
+  let q=factory();
+  for(const column of (Array.isArray(columns)?columns:[columns]))
+   if(typeof q.order==='function')q=q.order(column,{ascending:true});
+  if(typeof q.range==='function')q=q.range(offset,offset+pageSize-1);
+  else if(offset>0)throw Error('Required management evidence pagination unavailable');
+  const response=await q as {data:T[]|null;error:unknown};
+  if(response.error||!Array.isArray(response.data))
+   throw Error('Required decision-scoped management database page unavailable');
+  all.push(...response.data);
+  if(response.data.length<pageSize)break;
+ }
+ return all;
+}
+async function managementRowsByIds<T>(ids:string[],factory:(batch:string[])=>any,columns:string|string[]):Promise<T[]>{
+ const all:T[]=[];
+ for(let i=0;i<ids.length;i+=32)
+  all.push(...await completeManagementRows<T>(()=>factory(ids.slice(i,i+32)),columns));
+ return all;
+}
+
 export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruction:string,input:string,tools:'none')=>Promise<ModelResult>) {
  const recovery=directorRecoveryRelease(claim);
  if(recovery&&(process.env.VERCEL_ENV!=='production'||recovery!==process.env.VERCEL_GIT_COMMIT_SHA))
@@ -66,46 +93,39 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const db=getSupabaseAdminClient();
  // Read the complete *topology* for the independent immediate-reporting guard,
  // not every node's large contract, completed evidence and archived assignments.
- const [index,projectRecord]=await Promise.all([
-  db.from('project_organization_nodes').select('id,agent_id,kind,management_level,parent_id,area,depth,status,decision_needed').eq('project_id',claim.mission.project_id),
+ const [topology,projectRecord]=await Promise.all([
+  completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes').select('id,agent_id,kind,management_level,parent_id,area,depth,status,decision_needed').eq('project_id',claim.mission.project_id),'id'),
   db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline').eq('id',claim.mission.project_id).single(),
  ]);
- if(index.error||projectRecord.error||!projectRecord.data)throw Error('Durable organization topology or owner objective unavailable');
- const topology=(index.data??[]) as ManagementNode[];
+ if(projectRecord.error||!projectRecord.data)throw Error('Durable organization topology or owner objective unavailable');
  const principalId=String(claim.job.payload.organizationNodeId??'');
  const scope=managementScope(topology,principalId);
  const node=scope.principal;
  if(node.agent_id!==claim.job.agent_id)throw Error('Management principal mismatch');
  const project=projectRecord.data as {objective:string;team:string[];approved_hash?:string|null};
- // Only the principal, immediate superior and direct reports need complete
- // contracts. Every other organization's immutable history remains in the DB.
- const [focused,bindingsQuery,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work]=await Promise.all([
-  db.from('project_organization_nodes').select('*').in('id',scope.contextIds),
-  db.from('project_organization_assignments').select('assignment_id,node_id,created_at').in('node_id',scope.decisionIds),
-  db.from('managed_agents').select('id,config').in('id',project.team??[]),
-  db.from('project_organization_scope_grants').select('*').in('node_id',scope.contextIds),
-  db.from('project_organization_plans').select('*').in('node_id',scope.contextIds),
-  db.from('project_organization_dependencies').select('*').in('node_id',scope.decisionIds),
-  db.from('project_organization_exceptions').select('*').eq('project_id',claim.mission.project_id).in('owner_id',scope.decisionIds),
-  db.from('project_organization_exceptions').select('*').eq('project_id',claim.mission.project_id).in('origin_id',scope.decisionIds),
-  db.from('project_work_packages').select('*').eq('project_id',claim.mission.project_id).in('manager_id',scope.decisionIds),
-  db.from('project_worker_contracts').select('*').eq('project_id',claim.mission.project_id).in('manager_id',scope.decisionIds),
-  db.from('project_organization_work').select('*').eq('project_id',claim.mission.project_id).in('node_id',scope.decisionIds),
+ // Fetch direct-report contracts and active decision inputs; older assignments
+ // remain in PostgreSQL. Complete, ordered pages avoid PostgREST row truncation.
+ const [focused,bindings,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work]=await Promise.all([
+  managementRowsByIds<ManagementNode>(scope.contextIds,ids=>db.from('project_organization_nodes').select('*').in('id',ids),'id'),
+  completeManagementRows<AssignmentBinding>(()=>db.from('project_organization_assignments').select('assignment_id,node_id,created_at').in('node_id',scope.decisionIds),'assignment_id'),
+  managementRowsByIds<ManagementRow>(project.team??[],ids=>db.from('managed_agents').select('id,config').in('id',ids),'id'),
+  managementRowsByIds<ManagementRow>(scope.contextIds,ids=>db.from('project_organization_scope_grants').select('*').in('node_id',ids),'node_id'),
+  managementRowsByIds<ManagementRow>(scope.contextIds,ids=>db.from('project_organization_plans').select('*').in('node_id',ids),'node_id'),
+  completeManagementRows<ManagementRow>(()=>db.from('project_organization_dependencies').select('*').in('node_id',scope.decisionIds),['node_id','depends_on']),
+  completeManagementRows<ManagementRow>(()=>db.from('project_organization_exceptions').select('*').eq('project_id',claim.mission.project_id).in('owner_id',scope.decisionIds),'id'),
+  completeManagementRows<ManagementRow>(()=>db.from('project_organization_exceptions').select('*').eq('project_id',claim.mission.project_id).in('origin_id',scope.decisionIds),'id'),
+  completeManagementRows<ManagementRow>(()=>db.from('project_work_packages').select('*').eq('project_id',claim.mission.project_id).in('manager_id',scope.decisionIds),'id'),
+  completeManagementRows<ManagementRow>(()=>db.from('project_worker_contracts').select('*').eq('project_id',claim.mission.project_id).in('manager_id',scope.decisionIds),'id'),
+  completeManagementRows<ManagementRow>(()=>db.from('project_organization_work').select('*').eq('project_id',claim.mission.project_id).in('node_id',scope.decisionIds),'id'),
  ]);
- if([focused,bindingsQuery,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work].some(r=>r.error))
-  throw Error('Required decision-scoped management evidence unavailable');
- const bindings=(bindingsQuery.data??[]) as AssignmentBinding[];
- const statusQuery=bindings.length?await db.from('mission_assignments').select('id,status,updated_at').in('id',bindings.map(b=>b.assignment_id)):{data:[],error:null};
- if(statusQuery.error)throw Error('Management assignment status unavailable');
- const statuses=(statusQuery.data??[]) as AssignmentStatus[];
+ const statuses=await managementRowsByIds<AssignmentStatus>(bindings.map(b=>b.assignment_id),
+  ids=>db.from('mission_assignments').select('id,status,updated_at').in('id',ids),'id');
  const selectedIds=selectManagementEvidenceIds(bindings,statuses,scope.decisionIds);
- const packageRows=(packages.data??[]) as Array<{id:string}>;
  const [evidence,attempts]=await Promise.all([
-  selectedIds.length?db.from('mission_assignments').select('id,status,result,detail,mission_id,role,agent_id,instruction,payload,dependencies').in('id',selectedIds):Promise.resolve({data:[],error:null}),
-  packageRows.length?db.from('project_work_package_attempts').select('*').in('package_id',packageRows.map(p=>p.id)):Promise.resolve({data:[],error:null}),
+  managementRowsByIds<ManagementRow>(selectedIds,ids=>db.from('mission_assignments').select('id,status,result,detail,mission_id,role,agent_id,instruction,payload,dependencies').in('id',ids),'id'),
+  managementRowsByIds<ManagementRow>(packages.map(p=>String(p.id)),ids=>db.from('project_work_package_attempts').select('*').in('package_id',ids),['package_id','attempt']),
  ]);
- if(evidence.error||attempts.error)throw Error('Selected management evidence or work-package attempts unavailable');
- const exceptions=[...((ownedExceptions.data??[]) as Array<{id:string}>),...((originExceptions.data??[]) as Array<{id:string}>)]
+ const exceptions=[...ownedExceptions,...originExceptions]
   .filter((e,i,a)=>a.findIndex(v=>v.id===e.id)===i);
  const providerControlled=await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id});
  if(providerControlled&&claim.mission.calls>0)throw Error('Trial management inference was already admitted for this mission');
@@ -116,11 +136,10 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?baseInstruction+'\nONE-SHOT RECOVERY: Use only plan, appoint Functional Directors, and ready. Do not create dependency commands or use IDs for appointments that have yet to be committed. Downstream management and execution are paused after this decision.'
   :baseInstruction;
  const input=buildManagementDecisionContext({
-  principalId,topology,scopedNodes:(focused.data??[]) as ManagementNode[],project,
-  executionTeam:(team.data??[]) as ManagementRow[],exceptions,bindings,statuses,
-  evidence:(evidence.data??[]) as ManagementRow[],plans:(plans.data??[]) as ManagementRow[],dependencies:(dependencies.data??[]) as ManagementRow[],
-  scopeGrants:(grants.data??[]) as ManagementRow[],workerContracts:(workerContracts.data??[]) as ManagementRow[],
-  workPackages:(packages.data??[]) as ManagementRow[],workPackageAttempts:(attempts.data??[]) as ManagementRow[],work:(work.data??[]) as ManagementRow[],
+  principalId,topology,scopedNodes:focused,project,
+  executionTeam:team,exceptions,bindings,statuses,
+  evidence,plans,dependencies,scopeGrants:grants,workerContracts,
+  workPackages:packages,workPackageAttempts:attempts,work,
  },missionInputLimit(claim));
  const response=await model(claim,instruction,input,'none');
  let commands:unknown;
