@@ -61,12 +61,16 @@ export function directorRecoveryRelease(claim:Claim):string|undefined {
 
 // PostgREST applies a server-side maximum row count. An unpaged history read
 // can silently omit the very assignment or direct report needed for a decision.
-// Stable keyset ordering plus bounded pages keep complete indexing out of the
+// Stable ordering plus bounded pages keep complete indexing out of the
 // model prompt without dropping required evidence.
-export async function completeManagementRows<T>(factory:()=>any,columns:string|string[]):Promise<T[]>{
+type ManagementPageQuery<T>=PromiseLike<{data:T[]|null;error:unknown}>&{
+ order?:(column:string,options:{ascending:boolean})=>ManagementPageQuery<T>;
+ range?:(from:number,to:number)=>ManagementPageQuery<T>;
+};
+export async function completeManagementRows<T>(factory:()=>unknown,columns:string|string[]):Promise<T[]>{
  const pageSize=200,all:T[]=[];
  for(let offset=0;;offset+=pageSize){
-  let q=factory();
+  let q=factory() as ManagementPageQuery<T>;
   for(const column of (Array.isArray(columns)?columns:[columns]))
    if(typeof q.order==='function')q=q.order(column,{ascending:true});
   if(typeof q.range==='function')q=q.range(offset,offset+pageSize-1);
@@ -79,7 +83,7 @@ export async function completeManagementRows<T>(factory:()=>any,columns:string|s
  }
  return all;
 }
-async function managementRowsByIds<T>(ids:string[],factory:(batch:string[])=>any,columns:string|string[]):Promise<T[]>{
+async function managementRowsByIds<T>(ids:string[],factory:(batch:string[])=>unknown,columns:string|string[]):Promise<T[]>{
  const all:T[]=[];
  for(let i=0;i<ids.length;i+=32)
   all.push(...await completeManagementRows<T>(()=>factory(ids.slice(i,i+32)),columns));
