@@ -33,6 +33,7 @@ SingleWorkerContract: {objective,deliverable,instruction,parentObjective:"exact 
 Commands:
 plan: {action:"plan",purpose,direction,outcomes:[{criterion,verification}],milestones:[{objective}],organizations:["justified-area-key"]}. Preserve the original owner objective; identify strategic priorities, measurable outcomes and milestone direction. The Project Director commissions the organizations in its own plan, not a fixed chart. Material ambiguities require an exception through the owner approval boundary.
 appoint: {action:"appoint",kind:"manager"|"worker",managementLevel:"functional_director"|"manager"|"supervisor"|"worker",name,area,purpose,objective,deliverables:["expected artifacts"],interfaces:["component interfaces"],reporting,acceptance:["measurable criteria"],tokens:integer,deadline:ISO8601,tools:["manage"|"analysis"|"research"|"development"|"repository_review"],paths:[],reuseAgentId?:UUID}. Sibling allocations together must fit parent resources; retain capacity for your own management decisions. Workers cannot delegate. Organizational growth must remain within inherited operational and financial resources. Do not allocate unavailable scope or authority.
+amend_delegation: {action:"amend_delegation",nodeId:directChildUUID,expectedTools:["exact current capabilities"],expectedDeadline:ISO8601,tools:["new capabilities"],deadline?:ISO8601,reason}. Amend only your direct report, within your own tools and the approved parent/project deadlines. Roles, identities, scope and accepted evidence cannot change. Accepted or busy organizations cannot be amended. Removal must retain all descendant authority. Worker SMART deadlines never change; optional extensions apply to management only. Independent QA cannot receive development authority. A manager's delegated development capability permits commissioning workers, never executing code personally. Refresh stale contracts before deciding again.
 grant_scope: {action:"grant_scope",nodeId:directChildUUID,paths:["approved/path/"]}. After scope approval, delegate only the current parent scope grant to each organization. Managers propagate it to workers; initial empty paths never authorize coding.
 authorize_assignment: {action:"authorize_assignment",assignmentId:queuedDirectWorkerAssignmentUUID,smart:SingleWorkerContract}. Commission a queued research, specification, assessment or revision job after inspecting its actual worker, role and dependencies. The scheduler returns uncommissioned work to its immediate manager. Worker-generated suggestions never authorize execution. Root cannot authorize individual assignments.
 assign: {action:"assign",nodeId:directWorkerUUID,capability:"analysis"|"research"|"writing"|"repository_review",smart:SingleWorkerContract}. Delegate technical research/design work through the existing mission worker. Functional Directors appoint and supervise the existing developers as execution workers. Commission coding packages bound to the existing approved cumulative project milestones. The Project Director must delegate this responsibility to a Functional Director.
@@ -105,7 +106,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
 }
 
-const managementActions=new Set(['plan','appoint','grant_scope','authorize_assignment','assign','commission_package','evaluate_package','repair_package','dependency','exception','resolve','escalate','submit_component','certify','reject','replace_leader','reorganize','ready','close']);
+const managementActions=new Set(['plan','appoint','amend_delegation','grant_scope','authorize_assignment','assign','commission_package','evaluate_package','repair_package','dependency','exception','resolve','escalate','submit_component','certify','reject','replace_leader','reorganize','ready','close']);
 type ReportingNode={id:string;parent_id?:string|null};
 type ReportingTarget={field:string;status:'missing'|'malformed'|'unknown'|'direct_report'|'not_direct_report';id?:string;idHash?:string};
 
@@ -147,7 +148,7 @@ export function assertManagementCommands(principal:{id:string;kind:string;manage
    c.action==='authorize_assignment'?['assignmentId']:['evaluate_package','repair_package'].includes(c.action)?['packageId']:[]);
   if(c.action==='submit_component'&&(principal.kind!=='manager'||c.nodeId!=null))reject('Only the responsible Functional Director may submit its own component','component_authority',['nodeId']);
   const fields=c.action==='commission_package'?['workerId','writerId','reviewerId']:
-   ['assign','certify','reject','grant_scope','reorganize','replace_leader','dependency'].includes(c.action)
+   ['assign','certify','reject','grant_scope','amend_delegation','reorganize','replace_leader','dependency'].includes(c.action)
     ?['nodeId',...(c.action==='reorganize'?['underId']:c.action==='dependency'?['dependsOn']:[])]:[];
   if(fields.some(field=>!nodes.some(n=>n.id===c[field]&&n.parent_id===principal.id)))reject('Management decisions require immediate reporting authority','immediate_reporting_authority',fields);
   if(c.action==='appoint')priorAppointments++;
