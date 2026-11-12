@@ -132,13 +132,18 @@ test('activity-specific timeout is enforced at the paid transport boundary and r
     timeoutMessage: timeoutMs => `Intermediate memory provider transmission timed out after ${timeoutMs}ms.`,
     uncertaintyReason: timeoutMs => `Memory-summary provider transmission timed out after ${timeoutMs}ms; reservation remains held.`,
   });
-  await assert.rejects(
-    runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)),
-    error => {
-      assert.equal(standaloneAccountingCause(error)?.code, 'standalone_memory_timeout');
-      return true;
-    },
-  );
+  const keepAlive = setTimeout(() => {}, 100);
+  try {
+    await assert.rejects(
+      runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)),
+      error => {
+        assert.equal(standaloneAccountingCause(error)?.code, 'standalone_memory_timeout');
+        return true;
+      },
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
   assert.equal(sends, 1);
   assert.equal(fake.attempts[0].state, 'uncertain');
   assert.match(fake.uncertaintyReasons[0], /Memory-summary provider transmission timed out after 10ms/);
