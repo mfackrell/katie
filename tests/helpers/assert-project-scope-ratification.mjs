@@ -31,6 +31,12 @@ export async function assertProjectScopeRatification(db){
     return {job:job.id,lease,node:scheduled.nodeId};
   };
   const decide=(s,commands)=>db.query('select project_org_decide($1,$2,$3)',[s.job,s.lease,JSON.stringify(commands)]);
+  const activate=async nodeId=>{
+    await db.query('reset role');
+    await db.query('update project_organization_nodes set decision_needed=(id=$2) where project_id=$1',[project,nodeId]);
+    await db.query('set role service_role');
+    const s=await session();assert.equal(s.node,nodeId);return s;
+  };
   const root=await session();
   const scopePaths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
   const direction='Commission implementation only within '+scopePaths.join(', ')+' and preserve independent QA.';
@@ -108,20 +114,17 @@ export async function assertProjectScopeRatification(db){
     await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3)',[owner,prepared.proposalId,prepared.scopeHash]),/stale or already consumed/);
 
     // Existing management authority remains mandatory after root ratification.
-    await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=true where id=$1',[rootNode.id]);await db.query('set role service_role');
-    const rootGrant=await session();
+    const rootGrant=await activate(rootNode.id);
     const game=(await db.query("select id from project_organization_nodes where project_id=$1 and name='Game Delivery'",[project])).rows[0];
     await decide(rootGrant,[{action:'grant_scope',nodeId:game.id,paths:scopePaths},{action:'ready'}]);
     assert.equal((await db.query('select count(*)::int n from project_organization_scope_grants where node_id=$1 and scope_hash=$2',[game.id,prepared.scopeHash])).rows[0].n,1);
 
-    await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=true where id=$1',[game.id]);await db.query('set role service_role');
-    const manager=await session();assert.equal(manager.node,game.id);
+    const manager=await activate(game.id);
     await decide(manager,[{action:'appoint',kind:'worker',name:'Coder',area:'game_delivery',objective:'Implement only the approved tic-tac-toe package',
       acceptance:['Approved browser contract passes'],tokens:1000,deadline,paths:[],tools:['analysis','development']},{action:'ready'}]);
     const coder=(await db.query("select id from project_organization_nodes where parent_id=$1 and name='Coder'",[game.id])).rows[0];
     assert.ok(coder?.id);
-    await db.query('reset role');await db.query('update project_organization_nodes set decision_needed=true where id=$1',[game.id]);await db.query('set role service_role');
-    const delegator=await session();assert.equal(delegator.node,game.id);
+    const delegator=await activate(game.id);
     await decide(delegator,[{action:'grant_scope',nodeId:coder.id,paths:scopePaths},{action:'ready'}]);
     assert.equal((await db.query('select count(*)::int n from project_organization_scope_grants where node_id=$1 and scope_hash=$2',[coder.id,prepared.scopeHash])).rows[0].n,1,
       'coding worker receives scope only through existing manager delegation');
