@@ -62,6 +62,14 @@ test('new document attachment selection is exact and editing requests do not mas
   ],()=>true),null);
   assert.equal(retainedPdfExportFileId('create a pdf of my resume',[{fileId:'new',mimeType:'application/pdf'}],id=>id==='new'),'new');
   assert.equal(retainedPdfExportFileId('revise my resume and create a pdf',[{fileId:'new',mimeType:'application/pdf'}],()=>true),null);
+  assert.equal(retainedPdfExportFileId('create a PDF cover letter based on my resume',[{fileId:'resume',mimeType:'application/pdf'}],()=>true),null,
+    'a different requested document must draft from the source instead of returning it unchanged');
+  assert.equal(retainedPdfExportFileId('create a one-page pdf of my resume',[{fileId:'resume',mimeType:'application/pdf'}],()=>true),null,
+    'an explicit page constraint requires generation/clarification rather than unchecked source preservation');
+  assert.equal(sourcePreservingPdfExportRequest('create a pdf of my resume'),true);
+  assert.equal(sourcePreservingPdfExportRequest('export my resume as a pdf'),true);
+  assert.equal(sourcePreservingPdfExportRequest('create a PDF cover letter based on my resume'),false);
+  assert.equal(sourcePreservingPdfExportRequest('create a one-page pdf of my resume'),false);
   assert.equal(retainedPdfExportFileId('create a pdf of my resume',[{fileId:'new',mimeType:'application/pdf'}],()=>false),null);
 });
 
