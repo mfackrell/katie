@@ -168,7 +168,8 @@ begin
   returning * into q;
   if q.id is null then
     select * into strict q from project_scope_ratification_proposals
-      where project_id=p.id and scope_hash=scope_hash and organization_hash=organization_hash;
+      where project_id=p.id and project_scope_ratification_proposals.scope_hash=scope_hash
+        and project_scope_ratification_proposals.organization_hash=organization_hash;
   end if;
   return jsonb_build_object(
     'proposalId',q.id,'projectId',q.project_id,'repository',q.repository_full_name,

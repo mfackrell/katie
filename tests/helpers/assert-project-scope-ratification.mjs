@@ -56,6 +56,9 @@ export async function assertProjectScopeRatification(db){
   await assert.rejects(db.query('select project_org_prepare_scope_ratification($1,$2,$3)',[project,badSpec,base]),/exceeds accepted organization evidence/);
 
   const prepared=(await db.query('select project_org_prepare_scope_ratification($1,$2,$3) q',[project,spec,base])).rows[0].q;
+  const replayed=(await db.query('select project_org_prepare_scope_ratification($1,$2,$3) q',[project,spec,base])).rows[0].q;
+  assert.equal(replayed.proposalId,prepared.proposalId,'identical inert proposal preparation is idempotent');
+  assert.equal(replayed.scopeHash,prepared.scopeHash);
   assert.match(prepared.scopeHash,/^[a-f0-9]{64}$/);
   assert.match(prepared.organizationHash,/^[a-f0-9]{64}$/);
   assert.deepEqual(prepared.specification.allowedPaths,scopePaths);
