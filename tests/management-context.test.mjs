@@ -110,6 +110,6 @@ test('selected evidence retains active assignments and only the latest terminal 
  {assignment_id:'five',node_id:'child',created_at:'2026-04-02'}];
  const states=[{id:'one',status:'failed'},{id:'two',status:'completed'},{id:'three',status:'running'},
  {id:'four',status:'completed'},{id:'five',status:'failed'}];
- assert.deepEqual(selectManagementEvidenceIds(bs,states,['root','child']),['three','two','five'].sort());
+ assert.deepEqual([...selectManagementEvidenceIds(bs,states,['root','child'])],['three','two','five'].sort());
  assert.throws(()=>selectManagementEvidenceIds(bs,states.slice(1),['root','child']),/unreadable assignment status/);
 });
