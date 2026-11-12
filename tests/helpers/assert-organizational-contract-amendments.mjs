@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {modules} from './load-project-modules.mjs';
 
 // Deterministic management fixtures, actual PostgreSQL leases/transactions.
 // This qualifies authority; it is not evidence of live inference autonomy.
@@ -11,6 +12,43 @@ export async function assertOrganizationalContractAmendments(db,rival,{project,o
  await db.query('reset role');await db.query('update work_projects set team=$2 where id=$1',[project.id,project.team]);await db.query('set role service_role');
  const initial=await rows(),root=initial.find(n=>n.kind==='project_director'),game=initial.find(n=>n.kind==='manager'&&n.area==='development'),qa=initial.find(n=>n.kind==='manager'&&n.area==='quality_assurance');
  assert.ok(game&&qa);assert.notEqual(game.id,qa.id);
+
+ // Native PostgreSQL regression: assemble a real organization's decision
+ // evidence without relying on fixture-only JavaScript objects or fake RPCs.
+ // All queries are read-only and retain the original database evidence.
+ await db.query('reset role');
+ const {managementScope,selectManagementEvidenceIds,buildManagementDecisionContext}=modules()('@/lib/projects/management-context');
+ const scope=managementScope(initial,root.id);
+ const load=async(query,args=[])=> (await db.query(query,args)).rows;
+ const current=await load('select objective,team,approved_hash,verified_sha,phase,deadline from work_projects where id=$1',[project.id]);
+ assert.equal(current.length,1);
+ const binds=await load('select assignment_id,node_id,created_at from project_organization_assignments where node_id=any($1::uuid[])',[scope.decisionIds]);
+ const statusRows=binds.length?await load('select id,status,updated_at from mission_assignments where id=any($1::uuid[])',[binds.map(b=>b.assignment_id)]):[];
+ const selected=selectManagementEvidenceIds(binds,statusRows,scope.decisionIds);
+ const related=async(table,field,values)=>load('select * from '+table+' where '+field+'=any($1::uuid[])',[values]);
+ const context=buildManagementDecisionContext({
+  principalId:root.id,topology:initial,scopedNodes:initial.filter(n=>scope.contextIds.includes(n.id)),
+  project:current[0],
+  executionTeam:await related('managed_agents','id',project.team),
+  exceptions:(await load('select * from project_organization_exceptions where project_id=$1',[project.id])),
+  bindings:binds,statuses:statusRows,
+  evidence:selected.length?await related('mission_assignments','id',selected):[],
+  plans:await related('project_organization_plans','node_id',scope.contextIds),
+  dependencies:await load('select * from project_organization_dependencies where project_id=$1',[project.id]),
+  scopeGrants:await related('project_organization_scope_grants','node_id',scope.contextIds),
+  workerContracts:await load('select * from project_worker_contracts where project_id=$1',[project.id]),
+  workPackages:await load('select * from project_work_packages where project_id=$1',[project.id]),
+  workPackageAttempts:await load('select * from project_work_package_attempts where package_id in (select id from project_work_packages where project_id=$1)',[project.id]),
+  work:await load('select * from project_organization_work where project_id=$1',[project.id]),
+ },48000);
+ const scoped=JSON.parse(context);
+ assert.ok(context.length<=48000);
+ assert.equal(scoped.project.objective,current[0].objective);
+ assert.deepEqual(scoped.organization.map(n=>n.id).sort(),[...scope.directIds].sort());
+ assert.equal(scoped.principal.id,root.id);
+ assert.equal(scoped.reporting.directReportIds.length,2);
+ await db.query('set role service_role');
+
  const decision=await sql(db,'select id value from project_organization_decisions where assignment_id=$1',[job.id]);
  const release='d'.repeat(40),end=new Date(Date.now()+3600000).toISOString();
  const renew=(c=db,id=randomUUID(),who=owner,prior=cutoff,until=end,sha=release)=>sql(c,'select project_org_renew_continue($1,$2,$3,$4,$5,$6,$7) value',[who,project.id,sha,decision,prior,until,id]);
