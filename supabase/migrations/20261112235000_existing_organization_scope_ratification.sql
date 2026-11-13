@@ -108,7 +108,7 @@ create function public.project_org_prepare_scope_ratification(
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare
   p work_projects; a project_provider_execution; repo_name text;
-  objective_hash text; organization_hash text; execution_hash text; scope_data jsonb; scope_hash text;
+  v_objective_hash text; v_organization_hash text; execution_hash text; scope_data jsonb; v_scope_hash text;
   q project_scope_ratification_proposals;
 begin
   perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
@@ -160,16 +160,16 @@ begin
 
   select repository_full_name into repo_name from repo_sync_runs where id=p.repository_id;
   if repo_name is null or repo_name!~'^[-A-Za-z0-9_.]+/[-A-Za-z0-9_.]+$' then raise exception 'Connected repository unavailable';end if;
-  objective_hash:=encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex');
+  v_objective_hash:=encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex');
   select * into a from project_provider_execution where project_id=p.id;
   if found then
-    if a.objective_hash is distinct from objective_hash or a.approved_scope is not null
+    if a.objective_hash is distinct from v_objective_hash or a.approved_scope is not null
        or a.deadline is distinct from p.deadline or a.deadline<=clock_timestamp()
        or project_provider_request_pending(p.id)
     then raise exception 'Provider authority is not in a recoverable pre-scope state';end if;
   end if;
 
-  organization_hash:=project_org_scope_ratification_state(p.id);
+  v_organization_hash:=project_org_scope_ratification_state(p.id);
   execution_hash:=project_org_scope_ratification_execution_state(p.id);
   scope_data:=jsonb_build_object(
     'objective',p.objective,'clarifications',p.clarifications,'spec',p_spec,
@@ -177,17 +177,17 @@ begin
     'max_cycles',p.max_cycles,'max_missions',p.max_missions,
     'token_allowance',p.token_allowance,'deadline',p.deadline
   );
-  scope_hash:=encode(sha256(convert_to(project_canonical(scope_data),'UTF8')),'hex');
+  v_scope_hash:=encode(sha256(convert_to(project_canonical(scope_data),'UTF8')),'hex');
 
   insert into project_scope_ratification_proposals(
     project_id,repository_id,repository_full_name,baseline_sha,objective_hash,organization_hash,active_mission_id,execution_state_hash,spec,scope_hash
-  ) values(p.id,p.repository_id,repo_name,p_baseline,objective_hash,organization_hash,p.active_mission_id,execution_hash,p_spec,scope_hash)
+  ) values(p.id,p.repository_id,repo_name,p_baseline,v_objective_hash,v_organization_hash,p.active_mission_id,execution_hash,p_spec,v_scope_hash)
   on conflict(project_id,scope_hash,organization_hash,execution_state_hash) do nothing
   returning * into q;
   if q.id is null then
     select * into strict q from project_scope_ratification_proposals
-      where project_id=p.id and project_scope_ratification_proposals.scope_hash=scope_hash
-        and project_scope_ratification_proposals.organization_hash=organization_hash
+      where project_id=p.id and project_scope_ratification_proposals.scope_hash=v_scope_hash
+        and project_scope_ratification_proposals.organization_hash=v_organization_hash
         and project_scope_ratification_proposals.execution_state_hash=execution_hash;
   end if;
   return jsonb_build_object(
