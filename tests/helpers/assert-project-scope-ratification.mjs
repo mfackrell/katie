@@ -308,7 +308,16 @@ export async function assertProjectScopeRatification(db){
     assert.equal((await db.query('select approved_scope from project_provider_execution where project_id=$1',[project])).rows[0].approved_scope,prepared.scopeHash);
     const grants=(await db.query('select g.*,n.kind from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1 and g.scope_hash=$2',[project,prepared.scopeHash])).rows;
     assert.equal(grants.length,1);assert.equal(grants[0].kind,'project_director');assert.equal(grants[0].parent_id,null);assert.deepEqual(grants[0].paths,scopePaths);
-    await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,prepared.scopeHash]),/stale or already consumed/);
+    // A deliberately rejected replay aborts an ordinary PostgreSQL transaction.
+    // Isolate that negative test so subsequent lifecycle checks can continue
+    // under the original ratification transaction without bypassing replay guards.
+    await db.query('savepoint ratification_replay_rejection');
+    try{
+      await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,prepared.scopeHash]),/stale or already consumed/);
+    }finally{
+      await db.query('rollback to savepoint ratification_replay_rejection');
+      await db.query('release savepoint ratification_replay_rejection');
+    }
 
     const resumed=await session();
     assert.equal(resumed.node,rootNode.id);assert.notEqual(resumed.mission,blocked.mid);
