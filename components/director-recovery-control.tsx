@@ -18,6 +18,8 @@ export type DirectorRecoveryOffer = {
   priorCutoff: string;
   receipt: DirectorRecoveryReceipt | null;
   continuation?: {decisionId:string;admittedAt:string|null;maxCutoff?:string;authorizationId?:string;authorizedAt?:string};
+  hierarchyRecovery?: {decisionId:string;priorCutoff:string;directorCutoff:string;stateHash:string;
+    nodeCount:number;maxHours:number;activeMissionId:string|null};
 };
 
 export function DirectorRecoveryControl({
@@ -42,20 +44,29 @@ export function DirectorRecoveryControl({
   async function recover(continuation=false,renewal=false) {
     if (submitting.current || (!continuation&&receipt) || (continuation&&!recovery.continuation)
       || (!renewal&&((continuation&&(continued||recovery.continuation?.admittedAt))||Date.now()>=Date.parse(recovery.cutoff)))) return;
+    const hierarchy=renewal&&!!recovery.hierarchyRecovery;
     submitting.current = true;
     setPending(true);
     setError(null);
     try {
       const cutoff=renewal?new Date(newCutoff).toISOString():recovery.cutoff;
-      if(renewal&&(Date.parse(cutoff)<=Date.now()||Date.parse(cutoff)<=Date.parse(recovery.cutoff)))
-        throw Error("Choose an explicit future cutoff later than the current project deadline.");
+      if(renewal&&(Date.parse(cutoff)<=Date.now()||Date.parse(cutoff)<=Date.parse(recovery.cutoff)
+        ||(hierarchy&&(Date.parse(cutoff)<=Date.parse(recovery.hierarchyRecovery!.directorCutoff)
+          ||Date.parse(cutoff)>Date.now()+recovery.hierarchyRecovery!.maxHours*3600000))))
+        throw Error("Choose an explicit future cutoff within the authorized recovery window and later than the expired hierarchy.");
       const authorizationId=renewal?crypto.randomUUID():null;
       const bearer = await ownerSessionBearer();
       if (!bearer) throw Error("Sign in as Katie owner to recover the Project Director.");
       const response = await fetch("/api/projects/organization", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}` },
-        body: JSON.stringify(continuation?{
+        body: JSON.stringify(hierarchy?{
+          trialAction:'recover_hierarchy',projectId:recovery.projectId,releaseSha:recovery.releaseSha,
+          decisionId:recovery.hierarchyRecovery!.decisionId,
+          priorCutoff:recovery.hierarchyRecovery!.priorCutoff,
+          directorCutoff:recovery.hierarchyRecovery!.directorCutoff,
+          stateHash:recovery.hierarchyRecovery!.stateHash,cutoff,authorizationId,
+        }:continuation?{
           trialAction:renewal?'renew_continue':'continue',projectId:recovery.projectId,releaseSha:recovery.releaseSha,
           cutoff,decisionId:recovery.continuation!.decisionId,
           ...(renewal?{priorCutoff:recovery.cutoff,authorizationId}:{}),
@@ -70,6 +81,22 @@ export function DirectorRecoveryControl({
       const result = await response.json();
       if (!response.ok) throw Error(typeof result.error === "string" ? result.error : `Recovery request failed (HTTP ${response.status}).`);
       if(continuation){
+        if(hierarchy){
+          const proposal=recovery.hierarchyRecovery!;
+          if(!result||result.projectId!==recovery.projectId||result.decisionId!==proposal.decisionId
+             ||result.releaseSha!==recovery.releaseSha||result.authorizationId!==authorizationId
+             ||result.stateHash!==proposal.stateHash||result.activeMissionId!==proposal.activeMissionId
+             ||Date.parse(result.cutoff)!==Date.parse(cutoff)
+             ||Date.parse(result.priorCutoff)!==Date.parse(proposal.priorCutoff)
+             ||Date.parse(result.priorDirectorCutoff)!==Date.parse(proposal.directorCutoff)
+             ||typeof result.authorizedAt!=='string'||!Number.isFinite(Date.parse(result.authorizedAt))
+             ||result.existing!==false||!Array.isArray(result.renewedNodeIds)
+             ||result.renewedNodeIds.length<1||result.renewedNodeIds.length>proposal.nodeCount)
+            throw Error('Hierarchy recovery receipt was not confirmed. Refresh the project before continuing.');
+          setAuthorizedCutoff(result.cutoff);
+          setWindowReceipt({authorizationId:result.authorizationId,authorizedAt:result.authorizedAt});
+          setContinued(result.authorizedAt);onRefresh();return;
+        }
         if(!result||result.projectId!==recovery.projectId||result.decisionId!==recovery.continuation!.decisionId
           ||result.releaseSha!==recovery.releaseSha||Date.parse(result.cutoff)!==Date.parse(cutoff)
           ||typeof result.existing!=='boolean'||typeof result.admittedAt!=='string'||!Number.isFinite(Date.parse(result.admittedAt)))
@@ -119,15 +146,19 @@ export function DirectorRecoveryControl({
       {recovery.continuation&&(
         expired?
           <div>
-            <p>The execution window has expired. Enter a new cutoff to explicitly authorize renewal of inherited management deadlines and continuation. The Project Director&apos;s existing authority remains the ceiling.</p>
-            {recovery.continuation.maxCutoff&&<p>Project Director deadline: {new Date(recovery.continuation.maxCutoff).toLocaleString()}.</p>}
+            <p>{recovery.hierarchyRecovery
+              ? "Both the project window and Project Director authority have expired. An authenticated owner can renew the exact existing appointments, with no new capabilities, coding dispatch, scope approval, or provider spending."
+              : "The execution window has expired. Enter a new cutoff to explicitly authorize renewal of inherited management deadlines and continuation. The Project Director's existing authority remains the ceiling."}</p>
+            {recovery.hierarchyRecovery
+              ?<p>Expired Director deadline: {new Date(recovery.hierarchyRecovery.directorCutoff).toLocaleString()}. Preserved appointments: {recovery.hierarchyRecovery.nodeCount}. New cutoff must be within {recovery.hierarchyRecovery.maxHours} hours.</p>
+              :recovery.continuation.maxCutoff&&<p>Project Director deadline: {new Date(recovery.continuation.maxCutoff).toLocaleString()}.</p>}
             <label>New project cutoff (your local time)<input type="datetime-local" aria-label="New project cutoff (your local time)" value={newCutoff} onChange={event=>setNewCutoff(event.target.value)} disabled={pending}/></label>
             <button type="button" className="min-h-11 font-semibold" disabled={pending||!newCutoff} onClick={()=>void recover(true,true)}>
-              {pending?'Submitting deadline authorization…':'Authorize deadline and continue project'}
+              {pending?'Submitting deadline authorization…':recovery.hierarchyRecovery?'Authorize existing hierarchy recovery':'Authorize deadline and continue project'}
             </button>
           </div>:
         continued||recovery.continuation.admittedAt?
-          <div role="status"><p>Project continuation admitted. Decision {recovery.continuation.decisionId}. Admission {windowReceipt?.authorizedAt??recovery.continuation.authorizedAt??continued??recovery.continuation.admittedAt}. Cutoff {visibleCutoff}.</p>
+          <div role="status"><p>{recovery.hierarchyRecovery?'Existing hierarchy recovered; scope approval and paid work remain separate.':'Project continuation admitted.'} Decision {recovery.continuation.decisionId}. Admission {windowReceipt?.authorizedAt??recovery.continuation.authorizedAt??continued??recovery.continuation.admittedAt}. Cutoff {visibleCutoff}.</p>
             {(windowReceipt?.authorizationId??recovery.continuation.authorizationId)&&<p>Deadline authorization {windowReceipt?.authorizationId??recovery.continuation.authorizationId}.</p>}</div>:
           !expired&&<button type="button" className="min-h-11 font-semibold" disabled={pending} onClick={()=>void recover(true)}>
             {pending?'Submitting project continuation…':'Continue approved project'}
