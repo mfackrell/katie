@@ -695,7 +695,10 @@ test('scope ratification API requires owner authentication and accepts only immu
   assert.equal((await PUT(request({actorId:randomUUID(),chatId:chat,proposalId,approvalHash:scopeHash}))).status,404);assert.equal(calls.length,0);
   const response=await PUT(request({actorId:actor,chatId:chat,proposalId,approvalHash:scopeHash}));
   assert.equal(response.status,200);assert.equal(calls.length,1);assert.equal(calls[0].name,'project_org_ratify_scope');
-  assert.deepEqual(calls[0].args,{p_owner:ownerId,p_project:p.id,p_proposal:proposalId,p_hash:scopeHash});
+  const rpcArgs=calls[0].args;
+  assert.deepEqual(Object.keys(rpcArgs).sort(),['p_hash','p_owner','p_project','p_proposal']);
+  assert.equal(rpcArgs.p_owner,ownerId);assert.equal(rpcArgs.p_project,p.id);
+  assert.equal(rpcArgs.p_proposal,proposalId);assert.equal(rpcArgs.p_hash,scopeHash);
   assert.equal((await response.json()).approvedScopeHash,scopeHash);
  }finally{if(saved===undefined)delete process.env.KATIE_OWNER_AUTH_USER_ID;else process.env.KATIE_OWNER_AUTH_USER_ID=saved;}
 });
