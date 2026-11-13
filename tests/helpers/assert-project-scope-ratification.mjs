@@ -86,12 +86,61 @@ export async function assertProjectScopeRatification(db){
   const rootDecision=(await db.query('select * from project_organization_decisions where project_id=$1 and node_id=$2 order by created_at desc,id desc limit 1',[project,rootNode.id])).rows[0];
   const windowId=randomUUID(),release='c'.repeat(40),priorCutoff=new Date(authority.deadline.getTime()-60000);
   await db.query('reset role');
-  await db.query("insert into project_execution_windows(id,project_id,owner_id,release_sha,decision_id,prior_cutoff,cutoff) values($1,$2,$3,$4,$5,$6,$7)",
-    [windowId,project,owner,release,rootDecision.id,priorCutoff,authority.deadline]);
+  // The PostgreSQL deadline is microsecond-precise. pg parses it as a JS Date
+  // with millisecond precision, so round-tripping authority.deadline produces
+  // a cutoff that fails the exact window/deadline equality in the continuation
+  // authorization join. Read the canonical cutoff within PostgreSQL instead.
+  const insertedWindow=await db.query(
+    "insert into project_execution_windows(id,project_id,owner_id,release_sha,decision_id,prior_cutoff,cutoff) select $1,$2,$3,$4,$5,$6,a.deadline from project_provider_execution a where a.project_id=$2 and a.owner_id=$3 returning id",
+    [windowId,project,owner,release,rootDecision.id,priorCutoff]);
+  assert.equal(insertedWindow.rowCount,1,'one exact owner-bound continuation window must be inserted');
+  assert.equal(insertedWindow.rows[0].id,windowId);
   await db.query("update project_provider_execution set continued_at=clock_timestamp(),continuation_decision_id=$2,continuation_release_sha=$3,window_id=$4 where project_id=$1",
     [project,rootDecision.id,release,windowId]);
   await db.query("insert into project_organization_exceptions(project_id,origin_id,owner_id,reason,detail) values($1,$2,$3,'authority','Synthetic pre-scope exception retained across ratification')",
     [project,existingWorker.id,game.id]);
+
+  // Verify the synthetic continuation is genuinely admitted BEFORE any
+  // management scheduling. The checks mirror the deployed owner-window join;
+  // a missing relationship must fail, never produce an incomplete assignment.
+  const continuation=(await db.query(`
+    select public.project_provider_continued($1) authorized,
+           w.id=a.window_id window_bound,
+           w.project_id=a.project_id project_bound,
+           w.owner_id=a.owner_id owner_bound,
+           w.decision_id=a.continuation_decision_id decision_bound,
+           w.release_sha=a.continuation_release_sha release_bound,
+           w.cutoff=a.deadline exact_cutoff,
+           p.deadline=a.deadline project_cutoff,
+           d.id=a.continuation_decision_id approved_decision,
+           n.kind='project_director' and n.parent_id is null rooted_decision,
+           j.status='completed' and m.status='completed' committed_decision
+    from project_provider_execution a
+    join work_projects p on p.id=a.project_id
+    join project_execution_windows w on w.id=a.window_id
+    join project_organization_decisions d on d.id=a.continuation_decision_id and d.project_id=p.id
+    join project_organization_nodes n on n.id=d.node_id and n.project_id=p.id
+    join mission_assignments j on j.id=d.assignment_id
+    join agent_missions m on m.id=j.mission_id
+    where a.project_id=$1 and a.owner_id=$2
+  `,[project,owner])).rows[0];
+  assert.ok(continuation,'the owner decision and execution window must join to the existing project');
+  for(const field of ['authorized','window_bound','project_bound','owner_bound','decision_bound',
+    'release_bound','exact_cutoff','project_cutoff','approved_decision','rooted_decision','committed_decision'])
+    assert.equal(continuation[field],true,'continuation authorization invariant: '+field);
+
+  // Compare the actual installed test scheduler's authorization and evidence
+  // binding against the verified deployed definition, not a replacement mock.
+  const schedulerDef=(await db.query(
+    "select pg_get_functiondef('public.project_org_schedule(uuid,uuid)'::regprocedure) body"
+  )).rows[0]?.body;
+  assert.ok(schedulerDef,'installed management scheduler must exist');
+  for(const contract of [
+    'if not found and not project_provider_continued(p_project)',
+    'if project_provider_continued(p_project) then',
+    "'providerContinuationWindow',a.window_id",
+    'm.id is distinct from r.mission_id',
+  ]) assert.ok(schedulerDef.includes(contract),'installed scheduler differs from production: '+contract);
 
   // Production-shaped history MUST be admitted by the existing management
   // scheduler. A direct create_mission() for a registered leader is correctly
