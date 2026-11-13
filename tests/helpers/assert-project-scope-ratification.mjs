@@ -208,6 +208,9 @@ export async function assertProjectScopeRatification(db){
   assert.equal(firstAttempt?.status,'failed','consumed blocked management assignment must remain failed');
   assert.equal(firstAttempt.attempts,1,'consumed management attempt must never reset');
   const blocked=await installBlockedManagement({providerEvidence:true});
+  // The admission helper returns under service_role. Only fixture setup may
+  // change protected organization rows; never relax production SQL grants.
+  await db.query('reset role');
   await db.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,rootNode.id]);
   await db.query("update work_projects set status='blocked',phase='research',lease=null,lease_until=null where id=$1",[project]);
   await db.query('set role service_role');
