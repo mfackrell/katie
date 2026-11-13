@@ -187,12 +187,26 @@ export async function assertProjectScopeRatification(db){
     assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,mid);
     return {mid,job};
   };
-  await installBlockedManagement();
+  const firstBlocked=await installBlockedManagement();
+  // The scheduler restores the actual saved previousMissionId; there is no
+  // requirement that an earlier Game Delivery mission remains the predecessor.
+  // Inspect the durable blocked-management record, not an assumed session.
+  const firstPredecessor=(await db.query(
+    "select project_evidence->>'previousMissionId' previous_id from agent_missions where id=$1 and project_id=$2 and project_kind='management' and status='blocked'",
+    [firstBlocked.mid,project])).rows[0];
+  assert.ok(firstPredecessor,'original blocked management mission and its predecessor evidence must remain available');
   // The ordinary scheduler must reconcile the first failed session before
-  // scheduling the second. Reuse the prior accepted organization and attempts.
+  // scheduling the second. Preserve the saved predecessor and consumed attempt.
   const reconciled=(await db.query('select project_org_schedule($1,$2) s',[project,await leaseProject()])).rows[0].s;
   assert.equal(reconciled?.waiting,true,JSON.stringify(reconciled));
-  assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,deliverySetup.mission);
+  assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,
+    firstPredecessor.previous_id,'reconciliation must restore the blocked mission\'s persisted previousMissionId');
+  assert.equal((await db.query(
+    "select project_evidence->>'previousMissionId' previous_id from agent_missions where id=$1",[firstBlocked.mid]
+  )).rows[0].previous_id,firstPredecessor.previous_id,'reconciliation must not rewrite historical mission provenance');
+  const firstAttempt=(await db.query('select status,attempts from mission_assignments where id=$1',[firstBlocked.job])).rows[0];
+  assert.equal(firstAttempt?.status,'failed','consumed blocked management assignment must remain failed');
+  assert.equal(firstAttempt.attempts,1,'consumed management attempt must never reset');
   const blocked=await installBlockedManagement({providerEvidence:true});
   await db.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,rootNode.id]);
   await db.query("update work_projects set status='blocked',phase='research',lease=null,lease_until=null where id=$1",[project]);
