@@ -11,10 +11,12 @@ create table public.project_scope_ratification_proposals (
   baseline_sha text not null check (baseline_sha ~ '^[a-f0-9]{40}$'),
   objective_hash text not null check (objective_hash ~ '^[a-f0-9]{64}$'),
   organization_hash text not null check (organization_hash ~ '^[a-f0-9]{64}$'),
+  active_mission_id uuid,
+  execution_state_hash text not null check (execution_state_hash ~ '^[a-f0-9]{64}$'),
   spec jsonb not null,
   scope_hash text not null check (scope_hash ~ '^[a-f0-9]{64}$'),
   created_at timestamptz not null default clock_timestamp(),
-  unique(project_id,scope_hash,organization_hash)
+  unique(project_id,scope_hash,organization_hash,execution_state_hash)
 );
 
 create table public.project_scope_ratification_approvals (
@@ -22,6 +24,8 @@ create table public.project_scope_ratification_approvals (
   project_id uuid not null unique references public.work_projects(id),
   owner_id uuid not null,
   scope_hash text not null check (scope_hash ~ '^[a-f0-9]{64}$'),
+  prior_active_mission_id uuid,
+  execution_state_hash text not null check (execution_state_hash ~ '^[a-f0-9]{64}$'),
   transaction_id bigint not null,
   approved_at timestamptz not null default clock_timestamp()
 );
@@ -60,6 +64,19 @@ language sql stable security definer set search_path=public,pg_temp as $$
   )),'UTF8')),'hex')
 $$;
 
+create function public.project_org_scope_ratification_execution_state(p_project uuid) returns text
+language sql stable security definer set search_path=public,pg_temp as $$
+  select encode(sha256(convert_to(project_canonical(jsonb_build_object(
+    'activeMissionId',p.active_mission_id,
+    'mission',coalesce((select to_jsonb(m) from agent_missions m where m.id=p.active_mission_id),'null'::jsonb),
+    'assignments',coalesce((select jsonb_agg(to_jsonb(j) order by j.id) from mission_assignments j where j.mission_id=p.active_mission_id),'[]'::jsonb),
+    'organizationAssignments',coalesce((select jsonb_agg(to_jsonb(b) order by b.assignment_id) from project_organization_assignments b join mission_assignments j on j.id=b.assignment_id where j.mission_id=p.active_mission_id),'[]'::jsonb),
+    'providerRequests',coalesce((select jsonb_agg(to_jsonb(r) order by r.started_at,r.id) from project_provider_requests r where r.mission_id=p.active_mission_id),'[]'::jsonb),
+    'providerDispatches',coalesce((select jsonb_agg(to_jsonb(d) order by d.task_id,d.run_id) from project_provider_dispatches d join mission_assignments j on j.id=d.task_id where j.mission_id=p.active_mission_id),'[]'::jsonb),
+    'missionCalls',coalesce((select jsonb_agg(to_jsonb(c) order by c.id) from mission_calls c join mission_assignments j on j.id=c.job_id where j.mission_id=p.active_mission_id),'[]'::jsonb)
+  )),'UTF8')),'hex') from work_projects p where p.id=p_project
+$$;
+
 -- Recovery may authorize only paths already stated literally in accepted
 -- management evidence. This is intentionally conservative; absent evidence
 -- requires normal research/specification rather than inferred scope.
@@ -91,7 +108,7 @@ create function public.project_org_prepare_scope_ratification(
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare
   p work_projects; a project_provider_execution; repo_name text;
-  objective_hash text; organization_hash text; scope_data jsonb; scope_hash text;
+  objective_hash text; organization_hash text; execution_hash text; scope_data jsonb; scope_hash text;
   q project_scope_ratification_proposals;
 begin
   perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
@@ -153,6 +170,7 @@ begin
   end if;
 
   organization_hash:=project_org_scope_ratification_state(p.id);
+  execution_hash:=project_org_scope_ratification_execution_state(p.id);
   scope_data:=jsonb_build_object(
     'objective',p.objective,'clarifications',p.clarifications,'spec',p_spec,
     'repository',p.repository_id,'repository_name',repo_name,'baseline',p_baseline,
@@ -162,19 +180,20 @@ begin
   scope_hash:=encode(sha256(convert_to(project_canonical(scope_data),'UTF8')),'hex');
 
   insert into project_scope_ratification_proposals(
-    project_id,repository_id,repository_full_name,baseline_sha,objective_hash,organization_hash,spec,scope_hash
-  ) values(p.id,p.repository_id,repo_name,p_baseline,objective_hash,organization_hash,p_spec,scope_hash)
-  on conflict(project_id,scope_hash,organization_hash) do nothing
+    project_id,repository_id,repository_full_name,baseline_sha,objective_hash,organization_hash,active_mission_id,execution_state_hash,spec,scope_hash
+  ) values(p.id,p.repository_id,repo_name,p_baseline,objective_hash,organization_hash,p.active_mission_id,execution_hash,p_spec,scope_hash)
+  on conflict(project_id,scope_hash,organization_hash,execution_state_hash) do nothing
   returning * into q;
   if q.id is null then
     select * into strict q from project_scope_ratification_proposals
       where project_id=p.id and project_scope_ratification_proposals.scope_hash=scope_hash
-        and project_scope_ratification_proposals.organization_hash=organization_hash;
+        and project_scope_ratification_proposals.organization_hash=organization_hash
+        and project_scope_ratification_proposals.execution_state_hash=execution_hash;
   end if;
   return jsonb_build_object(
     'proposalId',q.id,'projectId',q.project_id,'repository',q.repository_full_name,
-    'baselineSha',q.baseline_sha,'organizationHash',q.organization_hash,
-    'scopeHash',q.scope_hash,'specification',q.spec,'createdAt',q.created_at
+    'baselineSha',q.baseline_sha,'organizationHash',q.organization_hash,'activeMissionId',q.active_mission_id,
+    'executionStateHash',q.execution_state_hash,'scopeHash',q.scope_hash,'specification',q.spec,'createdAt',q.created_at
   );
 end $$;
 
@@ -186,8 +205,8 @@ create function public.project_org_ratify_scope(
 ) returns jsonb
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare
-  q project_scope_ratification_proposals; p work_projects; a project_provider_execution;
-  objective_hash text; current_hash text; scope_data jsonb; root_id uuid;
+  q project_scope_ratification_proposals; p work_projects; a project_provider_execution; m agent_missions;
+  objective_hash text; current_hash text; scope_data jsonb; root_id uuid; retired_mid uuid;
 begin
   perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
   select * into strict q from project_scope_ratification_proposals where id=p_proposal and project_id=p_project for update;
@@ -202,6 +221,18 @@ begin
   then raise exception 'Scope ratification proposal is stale or already consumed';end if;
   if project_org_scope_ratification_state(p.id) is distinct from q.organization_hash
   then raise exception 'Accepted organization changed; prepare a new exact scope proposal';end if;
+  if p.active_mission_id is distinct from q.active_mission_id or project_org_scope_ratification_execution_state(p.id) is distinct from q.execution_state_hash
+  then raise exception 'Active project execution state changed; prepare a new exact scope proposal';end if;
+  if p.active_mission_id is not null then
+    select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
+    if m.id is null or m.project_kind is distinct from 'management' or m.status not in ('blocked','stopped')
+       or exists(select 1 from mission_assignments j where j.mission_id=m.id and j.status not in ('completed','failed'))
+       or exists(select 1 from project_provider_requests r where r.mission_id=m.id and r.resolved_at is null)
+       or exists(select 1 from project_provider_dispatches d join mission_assignments j on j.id=d.task_id where j.mission_id=m.id)
+       or exists(select 1 from mission_calls c join mission_assignments j on j.id=c.job_id where j.mission_id=m.id and (c.status<>'completed' or c.actual_tokens is null))
+    then raise exception 'Only unchanged terminal blocked management state can be reconciled during scope ratification';end if;
+    retired_mid:=m.id;
+  end if;
 
   objective_hash:=encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex');
   if objective_hash is distinct from q.objective_hash then raise exception 'Project objective changed; scope proposal is stale';end if;
@@ -223,8 +254,15 @@ begin
   end if;
 
   insert into project_scope_ratification_approvals(
-    proposal_id,project_id,owner_id,scope_hash,transaction_id
-  ) values(q.id,p.id,p_owner,q.scope_hash,txid_current());
+    proposal_id,project_id,owner_id,scope_hash,prior_active_mission_id,execution_state_hash,transaction_id
+  ) values(q.id,p.id,p_owner,q.scope_hash,retired_mid,q.execution_state_hash,txid_current());
+  if retired_mid is not null then
+    insert into project_events(project_id,event,data) values(p.id,'scope_ratification_active_mission_reconciled',
+      jsonb_build_object('proposalId',q.id,'missionId',retired_mid,'missionStatus',m.status,'executionStateHash',q.execution_state_hash,
+        'disposition','pointer_cleared_terminal_management_state',
+        'assignments',coalesce((select jsonb_agg(jsonb_build_object('assignmentId',j.id,'status',j.status,'attempts',j.attempts) order by j.id) from mission_assignments j where j.mission_id=retired_mid),'[]'::jsonb),
+        'providerRequests',coalesce((select jsonb_agg(jsonb_build_object('requestId',r.id,'operation',r.operation,'requestHash',r.request_hash,'providerReceipt',r.provider_receipt,'resolvedAt',r.resolved_at) order by r.started_at,r.id) from project_provider_requests r where r.mission_id=retired_mid),'[]'::jsonb)));
+  end if;
 
   if a.project_id is not null then
     update project_provider_execution set approved_scope=q.scope_hash where project_id=p.id;
@@ -233,8 +271,9 @@ begin
   update work_projects set
     spec=q.spec,repository_full_name=q.repository_full_name,baseline_sha=q.baseline_sha,
     approval_hash=q.scope_hash,approved_hash=q.scope_hash,status='running',phase='development',
-    milestone_index=0,active_mission_id=null,lease=null,lease_until=null,
-    detail='Owner ratified the existing organization scope. Management must delegate current development capability and file scope before coding.',
+    milestone_index=0,active_mission_id=case when retired_mid is not null then null else active_mission_id end,lease=null,lease_until=null,
+    detail=case when retired_mid is not null then 'Owner ratified the existing organization scope and audibly reconciled the terminal blocked management pointer. Existing mission and provider evidence were retained; management authority must resume normally.'
+      else 'Owner ratified the existing organization scope. Management must delegate current development capability and file scope before coding.' end,
     updated_at=clock_timestamp()
   where id=p.id
   returning * into p;
@@ -287,6 +326,7 @@ end $$;
 
 revoke all on function public.project_scope_ratification_immutable(),
   public.project_org_scope_ratification_state(uuid),
+  public.project_org_scope_ratification_execution_state(uuid),
   public.project_org_scope_path_supported(uuid,text),
   public.project_org_prepare_scope_ratification(uuid,jsonb,text),
   public.project_org_ratify_scope(uuid,uuid,uuid,text)
