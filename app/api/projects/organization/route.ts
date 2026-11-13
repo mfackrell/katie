@@ -14,7 +14,14 @@ const continuationInput=z.object({projectId:z.string().uuid(),trialAction:z.lite
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),decisionId:z.string().uuid(),cutoff:z.string().datetime({offset:true})}).strict();
 const renewalInput=continuationInput.extend({trialAction:z.literal('renew_continue'),
  priorCutoff:z.string().datetime({offset:true}),authorizationId:z.string().uuid()}).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput]);
+const hierarchyRecoveryInput=z.object({
+ projectId:z.string().uuid(),trialAction:z.literal('recover_hierarchy'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),decisionId:z.string().uuid(),
+ priorCutoff:z.string().datetime({offset:true}),directorCutoff:z.string().datetime({offset:true}),
+ cutoff:z.string().datetime({offset:true}),authorizationId:z.string().uuid(),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput]);
 // Neither workers nor cron can activate either kind of owner authority.
 export async function POST(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
@@ -22,6 +29,15 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='recover_hierarchy'){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Hierarchy recovery requires the exact active production release'},{status:409});
+  return NextResponse.json(await rpc('project_org_recover_hierarchy',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
+   p_decision:p.decisionId,p_prior_cutoff:p.priorCutoff,p_director_cutoff:p.directorCutoff,
+   p_cutoff:p.cutoff,p_authorization:p.authorizationId,p_state_hash:p.stateHash,
+  }));
+ }
  if('trialAction' in p&&(p.trialAction==='continue'||p.trialAction==='renew_continue')){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'Continuation requires the exact active production release'},{status:409});
