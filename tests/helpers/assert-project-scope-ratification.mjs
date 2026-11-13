@@ -274,7 +274,11 @@ export async function assertProjectScopeRatification(db){
   assert.equal((await db.query('select approved_scope from project_provider_execution where project_id=$1',[project])).rows[0].approved_scope,null);
   assert.equal((await db.query('select count(*)::int n from project_scope_ratification_approvals where project_id=$1',[project])).rows[0].n,0);
 
-  const snapshot=async()=>({
+  const snapshot=async()=>{
+    // This is a privileged, read-only test audit, not an application RPC.
+    // service_role deliberately cannot SELECT protected provider receipts.
+    await db.query('reset role');
+    try { return {
     nodes:(await db.query('select jsonb_agg(to_jsonb(n) order by n.id) v from project_organization_nodes n where project_id=$1',[project])).rows[0].v,
     decisions:(await db.query('select jsonb_agg(to_jsonb(d) order by d.created_at,d.id) v from project_organization_decisions d where d.project_id=$1',[project])).rows[0].v,
     plans:(await db.query('select jsonb_agg(to_jsonb(pl) order by pl.node_id) v from project_organization_plans pl join project_organization_nodes n on n.id=pl.node_id where n.project_id=$1',[project])).rows[0].v,
@@ -284,7 +288,13 @@ export async function assertProjectScopeRatification(db){
     bindings:(await db.query('select jsonb_agg(to_jsonb(b) order by b.assignment_id) v from project_organization_assignments b join mission_assignments j on j.id=b.assignment_id where j.mission_id=$1',[blocked.mid])).rows[0].v,
     requests:(await db.query('select jsonb_agg(to_jsonb(r) order by r.started_at,r.id) v from project_provider_requests r where r.mission_id=$1',[blocked.mid])).rows[0].v,
     dispatches:(await db.query("select coalesce(jsonb_agg(to_jsonb(d) order by d.task_id,d.run_id),'[]'::jsonb) v from project_provider_dispatches d join mission_assignments j on j.id=d.task_id where j.mission_id=$1",[blocked.mid])).rows[0].v,
-  });
+    }; } finally { await db.query('set role service_role'); }
+  };
+  const privilegedRead=async(sql,params)=>{
+    await db.query('reset role');
+    try { return await db.query(sql,params); }
+    finally { await db.query('set role service_role'); }
+  };
   const before=await snapshot();
   await db.query('begin');
   try{
@@ -338,8 +348,8 @@ export async function assertProjectScopeRatification(db){
     assert.equal((await db.query('select status from agent_missions where id=$1',[blocked.mid])).rows[0].status,'blocked');
     const blockedJob=(await db.query('select status,attempts from mission_assignments where id=$1',[blocked.job])).rows[0];
     assert.equal(blockedJob.status,'failed');assert.equal(blockedJob.attempts,1);
-    assert.equal((await db.query('select count(*)::int n from project_provider_requests where project_id=$1',[project])).rows[0].n,2);
-    assert.equal((await db.query('select count(*)::int n from project_provider_dispatches d join mission_assignments j on j.id=d.task_id join agent_missions m on m.id=j.mission_id where m.project_id=$1',[project])).rows[0].n,0,
+    assert.equal((await privilegedRead('select count(*)::int n from project_provider_requests where project_id=$1',[project])).rows[0].n,2);
+    assert.equal((await privilegedRead('select count(*)::int n from project_provider_dispatches d join mission_assignments j on j.id=d.task_id join agent_missions m on m.id=j.mission_id where m.project_id=$1',[project])).rows[0].n,0,
       'scope ratification must not dispatch workers for this project');
     await decide(resumed,[{action:'ready'}]);
 
