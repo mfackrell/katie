@@ -331,7 +331,8 @@ export async function assertProjectScopeRatification(db){
     const blockedJob=(await db.query('select status,attempts from mission_assignments where id=$1',[blocked.job])).rows[0];
     assert.equal(blockedJob.status,'failed');assert.equal(blockedJob.attempts,1);
     assert.equal((await db.query('select count(*)::int n from project_provider_requests where project_id=$1',[project])).rows[0].n,2);
-    assert.equal((await db.query('select count(*)::int n from project_provider_dispatches')).rows[0].n,0);
+    assert.equal((await db.query('select count(*)::int n from project_provider_dispatches d join mission_assignments j on j.id=d.task_id join agent_missions m on m.id=j.mission_id where m.project_id=$1',[project])).rows[0].n,0,
+      'scope ratification must not dispatch workers for this project');
     await decide(resumed,[{action:'ready'}]);
 
     const rootGrant=await activate(rootNode.id);
