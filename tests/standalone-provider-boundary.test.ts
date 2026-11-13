@@ -25,6 +25,7 @@ function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT)
   const attempts: LedgerAttempt[] = [];
   const events: string[] = [];
   const identifiers: Array<{ requestId: string | null; responseId: string | null }> = [];
+  const uncertaintyReasons: string[] = [];
   const service = {
     async uncertainExposureAccepted() { return false; },
     async loadPricing() { return {snapshot:pricing,retrievedAt:new Date().toISOString()}; },
@@ -45,10 +46,10 @@ function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT)
     async recordProviderIdentifiers(_owner: string, id: string, requestId: string | null, responseId: string | null) { identifiers.push({ requestId, responseId }); return attempts.find(item => item.id === id)!; },
     async recordPartialUsage(_owner: string, id: string, usage: Record<string, unknown>, evidence: Record<string, unknown>) { events.push('partial-usage'); const attempt = attempts.find(item => item.id === id)!; attempt.usage = usage; attempt.evidence = evidence; attempt.state = 'uncertain'; attempt.actual_microusd = null; return attempt; },
     async settle(input: SettlementInput) { events.push('settle'); const attempt = attempts.find(item => item.id === input.attemptId)!; attempt.state = 'settled'; attempt.actual_microusd = input.actualMicrousd; attempt.usage = input.usage; attempt.evidence = input.evidence; return attempt; },
-    async markUncertain(_owner: string, id: string) { events.push('uncertain'); const attempt = attempts.find(item => item.id === id)!; attempt.state = 'uncertain'; return attempt; },
+    async markUncertain(_owner: string, id: string, reason?: string) { events.push('uncertain'); uncertaintyReasons.push(reason ?? ''); const attempt = attempts.find(item => item.id === id)!; attempt.state = 'uncertain'; return attempt; },
     async cancel(_owner: string, id: string) { const attempt = attempts.find(item => item.id === id)!; attempt.state = 'cancelled'; return attempt; },
   } as unknown as ReturnType<typeof createStandaloneLedger>;
-  return { service, attempts, events, identifiers, factory: () => service };
+  return { service, attempts, events, identifiers, uncertaintyReasons, factory: () => service };
 }
 
 test('paid transport fails closed without trusted context and unsupported pricing never sends', async () => {
@@ -111,6 +112,41 @@ test('cancellation aborts the actual transmission and retains dispatched exposur
   await assert.rejects(runWithStandaloneAccounting({ ...context, signal: controller.signal }, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
   assert.equal(observedSignal?.aborted, true);
   assert.equal(fake.attempts[0].state, 'uncertain');
+});
+
+test('activity-specific timeout is enforced at the paid transport boundary and records a distinct memory timeout', async () => {
+  const fake = fakeLedger();
+  fake.service.uncertainExposureAccepted = async () => true;
+  let sends = 0;
+  const send = createAccountingFetch('openai', async (_url, init) => {
+    sends++;
+    const signal = init?.signal;
+    assert.ok(signal);
+    if (signal.aborted) signal.throwIfAborted();
+    return await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  }, fake.factory, {
+    timeoutMs: 10,
+    timeoutCode: 'memory_timeout',
+    timeoutMessage: timeoutMs => `Intermediate memory provider transmission timed out after ${timeoutMs}ms.`,
+    uncertaintyReason: timeoutMs => `Memory-summary provider transmission timed out after ${timeoutMs}ms; reservation remains held.`,
+  });
+  const keepAlive = setTimeout(() => {}, 100);
+  try {
+    await assert.rejects(
+      runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)),
+      error => {
+        assert.equal(standaloneAccountingCause(error)?.code, 'standalone_memory_timeout');
+        return true;
+      },
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
+  assert.equal(sends, 1);
+  assert.equal(fake.attempts[0].state, 'uncertain');
+  assert.match(fake.uncertaintyReasons[0], /Memory-summary provider transmission timed out after 10ms/);
 });
 
 test('standalone child cannot opt out by entering an orchestrator scope', async () => {

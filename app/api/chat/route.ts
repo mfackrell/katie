@@ -2366,6 +2366,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
 
     const imageGenerationRequested = resolvedRequestIntent === "image-generation";
     let streamCancelled = false;
+    let answerStreamFinalized = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
@@ -3910,8 +3911,7 @@ ${chunkWorkflowSummary}`;
             // Each standalone job checkpoints independently; a spending pause
             // remains resumable even when the answer is already saved.
             const persistAccountedMemory = async () => {
-              progress("memory", "Answer delivered; checking conversation memory.");
-              console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
+              console.log("[Chat API] Post-answer memory persistence start", { actorId, chatId, requestId });
               try {
                 const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateRelevantLongTermMemory(actorId, chatId, message));
                 const cleanup = retention.then(
@@ -3939,22 +3939,22 @@ ${chunkWorkflowSummary}`;
                 const summaryResult = memoryResults[1];
                 const degraded = memoryResults.some(result => result.status === "rejected") ||
                   (summaryResult.status === "fulfilled" && summaryResult.value === "blocked");
-                progress("memory", degraded ? "Memory processing needs attention; the saved answer remains available." : "Memory processing completed.");
                 console.log(degraded ? "[Chat API] Memory persistence degraded" : "[Chat API] Memory persistence complete", {
                   actorId, chatId, requestId,
                   intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
                 });
               } catch (error) {
                 if (isStandaloneAccountingError(error)) throw error;
-                progress("memory", "Memory update failed; the saved answer remains available.");
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)
                 });
               }
             };
-            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
+            // The assistant answer is durably saved and final_answer has already
+            // been emitted. End the user-facing stream before memory maintenance.
+            answerStreamFinalized = true;
             if (!streamCancelled) {
               controller.close();
             } else {
@@ -3966,8 +3966,15 @@ ${chunkWorkflowSummary}`;
                 responseLength: assistantText.length
               });
             }
+            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
           } catch (error: unknown) {
+            if (answerStreamFinalized) {
+              console.error("[Chat API] Post-answer workflow settlement error", {
+                requestId, reason: error instanceof Error ? error.message : String(error),
+              });
+              return;
+            }
             if (isStandaloneAccountingError(error)) {
               const cause = standaloneAccountingCause(error) ?? error;
               const code = standaloneAccountingCause(error)?.code ?? "standalone_approval_or_accounting_required";

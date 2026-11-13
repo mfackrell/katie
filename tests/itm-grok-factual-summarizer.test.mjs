@@ -24,7 +24,7 @@ const selected = (messageId = "m0", quote = "Historical detail from turn 0",
 const retained = (keep = []) => reply(JSON.stringify({ keep }));
 
 function harness({
-  history = messageHistory(90), prior = {}, configured = true,
+  history = messageHistory(90), prior = {}, configured = true, fallbackConfigured = false,
   responses = n => n % 2 ? selected() : retained(),
   missingChat = false, commitResult = true,
 } = {}) {
@@ -34,11 +34,25 @@ function harness({
   class Transport {
     constructor(options) {
       constructors.push(options);
+      const provider = options.baseURL?.includes("anthropic") ? "anthropic" : "grok";
       this.chat = { completions: { create: async body => {
         const n = calls.length + 1;
-        calls.push(copy(body));
-        return responses(n, body);
+        calls.push({ ...copy(body), __provider: provider, __transport: "chat" });
+        return responses(n, body, provider);
       } } };
+      this.post = async (path, options) => {
+        assert.equal(path, "/responses");
+        const body = options.body;
+        const n = calls.length + 1;
+        calls.push({ ...copy(body), __provider: provider, __transport: "responses" });
+        const simulated = await responses(n, body, provider);
+        const choice = simulated?.choices?.[0];
+        return {
+          status: choice?.finish_reason === "stop" ? "completed" : "incomplete",
+          incomplete_details: choice?.finish_reason === "stop" ? null : { reason: choice?.finish_reason ?? "missing" },
+          output: [{ type: "message", content: [{ type: "output_text", text: choice?.message?.content ?? "" }] }],
+        };
+      };
     }
   }
   const admin = {
@@ -90,8 +104,8 @@ function harness({
     openai: Transport,
     "@/lib/data/persistence-store": store,
     "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => admin },
-    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch: (provider, activity) => {
-      events.push({ name: "accounting", provider, activity });
+    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch: (provider, activity, policy) => {
+      events.push({ name: "accounting", provider, activity, timeoutCode: policy?.timeoutCode, timeoutMsType: typeof policy?.timeoutMs });
       return async () => { throw Error("Network disallowed in tests"); };
     } },
     "@/lib/standalone-accounting/context": { isStandaloneAccountingError: accountingError },
@@ -100,23 +114,31 @@ function harness({
   };
   runInNewContext(compiled, {
     module, exports: module.exports,
-    process: { env: configured ? { GROK_API_KEY: "test-only-key" } : {} },
+    process: { env: configured ? {
+      GROK_API_KEY: "test-only-key",
+      ...(fallbackConfigured ? { CLAUDE_API_KEY: "test-only-claude-key" } : {}),
+    } : {} },
     console: Object.fromEntries(["warn", "info", "error"].map(level => [level, (...args) => logs.push({ level, args })])),
+    AbortController, setTimeout, clearTimeout, Date,
     require: name => { assert.ok(name in deps, "Unknown dependency " + name); return deps[name]; },
   });
   return { run: () => module.exports.maybeUpdateSummary("chat"),
     calls, writes, events, logs, constructors, memory: () => memory };
 }
 
-test("Grok 4.7 remains the exclusive metered, non-retrying ITM model", async () => {
+test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () => {
   const h = harness();
   assert.equal(await h.run(), "committed");
   assert.deepEqual(h.calls.map(x => x.model), ["grok-4.7", "grok-4.7"]);
-  assert.deepEqual(h.calls.map(x => x.response_format), [{ type: "json_object" }, { type: "json_object" }]);
+  assert.deepEqual(h.calls.map(x => x.__transport), ["responses", "responses"]);
+  assert.deepEqual(h.calls.map(x => x.reasoning), [{ effort: "low" }, { effort: "low" }]);
+  assert.ok(h.calls.every(x => x.text?.format?.type === "json_schema" && x.store === false));
   assert.equal(h.constructors[0].baseURL, "https://api.x.ai/v1");
   assert.equal(h.constructors[0].maxRetries, 0);
-  assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary"));
-  assert.doesNotMatch(source, /CLAUDE_API_KEY|claude-sonnet|api\.anthropic\.com/);
+  assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary" &&
+    x.timeoutCode === "memory_timeout" && x.timeoutMsType === "function"));
+  assert.match(source, /claude-sonnet-5-5/);
+  assert.match(source, /SUMMARY_TIMEOUT_MS = 90_000/);
 });
 
 test("ITM preserves factual narrative, Katie ownership, original quote and timestamp", async () => {
@@ -174,8 +196,8 @@ test("later correction supersedes the obsolete older assertion without inventing
   assert.equal(await h.run(), "committed");
   assert.ok(h.memory().summary.includes(summary));
   assert.doesNotMatch(h.memory().summary, /Katie previously stated she could never/);
-  assert.match(h.calls[1].messages[0].content, /DROP the stale old episode/);
-  assert.match(h.calls[1].messages[1].content, /NEW SOURCE-CITED FACTUAL EPISODES/);
+  assert.match(h.calls[1].input[0].content, /DROP the stale old episode/);
+  assert.match(h.calls[1].input[1].content, /NEW SOURCE-CITED FACTUAL EPISODES/);
 });
 
 test("fabricated evidence, wrong message, duplicates and unsupported structure fail closed", async () => {
@@ -295,7 +317,29 @@ test("accounting denial, ambiguous provider failure and concurrency remain bound
   assert.equal(shared.writes.length, 1);
 });
 
-test("no Grok key means skip with no fallbacks or persisted mutation", async () => {
+test("memory transport timeout defers and the next request uses Anthropic without advancing the cursor", async () => {
+  const timeout = Object.assign(new Error("Intermediate memory provider transmission timed out at the accounting boundary."), {
+    code: "standalone_memory_timeout", terminal: true,
+  });
+  const h = harness({
+    fallbackConfigured: true,
+    responses: (n, body, provider) => {
+      if (provider === "grok") throw timeout;
+      return n % 2 === 0 ? selected() : retained();
+    },
+  });
+  assert.equal(await h.run(), "deferred");
+  assert.equal(h.memory().summarizedThroughMessageId ?? null, null);
+  assert.deepEqual(h.calls.map(x => x.__provider), ["grok"]);
+  assert.equal(await h.run(), "committed");
+  assert.deepEqual(h.calls.map(x => x.__provider), ["grok", "anthropic", "anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId, "m29");
+  assert.ok(h.events.some(x => x.name === "finish_intermediate_memory_batch" &&
+    x.args.p_state === "blocked" && /:grok$/.test(x.args.p_processor_version)));
+  assert.ok(h.events.some(x => x.name === "commit_intermediate_memory_checkpoint"));
+});
+
+test("no configured memory provider means skip with no persisted mutation", async () => {
   const h = harness({ configured: false });
   assert.equal(await h.run(), "skipped");
   assert.equal(h.calls.length, 0);
@@ -315,7 +359,7 @@ test("atomic cursor prevents stale writes and preserves previous memory", async 
 test("model prompts require factual narratives and prohibit interpretive memory", async () => {
   const h = harness();
   assert.equal(await h.run(), "committed");
-  const prompts = h.calls.map(x => x.messages[0].content);
+  const prompts = h.calls.map(x => (x.input ?? x.messages)[0].content);
   assert.match(prompts[0], /FACTUAL EPISODIC SUMMARIES/);
   assert.match(prompts[0], /WHO SAID or DID WHAT IN THE CONVERSATION/);
   assert.match(prompts[0], /Do NOT infer motives/);
