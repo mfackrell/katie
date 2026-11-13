@@ -179,3 +179,46 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'project_org_renew_continue',args:{...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_cutoff:renewal.cutoff,p_prior_cutoff:cutoff,p_authorization:authorizationId}}]);
 
  });
+
+
+test('expired hierarchy API is owner-only, production-release bound and requires an exact immutable proposal',async t=>{
+ const saved={sha:process.env.VERCEL_GIT_COMMIT_SHA,env:process.env.VERCEL_ENV};
+ process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;process.env.VERCEL_ENV='production';
+ t.after(()=>{for(const [key,value] of [['VERCEL_GIT_COMMIT_SHA',saved.sha],['VERCEL_ENV',saved.env]])
+  if(value===undefined)delete process.env[key];else process.env[key]=value;});
+ let owner=false;const calls=[];
+ const load=modules({
+  '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return {projectId,authorizationId:args.p_authorization,existing:false};}},
+  '@/lib/data/persistence-store':{getMessages:async()=>[]}
+ });
+ const submit=async payload=>load('@/app/api/projects/organization/route').POST(
+  new Request('https://synthetic.test/api/projects/organization',{method:'POST',body:JSON.stringify(payload)}));
+ const payload={trialAction:'recover_hierarchy',projectId,releaseSha,decisionId,
+  priorCutoff:'2026-11-13T16:30:00Z',directorCutoff:'2026-11-13T16:59:32.521Z',
+  cutoff:'2026-11-14T00:00:00Z',authorizationId:'aaaaaaaa-1111-4111-8111-111111111111',
+  stateHash:'a'.repeat(64)};
+ assert.equal((await submit(payload)).status,403);assert.equal(calls.length,0);
+ owner=true;
+ for(const corrupted of [
+   {...payload,releaseSha:'f'.repeat(40)},
+   {...payload,stateHash:'not-a-hash'},
+   {...payload,authorizationId:'forged'},
+   {...payload,ownerId:'attacker'},
+   {...payload,directorCutoff:undefined},
+ ]){
+  const response=await submit(corrupted);
+  assert.ok([400,409].includes(response.status),String(response.status));
+ }
+ process.env.VERCEL_ENV='preview';assert.equal((await submit(payload)).status,409);
+ process.env.VERCEL_ENV='production';
+ assert.equal(calls.length,0);
+ const valid=await submit(payload);assert.equal(valid.status,200);
+ assert.equal(calls.length,1);
+ assert.deepEqual(calls[0],{name:'project_org_recover_hierarchy',args:{
+  ...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),
+  p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_prior_cutoff:payload.priorCutoff,
+  p_director_cutoff:payload.directorCutoff,p_cutoff:payload.cutoff,
+  p_authorization:payload.authorizationId,p_state_hash:payload.stateHash
+ }});
+});
