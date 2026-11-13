@@ -344,8 +344,17 @@ export async function assertProjectScopeRatification(db){
       await db.query('release savepoint ratification_replay_rejection');
     }
 
+    // After scope ratification, a deeper manager may still be marked pending.
+    // Before the first scoped package, select the Project Director first to
+    // authorize direct reports; never spend a subordinate management inference
+    // while the root grant has not yet propagated to delivery.
+    await db.query('reset role');
+    await db.query('update project_organization_nodes set decision_needed=true where id in ($1,$2)',[rootNode.id,game.id]);
+    await db.query('set role service_role');
+    assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
     const resumed=await session();
-    assert.equal(resumed.node,rootNode.id);assert.notEqual(resumed.mission,blocked.mid);
+    assert.equal(resumed.node,rootNode.id,'root scope delegation must precede deeper pending management before the first coding package');
+    assert.notEqual(resumed.mission,blocked.mid);
     const resumedMission=(await db.query('select * from agent_missions where id=$1',[resumed.mission])).rows[0];
     assert.equal(resumedMission.project_kind,'management');
     assert.equal(resumedMission.project_evidence.providerContinuationWindow,windowId);
