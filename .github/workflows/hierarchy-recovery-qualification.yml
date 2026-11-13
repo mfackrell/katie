@@ -1,0 +1,45 @@
+name: hierarchy-recovery-qualification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/hierarchy-recovery-qualification.yml"
+      - "app/api/projects/**"
+      - "components/director-recovery-control.tsx"
+      - "supabase/migrations/*hierarchical_authority_recovery.sql"
+      - "tests/director-recovery-control.test.mjs"
+      - "tests/helpers/assert-project-hierarchy-recovery.mjs"
+      - "tests/helpers/assert-project-scope-ratification.mjs"
+      - "tests/helpers/assert-project-organization-compatibility.mjs"
+      - "tests/project-organization-integration.test.mjs"
+      - "tests/organizational-contract-amendments-postgres.test.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  native-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          echo "KATIE_TEST_PG_BIN=/usr/lib/postgresql/16/bin" >> "$GITHUB_ENV"
+      - name: Owner endpoint and real Chromium authentication controls
+        run: node --test tests/director-recovery-control.test.mjs
+      - name: Native PostgreSQL ratification plus expired-hierarchy recovery
+        run: node --test tests/project-organization-integration.test.mjs tests/organizational-contract-amendments-postgres.test.mjs
