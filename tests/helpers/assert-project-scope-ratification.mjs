@@ -69,20 +69,22 @@ export async function assertProjectScopeRatification(db){
   assert.match(prepared.organizationHash,/^[a-f0-9]{64}$/);
   assert.deepEqual(prepared.specification.allowedPaths,scopePaths);
   assert.equal(prepared.baselineSha,base);
-  assert.equal((await db.query("select has_function_privilege('anon','project_org_ratify_scope(uuid,uuid,text)','EXECUTE') ok")).rows[0].ok,false);
-  assert.equal((await db.query("select has_function_privilege('authenticated','project_org_ratify_scope(uuid,uuid,text)','EXECUTE') ok")).rows[0].ok,false);
-  assert.equal((await db.query("select has_function_privilege('service_role','project_org_ratify_scope(uuid,uuid,text)','EXECUTE') ok")).rows[0].ok,true);
+  assert.equal((await db.query("select has_function_privilege('anon','project_org_ratify_scope(uuid,uuid,uuid,text)','EXECUTE') ok")).rows[0].ok,false);
+  assert.equal((await db.query("select has_function_privilege('authenticated','project_org_ratify_scope(uuid,uuid,uuid,text)','EXECUTE') ok")).rows[0].ok,false);
+  assert.equal((await db.query("select has_function_privilege('service_role','project_org_ratify_scope(uuid,uuid,uuid,text)','EXECUTE') ok")).rows[0].ok,true);
   await assert.rejects(db.query('insert into project_scope_ratification_approvals(proposal_id,project_id,owner_id,scope_hash,transaction_id) values($1,$2,$3,$4,txid_current())',
     [prepared.proposalId,project,owner,prepared.scopeHash]),/permission denied/);
-  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3)',[randomUUID(),prepared.proposalId,prepared.scopeHash]),/authenticated owner/);
-  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3)',[owner,prepared.proposalId,'f'.repeat(64)]),/authenticated owner/);
+  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,randomUUID(),prepared.proposalId,prepared.scopeHash]),/no rows|strict|query returned no rows/i,
+    'proposal cannot authorize a different project context');
+  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[randomUUID(),project,prepared.proposalId,prepared.scopeHash]),/authenticated owner/);
+  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,'f'.repeat(64)]),/authenticated owner/);
 
   // A provider-specific invalid browser route is permitted to exist as an inert
   // proposal but fails inside activation. The prior receipt/provider state must
   // roll back with the failed project update.
   const wrongRoute={...spec,milestones:[{...spec.milestones[0],contract:{...contract,path:'/wrong'}}],finalContract:{...contract,path:'/wrong'}};
   const wrong=(await db.query('select project_org_prepare_scope_ratification($1,$2,$3) q',[project,wrongRoute,base])).rows[0].q;
-  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3)',[owner,wrong.proposalId,wrong.scopeHash]),/isolated tic-tac-toe route/);
+  await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,wrong.proposalId,wrong.scopeHash]),/isolated tic-tac-toe route/);
   assert.equal((await db.query('select approved_scope from project_provider_execution where project_id=$1',[project])).rows[0].approved_scope,null);
   assert.equal((await db.query('select count(*)::int n from project_scope_ratification_approvals where project_id=$1',[project])).rows[0].n,0);
 
@@ -98,12 +100,12 @@ export async function assertProjectScopeRatification(db){
     await db.query('reset role');
     await db.query('update project_organization_nodes set decision_needed=not decision_needed where id=$1',[rootNode.id]);
     await db.query('set role service_role');
-    await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3)',[owner,prepared.proposalId,prepared.scopeHash]),/organization changed/);
+    await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,prepared.scopeHash]),/organization changed/);
   }finally{await db.query('rollback');await db.query('set role service_role');}
 
   await db.query('begin');
   try{
-    const approved=(await db.query('select project_org_ratify_scope($1,$2,$3) p',[owner,prepared.proposalId,prepared.scopeHash])).rows[0].p;
+    const approved=(await db.query('select project_org_ratify_scope($1,$2,$3,$4) p',[owner,project,prepared.proposalId,prepared.scopeHash])).rows[0].p;
     assert.equal(approved.status,'running');assert.equal(approved.phase,'development');
     assert.equal(approved.approval_hash,prepared.scopeHash);assert.equal(approved.approved_hash,prepared.scopeHash);
     assert.equal(approved.baseline_sha,base);assert.deepEqual(approved.spec.allowedPaths,scopePaths);
@@ -111,7 +113,7 @@ export async function assertProjectScopeRatification(db){
     assert.equal((await db.query('select approved_scope from project_provider_execution where project_id=$1',[project])).rows[0].approved_scope,prepared.scopeHash);
     const grants=(await db.query('select g.*,n.kind from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1 and g.scope_hash=$2',[project,prepared.scopeHash])).rows;
     assert.equal(grants.length,1);assert.equal(grants[0].kind,'project_director');assert.equal(grants[0].parent_id,null);assert.deepEqual(grants[0].paths,scopePaths);
-    await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3)',[owner,prepared.proposalId,prepared.scopeHash]),/stale or already consumed/);
+    await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,prepared.scopeHash]),/stale or already consumed/);
 
     // Existing management authority remains mandatory after root ratification.
     const rootGrant=await activate(rootNode.id);

@@ -166,7 +166,7 @@ export async function PUT(request: NextRequest) {
         if (!ownerId || !/^[a-f0-9-]{36}$/i.test(ownerId))
             return NextResponse.json({ error: 'Owner scope identity unavailable' }, { status: 503 });
         const updated = await projectRpc<Project>('project_org_ratify_scope', {
-            p_owner: ownerId, p_proposal: input.proposalId, p_hash: input.approvalHash,
+            p_owner: ownerId, p_project: p.id, p_proposal: input.proposalId, p_hash: input.approvalHash,
         });
         return NextResponse.json({ status: updated.status, approvedScopeHash: updated.approved_hash, messages: await getMessages(input.chatId) }, {
             headers: { 'Cache-Control': 'no-store' },

@@ -182,7 +182,7 @@ end $$;
 -- the existing project_org_scope_approved trigger create the root grant while
 -- preserving the already accepted organization instead of resetting it.
 create function public.project_org_ratify_scope(
-  p_owner uuid,p_proposal uuid,p_hash text
+  p_owner uuid,p_project uuid,p_proposal uuid,p_hash text
 ) returns jsonb
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare
@@ -190,8 +190,8 @@ declare
   objective_hash text; current_hash text; scope_data jsonb; root_id uuid;
 begin
   perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
-  select * into strict q from project_scope_ratification_proposals where id=p_proposal for update;
-  select * into strict p from work_projects where id=q.project_id for update;
+  select * into strict q from project_scope_ratification_proposals where id=p_proposal and project_id=p_project for update;
+  select * into strict p from work_projects where id=p_project for update;
   if p_owner is null or not standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
      or p_hash is null or p_hash is distinct from q.scope_hash
   then raise exception 'Exact authenticated owner scope ratification required';end if;
@@ -289,9 +289,9 @@ revoke all on function public.project_scope_ratification_immutable(),
   public.project_org_scope_ratification_state(uuid),
   public.project_org_scope_path_supported(uuid,text),
   public.project_org_prepare_scope_ratification(uuid,jsonb,text),
-  public.project_org_ratify_scope(uuid,uuid,text)
+  public.project_org_ratify_scope(uuid,uuid,uuid,text)
 from public,anon,authenticated,service_role;
 grant execute on function public.project_org_prepare_scope_ratification(uuid,jsonb,text),
-  public.project_org_ratify_scope(uuid,uuid,text) to service_role;
+  public.project_org_ratify_scope(uuid,uuid,uuid,text) to service_role;
 
 commit;
