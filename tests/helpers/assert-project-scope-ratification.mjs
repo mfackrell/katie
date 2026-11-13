@@ -52,7 +52,29 @@ export async function assertProjectScopeRatification(db){
   ]);
   const rootNode=(await db.query("select * from project_organization_nodes where project_id=$1 and kind='project_director' and parent_id is null",[project])).rows[0];
   const game=(await db.query("select * from project_organization_nodes where project_id=$1 and name='Game Delivery'",[project])).rows[0];
-  assert.equal((await db.query('select project_org_plan_ready($1) ok',[rootNode.id])).rows[0].ok,true);
+  const readiness=(await db.query(`
+    select
+      pl.objective_hash=(select encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex') from work_projects p where p.id=$2) objective_bound,
+      pl.organizations,
+      exists(
+        select 1 from project_organization_decisions d
+        join mission_assignments j on j.id=d.assignment_id
+        join agent_missions m on m.id=j.mission_id
+        where d.project_id=$2 and d.node_id=$1 and j.status='completed' and m.status='completed'
+          and exists(select 1 from jsonb_array_elements(d.decision) c where c->>'action'='ready')
+      ) ready_committed,
+      (select array_agg(distinct child.area order by child.area)
+       from project_organization_nodes child
+       where child.parent_id=$1 and child.kind='manager'
+         and child.area=any(array['game_delivery','independent_qa'])) required_direct_reports
+    from project_organization_plans pl where pl.node_id=$1
+  `,[rootNode.id,project])).rows[0];
+  assert.ok(readiness,'Director management plan must be durably committed');
+  assert.equal(readiness.objective_bound,true,'Director plan must remain bound to the exact project objective');
+  assert.deepEqual([...readiness.organizations].sort(),['game_delivery','independent_qa']);
+  assert.equal(readiness.ready_committed,true,'Director ready decision must be committed by a completed management mission');
+  assert.deepEqual(readiness.required_direct_reports,['game_delivery','independent_qa'],
+    'every required organization must exist as a direct manager report');
 
   const deliverySetup=await activate(game.id);
   await decide(deliverySetup,[{action:'appoint',kind:'worker',name:'Repository Scope Analyst',area:'game_delivery',
