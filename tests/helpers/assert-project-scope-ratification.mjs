@@ -44,8 +44,10 @@ export async function assertProjectScopeRatification(db){
     {action:'plan',purpose:'Deliver the owner tic-tac-toe outcome without expanding scope',direction,
       outcomes:[{criterion:'Playable game is independently accepted',verification:'Protected same-commit Preview'}],
       milestones:[{objective:'One bounded coding milestone'}],organizations:['game_delivery','independent_qa']},
+    // Mirror the production Game Delivery director: implementation is withheld
+    // until the owner-ratified root grant and a recorded parent amendment.
     {action:'appoint',kind:'manager',name:'Game Delivery',area:'game_delivery',objective:'Manage the scoped game implementation',
-      acceptance:['Only approved game scope is implemented'],tokens:60000,deadline,paths:[],tools:['manage','analysis','development','repository_review']},
+      acceptance:['Only approved game scope is implemented'],tokens:60000,deadline,paths:[],tools:['manage','analysis','repository_review']},
     {action:'appoint',kind:'manager',name:'Independent QA',area:'independent_qa',objective:'Verify the scoped game independently',
       acceptance:['Same-commit Preview acceptance'],tokens:40000,deadline,paths:[],tools:['manage','analysis','repository_review']},
     {action:'ready'}
