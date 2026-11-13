@@ -28,7 +28,7 @@ export async function assertProjectScopeRatification(db){
     const job=(await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where mission_id=$1 and status='queued' returning id",[scheduled.missionId,lease])).rows[0];
     await db.query('set role service_role');
     assert.ok(job?.id);
-    return {job:job.id,lease,node:scheduled.nodeId};
+    return {job:job.id,lease,node:scheduled.nodeId,mission:scheduled.missionId};
   };
   const decide=(s,commands)=>db.query('select project_org_decide($1,$2,$3)',[s.job,s.lease,JSON.stringify(commands)]);
   const activate=async nodeId=>{
@@ -46,13 +46,68 @@ export async function assertProjectScopeRatification(db){
       milestones:[{objective:'One bounded coding milestone'}],organizations:['game_delivery','independent_qa']},
     {action:'appoint',kind:'manager',name:'Game Delivery',area:'game_delivery',objective:'Manage the scoped game implementation',
       acceptance:['Only approved game scope is implemented'],tokens:60000,deadline,paths:[],tools:['manage','analysis','development','repository_review']},
-    {action:'appoint',kind:'manager',name:'Independent QA',area:'quality_assurance',objective:'Verify the scoped game independently',
+    {action:'appoint',kind:'manager',name:'Independent QA',area:'independent_qa',objective:'Verify the scoped game independently',
       acceptance:['Same-commit Preview acceptance'],tokens:40000,deadline,paths:[],tools:['manage','analysis','repository_review']},
     {action:'ready'}
   ]);
+  const rootNode=(await db.query("select * from project_organization_nodes where project_id=$1 and kind='project_director' and parent_id is null",[project])).rows[0];
+  const game=(await db.query("select * from project_organization_nodes where project_id=$1 and name='Game Delivery'",[project])).rows[0];
+  assert.equal((await db.query('select project_org_plan_ready($1) ok',[rootNode.id])).rows[0].ok,true);
+
+  const deliverySetup=await activate(game.id);
+  await decide(deliverySetup,[{action:'appoint',kind:'worker',name:'Repository Scope Analyst',area:'game_delivery',
+    objective:'Inventory the already approved milestone paths without coding',
+    acceptance:['Observed repository inventory is reported without implementation'],tokens:1000,deadline,paths:[],
+    tools:['analysis','repository_review']},{action:'ready'}]);
+  const existingWorker=(await db.query("select * from project_organization_nodes where parent_id=$1 and name='Repository Scope Analyst'",[game.id])).rows[0];
+
+  const rootDecision=(await db.query('select * from project_organization_decisions where project_id=$1 and node_id=$2 order by created_at desc,id desc limit 1',[project,rootNode.id])).rows[0];
+  const windowId=randomUUID(),release='c'.repeat(40),priorCutoff=new Date(authority.deadline.getTime()-60000);
   await db.query('reset role');
-  await db.query("update work_projects set status='blocked',phase='research',active_mission_id=null,lease=null,lease_until=null where id=$1",[project]);
+  await db.query("insert into project_execution_windows(id,project_id,owner_id,release_sha,decision_id,prior_cutoff,cutoff) values($1,$2,$3,$4,$5,$6,$7)",
+    [windowId,project,owner,release,rootDecision.id,priorCutoff,authority.deadline]);
+  await db.query("update project_provider_execution set continued_at=clock_timestamp(),continuation_decision_id=$2,continuation_release_sha=$3,window_id=$4 where project_id=$1",
+    [project,rootDecision.id,release,windowId]);
+  await db.query("insert into project_organization_exceptions(project_id,origin_id,owner_id,reason,detail) values($1,$2,$3,'authority','Synthetic pre-scope exception retained across ratification')",
+    [project,existingWorker.id,game.id]);
+
+  const executionAgent=(await db.query('select team[1] agent from work_projects where id=$1',[project])).rows[0].agent;
+  const installBlockedManagement=async({providerEvidence=false,active=false}={})=>{
+    const mid=randomUUID(),attempt=randomUUID();
+    await db.query('select create_mission($1,$2,$3,20,null)',[mid,rootNode.objective,[executionAgent]]);
+    await db.query("update agent_missions set project_id=$2,project_kind='management',project_evidence=$3,team=jsonb_build_array((select to_jsonb(a) from managed_agents a where a.id=$4)),token_allowance=60000,deadline=$5,status='blocked',detail='Mission state operation failed: Scope grant exceeds approved parent',calls=$6 where id=$1",
+      [mid,project,{organizationNodeId:rootNode.id,previousMissionId:null,providerContinuationDecision:rootDecision.id,providerContinuationRelease:release,providerContinuationWindow:windowId},rootNode.agent_id,authority.deadline,providerEvidence?1:0]);
+    const job=(await db.query("update mission_assignments set role='work',agent_id=$2,payload=$3,instruction='Make bounded management decisions. Delegate all technical execution.',status='failed',attempts=1,result=$4,detail='Scope grant exceeds approved parent',lease=null,lease_until=null where mission_id=$1 returning id",
+      [mid,rootNode.agent_id,{organizationNodeId:rootNode.id},{detail:'Scope grant exceeds approved parent',diagnostic:{stage:'work',acceptedIssue:false}}])).rows[0];
+    await db.query("insert into project_organization_assignments(assignment_id,node_id,contract_hash) values($1,$2,encode(sha256(convert_to(project_canonical($3::jsonb),'UTF8')),'hex'))",
+      [job.id,rootNode.id,JSON.stringify(rootNode.acceptance)]);
+    if(providerEvidence){
+      await db.query("insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash,started_at,provider_receipt,resolved_at) values($1,$2,$3,$4,$5,$6,'model-list',$7,clock_timestamp()-interval '2 seconds','model-catalog',clock_timestamp()-interval '1 second')",
+        [randomUUID(),project,mid,job.id,rootNode.agent_id,attempt,'a'.repeat(64)]);
+      await db.query("insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash,started_at,provider_receipt,resolved_at) values($1,$2,$3,$4,$5,$6,'inference',$7,clock_timestamp()-interval '1 second','synthetic-provider-receipt',clock_timestamp())",
+        [randomUUID(),project,mid,job.id,rootNode.agent_id,attempt,'b'.repeat(64)]);
+    }
+    if(active)await db.query("update work_projects set active_mission_id=$2 where id=$1",[project,mid]);
+    return {mid,job:job.id};
+  };
+  await installBlockedManagement();
+  const blocked=await installBlockedManagement({providerEvidence:true,active:true});
+  await db.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,rootNode.id]);
+  await db.query("update work_projects set status='blocked',phase='research',lease=null,lease_until=null where id=$1",[project]);
   await db.query('set role service_role');
+  assert.equal((await db.query('select project_provider_continued($1) ok',[project])).rows[0].ok,true);
+  assert.equal((await db.query('select project_provider_request_pending($1) ok',[project])).rows[0].ok,false);
+
+  await db.query('begin');
+  try{
+    const lease=randomUUID();
+    await db.query('reset role');
+    await db.query("update work_projects set status='running',lease=$2,lease_until=clock_timestamp()+interval '5 minutes' where id=$1",[project,lease]);
+    await db.query('set role service_role');
+    const retained=(await db.query('select project_org_schedule($1,$2) s',[project,lease])).rows[0].s;
+    assert.match(retained.blocked,/cannot achieve its objective within bounded retry authority/);
+    assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,blocked.mid);
+  }finally{await db.query('rollback');await db.query('set role service_role');}
 
   const contract={path:'/milestone-3-tic-tac-toe',scenarios:[{name:'Initial state',steps:[{action:'expectText',selector:'#status',value:"X's turn"}]}]};
   const spec={name:'Recovered scoped game',summary:'Exact accepted organization game scope',requirements:['Implement the owner-approved tic-tac-toe game'],
@@ -65,6 +120,8 @@ export async function assertProjectScopeRatification(db){
   const replayed=(await db.query('select project_org_prepare_scope_ratification($1,$2,$3) q',[project,spec,base])).rows[0].q;
   assert.equal(replayed.proposalId,prepared.proposalId,'identical inert proposal preparation is idempotent');
   assert.equal(replayed.scopeHash,prepared.scopeHash);
+  assert.equal(prepared.activeMissionId,blocked.mid);
+  assert.match(prepared.executionStateHash,/^[a-f0-9]{64}$/);
   assert.match(prepared.scopeHash,/^[a-f0-9]{64}$/);
   assert.match(prepared.organizationHash,/^[a-f0-9]{64}$/);
   assert.deepEqual(prepared.specification.allowedPaths,scopePaths);
@@ -90,11 +147,16 @@ export async function assertProjectScopeRatification(db){
 
   const snapshot=async()=>({
     nodes:(await db.query('select jsonb_agg(to_jsonb(n) order by n.id) v from project_organization_nodes n where project_id=$1',[project])).rows[0].v,
-    decisions:(await db.query('select jsonb_agg(to_jsonb(d) order by d.created_at,d.id) v from project_organization_decisions d where project_id=$1',[project])).rows[0].v,
+    decisions:(await db.query('select jsonb_agg(to_jsonb(d) order by d.created_at,d.id) v from project_organization_decisions d where d.project_id=$1',[project])).rows[0].v,
     plans:(await db.query('select jsonb_agg(to_jsonb(pl) order by pl.node_id) v from project_organization_plans pl join project_organization_nodes n on n.id=pl.node_id where n.project_id=$1',[project])).rows[0].v,
+    exceptions:(await db.query('select jsonb_agg(to_jsonb(e) order by e.created_at,e.id) v from project_organization_exceptions e where e.project_id=$1',[project])).rows[0].v,
+    mission:(await db.query('select to_jsonb(m) v from agent_missions m where id=$1',[blocked.mid])).rows[0].v,
+    assignments:(await db.query('select jsonb_agg(to_jsonb(j) order by j.id) v from mission_assignments j where j.mission_id=$1',[blocked.mid])).rows[0].v,
+    bindings:(await db.query('select jsonb_agg(to_jsonb(b) order by b.assignment_id) v from project_organization_assignments b join mission_assignments j on j.id=b.assignment_id where j.mission_id=$1',[blocked.mid])).rows[0].v,
+    requests:(await db.query('select jsonb_agg(to_jsonb(r) order by r.started_at,r.id) v from project_provider_requests r where r.mission_id=$1',[blocked.mid])).rows[0].v,
+    dispatches:(await db.query("select coalesce(jsonb_agg(to_jsonb(d) order by d.task_id,d.run_id),'[]'::jsonb) v from project_provider_dispatches d join mission_assignments j on j.id=d.task_id where j.mission_id=$1",[blocked.mid])).rows[0].v,
   });
   const before=await snapshot();
-  const rootNode=(await db.query("select id from project_organization_nodes where project_id=$1 and kind='project_director' and parent_id is null",[project])).rows[0];
   await db.query('begin');
   try{
     await db.query('reset role');
@@ -105,20 +167,53 @@ export async function assertProjectScopeRatification(db){
 
   await db.query('begin');
   try{
+    await db.query('reset role');
+    await db.query('update mission_assignments set attempts=attempts+1 where id=$1',[blocked.job]);
+    await db.query('set role service_role');
+    await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,prepared.scopeHash]),/execution state changed/);
+  }finally{await db.query('rollback');await db.query('set role service_role');}
+
+  await db.query('begin');
+  try{
     const approved=(await db.query('select project_org_ratify_scope($1,$2,$3,$4) p',[owner,project,prepared.proposalId,prepared.scopeHash])).rows[0].p;
     assert.equal(approved.status,'running');assert.equal(approved.phase,'development');
     assert.equal(approved.approval_hash,prepared.scopeHash);assert.equal(approved.approved_hash,prepared.scopeHash);
     assert.equal(approved.baseline_sha,base);assert.deepEqual(approved.spec.allowedPaths,scopePaths);
-    assert.deepEqual(await snapshot(),before,'ratification must preserve node state, evidence, decisions and pending decisions byte-for-byte');
+    assert.equal(approved.active_mission_id,null);
+    assert.deepEqual(await snapshot(),before,'ratification preserves organization, exceptions, mission, attempts and provider evidence byte-for-byte');
+    const approval=(await db.query('select * from project_scope_ratification_approvals where project_id=$1',[project])).rows[0];
+    assert.equal(approval.prior_active_mission_id,blocked.mid);assert.equal(approval.execution_state_hash,prepared.executionStateHash);
+    const audit=(await db.query("select data from project_events where project_id=$1 and event='scope_ratification_active_mission_reconciled'",[project])).rows;
+    assert.equal(audit.length,1);assert.equal(audit[0].data.missionId,blocked.mid);
+    assert.equal(audit[0].data.disposition,'pointer_cleared_terminal_management_state');
     assert.equal((await db.query('select approved_scope from project_provider_execution where project_id=$1',[project])).rows[0].approved_scope,prepared.scopeHash);
     const grants=(await db.query('select g.*,n.kind from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1 and g.scope_hash=$2',[project,prepared.scopeHash])).rows;
     assert.equal(grants.length,1);assert.equal(grants[0].kind,'project_director');assert.equal(grants[0].parent_id,null);assert.deepEqual(grants[0].paths,scopePaths);
     await assert.rejects(db.query('select project_org_ratify_scope($1,$2,$3,$4)',[owner,project,prepared.proposalId,prepared.scopeHash]),/stale or already consumed/);
 
-    // Existing management authority remains mandatory after root ratification.
+    const resumed=await session();
+    assert.equal(resumed.node,rootNode.id);assert.notEqual(resumed.mission,blocked.mid);
+    const resumedMission=(await db.query('select * from agent_missions where id=$1',[resumed.mission])).rows[0];
+    assert.equal(resumedMission.project_kind,'management');
+    assert.equal(resumedMission.project_evidence.providerContinuationWindow,windowId);
+    assert.equal(resumedMission.project_evidence.providerContinuationRelease,release);
+    assert.equal((await db.query('select status from agent_missions where id=$1',[blocked.mid])).rows[0].status,'blocked');
+    const blockedJob=(await db.query('select status,attempts from mission_assignments where id=$1',[blocked.job])).rows[0];
+    assert.equal(blockedJob.status,'failed');assert.equal(blockedJob.attempts,1);
+    assert.equal((await db.query('select count(*)::int n from project_provider_requests where project_id=$1',[project])).rows[0].n,2);
+    assert.equal((await db.query('select count(*)::int n from project_provider_dispatches')).rows[0].n,0);
+    await decide(resumed,[{action:'ready'}]);
+
     const rootGrant=await activate(rootNode.id);
-    const game=(await db.query("select id from project_organization_nodes where project_id=$1 and name='Game Delivery'",[project])).rows[0];
-    await decide(rootGrant,[{action:'grant_scope',nodeId:game.id,paths:scopePaths},{action:'ready'}]);
+    const gameNow=(await db.query('select * from project_organization_nodes where id=$1',[game.id])).rows[0];
+    await decide(rootGrant,[
+      {action:'amend_delegation',nodeId:game.id,expectedTools:gameNow.tools,tools:['manage','analysis','development','repository_review'],
+       expectedDeadline:new Date(gameNow.deadline).toISOString(),
+       reason:'Owner-ratified scope now permits the existing Game Delivery director to delegate bounded implementation.'},
+      {action:'grant_scope',nodeId:game.id,paths:scopePaths},{action:'ready'}
+    ]);
+    assert.equal((await db.query('select tools from project_organization_nodes where id=$1',[game.id])).rows[0].tools.includes('development'),true);
+    assert.equal((await db.query('select count(*)::int n from project_organization_contract_changes where node_id=$1 and decision_id is not null',[game.id])).rows[0].n,1);
     assert.equal((await db.query('select count(*)::int n from project_organization_scope_grants where node_id=$1 and scope_hash=$2',[game.id,prepared.scopeHash])).rows[0].n,1);
 
     const manager=await activate(game.id);
@@ -126,10 +221,12 @@ export async function assertProjectScopeRatification(db){
       acceptance:['Approved browser contract passes'],tokens:1000,deadline,paths:[],tools:['analysis','development']},{action:'ready'}]);
     const coder=(await db.query("select id from project_organization_nodes where parent_id=$1 and name='Coder'",[game.id])).rows[0];
     assert.ok(coder?.id);
+    assert.ok((await db.query('select id from project_organization_nodes where id=$1',[existingWorker.id])).rows[0]);
     const delegator=await activate(game.id);
     await decide(delegator,[{action:'grant_scope',nodeId:coder.id,paths:scopePaths},{action:'ready'}]);
     assert.equal((await db.query('select count(*)::int n from project_organization_scope_grants where node_id=$1 and scope_hash=$2',[coder.id,prepared.scopeHash])).rows[0].n,1,
       'coding worker receives scope only through existing manager delegation');
+    assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
   }finally{await db.query('rollback');await db.query('set role service_role');}
   console.log('PROJECT_SCOPE_RATIFICATION_POSTGRES_PASS');
 }
