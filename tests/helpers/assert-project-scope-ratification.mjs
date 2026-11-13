@@ -236,6 +236,14 @@ export async function assertProjectScopeRatification(db){
   const base='b'.repeat(40);
   const badSpec={...spec,allowedPaths:['app/unapproved-scope/']};
   await assert.rejects(db.query('select project_org_prepare_scope_ratification($1,$2,$3)',[project,badSpec,base]),/exceeds accepted organization evidence/);
+  // Prefixes of previously accepted paths are not themselves accepted paths:
+  // permitting one would broaden the future root grant beyond approved scope.
+  const broadenedPrefix={...spec,allowedPaths:['app/milestone-3-tic-tac']};
+  await assert.rejects(
+    db.query('select project_org_prepare_scope_ratification($1,$2,$3)',[project,broadenedPrefix,base]),
+    /exceeds accepted organization evidence/,
+    'a substring of an approved path must not grant authority to its parent prefix'
+  );
 
   const prepared=(await db.query('select project_org_prepare_scope_ratification($1,$2,$3) q',[project,spec,base])).rows[0].q;
   const replayed=(await db.query('select project_org_prepare_scope_ratification($1,$2,$3) q',[project,spec,base])).rows[0].q;
