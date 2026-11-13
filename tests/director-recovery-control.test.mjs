@@ -215,7 +215,7 @@ test('expired hierarchy API is owner-only, production-release bound and requires
  assert.equal(calls.length,0);
  const valid=await submit(payload);assert.equal(valid.status,200);
  assert.equal(calls.length,1);
- assert.deepEqual(calls[0],{name:'project_org_recover_hierarchy',args:{
+ assert.deepEqual(JSON.parse(JSON.stringify(calls[0])),{name:'project_org_recover_hierarchy',args:{
   ...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),
   p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_prior_cutoff:payload.priorCutoff,
   p_director_cutoff:payload.directorCutoff,p_cutoff:payload.cutoff,
