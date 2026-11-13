@@ -93,27 +93,58 @@ export async function assertProjectScopeRatification(db){
   await db.query("insert into project_organization_exceptions(project_id,origin_id,owner_id,reason,detail) values($1,$2,$3,'authority','Synthetic pre-scope exception retained across ratification')",
     [project,existingWorker.id,game.id]);
 
-  const executionAgent=(await db.query('select team[1] agent from work_projects where id=$1',[project])).rows[0].agent;
-  const installBlockedManagement=async({providerEvidence=false,active=false}={})=>{
-    const mid=randomUUID(),attempt=randomUUID();
-    await db.query('select create_mission($1,$2,$3,20,null)',[mid,rootNode.objective,[executionAgent]]);
-    await db.query("update agent_missions set project_id=$2,project_kind='management',project_evidence=$3,team=jsonb_build_array((select to_jsonb(a) from managed_agents a where a.id=$4)),token_allowance=60000,deadline=$5,status='blocked',detail='Mission state operation failed: Scope grant exceeds approved parent',calls=$6 where id=$1",
-      [mid,project,{organizationNodeId:rootNode.id,previousMissionId:null,providerContinuationDecision:rootDecision.id,providerContinuationRelease:release,providerContinuationWindow:windowId},rootNode.agent_id,authority.deadline,providerEvidence?1:0]);
-    const job=(await db.query("update mission_assignments set role='work',agent_id=$2,payload=$3,instruction='Make bounded management decisions. Delegate all technical execution.',status='failed',attempts=1,result=$4,detail='Scope grant exceeds approved parent',lease=null,lease_until=null where mission_id=$1 returning id",
-      [mid,rootNode.agent_id,{organizationNodeId:rootNode.id},{detail:'Scope grant exceeds approved parent',diagnostic:{stage:'work',acceptedIssue:false}}])).rows[0];
-    await db.query("insert into project_organization_assignments(assignment_id,node_id,contract_hash) values($1,$2,encode(sha256(convert_to(project_canonical($3::jsonb),'UTF8')),'hex'))",
-      [job.id,rootNode.id,JSON.stringify(rootNode.acceptance)]);
+  // Production-shaped history MUST be admitted by the existing management
+  // scheduler. A direct create_mission() for a registered leader is correctly
+  // rejected by project_org_execution_guard() before its principal is bound.
+  const installBlockedManagement=async({providerEvidence=false}={})=>{
+    const scheduled=await activate(rootNode.id);
+    const {mission:mid,job,lease:attempt}=scheduled;
+    // Confirm authority came from the scheduler before simulating the terminal
+    // failure; do not create a technical assignment and relabel it afterwards.
+    const bound=(await db.query(
+      "select m.project_id,m.project_kind,m.project_evidence->>'organizationNodeId' principal_id,m.project_evidence->>'providerContinuationWindow' window_id,p.active_mission_id,j.agent_id,j.role,j.payload->>'organizationNodeId' assignment_node,j.status,j.lease,b.node_id from agent_missions m join mission_assignments j on j.mission_id=m.id join work_projects p on p.id=m.project_id join project_organization_assignments b on b.assignment_id=j.id where m.id=$1 and j.id=$2",
+      [mid,job])).rows[0];
+    assert.ok(bound,'management mission and principal binding must be durably admitted');
+    assert.equal(bound.project_id,project);
+    assert.equal(bound.project_kind,'management');
+    assert.equal(bound.principal_id,rootNode.id);
+    assert.equal(bound.window_id,windowId);
+    assert.equal(bound.active_mission_id,mid);
+    assert.equal(bound.agent_id,rootNode.agent_id);
+    assert.equal(bound.role,'work');
+    assert.equal(bound.assignment_node,rootNode.id);
+    assert.equal(bound.node_id,rootNode.id);
+    assert.equal(bound.status,'running');
+    assert.equal(bound.lease,attempt);
+
+    // Simulate the real terminal failure AFTER valid scheduler admission. This
+    // preserves the scheduler-issued mission ID, assignment ID, and binding.
+    await db.query('reset role');
+    await db.query("update agent_missions set status='blocked',detail='Mission state operation failed: Scope grant exceeds approved parent',calls=$2 where id=$1",
+      [mid,providerEvidence?1:0]);
+    const failed=(await db.query("update mission_assignments set status='failed',attempts=1,result=$2,detail='Scope grant exceeds approved parent',lease=null,lease_until=null where id=$1 returning id,status,attempts",
+      [job,{detail:'Scope grant exceeds approved parent',diagnostic:{stage:'work',acceptedIssue:false}}])).rows[0];
+    assert.equal(failed?.id,job);
+    assert.equal(failed.status,'failed');
+    assert.equal(failed.attempts,1);
     if(providerEvidence){
+      // Settled test receipts bind to the actual claimed management attempt.
       await db.query("insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash,started_at,provider_receipt,resolved_at) values($1,$2,$3,$4,$5,$6,'model-list',$7,clock_timestamp()-interval '2 seconds','model-catalog',clock_timestamp()-interval '1 second')",
-        [randomUUID(),project,mid,job.id,rootNode.agent_id,attempt,'a'.repeat(64)]);
+        [randomUUID(),project,mid,job,rootNode.agent_id,attempt,'a'.repeat(64)]);
       await db.query("insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash,started_at,provider_receipt,resolved_at) values($1,$2,$3,$4,$5,$6,'inference',$7,clock_timestamp()-interval '1 second','synthetic-provider-receipt',clock_timestamp())",
-        [randomUUID(),project,mid,job.id,rootNode.agent_id,attempt,'b'.repeat(64)]);
+        [randomUUID(),project,mid,job,rootNode.agent_id,attempt,'b'.repeat(64)]);
     }
-    if(active)await db.query("update work_projects set active_mission_id=$2 where id=$1",[project,mid]);
-    return {mid,job:job.id};
+    await db.query('set role service_role');
+    assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,mid);
+    return {mid,job};
   };
   await installBlockedManagement();
-  const blocked=await installBlockedManagement({providerEvidence:true,active:true});
+  // The ordinary scheduler must reconcile the first failed session before
+  // scheduling the second. Reuse the prior accepted organization and attempts.
+  const reconciled=(await db.query('select project_org_schedule($1,$2) s',[project,await leaseProject()])).rows[0].s;
+  assert.equal(reconciled?.waiting,true,JSON.stringify(reconciled));
+  assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,deliverySetup.mission);
+  const blocked=await installBlockedManagement({providerEvidence:true});
   await db.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,rootNode.id]);
   await db.query("update work_projects set status='blocked',phase='research',lease=null,lease_until=null where id=$1",[project]);
   await db.query('set role service_role');
