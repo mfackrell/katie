@@ -246,9 +246,9 @@ test('real Chromium owner confirmation renews only the existing expired hierarch
     +'Date.now=()=>'+Date.parse('2026-11-13T18:00:00Z')+';window.refreshes=0;'+transpiled
     +';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.DirectorRecoveryControl,{recovery:'+JSON.stringify(recovery)+',onRefresh:()=>window.refreshes++}));';
    await page.route('http://localhost/**',async route=>{
-    if(new URL(route.request().url).pathname==='/control')
+    if(new URL(route.request().url()).pathname==='/control')
       return route.fulfill({contentType:'text/html; charset=utf-8',body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
-    assert.equal(new URL(route.request().url).pathname,'/api/projects/organization');
+    assert.equal(new URL(route.request().url()).pathname,'/api/projects/organization');
     const submitted=route.request().postDataJSON();
     assert.equal(route.request().headers().authorization,'Bearer synthetic-owner');
     assert.equal(submitted.trialAction,'recover_hierarchy');
