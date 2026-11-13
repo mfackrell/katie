@@ -10,9 +10,11 @@ test('organization migration composes with installed ordinary authority and nati
  const result=await run();
  assert.equal(result.code,0,result.output);
  assert.match(result.output,/PROJECT_ORGANIZATION_COMBINED_SCHEMA_PASS/);
+ assert.match(result.output,/PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS/);
  assert.match(result.output,/PROVIDER_CONTROLLED_TRIAL_POSTGRES_PASS/);
  env.KATIE_TEST_DIRECTOR_ONE_SHOT='1';
  const recovery=await run();
  assert.equal(recovery.code,0,recovery.output);
  assert.match(recovery.output,/DIRECTOR_ONE_SHOT_POSTGRES_PASS/);
+ assert.match(recovery.output,/PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS/);
 });
