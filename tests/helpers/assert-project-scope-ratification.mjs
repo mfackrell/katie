@@ -377,5 +377,23 @@ export async function assertProjectScopeRatification(db){
       'coding worker receives scope only through existing manager delegation');
     assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
   }finally{await db.query('rollback');await db.query('set role service_role');}
+
+  // The settled synthetic provider receipts and singleton are a test-only
+  // fixture. The full immutable-history and rollback assertions above have
+  // already verified their preservation across ratification. Release this
+  // isolated fixture's singleton before the historical provider suites launch
+  // their own independent test trials. Never change production grants or rows.
+  await db.query('reset role');
+  await db.query('begin');
+  try{
+    await db.query('delete from project_provider_requests where project_id=$1',[project]);
+    await db.query('delete from project_provider_execution where project_id=$1',[project]);
+    await db.query('commit');
+  }catch(err){
+    await db.query('rollback');
+    throw err;
+  }
+  assert.equal((await db.query('select count(*)::int n from project_provider_execution')).rows[0].n,0,
+    'isolated scope-ratification fixture must not consume the provider singleton for other suites');
   console.log('PROJECT_SCOPE_RATIFICATION_POSTGRES_PASS');
 }
