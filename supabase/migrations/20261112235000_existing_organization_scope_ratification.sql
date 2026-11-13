@@ -95,7 +95,13 @@ language sql stable security definer set search_path=public,pg_temp as $$
       union all
       select coalesce(d.decision::text,'') body
       from project_organization_decisions d where d.project_id=p_project
-    ) evidence where strpos(evidence.body,p_path)>0
+    ) evidence where exists (
+      -- Require a whole, literally recorded path token. Substring matching
+      -- permits an approved child path to authorize a broader parent prefix.
+      select 1
+      from regexp_split_to_table(evidence.body, '[[:space:],"'';:{}()]+') as literal_path(candidate)
+      where literal_path.candidate=p_path
+    )
   )
 $$;
 
