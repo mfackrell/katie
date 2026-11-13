@@ -7,4 +7,5 @@ test('owner execution windows and parent delegation amendments preserve the live
  const result=await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--test','tests/benchmark-renewal-postgres.test.mjs'],{env,stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);child.on('error',reject);child.on('close',code=>resolve({code,output}));});
  assert.equal(result.code,0,result.output);
  assert.match(result.output,/ORGANIZATIONAL_CONTRACT_AMENDMENTS_POSTGRES_PASS/);
+ assert.match(result.output,/PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS/);
 });

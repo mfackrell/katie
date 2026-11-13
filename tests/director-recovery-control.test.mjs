@@ -179,3 +179,115 @@ test('Chromium recovery authenticates, prevents duplicate clicks, confirms recei
  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'project_org_renew_continue',args:{...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_cutoff:renewal.cutoff,p_prior_cutoff:cutoff,p_authorization:authorizationId}}]);
 
  });
+
+
+test('expired hierarchy API is owner-only, production-release bound and requires an exact immutable proposal',async t=>{
+ const saved={sha:process.env.VERCEL_GIT_COMMIT_SHA,env:process.env.VERCEL_ENV};
+ process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;process.env.VERCEL_ENV='production';
+ t.after(()=>{for(const [key,value] of [['VERCEL_GIT_COMMIT_SHA',saved.sha],['VERCEL_ENV',saved.env]])
+  if(value===undefined)delete process.env[key];else process.env[key]=value;});
+ let owner=false;const calls=[];
+ const load=modules({
+  '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return {projectId,authorizationId:args.p_authorization,existing:false};}},
+  '@/lib/data/persistence-store':{getMessages:async()=>[]}
+ });
+ const submit=async payload=>load('@/app/api/projects/organization/route').POST(
+  new Request('https://synthetic.test/api/projects/organization',{method:'POST',body:JSON.stringify(payload)}));
+ const payload={trialAction:'recover_hierarchy',projectId,releaseSha,decisionId,
+  priorCutoff:'2026-11-13T16:30:00Z',directorCutoff:'2026-11-13T16:59:32.521Z',
+  cutoff:'2026-11-14T00:00:00Z',authorizationId:'aaaaaaaa-1111-4111-8111-111111111111',
+  stateHash:'a'.repeat(64)};
+ assert.equal((await submit(payload)).status,403);assert.equal(calls.length,0);
+ owner=true;
+ for(const corrupted of [
+   {...payload,releaseSha:'f'.repeat(40)},
+   {...payload,stateHash:'not-a-hash'},
+   {...payload,authorizationId:'forged'},
+   {...payload,ownerId:'attacker'},
+   {...payload,directorCutoff:undefined},
+ ]){
+  const response=await submit(corrupted);
+  assert.ok([400,409].includes(response.status),String(response.status));
+ }
+ process.env.VERCEL_ENV='preview';assert.equal((await submit(payload)).status,409);
+ process.env.VERCEL_ENV='production';
+ assert.equal(calls.length,0);
+ const valid=await submit(payload);assert.equal(valid.status,200);
+ assert.equal(calls.length,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls[0])),{name:'project_org_recover_hierarchy',args:{
+  ...(process.env.KATIE_OWNER_AUTH_USER_ID?{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID}:{}),
+  p_project:projectId,p_release:releaseSha,p_decision:decisionId,p_prior_cutoff:payload.priorCutoff,
+  p_director_cutoff:payload.directorCutoff,p_cutoff:payload.cutoff,
+  p_authorization:payload.authorizationId,p_state_hash:payload.stateHash
+ }});
+});
+
+
+test('real Chromium owner confirmation renews only the existing expired hierarchy',{timeout:90000},async()=>{
+ const source=readFileSync('components/director-recovery-control.tsx','utf8');
+ const transpiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+ const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js']
+   .map(file=>readFileSync('node_modules/'+file,'utf8')).join('\n');
+ const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
+ const hierarchy={decisionId,priorCutoff:'2026-11-13T16:30:00Z',
+   directorCutoff:'2026-11-13T16:59:32.521Z',stateHash:'a'.repeat(64),
+   nodeCount:4,maxHours:24,activeMissionId:'11111111-1111-4111-8111-111111111111'};
+ const recovery={projectId,releaseSha,cutoff:hierarchy.priorCutoff,priorCutoff,
+   receipt,continuation:{decisionId,admittedAt:'2026-11-13T15:00:00Z',maxCutoff:hierarchy.directorCutoff},
+   hierarchyRecovery:hierarchy};
+ try{
+  const context=await browser.newContext({timezoneId:'UTC'});
+  for(const outcome of ['success','403','no-owner']){
+   const page=await context.newPage();
+   let posts=0;let releaseResponse;
+   const gate=new Promise(resolve=>{releaseResponse=resolve;});
+   const script='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=>'+(outcome==='no-owner'?'null':'"synthetic-owner"')+'};'
+    +'Date.now=()=>'+Date.parse('2026-11-13T18:00:00Z')+';window.refreshes=0;'+transpiled
+    +';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.DirectorRecoveryControl,{recovery:'+JSON.stringify(recovery)+',onRefresh:()=>window.refreshes++}));';
+   await page.route('http://localhost/**',async route=>{
+    if(new URL(route.request().url()).pathname==='/control')
+      return route.fulfill({contentType:'text/html; charset=utf-8',body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
+    assert.equal(new URL(route.request().url()).pathname,'/api/projects/organization');
+    const submitted=route.request().postDataJSON();
+    assert.equal(route.request().headers().authorization,'Bearer synthetic-owner');
+    assert.equal(submitted.trialAction,'recover_hierarchy');
+    assert.equal(submitted.projectId,projectId);
+    assert.equal(submitted.stateHash,hierarchy.stateHash);
+    assert.equal(submitted.decisionId,hierarchy.decisionId);
+    assert.equal(submitted.directorCutoff,hierarchy.directorCutoff);
+    assert.equal(submitted.priorCutoff,hierarchy.priorCutoff);
+    assert.equal(submitted.cutoff,'2026-11-13T19:00:00.000Z');
+    assert.match(submitted.authorizationId,/^[0-9a-f-]{36}$/i);
+    posts++;await gate;
+    return route.fulfill({status:outcome==='403'?403:200,json:outcome==='403'?{error:'Owner recovery denied'}:{
+      projectId,decisionId,releaseSha,authorizationId:submitted.authorizationId,stateHash:hierarchy.stateHash,
+      activeMissionId:hierarchy.activeMissionId,priorCutoff:hierarchy.priorCutoff,
+      priorDirectorCutoff:hierarchy.directorCutoff,cutoff:submitted.cutoff,
+      authorizedAt:'2026-11-13T18:00:01Z',existing:false,
+      renewedNodeIds:['a','b','c','d']}});
+   });
+   await page.goto('http://localhost/control');
+   await page.getByLabel('New project cutoff (your local time)').fill('2026-11-13T19:00');
+   const button=page.getByRole('button',{name:'Authorize existing hierarchy recovery'});
+   await button.click();
+   if(outcome==='no-owner'){
+    await page.getByRole('alert').filter({hasText:'Sign in as Katie owner'}).waitFor();
+    assert.equal(posts,0);
+   }else{
+    await page.getByRole('button',{name:'Submitting deadline authorization…'}).waitFor();
+    assert.equal(posts,1);
+    assert.equal(await page.getByText('Existing hierarchy recovered; scope approval and paid work remain separate.').count(),0);
+    releaseResponse();
+    if(outcome==='403'){
+      await page.getByRole('alert').filter({hasText:'Owner recovery denied'}).waitFor();
+      assert.equal(await page.evaluate(()=>window.refreshes),0);
+    }else{
+      await page.getByText('Existing hierarchy recovered; scope approval and paid work remain separate.').waitFor();
+      assert.equal(await page.evaluate(()=>window.refreshes),1);
+    }
+   }
+   await page.close();
+  }
+ }finally{await browser.close();}
+});

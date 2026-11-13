@@ -62,6 +62,20 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
             p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.id,
     });
     const windowReceipt=window&&typeof window==='object'&&typeof window.authorizationId==='string'&&typeof window.authorizedAt==='string'?{authorizationId:window.authorizationId,authorizedAt:window.authorizedAt}:{};
+    // Read-only preflight: the owner will approve a new cutoff in a separate
+    // authenticated action. Never implicitly restore expired appointments.
+    const hierarchyOffer=process.env.VERCEL_ENV==='production'&&p.status==='blocked'&&Date.now()>=Date.parse(p.deadline)
+        ?await projectRpc<{decisionId:string;directorCutoff:string;priorCutoff:string;stateHash:string;nodeCount:number;maxHours:number;activeMissionId:string|null}|null>(
+            'project_org_hierarchy_recovery_offer',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.id})
+        :null;
+    const hierarchyRecovery=hierarchyOffer&&typeof hierarchyOffer==='object'&&
+        /^[a-f0-9]{64}$/.test(hierarchyOffer.stateHash??'')&&
+        typeof hierarchyOffer.decisionId==='string'&&Number.isFinite(Date.parse(hierarchyOffer.directorCutoff))&&
+        Number.isFinite(Date.parse(hierarchyOffer.priorCutoff))&&hierarchyOffer.nodeCount>0
+        ?{decisionId:hierarchyOffer.decisionId,directorCutoff:hierarchyOffer.directorCutoff,
+            priorCutoff:hierarchyOffer.priorCutoff,stateHash:hierarchyOffer.stateHash,
+            nodeCount:hierarchyOffer.nodeCount,maxHours:hierarchyOffer.maxHours,activeMissionId:hierarchyOffer.activeMissionId}
+        :null;
     if(!data){
         if(window&&typeof window==='object'&&typeof window.decisionId==='string'
             &&(Date.now()>=Date.parse(window.cutoff)||window.admittedAt))
@@ -82,6 +96,7 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
         projectId: p.id, releaseSha: releaseSha!, cutoff:continuation?p.deadline:cutoff, priorCutoff,
         receipt: data ? {projectId: p.id, missionId: data.mission_id, assignmentId: data.assignment_id, cutoff: data.cutoff, existing: true} : null,
         ...(continuation?{continuation}:{}),
+        ...(hierarchyRecovery?{hierarchyRecovery}:{}),
     };
 }
 

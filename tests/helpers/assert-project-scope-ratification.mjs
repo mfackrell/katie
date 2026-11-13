@@ -230,6 +230,11 @@ export async function assertProjectScopeRatification(db){
     assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,blocked.mid);
   }finally{await db.query('rollback');await db.query('set role service_role');}
 
+  // Independently recover an expired hierarchy in a rolled-back PostgreSQL
+  // fixture, then verify the unchanged pre-scope project still ratifies.
+  await (await import('./assert-project-hierarchy-recovery.mjs'))
+    .assertProjectHierarchyRecovery(db,{project,owner,rootNode,blocked});
+
   const contract={path:'/milestone-3-tic-tac-toe',scenarios:[{name:'Initial state',steps:[{action:'expectText',selector:'#status',value:"X's turn"}]}]};
   const spec={name:'Recovered scoped game',summary:'Exact accepted organization game scope',requirements:['Implement the owner-approved tic-tac-toe game'],
     allowedPaths:scopePaths,milestones:[{title:'Game',instruction:'Implement only the approved game scope',contract}],finalContract:contract};
