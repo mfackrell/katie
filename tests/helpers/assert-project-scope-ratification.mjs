@@ -428,7 +428,7 @@ export async function assertProjectScopeRatification(db){
       const firstScoped=await session();
       assert.equal(firstScoped.node,rootNode.id);
       await db.query('reset role');
-      await db.query("update agent_missions set status='blocked',calls=1,detail='Project Director commissions Functional Directors only' where id=$1",[firstScoped.mission]);
+      await db.query("update agent_missions set status='blocked',calls=1,created_at=clock_timestamp(),detail='Project Director commissions Functional Directors only' where id=$1",[firstScoped.mission]);
       await db.query("update mission_assignments set status='failed',attempts=1,lease=null,lease_until=null,detail='Project Director commissions Functional Directors only',result=$2 where id=$1",
         [firstScoped.job,{managementCommandRejection:{code:'director_appointment',action:'appoint',position:6}}]);
       await db.query("update work_projects set status='blocked',detail='Project management cannot achieve its objective within bounded retry authority',lease=null,lease_until=null where id=$1",[project]);
