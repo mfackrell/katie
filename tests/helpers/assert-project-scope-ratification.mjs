@@ -420,6 +420,57 @@ export async function assertProjectScopeRatification(db){
       await db.query('release savepoint scoped_mission_capacity_recovery');
       await db.query('set role service_role');
     }
+    // Historical pre-ratification Director failures cannot exhaust the
+    // newly approved development epoch. Preserve all historical rows and
+    // test an exact owner-bound, one-shot recovery in a rollback savepoint.
+    await db.query('savepoint scoped_root_epoch_recovery');
+    try{
+      const firstScoped=await session();
+      assert.equal(firstScoped.node,rootNode.id);
+      await db.query('reset role');
+      await db.query("update agent_missions set status='blocked',calls=1,detail='Project Director commissions Functional Directors only' where id=$1",[firstScoped.mission]);
+      await db.query("update mission_assignments set status='failed',attempts=1,lease=null,lease_until=null,detail='Project Director commissions Functional Directors only',result=$2 where id=$1",
+        [firstScoped.job,{managementCommandRejection:{code:'director_appointment',action:'appoint',position:6}}]);
+      await db.query("update work_projects set status='blocked',detail='Project management cannot achieve its objective within bounded retry authority',lease=null,lease_until=null where id=$1",[project]);
+      await db.query('set role service_role');
+      const trialRelease='d'.repeat(40),source=firstScoped.mission;
+      const recoverSql='select project_org_resume_scoped_root_retry($1,$2,$3,$4,$5,$6) r';
+      const args=[owner,project,trialRelease,release,prepared.scopeHash,source];
+      await db.query('savepoint incorrect_scoped_root_owner');
+      try{
+        await assert.rejects(db.query(recoverSql,[randomUUID(),...args.slice(1)]),
+          /Authenticated, exact-release project owner approval required/);
+      }finally{
+        await db.query('rollback to savepoint incorrect_scoped_root_owner');
+        await db.query('release savepoint incorrect_scoped_root_owner');
+      }
+      const beforeCount=(await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n;
+      const r=(await db.query(recoverSql,args)).rows[0].r;
+      assert.equal(r.status,'running');
+      assert.equal(r.scopedRootFailures,1,'only one Director failure occurred after scope ratification');
+      assert.equal(r.historicalMissions,beforeCount);
+      assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,beforeCount,
+        'resumption preserves historical missions and never fabricates development work');
+      assert.equal((await db.query('select status from work_projects where id=$1',[project])).rows[0].status,'running');
+      await db.query('savepoint duplicate_scoped_root_recovery');
+      try{
+        await assert.rejects(db.query(recoverSql,args),/Original scoped root-retry evidence or authority changed/);
+      }finally{
+        await db.query('rollback to savepoint duplicate_scoped_root_recovery');
+        await db.query('release savepoint duplicate_scoped_root_recovery');
+      }
+      const reconciled=(await db.query('select project_org_schedule($1,$2) s',[project,await leaseProject()])).rows[0].s;
+      assert.equal(reconciled?.waiting,true,'a failed first scoped management decision is reconciled, not permanently blocked');
+      const secondScoped=await session();
+      assert.equal(secondScoped.node,rootNode.id,'scope-approved Project Director must receive its bounded second attempt');
+      assert.notEqual(secondScoped.mission,firstScoped.mission);
+      assert.equal((await db.query("select count(*)::int n from agent_missions where project_id=$1 and status='blocked' and project_kind='management' and project_evidence->>'organizationNodeId'=$2",[project,rootNode.id])).rows[0].n>=3,true,
+        'pre-ratification failures remain in the ledger');
+    }finally{
+      await db.query('rollback to savepoint scoped_root_epoch_recovery');
+      await db.query('release savepoint scoped_root_epoch_recovery');
+      await db.query('set role service_role');
+    }
     const resumed=await session();
     assert.equal(resumed.node,rootNode.id,'root scope delegation must precede deeper pending management before the first coding package');
     assert.notEqual(resumed.mission,blocked.mid);
