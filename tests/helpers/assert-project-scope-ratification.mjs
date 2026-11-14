@@ -420,6 +420,146 @@ export async function assertProjectScopeRatification(db){
       await db.query('release savepoint scoped_mission_capacity_recovery');
       await db.query('set role service_role');
     }
+    // Historical pre-ratification Director failures cannot exhaust the
+    // newly approved development epoch. Preserve all historical rows and
+    // test an exact owner-bound, one-shot recovery in a rollback savepoint.
+    await db.query('savepoint scoped_root_epoch_recovery');
+    try{
+      const firstScoped=await session();
+      assert.equal(firstScoped.node,rootNode.id);
+      await db.query('reset role');
+      await db.query("update agent_missions set status='blocked',calls=1,created_at=clock_timestamp(),detail='Project Director commissions Functional Directors only' where id=$1",[firstScoped.mission]);
+      await db.query("update mission_assignments set status='failed',attempts=1,lease=null,lease_until=null,detail='Project Director commissions Functional Directors only',result=$2 where id=$1",
+        [firstScoped.job,{managementCommandRejection:{code:'director_appointment',action:'appoint',position:6}}]);
+      await db.query("update work_projects set status='blocked',detail='Project management cannot achieve its objective within bounded retry authority',lease=null,lease_until=null where id=$1",[project]);
+      await db.query('set role service_role');
+      const trialRelease='d'.repeat(40),source=firstScoped.mission;
+      const recoverSql='select project_org_resume_scoped_root_retry($1,$2,$3,$4,$5,$6) r';
+      const args=[owner,project,trialRelease,release,prepared.scopeHash,source];
+      const rejectRecovery=async(values,pattern)=>{
+        await db.query('savepoint rejected_root_recovery');
+        try{await assert.rejects(db.query(recoverSql,values),pattern);}
+        finally{await db.query('rollback to savepoint rejected_root_recovery');await db.query('release savepoint rejected_root_recovery');}
+      };
+      for(const role of ['anon','authenticated']){
+        await db.query('reset role');await db.query('set role '+role);
+        await rejectRecovery(args,/permission denied/);
+      }
+      await db.query('reset role');await db.query('set role service_role');
+      await rejectRecovery([owner,project,trialRelease,'e'.repeat(40),prepared.scopeHash,source],/evidence or authority changed/);
+      await rejectRecovery([owner,project,trialRelease,release,'e'.repeat(64),source],/evidence or authority changed/);
+      await rejectRecovery([owner,project,trialRelease,release,prepared.scopeHash,randomUUID()],/evidence or authority changed/);
+      await db.query('savepoint incorrect_scoped_root_owner');
+      try{
+        await assert.rejects(db.query(recoverSql,[randomUUID(),...args.slice(1)]),
+          /Authenticated, exact-release project owner approval required/);
+      }finally{
+        await db.query('rollback to savepoint incorrect_scoped_root_owner');
+        await db.query('release savepoint incorrect_scoped_root_owner');
+      }
+      const beforeCount=(await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n;
+      const history=async()=>(await db.query(`select
+        (select jsonb_agg(to_jsonb(m) order by id) from agent_missions m where project_id=$1) missions,
+        (select jsonb_agg(to_jsonb(j) order by j.id) from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1) assignments,
+        (select jsonb_agg(to_jsonb(w) order by id) from project_execution_windows w where project_id=$1) windows,
+        (select jsonb_agg(to_jsonb(n) order by id) from project_organization_nodes n where project_id=$1) nodes,
+        (select jsonb_build_array(deadline,max_missions,token_allowance,active_mission_id,approved_hash) from work_projects where id=$1) authority`,[project])).rows[0];
+      const beforeHistory=await history();
+      // An error after receipt insertion must roll back release rebinding too.
+      await db.query('savepoint atomic_root_recovery');
+      await db.query('reset role');
+      await db.query("create function pg_temp.reject_scoped_resume() returns trigger language plpgsql as $$begin raise exception 'synthetic final write failure';end$$");
+      await db.query('create trigger reject_scoped_resume before update on work_projects for each row execute function pg_temp.reject_scoped_resume()');
+      await db.query('set role service_role');
+      await rejectRecovery(args,/synthetic final write failure/);
+      assert.equal((await db.query('select continuation_release_sha from project_provider_execution where project_id=$1',[project])).rows[0].continuation_release_sha,release);
+      assert.equal((await db.query('select count(*)::int n from project_scoped_root_retry_receipts where project_id=$1',[project])).rows[0].n,0);
+      await db.query('rollback to savepoint atomic_root_recovery');await db.query('release savepoint atomic_root_recovery');
+      await db.query('set role service_role');
+      const r=(await db.query(recoverSql,args)).rows[0].r;
+      assert.deepEqual(await history(),beforeHistory,'recovery preserves all missions, assignments, windows, organization and owner limits');
+      const rebound=(await db.query('select continuation_release_sha,window_id,project_provider_continued(project_id) authorized from project_provider_execution where project_id=$1',[project])).rows[0];
+      assert.equal(rebound.continuation_release_sha,trialRelease);
+      assert.equal(rebound.window_id,windowId);assert.equal(rebound.authorized,true);
+      assert.equal((await db.query('select project_org_scoped_retry_release($1,$2) ok',[windowId,trialRelease])).rows[0].ok,true);
+      assert.equal((await db.query('select project_org_scoped_retry_release($1,$2) ok',[randomUUID(),trialRelease])).rows[0].ok,false);
+      for(const [role,statement,pattern] of [
+        ['service_role','delete from project_scoped_root_retry_receipts',/permission denied/],
+        ['service_role','insert into project_scoped_root_retry_receipts select * from project_scoped_root_retry_receipts',/permission denied/],
+        [null,"update project_scoped_root_retry_receipts set release_sha=repeat('e',40)",/append-only/],
+      ]){
+        await db.query('savepoint immutable_retry_receipt');
+        await db.query('reset role');if(role)await db.query('set role '+role);
+        try{await assert.rejects(db.query(statement),pattern);}
+        finally{await db.query('rollback to savepoint immutable_retry_receipt');await db.query('release savepoint immutable_retry_receipt');}
+      }
+      await db.query('set role service_role');
+      assert.equal(r.status,'running');
+      assert.equal(r.scopedRootFailures,1,'only one Director failure occurred after scope ratification');
+      assert.equal(r.historicalMissions,beforeCount);
+      assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,beforeCount,
+        'resumption preserves historical missions and never fabricates development work');
+      assert.equal((await db.query('select status from work_projects where id=$1',[project])).rows[0].status,'running');
+      await db.query('savepoint duplicate_scoped_root_recovery');
+      try{
+        await assert.rejects(db.query(recoverSql,args),/Original scoped root-retry evidence or authority changed/);
+      }finally{
+        await db.query('rollback to savepoint duplicate_scoped_root_recovery');
+        await db.query('release savepoint duplicate_scoped_root_recovery');
+      }
+      const reconciled=(await db.query('select project_org_schedule($1,$2) s',[project,await leaseProject()])).rows[0].s;
+      assert.equal(reconciled?.waiting,true,'a failed first scoped management decision is reconciled, not permanently blocked');
+      const scheduledRetry=(await db.query('select project_org_schedule($1,$2) s',[project,await leaseProject()])).rows[0].s;
+      await db.query('reset role');
+      await db.query("update mission_assignments set created_at='2000-01-01' where mission_id=$1",[scheduledRetry.missionId]);
+      await db.query('set role service_role');
+      const staleClaim=(await db.query('select claim_mission_work_release($1) c',[release])).rows[0].c;
+      assert.notEqual(staleClaim?.mission.id,scheduledRetry.missionId,'old release must not claim the rebound retry');
+      const retryClaim=(await db.query('select claim_mission_work_release($1) c',[trialRelease])).rows[0].c;
+      assert.equal(retryClaim?.mission.id,scheduledRetry.missionId,'the newly authorized release must claim the scheduled retry');
+      assert.equal(retryClaim.mission.project_evidence.providerContinuationRelease,trialRelease);
+      assert.equal(retryClaim.mission.project_evidence.providerContinuationWindow,windowId);
+      assert.equal((await db.query('select project_provider_continued_assignment($1) ok',[retryClaim.job.id])).rows[0].ok,true);
+      const secondScoped={node:scheduledRetry.nodeId,mission:scheduledRetry.missionId,job:retryClaim.job.id,lease:retryClaim.job.lease};
+      assert.equal(secondScoped.node,rootNode.id,'scope-approved Project Director must receive its bounded second attempt');
+      assert.notEqual(secondScoped.mission,firstScoped.mission);
+      assert.equal((await db.query("select count(*)::int n from agent_missions where project_id=$1 and status='blocked' and project_kind='management' and project_evidence->>'organizationNodeId'=$2",[project,rootNode.id])).rows[0].n>=3,true,
+        'pre-ratification failures remain in the ledger');
+      // A second scoped rejection is still terminal; no third retry is granted.
+      await db.query('savepoint terminal_scoped_failure');
+      await db.query('reset role');
+      await db.query("update agent_missions set status='blocked',created_at=clock_timestamp() where id=$1",[secondScoped.mission]);
+      await db.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[secondScoped.job]);
+      await db.query('set role service_role');
+      const terminal=(await db.query('select project_org_schedule($1,$2) s',[project,await leaseProject()])).rows[0].s;
+      assert.match(terminal.blocked,/bounded retry authority/);
+      await db.query('rollback to savepoint terminal_scoped_failure');await db.query('release savepoint terminal_scoped_failure');
+      await db.query('set role service_role');
+      const qaNode=(await db.query("select * from project_organization_nodes where project_id=$1 and area='independent_qa'",[project])).rows[0];
+      await db.query('savepoint independent_qa_capability');
+      try{
+        await assert.rejects(decide(secondScoped,[
+          {action:'amend_delegation',nodeId:qaNode.id,expectedTools:qaNode.tools,tools:[...qaNode.tools,'development'],
+           expectedDeadline:new Date(qaNode.deadline).toISOString(),reason:'Invalid attempt to grant implementation to independent QA.'},
+          {action:'ready'},
+        ]),/Independent QA cannot inherit implementation authority/);
+      }finally{await db.query('rollback to savepoint independent_qa_capability');await db.query('release savepoint independent_qa_capability');}
+      await decide(secondScoped,[
+        {action:'amend_delegation',nodeId:game.id,expectedTools:game.tools,tools:[...game.tools,'development'],
+         expectedDeadline:new Date(game.deadline).toISOString(),reason:'Propagate the owner-ratified scope to existing Game Delivery.'},
+        {action:'grant_scope',nodeId:game.id,paths:scopePaths},{action:'ready'},
+      ]);
+      assert.equal((await db.query('select tools from project_organization_nodes where id=$1',[game.id])).rows[0].tools.includes('development'),true);
+      assert.deepEqual((await db.query('select paths from project_organization_scope_grants where node_id=$1',[game.id])).rows[0].paths,scopePaths);
+      const qa=(await db.query("select tools from project_organization_nodes where project_id=$1 and area='independent_qa'",[project])).rows[0];
+      assert.equal(qa.tools.includes('development'),false);
+      assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+      console.log('SCOPED_ROOT_RETRY_RELEASE_CLAIM_DELEGATION_PASS');
+    }finally{
+      await db.query('rollback to savepoint scoped_root_epoch_recovery');
+      await db.query('release savepoint scoped_root_epoch_recovery');
+      await db.query('set role service_role');
+    }
     const resumed=await session();
     assert.equal(resumed.node,rootNode.id,'root scope delegation must precede deeper pending management before the first coding package');
     assert.notEqual(resumed.mission,blocked.mid);

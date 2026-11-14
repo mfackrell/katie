@@ -41,7 +41,8 @@
   ],
   "git": {
     "deploymentEnabled": {
-      "codex/visual-review-integration": false
+      "codex/visual-review-integration": false,
+      "fix/scoped-root-delegation-retry-20261114": false
     }
   }
 }
