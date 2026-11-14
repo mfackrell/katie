@@ -378,7 +378,7 @@ export async function assertProjectScopeRatification(db){
       const grant=(await db.query(
         'select authorize_work_project_resources($1,$2,$3,$4,$5,$6,$7,$8,$9) r',
         [project,actor,chat,beforeCapacity.token_allowance,null,authorizedMaximum,null,authorizationId,
-          'Owner explicitly approved only a bounded mission safeguard renewal for the original tic-tac-toe scope.']
+          'Owner explicitly approved only a bounded mission safeguard renewal for exact release '+release+' and exact game scope '+prepared.scopeHash+'.']
       )).rows[0].r;
       assert.equal(grant.maxMissions,authorizedMaximum);
       await db.query('savepoint wrong_capacity_owner');
@@ -388,6 +388,15 @@ export async function assertProjectScopeRatification(db){
       }finally{
         await db.query('rollback to savepoint wrong_capacity_owner');
         await db.query('release savepoint wrong_capacity_owner');
+      }
+      await db.query('savepoint wrong_capacity_release');
+      try{
+        await assert.rejects(db.query(resumeSql,[owner,project,'d'.repeat(40),...resumeArgs.slice(3)]),
+          /Fresh owner-approved mission-only resource receipt required/,
+          'the owner receipt must bind to the exact candidate release, not any source SHA');
+      }finally{
+        await db.query('rollback to savepoint wrong_capacity_release');
+        await db.query('release savepoint wrong_capacity_release');
       }
       const resumedCapacity=(await db.query(resumeSql,resumeArgs)).rows[0].r;
       assert.equal(resumedCapacity.status,'running');
