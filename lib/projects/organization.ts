@@ -44,12 +44,12 @@ evaluate_package: {action:"evaluate_package",packageId,assignmentId,accepted:boo
 repair_package: {action:"repair_package",packageId}. Commission a bounded correction of your rejected package, retaining its original contract, scope, worker, financial usage and attempt history. Routine corrections stay local.
 dependency: {action:"dependency",nodeId:directChildUUID,dependsOn:directChildUUID}.
 exception: {action:"exception",reason:"routine"|"authority"|"scope"|"resources"|"dependency"|"security"|"objective",detail}. Routine problems stay in your organization. Escalate only insufficient authority, material changes, cross-organization dependencies, policy boundaries or inability to achieve objectives.
-resolve: {action:"resolve",exceptionId,assignmentId,evidence}. Resolve only your assigned exceptions with actual evidence.
+resolve: {action:"resolve",exceptionId,assignmentId,evidence}. Resolve only your assigned open exceptions with actual completed subordinate assignment evidence. Historical open exceptions do not prohibit lawful implementation work to obtain that evidence. Never treat management activity as technical completion, or resolve with a failed assignment or an invented ID.
 escalate: {action:"escalate",exceptionId}. Moves to your immediate superior only; owner involvement is a last-resort material decision.
 submit_component: {action:"submit_component",assignmentId:UUID,checks:[{criterion:"exact delegated criterion",passed:true,assignmentId:UUID,evaluation:"how the verified organization fulfills its contract"}]}. Functional Directors and subordinate managers certify their OWN complete organizational objective after accepting all subordinates. This submits evidence to the immediate superior; it does not accept your own component. Root cannot submit.
 certify: {action:"certify",nodeId:directChildUUID,assignmentId:UUID,checks:[{criterion:"exact delegated criterion",passed:true,assignmentId:UUID,evaluation:"how the actual artifact satisfies it"}]}. Evaluate every original delegated criterion; activity reports are not component acceptance. Evidence must be actual completed work from that organization. Never invent evidence IDs. For a management component, require its current completion_submission first and independently evaluate its original contract; accepted worker tasks alone are insufficient. Component completion is not project completion.
 reject: {action:"reject",nodeId:directChildUUID,findings}. Return incomplete outcomes to the responsible subordinate for corrective action.
-replace_leader: {action:"replace_leader",nodeId:directManagerUUID,reason}. Replace ineffective leadership while preserving its organization, contracts, subordinate work and consumed resources.
+replace_leader: {action:"replace_leader",nodeId:directManagerUUID,reason}. Replace ineffective leadership while preserving its organization, contracts, subordinate work and consumed resources. Replacement does not change capabilities or scope. A second replacement requires completed technical work since the prior replacement; otherwise repair the actual authority/contract problem or escalate.
 reorganize: {action:"reorganize",nodeId:directChildUUID,underId:directManagerUUID,reason}. Transfer responsibility to a sibling manager only within that manager's inherited authority; revise your organizational plan accordingly.
 ready: {action:"ready"}. Your current management decision is complete; execution remains delegated.
 close: {action:"close"}. Project Director only, after all components, integrated independent QA, artifacts and reconciled financials. Missing evidence means no closure.
@@ -90,6 +90,26 @@ export function scopedRootDelegationDirective(args:{
  );
  return '\nRATIFIED DEVELOPMENT PREWORK — MANDATORY FIRST ROOT DECISION: The owner already approved the scope and the existing Functional Directors. Do NOT appoint, replace, reorganize, plan or commission any new roles. This is an authority-propagation turn, not an organization-design turn. Preserve Independent QA separation; never delegate development to QA. '+tasks.join(' ')+
   ' Finish with ready. Do not generate any other commands. These are proposed management decisions only; the database checks direct reporting, grants, and amendment preconditions independently.';
+}
+
+// A scope-only grant is visible separately from capability. Prompt the actual
+// parent to repair an implementation delegation; never synthesize that decision.
+export function scopedImplementationDelegationDirective(principal:ManagementNode,topology:ManagementNode[],focused:ManagementNode[],grants:ManagementRow[],project:ManagementRow):string{
+ const current=focused.find(n=>n.id===principal.id);
+ if(project.phase!=='development'||!project.approved_hash||!Array.isArray(current?.tools)||!current.tools.includes('development'))return '';
+ const inQa=(id:string)=>{
+  const seen=new Set<string>();let n=topology.find(n=>n.id===id);
+  while(n&&!seen.has(n.id)){
+   if(['independent_qa','quality_assurance'].includes(n.area??''))return true;
+   seen.add(n.id);n=topology.find(parent=>parent.id===n?.parent_id);
+  }
+  return false;
+ };
+ const gaps=focused.filter(n=>n.parent_id===principal.id&&n.kind==='manager'&&n.status==='active'&&!inQa(n.id)&&
+  Array.isArray(n.tools)&&!n.tools.includes('development')&&grants.some(g=>g.node_id===n.id&&g.scope_hash===project.approved_hash));
+ if(!gaps.length)return '';
+ return '\nSCOPED REPORTS WITHOUT IMPLEMENTATION CAPABILITY: '+JSON.stringify(gaps.map(n=>({nodeId:n.id,objective:n.objective,expectedTools:n.tools,expectedDeadline:n.deadline})))+
+  '. These reports already hold approved scope, but cannot commission coding. For any report responsible for the approved implementation milestone, propose amend_delegation adding development within your own authority before ready. Do not repeat its scope grant or replace its leader to fix missing tools. Analysis-only reports remain analysis-only; QA never receives development. The database independently validates every proposal.';
 }
 
 export function directorRecoveryRelease(claim:Claim):string|undefined {
@@ -136,7 +156,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  // not every node's large contract, completed evidence and archived assignments.
  const [topology,projectRecord]=await Promise.all([
   completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes').select('id,agent_id,kind,management_level,parent_id,area,depth,status,decision_needed').eq('project_id',claim.mission.project_id),'id'),
-  db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline').eq('id',claim.mission.project_id).single(),
+  db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline,spec,milestone_index').eq('id',claim.mission.project_id).single(),
  ]);
  if(projectRecord.error||!projectRecord.data)throw Error('Durable organization topology or owner objective unavailable');
  const principalId=String(claim.job.payload.organizationNodeId??'');
@@ -146,7 +166,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const project=projectRecord.data as {objective:string;team:string[];approved_hash?:string|null;phase?:string|null};
  // Fetch direct-report contracts and active decision inputs; older assignments
  // remain in PostgreSQL. Complete, ordered pages avoid PostgREST row truncation.
- const [focused,bindings,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work]=await Promise.all([
+ const [focused,bindings,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work,decisions]=await Promise.all([
   managementRowsByIds<ManagementNode>(scope.contextIds,ids=>db.from('project_organization_nodes').select('*').in('id',ids),'id'),
   completeManagementRows<AssignmentBinding>(()=>db.from('project_organization_assignments').select('assignment_id,node_id,created_at').in('node_id',scope.decisionIds),'assignment_id'),
   managementRowsByIds<ManagementRow>(project.team??[],ids=>db.from('managed_agents').select('id,config').in('id',ids),'id'),
@@ -158,6 +178,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   completeManagementRows<ManagementRow>(()=>db.from('project_work_packages').select('*').eq('project_id',claim.mission.project_id).in('manager_id',scope.decisionIds),'id'),
   completeManagementRows<ManagementRow>(()=>db.from('project_worker_contracts').select('*').eq('project_id',claim.mission.project_id).in('manager_id',scope.decisionIds),'id'),
   completeManagementRows<ManagementRow>(()=>db.from('project_organization_work').select('*').eq('project_id',claim.mission.project_id).in('node_id',scope.decisionIds),'id'),
+  completeManagementRows<ManagementRow>(()=>db.from('project_organization_decisions').select('id,node_id,assignment_id,decision,created_at').eq('project_id',claim.mission.project_id).in('node_id',scope.decisionIds),'id'),
  ]);
  const statuses=await managementRowsByIds<AssignmentStatus>(bindings.map(b=>b.assignment_id),
   ids=>db.from('mission_assignments').select('id,status,updated_at').in('id',ids),'id');
@@ -177,18 +198,27 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?baseInstruction+'\nONE-SHOT RECOVERY: Use only plan, appoint Functional Directors, and ready. Do not create dependency commands or use IDs for appointments that have yet to be committed. Downstream management and execution are paused after this decision.'
   :baseInstruction+scopedRootDelegationDirective({
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
-  });
+  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project);
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:team,exceptions,bindings,statuses,
   evidence,plans,dependencies,scopeGrants:grants,workerContracts,
-  workPackages:packages,workPackageAttempts:attempts,work,
+  workPackages:packages,workPackageAttempts:attempts,work,decisions,
  },missionInputLimit(claim));
  const response=await model(claim,instruction,input,'none');
  let commands:unknown;
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
  assertManagementCommands(node,topology,commands,Boolean(recovery));
+ // A valid resolution may cite an older/deeper completed assignment omitted
+ // from the bounded prompt. Read the proposed IDs; never infer their existence.
+ const resolutionIds=(commands as ManagementRow[]).filter(c=>c.action==='resolve').map(c=>c.assignmentId)
+  .filter((id):id is string=>typeof id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+ const [resolutionBindings,resolutionEvidence]=await Promise.all([
+  managementRowsByIds<AssignmentBinding>(resolutionIds,ids=>db.from('project_organization_assignments').select('assignment_id,node_id').in('assignment_id',ids),'assignment_id'),
+  managementRowsByIds<ManagementRow>(resolutionIds,ids=>db.from('mission_assignments').select('id,status,result').in('id',ids),'id'),
+ ]);
+ assertManagementEvidenceCommands(node,topology,commands as ManagementRow[],{exceptions,bindings:resolutionBindings,evidence:resolutionEvidence});
  await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
 }
 
@@ -237,7 +267,31 @@ export function assertManagementCommands(principal:{id:string;kind:string;manage
    ['assign','certify','reject','grant_scope','amend_delegation','reorganize','replace_leader','dependency'].includes(c.action)
     ?['nodeId',...(c.action==='reorganize'?['underId']:c.action==='dependency'?['dependsOn']:[])]:[];
   if(fields.some(field=>!nodes.some(n=>n.id===c[field]&&n.parent_id===principal.id)))reject('Management decisions require immediate reporting authority','immediate_reporting_authority',fields);
+  if(!managementActions.has(c.action))reject('Unknown management command','invalid_command');
+  if(c.action==='dependency'&&c.nodeId===c.dependsOn)reject('A report cannot depend on itself','invalid_dependency',['nodeId','dependsOn']);
   if(c.action==='appoint')priorAppointments++;
+ }
+}
+
+// Context preflight adds useful diagnostics; SQL remains the authenticated
+// authority and checks mission completion, subtree membership and the lease.
+export function assertManagementEvidenceCommands(principal:ReportingNode,nodes:ReportingNode[],
+ commands:ManagementRow[],context:{exceptions:ManagementRow[];bindings:AssignmentBinding[];evidence:ManagementRow[]}){
+ for(const [index,c] of commands.entries()){
+  if(c.action!=='resolve')continue;
+  const exception=context.exceptions.find(e=>e.id===c.exceptionId&&e.owner_id===principal.id&&e.status==='open');
+  const assignment=context.evidence.find(e=>e.id===c.assignmentId&&e.status==='completed'&&e.result!=null);
+  const binding=context.bindings.find(b=>b.assignment_id===c.assignmentId);
+  let node=nodes.find(n=>n.id===binding?.node_id);
+  const seen=new Set<string>();
+  let subordinate=node?.id===principal.id;
+  while(node&&node.id!==principal.id&&!seen.has(node.id)){
+   seen.add(node.id);
+   if(node.parent_id===principal.id){subordinate=true;break;}
+   node=nodes.find(n=>n.id===node?.parent_id);
+  }
+  if(!exception||!assignment||!subordinate)
+   throw new ManagementCommandRejection('Exception resolution needs an owned open exception and authenticated completed assignment evidence from the reporting subtree','exception_evidence',index+1,c.action);
  }
 }
 
