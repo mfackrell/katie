@@ -1,0 +1,122 @@
+[
+  {
+    "nodeId": "9b62ae62-a499-490a-a7ac-6e6c5bb1229d",
+    "area": "game_delivery",
+    "characters": 30269,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 3,
+    "replacements": 1,
+    "failures": 2
+  },
+  {
+    "nodeId": "4e6503c8-7723-49e7-ad30-22f633feb2f8",
+    "area": "independent_qa",
+    "characters": 46936,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 6,
+    "replacements": 0,
+    "failures": 3
+  },
+  {
+    "nodeId": "2e50ada1-8d82-46c4-9994-c88ef40073a5",
+    "area": "independent_qa_execution",
+    "characters": 35368,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 2,
+    "replacements": 1,
+    "failures": 3
+  },
+  {
+    "nodeId": "a00de7ce-4159-49ac-9628-a070d5dbaffd",
+    "area": "delivery_management",
+    "characters": 29031,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 1,
+    "replacements": 0,
+    "failures": 2
+  },
+  {
+    "nodeId": "0e10e20e-e5a9-4443-a636-7c4866a66a5f",
+    "area": "delivery_planning",
+    "characters": 17334,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 0,
+    "replacements": 0,
+    "failures": 1
+  },
+  {
+    "nodeId": "686f5654-9c17-4cbb-8540-6105c611d74c",
+    "area": "qa_planning",
+    "characters": 15931,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 0,
+    "replacements": 0,
+    "failures": 1
+  },
+  {
+    "nodeId": "09577b82-8db4-4b3d-8cd5-5f2d983268e6",
+    "area": "qa_planning",
+    "characters": 16247,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 0,
+    "replacements": 0,
+    "failures": 1
+  },
+  {
+    "nodeId": "7e063f2f-6528-4f3e-9353-155fbbdc09da",
+    "area": "independent_qa_planning",
+    "characters": 39972,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 2,
+    "replacements": 1,
+    "failures": 4
+  },
+  {
+    "nodeId": "c486ade1-2a9c-4cd5-a80b-90c032e4e03e",
+    "area": "general",
+    "characters": 38566,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 6,
+    "replacements": 0,
+    "failures": 3
+  },
+  {
+    "nodeId": "5abbbb04-3f29-44d7-9a0b-2b1597349015",
+    "area": "qa_planning",
+    "characters": 15490,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 0,
+    "replacements": 0,
+    "failures": 1
+  },
+  {
+    "nodeId": "654f1697-845a-4232-b35b-656756bb98f2",
+    "area": "independent_qa_execution_coordination",
+    "characters": 15954,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 0,
+    "replacements": 0,
+    "failures": 1
+  },
+  {
+    "nodeId": "133afc8c-7816-42f5-a116-13ecf34cefc5",
+    "area": "independent_qa_execution_coordination",
+    "characters": 15887,
+    "limit": 48000,
+    "currentMilestone": 0,
+    "decisions": 0,
+    "replacements": 0,
+    "failures": 1
+  }
+]

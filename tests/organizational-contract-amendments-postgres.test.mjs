@@ -8,4 +8,7 @@ test('owner execution windows and parent delegation amendments preserve the live
  assert.equal(result.code,0,result.output);
  assert.match(result.output,/ORGANIZATIONAL_CONTRACT_AMENDMENTS_POSTGRES_PASS/);
  assert.match(result.output,/PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS/);
+ assert.match(result.output,/MANAGEMENT_LOOP_RECOVERY_POSTGRES_PASS/);
+ assert.match(result.output,/MANAGEMENT_INVALID_COMMAND_BOUND_PASS/);
+ console.log(result.output.split('\n').filter(line=>/MANAGEMENT_.*PASS/.test(line)).join('\n'));
 });
