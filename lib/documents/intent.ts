@@ -79,6 +79,89 @@ export function inheritDocumentPageConstraint(
   return current;
 }
 
+/** A retained PDF is already the requested output. Pure export/re-export must
+ * preserve the selected source instead of authorizing a model rewrite. */
+function retainedPdfSourceExportBaseRequest(message: string): boolean {
+  const request = documentRequest(message);
+  if (!request || request.pages !== undefined || !/\bpdf\b/i.test(message)) return false;
+  if (/\b(?:revise|edit|update|rewrite|tailor|change|correct|improve|summari[sz]e|summary|translate|extract|combine|merge|redact|annotate|fill|sign|add|remove|replace)\b/i.test(message))
+    return false;
+
+  // Source preservation is a conversion operation, not a shortcut for drafting
+  // a different document from the selected source. Multiple document identities
+  // make that relationship ambiguous (for example, a cover letter based on a
+  // résumé), so the normal drafting/clarification path must remain in control.
+  const identities = new Set<string>();
+  const identityPatterns: Array<[string, RegExp]> = [
+    ['resume', /\b(?:resume|résumé|cv|curriculum vitae)\b/i],
+    ['report', /\b(?:financial|quarterly|operating)?\s*report\b/i],
+    ['agreement', /\b(?:agreement|contract|statement of work)\b/i],
+    ['proposal', /\bproposal\b/i],
+    ['letter', /\b(?:cover\s+letter|letter)\b/i],
+  ];
+  for (const [identity, pattern] of identityPatterns) if (pattern.test(message)) identities.add(identity);
+  if (identities.size > 1) return false;
+
+  // Require language that identifies the requested PDF as the source document
+  // itself. "Create a PDF cover letter based on my résumé" intentionally fails.
+  return (
+    /\bpdf\b[^.!?\n]{0,80}\b(?:of|from)\s+(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b/i.test(message) ||
+    /\b(?:convert|export|save|re-?export|reissue|deliver|give\s+me)\b[^.!?\n]{0,100}\b(?:(?:my|the|this|that|same|attached|uploaded|existing|original|saved)\s+)?(?:resume|résumé|cv|report|agreement|contract|proposal|letter|document|file)\b[^.!?\n]{0,80}\b(?:to|as|in)\s+(?:a\s+)?pdf\b/i.test(message)
+  );
+}
+
+const WORD_OUTPUT_REFERENCE = /\b(?:docx|word(?:\s+(?:document|file|version|copy))?)\b/i;
+
+export function sourcePreservingPdfExportRequest(message: string): boolean {
+  return retainedPdfSourceExportBaseRequest(message) && !WORD_OUTPUT_REFERENCE.test(message);
+}
+
+/** A retained PDF cannot satisfy a simultaneous Word/DOCX request without
+ * reconstructing content. Detect that case so the route can fail closed rather
+ * than silently omit Word or authorize an unintended rewrite. */
+export function retainedPdfDualFormatRequest(message: string): boolean {
+  return retainedPdfSourceExportBaseRequest(message) && WORD_OUTPUT_REFERENCE.test(message);
+}
+
+export function retainedPdfExportFileId(
+  message: string, attachments: Array<{fileId:string; mimeType:string}>,
+  hasRetainedSource: (fileId:string)=>boolean,
+): string | null {
+  if (!sourcePreservingPdfExportRequest(message)) return null;
+  const pdfs = attachments.filter(file => file.mimeType === 'application/pdf');
+  if (pdfs.length !== 1 || !hasRetainedSource(pdfs[0].fileId)) return null;
+  return pdfs[0].fileId;
+}
+
+export function retainedPdfDualFormatFileId(
+  message: string, attachments: Array<{fileId:string; mimeType:string}>,
+  hasRetainedSource: (fileId:string)=>boolean,
+): string | null {
+  if (!retainedPdfDualFormatRequest(message)) return null;
+  const pdfs = attachments.filter(file => file.mimeType === 'application/pdf');
+  if (pdfs.length !== 1 || !hasRetainedSource(pdfs[0].fileId)) return null;
+  return pdfs[0].fileId;
+}
+
+/** Professional document identities fail closed when independent visual review
+ * is unresolved. Technical-only delivery remains available for other document
+ * classes and is never mislabeled as professionally accepted. */
+export function retainedPdfExportFileId(
+  message: string, attachments: Array<{fileId:string; mimeType:string}>,
+  hasRetainedSource: (fileId:string)=>boolean,
+): string | null {
+  if (!sourcePreservingPdfExportRequest(message)) return null;
+  const pdfs = attachments.filter(file => file.mimeType === 'application/pdf');
+  if (pdfs.length !== 1 || !hasRetainedSource(pdfs[0].fileId)) return null;
+  return pdfs[0].fileId;
+}
+
+export function requiresProfessionalDocumentAcceptance(message: string, identity?: string | null): boolean {
+  if (/\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\b/i.test(message))
+    return true;
+  return new Set(['resume','financial-report','agreement','proposal']).has(identity ?? '');
+}
+
 export function answeredDocumentRequest(progress: {
   lastUserIntent?: string; objective: { text: string; userMessageId: string } | null;
   answered: Array<{ taskId?: string; userMessageId: string }>;

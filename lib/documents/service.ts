@@ -4,12 +4,13 @@ import { createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { cachedWorkflowValue } from '@/lib/standalone-accounting/workflow';
 import { currentAgentTask } from '@/lib/agents/policy';
 import { launchWebsiteBrowser } from '@/lib/research/website-evidence';
-import { parseDocument } from './model';
+import { parseDocument, type Inspection } from './model';
+import { rasterizePdf } from './render';
 import { PAGE, documentPageStyle } from './generate';
 import { isDocumentCapabilityDenial } from './intent';
 import { produceDocument, visualReportSchema } from './production';
 import { selectDocumentVisualInspector } from './visual-routing';
-import { documentLinks, documentStore, receiptSchema, type DocumentScope } from './storage';
+import { documentLinks, documentStore, hash, receiptSchema, type DocumentScope } from './storage';
 
 export async function deliverDocument(input: {
   result: ProviderResponse; provider: LlmProvider; params: ChatGenerateParams;
@@ -100,5 +101,38 @@ Include every current page exactly once. Use issue page=0 only for document-wide
   // Cached delivery can only be reused for its original authenticated scope.
   if (JSON.stringify(receipt.scope) !== JSON.stringify(scope)) throw new Error('Document delivery scope mismatch.');
   await Promise.all((['docx', 'pdf'] as const).map(format => documentStore().read(scope, receipt.id, format)));
+  return { ...input.result, text: documentLinks(receipt), content: undefined };
+}
+
+
+export async function deliverRetainedPdfSource(input: {
+  result: ProviderResponse; sourcePdf: Buffer; sourceSha256: string;
+  actorId: string; chatId: string; requestId: string;
+}): Promise<ProviderResponse> {
+  const accounting = getAccountingScope(), task = currentAgentTask();
+  let scope: DocumentScope;
+  if (accounting?.kind === 'standalone' && accounting.context.actorId === input.actorId && accounting.context.chatId === input.chatId && accounting.context.requestId === input.requestId) {
+    scope = { ownerId: accounting.context.userId, actorId: input.actorId, chatId: input.chatId, requestId: input.requestId };
+  } else if (accounting?.kind === 'orchestrator' && task?.actor_id === input.actorId && task.chat_id === input.chatId && task.request_id === input.requestId && process.env.KATIE_OWNER_AUTH_USER_ID) {
+    scope = { ownerId: process.env.KATIE_OWNER_AUTH_USER_ID, actorId: input.actorId, chatId: input.chatId, requestId: input.requestId };
+  } else throw new Error('Document production requires an authorized conversation or managed task.');
+  if (hash(input.sourcePdf) !== input.sourceSha256) throw new Error('Selected source PDF changed before delivery.');
+  const receipt = receiptSchema.parse(await cachedWorkflowValue('document-source-pdf-delivery-v1', async () => {
+    const browser = await launchWebsiteBrowser();
+    try {
+      const raster = await rasterizePdf(browser, input.sourcePdf);
+      // A byte-for-byte source return is not a newly generated professional artifact.
+      // Rasterization must succeed, but pre-existing visual/font findings remain part
+      // of the source and are not silently 'fixed' or represented as Katie acceptance.
+      const inspection: Inspection = {
+        pageCount: raster.images.length, findings: [], extractedText: raster.text,
+        pageHashes: raster.images.map(hash), visual: 'technical-only',
+      };
+      return documentStore().savePdfSource(scope, input.sourcePdf, inspection);
+    } finally { await browser.close().catch(() => undefined); }
+  }));
+  if (JSON.stringify(receipt.scope) !== JSON.stringify(scope)) throw new Error('Document delivery scope mismatch.');
+  const verified = await documentStore().read(scope, receipt.id, 'pdf');
+  if (hash(verified.bytes) !== input.sourceSha256) throw new Error('Delivered PDF does not match the selected source.');
   return { ...input.result, text: documentLinks(receipt), content: undefined };
 }

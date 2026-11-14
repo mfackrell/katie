@@ -1,17 +1,17 @@
 {
-  "schema_version": 1,
-  "measured_at": "2026-11-09",
-  "binding": "SHA-256 of exact engine source files and dependency lock; final commit/run receipts are attached to PR #997 after qualification.",
+  "schema_version": 2,
+  "measured_at": "2026-11-12",
+  "binding": "Fresh PR #1040 rerun after production-incident corrections. Engine/dependency SHA-256 values are exact; all final page-image SHA-256 values match the immutable PR #997 independent visual-review packet byte-for-byte.",
   "engine_files": {
     "lib/documents/generate.ts": "8d101890abbfddf6cc844b99f61bdab460c7424501bd9695049721e6b730b22d",
     "lib/documents/model.ts": "768e9e4f5259796726557cce90a72a959617509702d5327a9299c2821f8bd9cc",
     "lib/documents/markdown.ts": "f9aa3f312868ca792d870172ae42b0884eeea85e533f2c8bd1a186261ca811c0",
     "lib/documents/render.ts": "f726ba805834b575f9b86c261c25359b3b04f6e81ab57257fa9a158f0b6011a0",
-    "lib/documents/production.ts": "52f1bd0508205e1038f0c42b7c2a6955cd6ee76cbd8681848585dd17e1edd680",
-    "lib/documents/design.ts": "d0d9b8bf981738f5346cd573f0b78d99f6e17430b5497fb665e07474afb59c33",
+    "lib/documents/production.ts": "a795dc47dc23363533557cfdfe28e98274ebd71126492d769f6623e0e9b63660",
+    "lib/documents/design.ts": "2c62e0833183b23f5f1a92b56bd23e14dc8a67cd213ae60927dfa632e98d3caa",
     "lib/documents/continuity.ts": "a0551ea98a6e8afeccad031c05cca8bf1ace679e0a52ab1c4baf5266ed69b30d",
-    "lib/documents/service.ts": "a853612843743e958f051e6a189e08020269c8b33bf35b0782729c0f50c000ea",
-    "lib/documents/storage.ts": "824815cbd94ce83a72f6893e57b93460dd4f2b1fb739623f8d59439205fe9131",
+    "lib/documents/service.ts": "3f9bb709530f78b942fb7b8217eb9123a77da0f90c5eba3bf9d5646404557ac3",
+    "lib/documents/storage.ts": "b11a30772ccb77fb93be35c1b41fd6086b183ccede98b4e599cda709951014da",
     "lib/documents/saved-source.ts": "59fd082410000d4a9430f47b6a2e09ea0ae30a7adf7a0f5c2c30b044968161ea",
     "package-lock.json": "376cc7bdc62389bd244f36b4b60260d1ad7ebe779090f628e83d248bf110113a"
   },
@@ -29,24 +29,19 @@
     {
       "name": "executive-resume",
       "private": false,
-      "source_sha256": "8f7c093a0ff7e1ab04b6265088b2ea667098c75fa85dfa3e46ed30b7889bdda6",
-      "semantic_sha256": "06505668bc9e43a732794eeb524c0b49d209608ef8bb22f652ac7fb35ec2f5f2",
       "requested_pages": 2,
-      "docx_sha256": "e1d33472641fb5544ef0a9ee65d73a320aae9867245e30eaf03d04a4b21985f5",
+      "page_count_constraint": "PASS",
       "minimum_docx_body_pt": 11,
       "docx_semantic_fidelity": "PASS",
       "cross_render_parity": "PASS",
-      "page_count_constraint": "PASS",
       "office_line_coordinate_max_delta_pt": 0.1150000000000091,
       "renderers": {
         "chromium": {
-          "pdf_sha256": "067b7a10038126bcf20b25bdea25e4e35d7b5410a6f396971515395d68bddc01",
           "pages": 2,
-          "minimum_body_pt": 11.002499616562496,
+          "minimum_actual_font_pt": 11.002499616562496,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "41cf3593f20af8000fb7ac3181b9d8b5e0040b222b5aad0fc66f392b8057b3af",
@@ -54,13 +49,11 @@
           ]
         },
         "lo24": {
-          "pdf_sha256": "afb0b86ef9444b584a18ed0fedeab9f0259f5ef9101499a1322b3d178c3548ad",
           "pages": 2,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "ea85a77e2236ba27969095afd69afeab36bc9f1edc5e0eeb227ea791d4d18fb4",
@@ -68,13 +61,11 @@
           ]
         },
         "lo26": {
-          "pdf_sha256": "ae1e4cec3fb4a39c575139c589a68245c3cd6417c036b245de32d969d5ffff19",
           "pages": 2,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "6b9625635edcdd4ed1b911a7e0db159d7f0c80769ee3e75304808256ff754435",
@@ -86,50 +77,41 @@
     {
       "name": "financial-report",
       "private": false,
-      "source_sha256": "1b090b858a7719d5fa8af6366467d14e92033560167a33061cc71bb45dcab48d",
-      "semantic_sha256": "78315bffa63aacadf3e0e0161f60a729e7964287147cb37860e84166c88bcd22",
       "requested_pages": null,
-      "docx_sha256": "91ac02045156e5602459e22d983bca660b8ed6bb713e3d8e3619a799c720ee62",
+      "page_count_constraint": "NOT_REQUESTED",
       "minimum_docx_body_pt": 11,
       "docx_semantic_fidelity": "PASS",
       "cross_render_parity": "PASS",
-      "page_count_constraint": "NOT_REQUESTED",
       "office_line_coordinate_max_delta_pt": 0.08799999999996544,
       "renderers": {
         "chromium": {
-          "pdf_sha256": "fd1d2be0695dcdd04ca8b4347c515ff29f4308fc4b0250ef2a672f8bb6b1c00b",
           "pages": 1,
-          "minimum_body_pt": 11.002499616562496,
+          "minimum_actual_font_pt": 11.002499616562496,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "b8531b971920eb84f43489c82307d6dddb2da0ea5db492f3479c950623b57ba4"
           ]
         },
         "lo24": {
-          "pdf_sha256": "838af7e1b1af1d2071f42750c61a686c9f531b25dbc36247a6c88b454113cafe",
           "pages": 1,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "6bf23ea91db47aac65dc5fe0a65a6c5d242138d84b48623c0b245466fcc5e6e5"
           ]
         },
         "lo26": {
-          "pdf_sha256": "067390b6a580fe8809a5c2d7bb428a6cae9c68e5cbde9da3cd856adb68090082",
           "pages": 1,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "5cbfc7f07c17557fc6115514b705509df3a7093efc4b36db300eba158e01dc26"
@@ -140,50 +122,41 @@
     {
       "name": "business-agreement",
       "private": false,
-      "source_sha256": "b1a426c458f9ec069d9dc04648f749f9b2aea76ad769c7bfc1e104697f6fbcd3",
-      "semantic_sha256": "16620fd70ca8847ec9b3ed190f91b840138330d00d870f9256c88224e7857688",
       "requested_pages": null,
-      "docx_sha256": "e28a6b15b26dff1f094a268feca17f7c6250abe02a37f1cde2d9921febd528fb",
+      "page_count_constraint": "NOT_REQUESTED",
       "minimum_docx_body_pt": 11,
       "docx_semantic_fidelity": "PASS",
       "cross_render_parity": "PASS",
-      "page_count_constraint": "NOT_REQUESTED",
       "office_line_coordinate_max_delta_pt": 0.09900000000004638,
       "renderers": {
         "chromium": {
-          "pdf_sha256": "56c9129b467e0f9903bd169b47ef52fd525ed9b37471ae21d15b8c10a550cb00",
           "pages": 1,
-          "minimum_body_pt": 11.002499616562496,
+          "minimum_actual_font_pt": 11.002499616562496,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "ff837341fdefa681be64f0de8b05b8c87540b867d63c15e3a5855f053a6eb776"
           ]
         },
         "lo24": {
-          "pdf_sha256": "c87d1715c715a29ebb803e99959379ff332776615cae30b5e4d9d14c5cd31613",
           "pages": 1,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "bc64d13901133627e57b54ead3e53106a73efa6a9a14965d907c7df92812ec71"
           ]
         },
         "lo26": {
-          "pdf_sha256": "5a23408ae90778c6943c2b648932c929bba8a29a22e7de5f61a48ba50086d904",
           "pages": 1,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "13426c47b3fe4bd767add7fed35b4bbb549ed25adaa39ef8ac3d288050785e1b"
@@ -194,50 +167,41 @@
     {
       "name": "large-heading",
       "private": false,
-      "source_sha256": "dcc97f225316d2ebe3b388a54a7b70c4bba86ac989061a01e8fd75ff588b350a",
-      "semantic_sha256": "6739dc827f6f4d19298a19617f8ed02d25dee797a9cb26e78dcabda5b2eea062",
       "requested_pages": null,
-      "docx_sha256": "355844e429224a9216749fd04c372f3b1f86f8356ce651273f978f1a1be3f0ab",
+      "page_count_constraint": "NOT_REQUESTED",
       "minimum_docx_body_pt": 11,
       "docx_semantic_fidelity": "PASS",
       "cross_render_parity": "PASS",
-      "page_count_constraint": "NOT_REQUESTED",
       "office_line_coordinate_max_delta_pt": 0.12599999999997635,
       "renderers": {
         "chromium": {
-          "pdf_sha256": "c3763394cc4dc97f386d4cb8970d0e78d15535137cc0f76aa3fea70844419094",
           "pages": 1,
-          "minimum_body_pt": 11.002499616562496,
+          "minimum_actual_font_pt": 11.002499616562496,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "bde2d90a55c8a5df35c9940703802cb886b6888a96fa6690f4b287e5129c7fdd"
           ]
         },
         "lo24": {
-          "pdf_sha256": "86dc1fe11819021464c0707763331a6b7af015e944aabc8d3745c57f696ee828",
           "pages": 1,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "353bc5b8e57a7e1cbee0b869adc9a79284757060f8640e4b7cf6c35673a16d65"
           ]
         },
         "lo26": {
-          "pdf_sha256": "4d14ba181d17f071cc07947db91529e48ad20f8d05c6fe17bd70e7f5421a3907",
           "pages": 1,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "40848d3db2198a2c1c5e97262f6fb8a39506973b3f726d019ea19504486f084c"
@@ -248,24 +212,20 @@
     {
       "name": "private-resume",
       "private": true,
-      "source_sha256": "b466561895813598f7b5b0f9f09cda5ca6e0f130e85f96c2369577e839900aa3",
-      "semantic_sha256": "0a80fbec3b889c44126f5153bf19599da5b136de321654aa0777de7cc3ad6acb",
       "requested_pages": 2,
-      "docx_sha256": "86a066f1b57161f501df016ce4987e7b5d150c2453503a84b8f712416a5e3d76",
+      "page_count_constraint": "PASS",
       "minimum_docx_body_pt": 11,
       "docx_semantic_fidelity": "PASS",
       "cross_render_parity": "PASS",
-      "page_count_constraint": "PASS",
       "office_line_coordinate_max_delta_pt": 0.17250000000001364,
+      "source_sha256": "b466561895813598f7b5b0f9f09cda5ca6e0f130e85f96c2369577e839900aa3",
       "renderers": {
         "chromium": {
-          "pdf_sha256": "eb2418655ac9c8216001a8a22e88ca3af5dc4f9de660f43a2c88884aa68b7925",
           "pages": 2,
-          "minimum_body_pt": 11.002499616562496,
+          "minimum_actual_font_pt": 11.002499616562496,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "3f582406afd170c50a9936404d2afbafe36f52a802e98abaff9e06514d94bf1b",
@@ -273,13 +233,11 @@
           ]
         },
         "lo24": {
-          "pdf_sha256": "d4e56c46ff20425979b4908dd432095d1ef94e4d1fc10ad943449ab24662d99d",
           "pages": 2,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "18efedac250195db3fde5a46e91b6b1e1b5bd71dde508fb6dbbcefca655f58d3",
@@ -287,13 +245,11 @@
           ]
         },
         "lo26": {
-          "pdf_sha256": "1c03462f8a3c9604aa81710e455c72933bba2722ca47a9c74e863eb66417440f",
           "pages": 2,
-          "minimum_body_pt": 11,
+          "minimum_actual_font_pt": 11,
           "semantic_fidelity": "PASS",
           "heading_continuity": "PASS",
           "split_groups": [],
-          "all_blocks_intact": true,
           "margin_check": "PASS",
           "image_sha256": [
             "6f53c4df5425736b1ccf78089b39afcd079417de5c74562a0356544c6b4abceb",
@@ -303,6 +259,6 @@
       }
     }
   ],
-  "contains_private_manuscript_or_images": false,
-  "independent_visual_review": "PENDING"
+  "independent_visual_review": "PR #997 independent AI review remains artifact-bound because all 12 reviewed final page-image hashes are identical on this fresh rerun; no verdict was transferred to changed pixels.",
+  "contains_private_manuscript_or_images": false
 }

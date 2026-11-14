@@ -284,6 +284,17 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
   return { counts, chunks, generationInputs, reviews, ...state };
 }
 
+test('actual route ordinary generation remains executable after retained-PDF export integration', async () => {
+  assert.doesNotMatch(runAttempt, /retainedPdfExportAttachment/,
+    'ordinary generation must not capture the retained-PDF binding');
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  const selected = await select(f, { message: SHORT_REPLY, messageId: REPLY_ID, priorTaskProgress: progress, history });
+  const result = await runPipeline(f, selected, { history });
+  assert.equal(result.counts.provider, 1);
+  assert.equal(result.chunks.find(chunk => chunk.type === 'content').text, EXPLANATION);
+});
+
 test('actual route rejects the old October pending task and answers the 97-character clarification directly', async () => {
   assert.equal(SHORT_REPLY.length, 97);
   const f = fixture();
@@ -864,4 +875,37 @@ test('actual route response-policy inputs ignore legacy companion pending obliga
   assert.equal(selected.responsePolicy.requiresSubstantiveProcessing, false);
   assert.equal(selected.taskProgressContext, '');
   assert.equal(selected.requiredReviewForRequest, false);
+});
+
+
+test('actual route admits retained source only for PDF-only output and blocks mixed PDF plus Word', async () => {
+  const start=routeSource.indexOf('const retainedPdfExportFileId = documentProduction');
+  const end=routeSource.indexOf('if (timelineActive && temporalIntent)',start);
+  assert.ok(start>0 && end>start,'retained PDF admission block must exist in production route');
+  const productionBlock=routeSource.slice(start,end);
+  const intentExports={};
+  vm.runInNewContext(compile(readFileSync('lib/documents/intent.ts','utf8')),{
+    exports:intentExports,require:nativeRequire,Set,Map,
+  });
+  const run=async(message,hasOriginal=true)=>{
+    const attachment={fileId:'resume-pdf',id:'stored-resume',mimeType:'application/pdf',fileName:'resume.pdf'};
+    const context={
+      message,attachments:[attachment],documentProduction:{},pdfSources:new Map([['resume-pdf',{...attachment,hasOriginal}]]),
+      retainedPdfExportAttachment:null,retainedPdfDualFormatAttachment:null,
+      resolveRetainedPdfExportFileId:intentExports.retainedPdfExportFileId,
+      resolveRetainedPdfDualFormatFileId:intentExports.retainedPdfDualFormatFileId,
+    };
+    return plain(await vm.runInNewContext(compile(`(async()=>{${productionBlock}
+      return {
+        pdfOnly:retainedPdfExportAttachment?.fileId ?? null,
+        dual:retainedPdfDualFormatAttachment?.fileId ?? null,
+      };})()`),context));
+  };
+  assert.deepEqual(await run('create a pdf of my resume'),{pdfOnly:'resume-pdf',dual:null});
+  assert.deepEqual(await run('create a PDF of my resume and a Word document'),{pdfOnly:null,dual:'resume-pdf'});
+  assert.deepEqual(await run('export my resume as PDF and DOCX'),{pdfOnly:null,dual:'resume-pdf'});
+  assert.deepEqual(await run('create a one-page pdf of my resume'),{pdfOnly:null,dual:null});
+  assert.deepEqual(await run('create a pdf of my resume',false),{pdfOnly:null,dual:null});
+  assert.match(routeSource,/SOURCE_PDF_DUAL_FORMAT_UNSUPPORTED/);
+  assert.match(routeSource,/No files were generated\. Request PDF only/);
 });

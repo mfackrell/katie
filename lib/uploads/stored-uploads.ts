@@ -735,6 +735,24 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (expectedActorId && record.actorId === expectedActorId) registerVideoTiming(record.reference, record.decoderTiming);
       return record.reference;
     },
+    async retainedSource(chatId: string, attachment: ConversationAttachment, expectedActorId: string): Promise<{ bytes: Buffer; sha256: string; fileName: string; mimeType: string }> {
+      if (attachment.chatId && attachment.chatId !== chatId) throw new UploadInputError("Attachment belongs to another conversation.");
+      if (attachment.actorId && attachment.actorId !== expectedActorId) throw new UploadInputError("Attachment belongs to another actor.");
+      const path = conversationPath(chatId, attachment.id);
+      const stored = await objects.download(`${path}.json`);
+      if (stored.error || !stored.data) throw new UploadInputError("Saved attachment metadata is unavailable.");
+      const record = JSON.parse(await stored.data.text()) as { reference: FileReference & { sourceFingerprint?: string }; hasSource: boolean; actorId?: string };
+      if (record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("This file belongs to a different actor.");
+      if (!record.hasSource) throw new UploadInputError("The retained original is unavailable.");
+      const source = await objects.download(`${path}.source`);
+      if (source.error || !source.data || source.data.size < 1 || source.data.size > 8_000_000)
+        throw new UploadInputError("The retained original is unavailable or exceeds the document limit.");
+      const bytes = Buffer.from(await source.data.arrayBuffer());
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      if (record.reference.sourceFingerprint && record.reference.sourceFingerprint !== sha256)
+        throw new UploadInputError("The retained original failed source-integrity verification.");
+      return { bytes, sha256, fileName: record.reference.fileName, mimeType: record.reference.mimeType };
+    },
     // Recover visual evidence only after Gemini fails. This reads the original
     // video already saved for this actor and persists extracted frames privately
     // for every subsequent retry, without asking for another upload.
@@ -1102,6 +1120,7 @@ export const hydrateStoredAttachments = (references: FileReference[]) =>
 
 export const persistConversationAttachment = (chatId: string, reference: FileReference, token?: string, options?: { source?: Blob; description?: Partial<ConversationAttachment>; actorId?: string }) => getUploadService().persist(chatId, reference, token, options);
 export const restoreConversationAttachment = (chatId: string, attachment: ConversationAttachment, actorId?: string) => getUploadService().restore(chatId, attachment, actorId);
+export const loadConversationAttachmentSource = (chatId: string, attachment: ConversationAttachment, actorId: string) => getUploadService().retainedSource(chatId, attachment, actorId);
 export const updateSavedImageObservation = (chatId:string,attachment:ConversationAttachment,actorId:string,description:Partial<ConversationAttachment>) => getUploadService().updateImageObservation(chatId,attachment,actorId,description);
 export const recoverSavedVideoFrames = (chatId: string, attachment: ConversationAttachment, actorId: string) => getUploadService().recoverSavedVideoFrames(chatId, attachment, actorId);
 export const recoverUploadVideoFrames = (referenceToken: string) => getUploadService().recoverUploadVideoFrames(referenceToken);
