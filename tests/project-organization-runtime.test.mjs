@@ -265,3 +265,43 @@ test('delegation amendments require immediate reporting authority and never ente
  assert.throws(()=>assertManagementCommands(root,[direct,other],[{...command,nodeId:other.id}]),e=>e.evidence?.action==='amend_delegation'&&e.evidence?.code==='immediate_reporting_authority');
  assert.throws(()=>assertManagementCommands(root,[direct],[command],true),/Recovery permits/);
 });
+
+
+test('ratified provider trial guides its existing root to delegate Game Delivery, without synthetic model decisions',()=>{
+ const {scopedRootDelegationDirective}=modules()('@/lib/projects/organization');
+ const root=randomUUID(),game=randomUUID(),qa=randomUUID(),scope='f'.repeat(64);
+ const paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const deadline='2026-11-15T18:00:00.000Z';
+ const input={
+  providerControlled:true,principal:{id:root,kind:'project_director'},
+  project:{phase:'development',approved_hash:scope},
+  scopedNodes:[
+   {id:root,kind:'project_director',status:'active'},
+   {id:game,parent_id:root,area:'game_delivery',kind:'manager',management_level:'functional_director',status:'active',tools:['manage','analysis','repository_review'],deadline},
+   {id:qa,parent_id:root,area:'independent_qa',kind:'manager',management_level:'functional_director',status:'active',tools:['manage','analysis','repository_review'],deadline},
+  ],
+  scopeGrants:[{node_id:root,scope_hash:scope,paths}],
+  workPackages:[],
+ };
+ const text=scopedRootDelegationDirective(input);
+ assert.match(text,/RATIFIED DEVELOPMENT PREWORK/);
+ assert.match(text,/Do NOT appoint/);
+ assert.match(text,/amend_delegation/);
+ assert.match(text,/grant_scope/);
+ assert.match(text,new RegExp(game));
+ assert.match(text,/expectedTools exactly/);
+ assert.match(text,/expectedDeadline exactly 2026-11-15T18:00:00.000Z/);
+ assert.match(text,/Independent QA separation/);
+ assert.match(text,/Finish with ready/);
+ assert.equal(text.includes(qa),false,'QA must not receive implementation authority');
+ assert.equal(scopedRootDelegationDirective({...input,providerControlled:false}),'');
+ assert.equal(scopedRootDelegationDirective({...input,project:{...input.project,phase:'research'}}),'');
+ assert.equal(scopedRootDelegationDirective({...input,workPackages:[{id:randomUUID()}]}),'');
+ assert.equal(scopedRootDelegationDirective({...input,scopeGrants:[]}),'');
+
+ const withDev={...input,scopedNodes:input.scopedNodes.map(n=>n.id===game?{...n,tools:[...n.tools,'development']}:n)};
+ const grantOnly=scopedRootDelegationDirective(withDev);
+ assert.match(grantOnly,/grant_scope/);assert.doesNotMatch(grantOnly,/Issue amend_delegation/);
+ const fullyDelegated={...withDev,scopeGrants:[...input.scopeGrants,{node_id:game,scope_hash:scope,paths}]};
+ assert.equal(scopedRootDelegationDirective(fullyDelegated),'');
+});
