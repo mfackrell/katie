@@ -344,8 +344,85 @@ export async function assertProjectScopeRatification(db){
       await db.query('release savepoint ratification_replay_rejection');
     }
 
+    // After scope ratification, a deeper manager may still be marked pending.
+    // Before the first scoped package, select the Project Director first to
+    // authorize direct reports; never spend a subordinate management inference
+    // while the root grant has not yet propagated to delivery.
+    await db.query('reset role');
+    await db.query('update project_organization_nodes set decision_needed=true where id in ($1,$2)',[rootNode.id,game.id]);
+    await db.query('set role service_role');
+    assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+    // Exhausted management capacity must never be reactivated by a scheduler
+    // change alone. Require a separate, fresh, audited owner resource receipt;
+    // keep this entire test fixture inside a rollback savepoint.
+    await db.query('savepoint scoped_mission_capacity_recovery');
+    try{
+      await db.query('reset role');
+      const beforeCapacity=(await db.query('select max_missions,token_allowance from work_projects where id=$1',[project])).rows[0];
+      const consumed=(await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n;
+      assert.ok(consumed>0,'capacity fixture must retain actual management missions');
+      await db.query("update work_projects set status='blocked',detail='Approved project mission limit reached',max_missions=$2,active_mission_id=null,lease=null,lease_until=null where id=$1",[project,consumed]);
+      await db.query('set role service_role');
+      const authorizationId=randomUUID(),authorizedMaximum=consumed+16;
+      const resumeArgs=[owner,project,release,prepared.scopeHash,authorizationId,consumed,authorizedMaximum];
+      const resumeSql='select project_org_resume_after_capacity_authorization($1,$2,$3,$4,$5,$6,$7) r';
+      await db.query('savepoint unapproved_capacity_recovery');
+      try{
+        await assert.rejects(db.query(resumeSql,resumeArgs),/Fresh owner-approved mission-only resource receipt required/,
+          'a capacity deficit never authorizes automatic resumption');
+      }finally{
+        await db.query('rollback to savepoint unapproved_capacity_recovery');
+        await db.query('release savepoint unapproved_capacity_recovery');
+      }
+      assert.equal((await db.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
+      const grant=(await db.query(
+        'select authorize_work_project_resources($1,$2,$3,$4,$5,$6,$7,$8,$9) r',
+        [project,actor,chat,beforeCapacity.token_allowance,null,authorizedMaximum,null,authorizationId,
+          'Owner explicitly approved only a bounded mission safeguard renewal for exact release '+release+' and exact game scope '+prepared.scopeHash+'.']
+      )).rows[0].r;
+      assert.equal(grant.maxMissions,authorizedMaximum);
+      await db.query('savepoint wrong_capacity_owner');
+      try{
+        await assert.rejects(db.query(resumeSql,[randomUUID(),...resumeArgs.slice(1)]),
+          /Authenticated original project owner required/);
+      }finally{
+        await db.query('rollback to savepoint wrong_capacity_owner');
+        await db.query('release savepoint wrong_capacity_owner');
+      }
+      await db.query('savepoint wrong_capacity_release');
+      try{
+        await assert.rejects(db.query(resumeSql,[owner,project,'d'.repeat(40),...resumeArgs.slice(3)]),
+          /Fresh owner-approved mission-only resource receipt required/,
+          'the owner receipt must bind to the exact candidate release, not any source SHA');
+      }finally{
+        await db.query('rollback to savepoint wrong_capacity_release');
+        await db.query('release savepoint wrong_capacity_release');
+      }
+      const resumedCapacity=(await db.query(resumeSql,resumeArgs)).rows[0].r;
+      assert.equal(resumedCapacity.status,'running');
+      assert.equal(resumedCapacity.approvedMaxMissions,authorizedMaximum);
+      assert.equal(resumedCapacity.historicalMissions,consumed);
+      assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,consumed,
+        'capacity recovery must not dispatch, rewrite, or delete any historical management mission');
+      assert.equal((await db.query("select count(*)::int n from project_events where project_id=$1 and event='project_capacity_resumed'",[project])).rows[0].n,1);
+      assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+      assert.equal((await db.query('select status from work_projects where id=$1',[project])).rows[0].status,'running');
+      await db.query('savepoint replay_capacity_recovery');
+      try{
+        await assert.rejects(db.query(resumeSql,resumeArgs),/Blocked capacity state, immutable scope or execution authority changed/,
+          'an owner authorization may resume the original blocked project only once');
+      }finally{
+        await db.query('rollback to savepoint replay_capacity_recovery');
+        await db.query('release savepoint replay_capacity_recovery');
+      }
+    }finally{
+      await db.query('rollback to savepoint scoped_mission_capacity_recovery');
+      await db.query('release savepoint scoped_mission_capacity_recovery');
+      await db.query('set role service_role');
+    }
     const resumed=await session();
-    assert.equal(resumed.node,rootNode.id);assert.notEqual(resumed.mission,blocked.mid);
+    assert.equal(resumed.node,rootNode.id,'root scope delegation must precede deeper pending management before the first coding package');
+    assert.notEqual(resumed.mission,blocked.mid);
     const resumedMission=(await db.query('select * from agent_missions where id=$1',[resumed.mission])).rows[0];
     assert.equal(resumedMission.project_kind,'management');
     assert.equal(resumedMission.project_evidence.providerContinuationWindow,windowId);
