@@ -48,6 +48,7 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  await db.query(readFileSync('supabase/migrations/20261113210000_prework_hierarchy_delegation_priority.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261022234500_authorize_saved_project_resources.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261114170000_owner_scoped_mission_capacity_resume.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261114174000_scoped_root_retry_epoch.sql','utf8'));
  assert.deepEqual(await snapshot(),before,'Recovery migrations must preserve existing records');
  await (await import('./assert-project-scope-ratification.mjs')).assertProjectScopeRatification(db,rival);
  if(process.env.KATIE_TEST_DIRECTOR_ONE_SHOT==='1'){
