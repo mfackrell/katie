@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState, type ClipboardEventHandler, type KeyboardEventHandler, type ReactNode, type MutableRefObject } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ClipboardEventHandler, type KeyboardEventHandler, type ReactNode, type MutableRefObject } from "react";
 
 type Props = {
   externalValue: string;
@@ -54,7 +54,7 @@ export const ChatComposerInput = memo(function ChatComposerInput(props: Props) {
     if (resizeFrame.current !== null) cancelAnimationFrame(resizeFrame.current);
   }, []);
 
-  const scheduleResize = () => {
+  const scheduleResize = useCallback(() => {
     if (resizeFrame.current !== null) cancelAnimationFrame(resizeFrame.current);
     resizeFrame.current = requestAnimationFrame(() => {
       resizeFrame.current = null;
@@ -63,7 +63,13 @@ export const ChatComposerInput = memo(function ChatComposerInput(props: Props) {
       textarea.style.height = "auto";
       textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
     });
-  };
+  }, [props.textareaRef]);
+
+  // External resets queue setValue in an earlier effect; their frame can run
+  // before that value commits. Re-measure after the local value is rendered.
+  useEffect(() => {
+    scheduleResize();
+  }, [value, props.resetVersion, scheduleResize]);
 
   const onChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const next = event.currentTarget.value;
