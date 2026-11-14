@@ -31,6 +31,8 @@ begin
     or (ev.data->>'newMaxMissions')::integer is distinct from p_approved_max
     or ev.data->>'oldAllowance' is distinct from ev.data->>'newAllowance'
     or ev.data->>'oldDeadline' is distinct from ev.data->>'newDeadline'
+    or position(p_release in coalesce(ev.data->>'approvalNote',''))=0
+    or position(p_scope_hash in coalesce(ev.data->>'approvalNote',''))=0
     or ev.data->>'preservedStatus' is distinct from 'blocked'
     or ev.data->>'preservedActiveMission' is not null
  then raise exception 'Fresh owner-approved mission-only resource receipt required';end if;
