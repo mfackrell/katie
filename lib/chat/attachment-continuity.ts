@@ -22,6 +22,15 @@ export interface ConversationAttachment {
     disposition:'observation'|'policy-limited'|'unavailable';
   }>;
   observationAgreement?: 'single'|'corroborated'|'conflict'|'unverified'|'policy-limited';
+  /** Explicit owner-approved correction, never generated from raw provider reports. */
+  manualCorrection?: {
+    approvedByUser: boolean;
+    correctedAt: string;
+    correctedBy: string;
+    originalSummaryModel: string;
+    sourceMessageId?: string;
+    reason?: string;
+  };
   createdAt?: string;
   hasOriginal?: boolean;
   chatId?: string;
