@@ -49,8 +49,29 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  await db.query(readFileSync('supabase/migrations/20261022234500_authorize_saved_project_resources.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261114170000_owner_scoped_mission_capacity_resume.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261114174000_scoped_root_retry_epoch.sql','utf8'));
+ const g6Snapshot=async()=>{
+  const organization={};
+  for(const table of ['project_organization_nodes','project_organization_leadership','project_organization_decisions','project_organization_assignments','project_organization_exceptions','project_organization_scope_grants','project_scope_ratification_approvals','project_organization_closures']){
+   organization[table]=(await db.query('select to_jsonb(t) row from '+table+' t order by to_jsonb(t)::text')).rows;
+  }
+  return {
+  records:await snapshot(),
+  organization,
+  privileges:(await db.query("select proacl,prosecdef,proconfig,proowner,provolatile from pg_proc where oid='public.project_org_decide_hierarchy(uuid,uuid,jsonb)'::regprocedure")).rows,
+  amendment:(await db.query("select pg_get_functiondef('public.project_org_amend_delegation(uuid,uuid,jsonb)'::regprocedure) body")).rows[0].body,
+ };};
+ const beforeG6=await g6Snapshot();
+ const beforeG6Body=(await db.query("select pg_get_functiondef('public.project_org_decide_hierarchy(uuid,uuid,jsonb)'::regprocedure) body")).rows[0].body;
+ await db.query(readFileSync('supabase/migrations/20261114183104_g6_qa_identity_compatibility.sql','utf8'));
+ assert.deepEqual(await g6Snapshot(),beforeG6,'G6 preserves data, identities, history, privileges and the existing amendment correction');
+ const afterG6Body=(await db.query("select pg_get_functiondef('public.project_org_decide_hierarchy(uuid,uuid,jsonb)'::regprocedure) body")).rows[0].body;
+ assert.equal(afterG6Body.replaceAll("in ('quality_assurance','independent_qa')","='quality_assurance'").replaceAll("area ='quality_assurance'","area='quality_assurance'").replace("c->>'area' ='quality_assurance'","c->>'area'='quality_assurance'"),beforeG6Body,'Only the four QA designation predicates may differ');
+ assert.equal((afterG6Body.match(/in \('quality_assurance','independent_qa'\)/g)||[]).length,4);
+ assert.match(beforeG6.amendment,/area in \('quality_assurance','independent_qa'\)/);
+
  assert.deepEqual(await snapshot(),before,'Recovery migrations must preserve existing records');
  await (await import('./assert-project-scope-ratification.mjs')).assertProjectScopeRatification(db,rival);
+ await (await import('./assert-project-qa-compatibility.mjs')).assertProjectQaCompatibility(db);
  if(process.env.KATIE_TEST_DIRECTOR_ONE_SHOT==='1'){
   await (await import('./assert-director-one-shot-recovery.mjs')).assertDirectorOneShotRecovery(db,rival);
  }else{
