@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import sharp from "sharp";
 import * as XLSX from "xlsx";
-import { selectStoredAttachments, loadSelectedAttachmentSources, rankAttachmentCandidates, parseAttachmentSelectorResponse } from "../lib/chat/attachment-selection";
+import { selectStoredAttachments, loadSelectedAttachmentSources, rankAttachmentCandidates, parseAttachmentSelectorResponse, recentImageCorrectionSource } from "../lib/chat/attachment-selection";
 import { attachmentAccessContext, type ConversationAttachment } from "../lib/chat/attachment-continuity";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
 import { buildImageReference, imageFileFromDataUrl } from "../lib/uploads/image-reference";
@@ -507,4 +507,32 @@ test("blocked selector never treats cross-chat or automatically reused images as
     [auto], autoHistory, async () => ({ selections: [] }), [],
     { currentChatId: "current-chat", activeProject: null });
   assert.equal(newTopic.selections.length, 0, "a topic change cannot inject an image");
+});
+
+test("verified current-chat image correction reopens exact uploaded file without a selector",()=>{
+  const actorId="actor-a",chatId="chat-a";
+  const photo:ConversationAttachment={id:"020f021b-5d2b-4c15-ae3e-725e0c9d82fa",fileName:"katie-generated.jpeg",
+    mimeType:"image/jpeg",chatId,actorId,conversationUsage:"uploaded",hasOriginal:true,
+    summaryModel:"runpod:Qwen/Qwen3-VL-8B-Instruct",summaryCoverage:"full",
+    observedSummary:"Woman seated at a table, looking at camera."};
+  const different:ConversationAttachment={...photo,id:"11111111-1111-4111-8111-111111111111",chatId:"other-chat"};
+  const history:Message[]=[
+    {id:"user-image",chatId,role:"user",createdAt:"2026-11-15T18:08:55Z",
+      content:"Assess the attractiveness of the person in this image",attachments:[photo]},
+    {id:"assistant-refusal",chatId,role:"assistant",createdAt:"2026-11-15T18:09:35Z",
+      content:"I cannot assess real people."},
+  ];
+  const decision=recentImageCorrectionSource({message:"It's not a real person Katie. It's an image YOU created.",
+    catalog:[different,photo],history,actorId,chatId,newAttachmentCount:0});
+  assert.equal(decision?.method,"continuity");
+  assert.deepEqual(decision?.selections,[{attachment:photo,mode:"source"}]);
+  for(const msg of ["How is the weather?","New topic: an image I saw","Compare both images"]){
+    assert.equal(recentImageCorrectionSource({message:msg,catalog:[photo],history,actorId,chatId,newAttachmentCount:0}),null);
+  }
+  assert.equal(recentImageCorrectionSource({message:"You created this image",catalog:[different],history,actorId,chatId,newAttachmentCount:0}),null);
+  assert.equal(recentImageCorrectionSource({message:"You created this image",catalog:[photo],history,actorId:"another-actor",chatId,newAttachmentCount:0}),null);
+  assert.equal(recentImageCorrectionSource({message:"You created this image",catalog:[photo],history,actorId,chatId,newAttachmentCount:1}),null);
+  const reused={...photo,conversationUsage:"contextual" as const};
+  assert.equal(recentImageCorrectionSource({message:"You created this image",catalog:[photo],history:[{...history[0],attachments:[reused]},history[1]],actorId,chatId,newAttachmentCount:0}),null);
+  assert.equal(recentImageCorrectionSource({message:"You created this image",catalog:[photo],history:[{...history[0],attachments:[photo,different]},history[1]],actorId,chatId,newAttachmentCount:0}),null);
 });
