@@ -83,6 +83,10 @@ test("visual correction binding rejects forged, ambiguous, stale, and cross-chat
   assert.equal(pick([saved],[turn([upload]),assistant],"chat-b"),null);
   assert.equal(pick([saved],[turn([upload]),{id:"new-topic",chatId:"chat-a",role:"user",content:"New topic: revenue"},
     assistant]),null);
+  assert.equal(pick([saved],[turn([upload]),{id:"casual-chat",chatId:"chat-a",role:"user",content:"I had coffee this morning"},
+    assistant]),null,"an intervening unrelated exchange cannot refresh the image anchor");
+  assert.equal(pick([saved],[turn([upload]),{id:"correction",chatId:"chat-a",role:"user",content:"No, that's not what I saw"},
+    assistant])?.selections[0]?.attachment.id,image.id,"a continued image correction may retain the same source");
   assert.equal(pick([saved],[turn([upload]),{id:"one",chatId:"chat-a",role:"user",content:"Tell me a joke"},
     {id:"two",chatId:"chat-a",role:"user",content:"What's the weather?"}]),null);
   assert.equal(recentVerifiedVisualCorrection("Help me write an email",[saved],[turn([upload]),assistant],"chat-a"),null);
