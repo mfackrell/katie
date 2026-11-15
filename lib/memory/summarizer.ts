@@ -601,6 +601,15 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     if (commit.error) throw new Error("Intermediate memory checkpoint unavailable: " + commit.error.message);
     if (commit.data !== true) {
       console.warn("[Summarizer] Checkpoint concurrently advanced; preserve newer version", { chatId });
+      // The source cursor is authoritative. The provider call already ran, so
+      // finalize this losing claim rather than leave an immortal processing row.
+      const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch", {
+        p_actor_id:chat.actorId, p_chat_id:chatId, p_batch_end_message_id:checkpoint.id,
+        p_processor_version:processorVersion(provider), p_state:"blocked",
+        p_reason:"Concurrent ITM checkpoint already advanced; previous provider receipt retained",
+      });
+      if(finished.error || finished.data !== true)
+        console.error("[Summarizer] Concurrent stale claim could not be finalized", {chatId,sourceEnd:checkpoint.id});
       return "deferred";
     }
     const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {

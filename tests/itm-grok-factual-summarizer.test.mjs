@@ -396,6 +396,8 @@ test("atomic cursor prevents stale writes and preserves previous memory", async 
   assert.equal(await h.run(), "deferred");
   assert.deepEqual(h.memory(), prior);
   assert.equal(h.writes.length, 0);
+  assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
+  assert.equal(await h.run(),"blocked","stale paid claim cannot retransmit");
 });
 
 test("model prompts require factual narratives and prohibit interpretive memory", async () => {
