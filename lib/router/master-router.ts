@@ -20,7 +20,6 @@ import {
   validateRoutingDecision
 } from "@/lib/router/model-intent";
 import { shortlistDecisionCandidates } from "@/lib/router/candidate-shortlist";
-import { getAccountingScope } from "@/lib/standalone-accounting/context";
 import { getModelPrice } from "@/lib/standalone-accounting/pricing";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
