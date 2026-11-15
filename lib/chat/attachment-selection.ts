@@ -4,6 +4,7 @@ import { googleGenerateContent as generateAccountedContent } from "@/lib/provide
 const googleGenerateContent: typeof generateAccountedContent = (apiKey, request) => runWithStandaloneActivity("attachment-selection", () => generateAccountedContent(apiKey, request));
 import { z } from "zod";
 import { selectFollowUpAttachments, requestedAttachmentKind, matchesAttachmentKind, type ConversationAttachment } from "./attachment-continuity";
+import { verifiedKatieVisualEpisode } from "./visual-memory";
 import type { FileReference } from "@/lib/providers/types";
 import type { Message } from "@/lib/types/chat";
 
@@ -84,6 +85,55 @@ const VIDEO_CONCLUSION_CHALLENGE = /\b(?:you (?:said|claimed|thought|misread|mis
 const SHORT_CORRECTION = /^(?:no[.! ,]|i disagree\b|you(?:'re| are| were| got) wrong\b|that's (?:incorrect|wrong|not true)\b|not true\b|incorrect\b|you missed\b)/i;
 const CLEAR_TOPIC_CHANGE = /\b(?:new topic|unrelated|switch (?:topic|subjects?)|change (?:the )?subject|forget (?:that|the video)|creative|dirtier|repeat(?:ing)? yourself|write (?:me|an?|the)\b|draft\b|remind me\b|schedule\b|translate\b|calculate\b|find me\b|search for\b|what time\b|tell me about (?!that\b|this\b|it\b|the (?:video|recording|clip)\b))\b/i;
 const SUMMARY_ONLY_VISUAL = /\b(?:saved summary only|summary only|don't (?:open|inspect)|do not (?:open|inspect))\b/i;
+
+/**
+ * A correction of Katie's immediate assessment of a *user-uploaded* picture
+ * must retain that same image's verified Qwen episode across model switches.
+ * Do not send a new Gemini selector call to decide whether that upload exists.
+ *
+ * This is deliberately narrower than general media search: current chat only,
+ * one latest upload, bounded to two user turns, and a source-hash-bound
+ * observation. It cannot silently choose among multiple pictures or borrow an
+ * earlier actor's image. A fresh inspection still goes through ordinary paid
+ * vision authorization and source restoration.
+ */
+export function recentVerifiedVisualCorrection(
+  message: string, catalog: ConversationAttachment[], history: Message[],
+  currentChatId?: string,
+): AttachmentDecision | null {
+  const text = message.trim();
+  if (!currentChatId || !text || text.length > 350 || CLEAR_TOPIC_CHANGE.test(text) ||
+      /\b(?:compare|contrast|versus|both|each|all images|another image|different image|new photo|previous photo)\b/i.test(text))
+    return null;
+  const explicitCorrection =
+    /\b(?:not (?:a|an|the) real person|(?:an?|the|this|that) (?:ai[- ]generated |generated )?(?:image|picture|photo) (?:you|katie) (?:created|generated|made)|(?:you|katie) (?:made|created|generated) (?:that|this|the) (?:image|picture|photo)|you (?:were|are|got) wrong about (?:the|that|this) (?:image|photo|picture)|(?:look|looking) again at (?:that|this|the) (?:image|photo|picture))\b/i.test(text) ||
+    (/\b(?:image|picture|photo|rendering|portrait)\b/i.test(text) &&
+      /\b(?:you (?:saw|looked|described|misread|assessed|refused)|your (?:assessment|description|refusal|analysis)|(?:that's|that is|it's|it is) (?:not|an?))\b/i.test(text));
+  if (!explicitCorrection) return null;
+
+  const recentUsers = history.filter(turn=>turn.role==="user" && turn.chatId===currentChatId).slice(-2);
+  for (let index=recentUsers.length-1;index>=0;index--) {
+    const turn=recentUsers[index];
+    if (!(turn.attachments?.length)) continue;
+    // A newer unrelated user request must break the anchor.
+    if (recentUsers.slice(index+1).some(later=>Boolean(later.attachments?.length) ||
+        CLEAR_TOPIC_CHANGE.test(later.content))) return null;
+    if (turn.attachments.length!==1) return null;
+    const original=turn.attachments[0];
+    if (!original.mimeType.startsWith("image/") || original.conversationUsage!=="uploaded" ||
+        (original.chatId && original.chatId!==currentChatId)) return null;
+    const matched=catalog.find(file=>file.id===original.id && file.chatId===currentChatId &&
+      file.mimeType.startsWith("image/") &&
+      (!original.actorId || !file.actorId || original.actorId===file.actorId));
+    if (!matched || !verifiedKatieVisualEpisode(matched)) return null;
+    const sourceRequired=/\b(?:look again|look closer|re-?inspect|re-?examine|zoom|actual pixels|original pixels|check the (?:original|actual) (?:image|photo|picture))\b/i.test(text);
+    return {
+      method:"continuity",
+      selections:[{attachment:matched,mode:sourceRequired?"source":"summary"}],
+    };
+  }
+  return null;
+}
 
 export function explicitlyRequestsVideo(message: string, attachment?: ConversationAttachment): boolean {
   const text = message.trim();
@@ -225,6 +275,10 @@ export async function selectStoredAttachments(
   taskContext?: AttachmentTaskContext,
 ): Promise<AttachmentDecision> {
   if (!catalog.length) return { selections: [], method: "none" };
+  if (!newFileNames.length) {
+    const verifiedCorrection=recentVerifiedVisualCorrection(message,catalog,history,taskContext?.currentChatId ?? history.at(-1)?.chatId);
+    if (verifiedCorrection) return verifiedCorrection;
+  }
   if (newFileNames.length && !/\b(?:compare|versus|previous|earlier|saved|last video|other clip)\b/i.test(message)) return { selections: [], method: "none" };
   const recentImages = !newFileNames.length
     ? recentExplicitImages(message, catalog, history, taskContext?.currentChatId ?? history.at(-1)?.chatId)
