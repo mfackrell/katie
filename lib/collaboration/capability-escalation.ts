@@ -83,7 +83,7 @@ export function parseCapabilityEscalationRequest(
   // Some models emit a short preamble before the internal control line.
   // A control line may occur after prose, but never take control from a
   // quoted/indented snippet or a response containing multiple directives.
-  const matches = [...trimmed.matchAll(/(?:^|\\r?\\n)[ \\t]*KATIE_CAPABILITY_REQUEST:[ \\t]*/g)];
+  const matches = [...trimmed.matchAll(/(?:^|\r?\n)[ \t]*KATIE_CAPABILITY_REQUEST:[ \t]*/g)];
   if (matches.length !== 1 || trimmed.indexOf(CAPABILITY_REQUEST_PREFIX) !==
       trimmed.lastIndexOf(CAPABILITY_REQUEST_PREFIX)) return null;
 
