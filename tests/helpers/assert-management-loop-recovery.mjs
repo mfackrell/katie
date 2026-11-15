@@ -84,6 +84,7 @@ export async function assertManagementLoopRecovery(db,x){
    out.assignments=(await db.query('select to_jsonb(j) r from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 order by j.id',[project])).rows;
    out.limits=(await db.query('select deadline,max_missions,token_allowance,approved_hash,approval_hash,spec,active_mission_id from work_projects where id=$1',[project])).rows[0];return out;
   };
+  await (await import('./assert-paused-window-renewal.mjs')).assertPausedWindowRenewal(db,{...x,source:s,supervisor});
   const before=await immutable(),newRelease='d'.repeat(40);
   const args=[owner,project,newRelease,release,scopeHash,s.mission];
   const resume=(a=args)=>db.query('select project_org_resume_management($1,$2,$3,$4,$5,$6) r',a);

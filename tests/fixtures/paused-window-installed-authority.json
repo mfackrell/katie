@@ -1,0 +1,12 @@
+{
+  "release": "26c7098450ee63106e0d3dc68488818ced3771b2",
+  "managementMigration": "20261115181555",
+  "prosrcMd5": {
+    "project_org_change_allowed": "41d6af377f594876ea3c7a69e8f0d354",
+    "project_org_resume_management": "21709b7d27aecc28fe9b5bc62195f43d",
+    "project_org_scoped_retry_release": "b609e295cd0f33c278fb30d79948f924",
+    "project_org_window_authorized": "e6ebe442ee7a56e98fba92247f36cb0a",
+    "project_provider_continued": "d2822a186c4b6990178d72811ea0266e",
+    "project_provider_request_pending": "00fa96c4f64f081caa20b5100f591cdf"
+  }
+}

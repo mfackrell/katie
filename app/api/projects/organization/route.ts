@@ -21,7 +21,19 @@ const hierarchyRecoveryInput=z.object({
  cutoff:z.string().datetime({offset:true}),authorizationId:z.string().uuid(),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput]);
+// This route exposes only the specific owner-approved #1050 deadline change.
+// The SQL RPC separately checks the exact locked project/window/source state.
+const pausedRenewalInput=z.object({
+ projectId:z.literal('fe9d2658-41e3-44c1-ae8e-a0cba98371fe'),trialAction:z.literal('renew_paused_window'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ expectedReleaseSha:z.literal('c1d9a5f1ac10396c3015a7d5ae5f22254502e5de'),
+ scopeHash:z.literal('4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6'),
+ sourceMissionId:z.literal('62cd8da3-1bcc-41ae-9470-574c6b05e420'),
+ priorWindowId:z.literal('a837004e-75d3-497d-b05a-482886ed5a5f'),
+ priorCutoff:z.literal('2026-11-15T18:00:00Z'),cutoff:z.literal('2026-11-16T18:00:00Z'),
+ authorizationId:z.string().uuid(),stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput]);
 // Neither workers nor cron can activate either kind of owner authority.
 export async function POST(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
@@ -29,6 +41,16 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='renew_paused_window'){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Paused renewal requires the exact active production release'},{status:409});
+  return NextResponse.json(await rpc('project_org_renew_paused_window',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
+   p_expected_release:p.expectedReleaseSha,p_scope_hash:p.scopeHash,p_source_mission:p.sourceMissionId,
+   p_prior_window:p.priorWindowId,p_prior_cutoff:p.priorCutoff,p_cutoff:p.cutoff,
+   p_authorization:p.authorizationId,p_state_hash:p.stateHash,
+  }));
+ }
  if('trialAction' in p&&p.trialAction==='recover_hierarchy'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'Hierarchy recovery requires the exact active production release'},{status:409});
