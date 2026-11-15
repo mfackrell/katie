@@ -71,49 +71,36 @@ export function getCapabilityEscalationInstruction(): string {
   ].join("\n");
 }
 
+/** Extract a control request only from its own line. The lead may mistakenly
+ * prepend an apology; it must never turn an internal action into user prose.
+ * Reject malformed controls rather than exposing JSON or guessing intent. */
+export function hasCapabilityEscalationMarker(raw:string):boolean {
+  return /(?:^|\n)\s*KATIE_CAPABILITY_REQUEST\s*:/i.test(raw);
+}
+
 export function parseCapabilityEscalationRequest(
   raw: string,
 ): CollaborationRequest | null {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith(CAPABILITY_REQUEST_PREFIX)) {
-    return null;
-  }
-
-  const jsonText = trimmed.slice(CAPABILITY_REQUEST_PREFIX.length).trim();
-  if (!jsonText) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-    const task = typeof parsed.task === "string" ? parsed.task.trim() : "";
-    if (!task) {
-      return null;
-    }
-
-    const capability = normalizeCapability(parsed.capability);
-    const reason =
-      typeof parsed.reason === "string" ? parsed.reason.trim() : undefined;
-    const context =
-      typeof parsed.context === "string" ? parsed.context.trim() : undefined;
-    let preferredProvider = normalizePreferredProvider(
-      parsed.preferredProvider,
-    );
-
-    if (capability === "research" && !preferredProvider) {
-      preferredProvider = "grok";
-    }
-
-    return {
-      task,
-      capability,
-      preferredProvider,
-      ...(reason ? { reason } : {}),
-      ...(context ? { context } : {}),
-    };
-  } catch {
-    return null;
-  }
+  const marker=/(?:^|\n)\s*KATIE_CAPABILITY_REQUEST\s*:/i.exec(raw);
+  if(!marker)return null;
+  const jsonText=raw.slice(marker.index+marker[0].length).trim();
+  if(!jsonText)return null;
+  let parsed:Record<string,unknown>;
+  try{
+    const value:unknown=JSON.parse(jsonText);
+    if(!value||typeof value!=='object'||Array.isArray(value))return null;
+    parsed=value as Record<string,unknown>;
+  }catch{return null;}
+  const task=typeof parsed.task==='string'?parsed.task.trim():'';
+  const capability=parsed.capability;
+  if(!task || typeof capability!=='string' ||
+    !CAPABILITIES.includes(capability as CollaborationCapability))return null;
+  const reason=typeof parsed.reason==='string'?parsed.reason.trim():undefined;
+  const context=typeof parsed.context==='string'?parsed.context.trim():undefined;
+  let preferredProvider=normalizePreferredProvider(parsed.preferredProvider);
+  if(capability==='research'&&!preferredProvider)preferredProvider='grok';
+  return {task,capability:capability as CollaborationCapability,preferredProvider,
+    ...(reason?{reason}:{}),...(context?{context}:{})};
 }
 
 export function withCapabilityEscalationInstruction(
@@ -134,73 +121,22 @@ export async function runCapabilityAwareGeneration(input: {
   streamedText: string;
   escalationRequest: CollaborationRequest | null;
 }> {
-  let rawStreamedText = "";
-  let bufferedPrefix = "";
-  let normalOutputStarted = false;
-
-  const flushBufferedAsNormal = async () => {
-    if (!bufferedPrefix) {
-      return;
-    }
-    const value = bufferedPrefix;
-    bufferedPrefix = "";
-    normalOutputStarted = true;
-    await input.onTextDelta(value);
-  };
-
-  const result = input.provider.generateStream
-    ? await runWithStandaloneActivity("capability_lead", () => input.provider.generateStream!(input.params, {
-        async onTextDelta(delta) {
-          rawStreamedText += delta;
-
-          if (normalOutputStarted) {
-            await input.onTextDelta(delta);
-            return;
-          }
-
-          bufferedPrefix += delta;
-          const normalized = bufferedPrefix.trimStart();
-
-          if (
-            CAPABILITY_REQUEST_PREFIX.startsWith(normalized) ||
-            normalized.startsWith(CAPABILITY_REQUEST_PREFIX)
-          ) {
-            return;
-          }
-
-          await flushBufferedAsNormal();
-        },
+  // Buffer the entire lead pass. A model may prepend ordinary prose BEFORE
+  // asking for a helper. Streaming that prose would make an internal control
+  // action visible and non-retractable. Flush only after classifying the full
+  // completed text.
+  let streamed='';
+  const result=input.provider.generateStream
+    ? await runWithStandaloneActivity('capability_lead',()=>input.provider.generateStream!(input.params,{
+        async onTextDelta(delta){streamed+=delta;}
       }))
-    : await runWithStandaloneActivity("capability_lead", () => input.provider.generate(input.params));
-
-  const rawText = result.text || rawStreamedText || bufferedPrefix;
-  const escalationRequest = parseCapabilityEscalationRequest(rawText);
-
-  if (escalationRequest) {
-    return {
-      result: {
-        ...result,
-        text: rawText,
-      },
-      streamedText: rawStreamedText,
-      escalationRequest,
-    };
+    : await runWithStandaloneActivity('capability_lead',()=>input.provider.generate(input.params));
+  const rawText=result.text||streamed;
+  const escalationRequest=parseCapabilityEscalationRequest(rawText);
+  if(hasCapabilityEscalationMarker(rawText)){
+    if(!escalationRequest)throw new Error('Malformed internal capability request; no answer was published.');
+    return {result:{...result,text:rawText},streamedText:'',escalationRequest};
   }
-
-  if (!normalOutputStarted && bufferedPrefix) {
-    await flushBufferedAsNormal();
-  }
-
-  if (!input.provider.generateStream && rawText) {
-    await input.onTextDelta(rawText);
-  }
-
-  return {
-    result: {
-      ...result,
-      text: rawText,
-    },
-    streamedText: rawStreamedText || rawText,
-    escalationRequest: null,
-  };
+  if(rawText)await input.onTextDelta(rawText);
+  return {result:{...result,text:rawText},streamedText:rawText,escalationRequest:null};
 }
