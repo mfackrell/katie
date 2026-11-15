@@ -8,6 +8,9 @@ on:
       - "components/director-recovery-control.tsx"
       - "supabase/migrations/*hierarchical_authority_recovery.sql"
       - "tests/director-recovery-control.test.mjs"
+      - "tests/paused-window-renewal.test.mjs"
+      - "tests/helpers/assert-paused-window-renewal.mjs"
+      - "supabase/migrations/*paused_expired_window_renewal.sql"
       - "tests/helpers/assert-project-hierarchy-recovery.mjs"
       - "tests/helpers/assert-project-scope-ratification.mjs"
       - "tests/helpers/assert-project-organization-compatibility.mjs"
@@ -40,6 +43,6 @@ jobs:
           fi
           echo "KATIE_TEST_PG_BIN=/usr/lib/postgresql/16/bin" >> "$GITHUB_ENV"
       - name: Owner endpoint and real Chromium authentication controls
-        run: node --test tests/director-recovery-control.test.mjs
+        run: node --test tests/director-recovery-control.test.mjs tests/paused-window-renewal.test.mjs
       - name: Native PostgreSQL ratification plus expired-hierarchy recovery
         run: node --test tests/project-organization-integration.test.mjs tests/organizational-contract-amendments-postgres.test.mjs
