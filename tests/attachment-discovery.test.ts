@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import sharp from "sharp";
 import * as XLSX from "xlsx";
-import { selectStoredAttachments, loadSelectedAttachmentSources, rankAttachmentCandidates, parseAttachmentSelectorResponse } from "../lib/chat/attachment-selection";
+import { selectStoredAttachments, recentVerifiedVisualCorrection, loadSelectedAttachmentSources, rankAttachmentCandidates, parseAttachmentSelectorResponse } from "../lib/chat/attachment-selection";
 import { attachmentAccessContext, type ConversationAttachment } from "../lib/chat/attachment-continuity";
+import {buildKatieVisualEpisode} from "../lib/chat/visual-memory";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
 import { buildImageReference, imageFileFromDataUrl } from "../lib/uploads/image-reference";
 import { sampleAttachmentText } from "../lib/uploads/attachment-observations";
@@ -14,6 +16,80 @@ import type { Message } from "../lib/types/chat";
 const doc: ConversationAttachment = { id: "11111111-1111-4111-8111-111111111111", fileName: "plan.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", observedSummary: "A warehouse relocation proposal comparing Harbor and Ridge sites, with lease costs and moving schedules.", summaryCoverage: "full", createdAt: "2020-01-01" };
 const sheet: ConversationAttachment = { ...doc, id: "22222222-2222-4222-8222-222222222222", fileName: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", observedSummary: "Forecast with Revenue and Expenses sheets; quarter ending September 2026." };
 const full: FileReference = { fileId: doc.id, fileName: doc.fileName, mimeType: doc.mimeType, preview: "first page", extractedText: "Entire body, including the precise lease amount 92741." };
+
+
+test("production Nov 15: visual correction deterministically recalls the verified image and bypasses Gemini selector",async()=>{
+  const hash="a".repeat(64);
+  const observed:ConversationAttachment={
+    id:"020f021b-5d2b-4c15-ae3e-725e0c9d82fa",chatId:"current-chat",actorId:"katie-actor",
+    fileName:"katie-generated-1794765770361.jpeg",mimeType:"image/jpeg",conversationUsage:"uploaded",
+    createdAt:"2026-11-15T18:08:33Z",hasOriginal:true,
+    observedSummary:"A woman seated at a table with a broad, engaging smile, warm lighting and a laptop.",
+    summaryModel:"runpod:Qwen/Qwen3-VL-8B-Instruct",summaryCoverage:"full",
+    observationSourceHash:hash,observationAt:"2026-11-15T18:08:26Z"
+  };
+  const saved:ConversationAttachment={
+    ...observed,visualMemory:buildKatieVisualEpisode(observed,hash,"2026-11-15T18:08:26Z")
+  };
+  assert.ok(saved.visualMemory);
+  const earlierImage={...saved,id:"old-unrelated",fileName:"unrelated.jpeg"};
+  const history:Message[]=[
+    {id:"image-turn",chatId:"current-chat",role:"user",content:"Assess the attractiveness of the person in this image",
+      attachments:[observed]},
+    {id:"bad-answer",chatId:"current-chat",role:"assistant",content:"I can't assess a real person's attractiveness."}
+  ];
+  const text="it's not a real person katie. it's an image YOU created. are you retarded today or what?";
+  let selectorCalls=0;
+  const result=await selectStoredAttachments(text,[earlierImage,saved],history,
+    async()=>{selectorCalls++;throw Error("A verified immediate visual follow-up needs no Gemini selector");},
+    [],{currentChatId:"current-chat",activeProject:null});
+  assert.equal(selectorCalls,0);
+  assert.equal(result.method,"continuity");
+  assert.deepEqual(result.selections.map(x=>[x.attachment.id,x.mode]),[[saved.id,"summary"]]);
+  let reads=0;
+  const restored=await loadSelectedAttachmentSources(result,async()=>{reads++;throw Error("Unrequested pixel reread");});
+  assert.equal(reads,0);
+  const prompt=attachmentAccessContext([],result.selections.map(x=>x.attachment),[],restored.sourceIds);
+  assert.match(prompt,/KATIE_VISUAL_MEMORY/);
+  assert.match(prompt,/woman seated at a table/i);
+  assert.doesNotMatch(prompt,/old-unrelated/);
+  const route=readFileSync("app/api/chat/route.ts","utf8");
+  assert.ok(route.indexOf("recentVerifiedVisualCorrection(message,catalog,attachmentHistory,chatId)")>0);
+  assert.ok(route.indexOf("pdfMemoryDecision ?? verifiedVisualCorrection ??")>0);
+});
+
+test("visual correction binding rejects forged, ambiguous, stale, and cross-chat sources",()=>{
+  const hash="b".repeat(64);
+  const image:ConversationAttachment={
+    id:"image-a",chatId:"chat-a",actorId:"actor-a",fileName:"generated.jpeg",
+    mimeType:"image/jpeg",summaryModel:"runpod:Qwen/Qwen3-VL-8B-Instruct",
+    summaryCoverage:"full",observedSummary:"Portrait near a window",
+    observationAt:"2026-11-15T18:08:26Z",observationSourceHash:hash,hasOriginal:true
+  };
+  const saved={...image,visualMemory:buildKatieVisualEpisode(image,hash,"2026-11-15T18:08:26Z")};
+  const upload={...image,conversationUsage:"uploaded" as const};
+  const turn=(attachments:ConversationAttachment[],chatId="chat-a"):Message=>({
+    id:"image-turn",chatId,role:"user",content:"Look at this photo",attachments
+  });
+  const assistant:Message={id:"reply",chatId:"chat-a",role:"assistant",content:"I saw it."};
+  const text="it's an image you created, not a real person";
+  const pick=(catalog:ConversationAttachment[],history:Message[],chatId="chat-a")=>
+    recentVerifiedVisualCorrection(text,catalog,history,chatId);
+  assert.equal(pick([saved],[turn([upload]),assistant])?.selections[0]?.attachment.id,image.id);
+  assert.equal(pick([{...saved,observationSourceHash:"e".repeat(64)}],[turn([upload]),assistant]),null);
+  assert.equal(pick([{...saved,actorId:"different-actor"}],[turn([upload]),assistant]),null);
+  assert.equal(pick([saved],[turn([{...upload,conversationUsage:"contextual"}]),assistant]),null);
+  assert.equal(pick([saved],[turn([upload,{...upload,id:"another-photo"}]),assistant]),null);
+  assert.equal(pick([saved],[turn([upload]),assistant],"chat-b"),null);
+  assert.equal(pick([saved],[turn([upload]),{id:"new-topic",chatId:"chat-a",role:"user",content:"New topic: revenue"},
+    assistant]),null);
+  assert.equal(pick([saved],[turn([upload]),{id:"one",chatId:"chat-a",role:"user",content:"Tell me a joke"},
+    {id:"two",chatId:"chat-a",role:"user",content:"What's the weather?"}]),null);
+  assert.equal(recentVerifiedVisualCorrection("Help me write an email",[saved],[turn([upload]),assistant],"chat-a"),null);
+  assert.equal(recentVerifiedVisualCorrection("Compare both pictures",[saved],[turn([upload]),assistant],"chat-a"),null);
+  assert.equal(recentVerifiedVisualCorrection("Look again at the image",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"source",
+    "an explicit pixel reread must use the authorized source-observation path");
+});
 
 test("a blocked Gemini attachment selector is not mistaken for invalid selection JSON", async () => {
   assert.throws(() => parseAttachmentSelectorResponse({
