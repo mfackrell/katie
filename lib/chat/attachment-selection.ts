@@ -67,6 +67,44 @@ function recentExplicitImages(
 }
 
 /**
+ * Recover the single image uploaded in the immediately preceding user turn
+ * when the user corrects Katie's answer about that image. The selector may
+ * otherwise return an empty set because the follow-up is written as a social
+ * correction rather than an explicit attachment query.
+ *
+ * This is an exact actor/chat/source binding. It cannot resurrect a photo from
+ * another chat, an older turn, or a contextual automatic reattachment.
+ */
+export function recentImageCorrectionSource(input:{
+  message:string; catalog:ConversationAttachment[]; history:Message[];
+  actorId:string; chatId:string; newAttachmentCount:number;
+}):AttachmentDecision|null {
+  if(input.newAttachmentCount!==0)return null;
+  const text=input.message.trim();
+  if(!text || text.length>700 ||
+    /\b(?:new topic|unrelated|switch topics?|different image|another image|other picture|compare|between|both images|ignore the image)\b/i.test(text))return null;
+  const refersToVisual=/\b(?:image|photo|picture|visual|generated|rendered|looks?|attractive|appearance|face|person)\b/i.test(text);
+  const correction=/\b(?:you (?:created|generated|made|said|claimed|refused|misread|got|were)|(?:it'?s|it is|that'?s|that is) not|(?:not|isn'?t) (?:a )?real|why (?:can'?t|won'?t|did)|wrong|incorrect|look again|assess|evaluate)\b/i.test(text);
+  if(!refersToVisual||!correction)return null;
+  const turns=input.history.filter(turn=>turn.role==='user'&&turn.chatId===input.chatId);
+  const previous=turns.at(-1);
+  if(!previous)return null;
+  const attachments=previous.attachments??[];
+  if(attachments.length!==1)return null;
+  const candidate=attachments[0];
+  if(!candidate.mimeType.startsWith('image/')||
+    candidate.conversationUsage!=='uploaded'||
+    (candidate.chatId&&candidate.chatId!==input.chatId)||
+    (candidate.actorId&&candidate.actorId!==input.actorId))return null;
+  const saved=input.catalog.find(file=>file.id===candidate.id &&
+    file.chatId===input.chatId && file.actorId===input.actorId &&
+    file.mimeType.startsWith('image/'));
+  if(!saved)return null;
+  return {method:'continuity',selections:[{attachment:saved,mode:'source'}],
+    rationale:'Exact current-chat image from immediately preceding user turn'};
+}
+
+/**
  * A selector can omit the video when the user responds to Katie's last
  * assessment rather than naming the recording ("Nineteen is an adult!").
  * Preserve current-chat visual context for a short, relevant continuation,
