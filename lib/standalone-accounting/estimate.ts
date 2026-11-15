@@ -10,7 +10,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export type JsonObject = { [key:string]: JsonValue };
 export type FrozenPreparedRequest = Readonly<{schemaVersion:"standalone-request-v1";provider:AccountingProvider;model:string;endpoint:string;payload:JsonObject;hash:string;serializedBody:string}>;
 export type StandaloneEstimate = {
-  status:"estimated"|"unsupported";pricingVersion:string;estimatorVersion:string;requestHash:string;currency:"USD";isCeiling:false;
+  status:"estimated"|"unsupported";pricingVersion:string;estimatorVersion:string;requestHash:string;currency:"USD";isCeiling:boolean;
   estimatedCostMicrousd:string|null;reservationMicrousd:string|null;inputTokens:number;outputAllowance:number;imageOutputAllowance:number;imageTokens:number;cacheWriteInputAllowance:number;cacheWriteTtl:"5m"|"30m"|"12h"|null;
   issues:string[];assumptions:string[];ownerApprovalRequired?:"selected_model_uncached";inputCountSource?:"provider"|"heuristic";breakdown:Array<{dimension:string;tokens:number;costMicrousd:string}>;
 };
@@ -301,7 +301,7 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
     (nativeGrokWeb?boundedGrokWebReservationMicrousd(price,outputAllowance):
       priceTokenUsage(price,inputTokens,outputAllowance,0,cacheWriteInputAllowance,cacheWriteTtl??"5m",imageOutputAllowance)):null;
   const inputCost=cost&&price?priceTokenUsage(price,inputTokens,0,0,cacheWriteInputAllowance,cacheWriteTtl??"5m"):"0";
-  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:verifiedCount?PROVIDER_COUNT_ESTIMATOR_VERSION:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageOutputAllowance,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,inputCountSource:verifiedCount?"provider":"heuristic",issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?(nativeGrokWeb?
+  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:verifiedCount?PROVIDER_COUNT_ESTIMATOR_VERSION:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:nativeGrokWeb,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageOutputAllowance,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,inputCountSource:verifiedCount?"provider":"heuristic",issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?(nativeGrokWeb?
     [{dimension:"Two full model-context passes plus one native Web Search call (conservative authorization ceiling)",tokens:2*price.maxContextTokens,costMicrousd:cost}]:
     [{dimension:cacheWriteInputAllowance?"full input allowance at selected cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]):[]});
 }
