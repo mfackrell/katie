@@ -1,4 +1,5 @@
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { ProviderResponseError } from "@/lib/providers/response-errors";
 import type {
   CollaborationCapability,
   CollaborationProviderName,
@@ -163,7 +164,7 @@ export async function runCapabilityAwareGeneration(input: {
   // Malformed controls must fail closed. Do not mark this task completed with
   // an internal request or silently transmit a second paid inference attempt.
   if (containsCapabilityControlMarker(rawText) || containsCapabilityControlMarker(rawStreamedText)) {
-    throw new Error("Internal capability handoff was malformed; no final answer was published.");
+    throw new ProviderResponseError("Internal capability handoff was malformed; no final answer was published.",false,"CAPABILITY_PROTOCOL_INVALID");
   }
 
   if (rawText) await input.onTextDelta(rawText);
