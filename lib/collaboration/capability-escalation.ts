@@ -99,7 +99,7 @@ export function parseCapabilityEscalationRequest(
   const context=typeof parsed.context==='string'?parsed.context.trim():undefined;
   let preferredProvider=normalizePreferredProvider(parsed.preferredProvider);
   if(capability==='research'&&!preferredProvider)preferredProvider='grok';
-  return {task,capability:capability as CollaborationCapability,preferredProvider,
+  return {task,capability:normalizeCapability(capability),preferredProvider,
     ...(reason?{reason}:{}),...(context?{context}:{})};
 }
 
