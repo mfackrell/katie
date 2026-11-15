@@ -34,7 +34,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
- const fixture={...load('lib/providers/openai-cache.ts'),workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={...load('lib/providers/openai-cache.ts'),workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,benchmarkIntake:false,recentImageCorrectionSource:()=>null,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   ...documentIntent,documentProduction:documentIntent.documentRequest(message),
   // PDF ownership/source selection runs independently of still-image inference.
   standaloneImageObservation:false,observeImages:async()=>{},retainedImageDescriptors:new Map(),
