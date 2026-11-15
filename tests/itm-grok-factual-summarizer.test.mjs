@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import OpenAI from "openai";
 
 const source = readFileSync("lib/memory/summarizer.ts", "utf8");
 const compiled = ts.transpileModule(source, {
@@ -29,6 +30,7 @@ function harness({
   missingChat = false, commitResult = true,
   priorExposure = { grok_sent:false, anthropic_sent:false, paused:false, in_flight:false },
   exposureInspectionError = false,
+  transportClass = null, fetchOverride = null,
 } = {}) {
   let memory = copy(prior);
   const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [];
@@ -132,12 +134,12 @@ function harness({
   };
   const module = { exports: {} };
   const deps = {
-    openai: Transport,
+    openai: transportClass ?? Transport,
     "@/lib/data/persistence-store": store,
     "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => admin },
     "@/lib/standalone-accounting/activity": { createActivityAccountingFetch: (provider, activity, policy) => {
       events.push({ name: "accounting", provider, activity, timeoutCode: policy?.timeoutCode, timeoutMsType: typeof policy?.timeoutMs });
-      return async () => { throw Error("Network disallowed in tests"); };
+      return fetchOverride ?? (async () => { throw Error("Network disallowed in tests"); });
     } },
     "@/lib/standalone-accounting/context": {
       isStandaloneAccountingError: accountingError,
@@ -527,4 +529,57 @@ test("native Claude truncation blocks with unchanged checkpoint",async()=>{
   assert.equal(h.writes.length,0);
   assert.equal(h.memory().summarizedThroughMessageId??null,null);
   assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
+});
+
+test("installed OpenAI SDK serializes ITM native Claude calls to /v1/messages with no retry",async()=>{
+  const requests=[];
+  const texts=[
+    selected().choices[0].message.content,
+    retained().choices[0].message.content,
+  ];
+  const fetchOverride=async(input,init)=>{
+    requests.push({url:String(input),body:JSON.parse(init.body),headers:new Headers(init.headers)});
+    return new Response(JSON.stringify({
+      id:"msg_synthetic_itm_"+requests.length,
+      type:"message",role:"assistant",model:"claude-sonnet-5-5",
+      stop_reason:"end_turn",content:[{type:"text",text:texts[requests.length-1]}],
+      usage:{input_tokens:1200,output_tokens:400},
+    }),{status:200,headers:{"content-type":"application/json"}});
+  };
+  const h=harness({
+    transportClass:OpenAI,fetchOverride,fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+  });
+  assert.equal(await h.run(),"committed");
+  assert.equal(requests.length,2);
+  assert.ok(requests.every(r=>r.url==="https://api.anthropic.com/v1/messages"));
+  assert.ok(requests.every(r=>r.headers.get("authorization")===null &&
+    r.headers.get("x-api-key")==="test-only-claude-key" &&
+    r.headers.get("anthropic-version")==="2023-06-01"));
+  assert.deepEqual(requests.map(r=>r.body.max_tokens),[2300,2800]);
+  assert.ok(requests.every(r=>r.body.model==="claude-sonnet-5-5" &&
+    r.body.thinking.type==="between_tools" && r.body.output_config.effort==="low" &&
+    r.body.output_config.format.type==="json_schema" &&
+    !("temperature" in r.body) && !("response_format" in r.body)));
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+  assert.equal(h.writes.length,1);
+});
+
+test("installed SDK native Claude truncated output cannot advance ITM checkpoint",async()=>{
+  let sends=0;
+  const fetchOverride=async()=>{
+    sends++;
+    return new Response(JSON.stringify({
+      id:"msg_synthetic_truncated",type:"message",role:"assistant",
+      stop_reason:"max_tokens",content:[{type:"text",text:'{"episodes":[]}'}],
+    }),{status:200,headers:{"content-type":"application/json"}});
+  };
+  const h=harness({
+    transportClass:OpenAI,fetchOverride,fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+  });
+  assert.equal(await h.run(),"blocked");
+  assert.equal(sends,1);
+  assert.equal(h.writes.length,0);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
 });
