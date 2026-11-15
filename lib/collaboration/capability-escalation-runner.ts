@@ -1,6 +1,7 @@
 import { requireAgentResearch } from "@/lib/agents/policy";
 import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { ProviderResponseError } from "@/lib/providers/response-errors";
 import {
   containsCapabilityControlMarker,
   runCapabilityAwareGeneration,
@@ -130,7 +131,7 @@ async function runPlainGeneration(input: {
 
   const finalText = result.text || streamedText;
   if (containsCapabilityControlMarker(finalText) || containsCapabilityControlMarker(streamedText)) {
-    throw new Error("Internal capability control appeared in finalization; no final answer was published.");
+    throw new ProviderResponseError("Internal capability control appeared in finalization; no final answer was published.",false,"CAPABILITY_PROTOCOL_INVALID");
   }
   if (finalText) await input.onTextDelta(finalText);
   return { result: {...result,text:finalText}, streamedText: finalText };
