@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
 import { createAccountingFetch } from '../lib/standalone-accounting/dispatch';
-import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, isStandaloneAccountingError, standaloneAccountingCause } from '../lib/standalone-accounting/context';
+import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, runWithDurablePostAnswerAccounting, isStandaloneAccountingError, standaloneAccountingCause } from '../lib/standalone-accounting/context';
 import { freezePreparedRequest, prepareStandaloneRequest, estimatePreparedRequest } from '../lib/standalone-accounting/estimate';
 import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
@@ -101,6 +101,35 @@ test('missing receipts retain exposure and block automatic continuation and repl
   await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
   assert.equal(sends, 1);
   assert.equal(fake.attempts[0].actual_microusd, undefined);
+});
+
+test('closed response signal blocks old ITM admission, but durable post-answer scope preserves metered transport', async () => {
+  const oldHttpRequest = new AbortController();
+  oldHttpRequest.abort();
+  const fake = fakeLedger();
+  let providerSends = 0;
+  const send = createAccountingFetch('openai', async () => {
+    providerSends++;
+    return receipt();
+  }, fake.factory);
+
+  await runWithStandaloneAccounting({ ...context, signal: oldHttpRequest.signal }, async () => {
+    await assert.rejects(
+      send('https://api.openai.com/v1/chat/completions', request),
+      error => standaloneAccountingCause(error)?.code === 'standalone_cancelled',
+    );
+    assert.equal(fake.attempts.length, 0, 'aborted request cannot create an accounting attempt');
+    assert.equal(providerSends, 0);
+
+    const response = await runWithDurablePostAnswerAccounting(
+      () => send('https://api.openai.com/v1/chat/completions', request),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(fake.attempts[0].actor_id, context.actorId);
+    assert.equal(fake.attempts[0].request_id, context.requestId);
+  });
+  assert.equal(providerSends, 1);
+  assert.equal(fake.attempts[0].state, 'settled');
 });
 
 test('cancellation aborts the actual transmission and retains dispatched exposure', async () => {
