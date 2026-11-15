@@ -121,7 +121,7 @@ export function recentVerifiedVisualCorrection(
         !(
           SHORT_CORRECTION.test(later.content) ||
           VISUAL_EVIDENCE_QUESTION.test(later.content) ||
-          /\\b(?:image|photo|picture|portrait|visual|rendering)\\b/i.test(later.content)
+          /\b(?:image|photo|picture|portrait|visual|rendering)\b/i.test(later.content)
         ))) return null;
     if (turn.attachments.length!==1) return null;
     const original=turn.attachments[0];
