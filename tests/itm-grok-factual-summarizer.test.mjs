@@ -466,6 +466,17 @@ test("previous metered Grok batch routes to native Claude without another Grok t
   assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v12.*:anthropic$/);
 });
 
+test("previously sent Claude source batch never reverses fallback to Grok",async()=>{
+  const h=harness({
+    fallbackConfigured:true,
+    priorExposure:{grok_sent:false,anthropic_sent:true,paused:false,in_flight:false},
+  });
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,0);
+  assert.equal(h.writes.length,0);
+  assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,0);
+});
+
 test("historical exposure inspection blocks duplicate paid work and preserves cursor",async()=>{
   for(const opts of [
     {priorExposure:{grok_sent:false,anthropic_sent:false,paused:true,in_flight:false}},
