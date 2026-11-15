@@ -3,6 +3,7 @@ import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import {
   runCapabilityAwareGeneration,
+  hasCapabilityEscalationMarker,
   withCapabilityEscalationInstruction,
 } from "@/lib/collaboration/capability-escalation";
 import { collaborationCapabilityToIntent } from "@/lib/collaboration/routing";
@@ -117,25 +118,19 @@ async function runPlainGeneration(input: {
   params: ChatGenerateParams;
   onTextDelta: (delta: string) => void | Promise<void>;
 }): Promise<{ result: ProviderResponse; streamedText: string }> {
-  let streamedText = "";
-
-  const result = input.provider.generateStream
-    ? await runWithStandaloneActivity("capability_finalization", () => input.provider.generateStream!(input.params, {
-        async onTextDelta(delta) {
-          streamedText += delta;
-          await input.onTextDelta(delta);
-        },
+  let streamedText='';
+  // Finalization is subject to the same response boundary as the lead pass.
+  // Never stream internal control markers or return them as a final response.
+  const result=input.provider.generateStream
+    ? await runWithStandaloneActivity('capability_finalization',()=>input.provider.generateStream!(input.params,{
+        async onTextDelta(delta){streamedText+=delta;}
       }))
-    : await runWithStandaloneActivity("capability_finalization", () => input.provider.generate(input.params));
-
-  if (!input.provider.generateStream && result.text) {
-    await input.onTextDelta(result.text);
-  }
-
-  return {
-    result,
-    streamedText: streamedText || result.text,
-  };
+    : await runWithStandaloneActivity('capability_finalization',()=>input.provider.generate(input.params));
+  const text=result.text||streamedText;
+  if(hasCapabilityEscalationMarker(text))
+    throw new Error('Capability finalization returned an internal control request; no answer was published.');
+  if(text)await input.onTextDelta(text);
+  return {result:{...result,text},streamedText:text};
 }
 
 export async function runOnDemandCapabilityEscalation(input: {
