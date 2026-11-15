@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_SNAPSHOT, type PricingSnapshot, OPENAI_NO_FEE_CACHE_RETENTIONS, type AccountingProvider, type ModelPrice } from "./pricing";
+import { isBoundedGrokWebRequest, boundedGrokWebReservationMicrousd, boundedGrokWebCostFromReceipt, GROK_BOUNDED_WEB_POLICY_VERSION } from "./grok-web-search";
 /** Changing counting/admissibility rules requires a new estimator identity. */
-export const ESTIMATOR_VERSION = "standalone-estimator-v7";
+export const ESTIMATOR_VERSION = "standalone-estimator-v8";
 export const PROVIDER_COUNT_ESTIMATOR_VERSION = "standalone-provider-count-v1";
 export type ProviderInputCount = Readonly<{ inputTokens: number; requestHash: string }>;
 
@@ -85,6 +86,15 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
   const issues:string[]=[];const assumptions=["Input text allowance is one token per UTF-8 byte plus framing allowance; it is an estimate, not a provider token count or guaranteed spending ceiling.","All allowed output tokens are reserved, including hidden reasoning/thinking. No future cache-hit discount is assumed."];
   let textTokens=256,imageTokens=0,outputAllowance=0,imageOutputAllowance=0,cacheBreakpoints=0,cachePolicyValid=true;
   const price=getModelPrice(request.provider,request.model,snapshot),body=request.payload;
+  const nativeGrokWeb=isBoundedGrokWebRequest(request);
+  const attemptedNativeGrokWeb=request.provider==="grok" && (
+    body.max_turns!==undefined || body.include!==undefined ||
+    Array.isArray(body.tools)&&body.tools.some(t=>obj(t).type==="web_search"));
+  if(attemptedNativeGrokWeb&&!nativeGrokWeb)
+    issues.push("Unbounded or unpriced Grok server-side web-search configuration");
+  if(nativeGrokWeb)
+    assumptions.push("Reviewed "+GROK_BOUNDED_WEB_POLICY_VERSION+
+      ": one nonparallel web-search turn, maximum two full model-context passes at the worst applicable tier, and $0.005 tool charge; authorization requires the full conservative ceiling. Settlement requires xAI cost_in_usd_ticks and complete tool-use details.");
   if(request.schemaVersion!=="standalone-request-v1")issues.push("Unsupported prepared request schema version");
   try {if(freezePreparedRequest(request.provider,request.model,request.endpoint,body).hash!==request.hash||canonicalJson(body)!==request.serializedBody)issues.push("Prepared request hash or serialized body mismatch");}catch{issues.push("Invalid prepared request");}
   if(!price)issues.push("No reviewed immutable price for this exact provider/model");
@@ -93,7 +103,7 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
   if(price?.supportsStreaming===false&&body.stream===true)issues.push("Streaming is unsupported for this exact model");
   if(body.model!==undefined&&body.model!==request.model)issues.push("Body model differs from prepared model");
   if(request.provider==="google") {const pathModel=request.endpoint.match(/\/models\/([^/]+):/);if(pathModel&&decodeURIComponent(pathModel[1])!==request.model)issues.push("Google endpoint model differs from prepared model");}
-  const topAllowed=request.provider==="google"?"model contents generationConfig config systemInstruction safetySettings tools toolConfig cachedContent":"model messages input instructions system max_tokens max_output_tokens max_completion_tokens stream stream_options temperature top_p stop stop_sequences seed presence_penalty frequency_penalty logprobs top_logprobs response_format text reasoning reasoning_effort store metadata user n tools tool_choice parallel_tool_calls service_tier"+(request.provider==="anthropic"?" thinking output_config cache_control":request.provider==="openai"?" prompt_cache_key prompt_cache_retention prompt_cache_options":"");
+  const topAllowed=request.provider==="google"?"model contents generationConfig config systemInstruction safetySettings tools toolConfig cachedContent":"model messages input instructions system max_tokens max_output_tokens max_completion_tokens stream stream_options temperature top_p stop stop_sequences seed presence_penalty frequency_penalty logprobs top_logprobs response_format text reasoning reasoning_effort store metadata user n tools tool_choice parallel_tool_calls service_tier"+(request.provider==="anthropic"?" thinking output_config cache_control":request.provider==="openai"?" prompt_cache_key prompt_cache_retention prompt_cache_options":request.provider==="grok"?" include max_turns":"");
   for(const key of Object.keys(body))if(!topAllowed.split(" ").includes(key))issues.push("Unpriced request field: "+key);
   if(request.provider==="openai"&&(body.prompt_cache_key!==undefined||body.prompt_cache_retention!==undefined)) {
     const retentions=Object.hasOwn(OPENAI_NO_FEE_CACHE_RETENTIONS,request.model)?OPENAI_NO_FEE_CACHE_RETENTIONS[request.model]:undefined;
@@ -145,6 +155,9 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
         onlyKeys(tool,"functionDeclarations","function tool");
         if(!Array.isArray(tool.functionDeclarations)||!tool.functionDeclarations.length)issues.push("Only local function declarations are supported");
         else tool.functionDeclarations.forEach(definition=>functionSchema(obj(definition),true));
+      } else if(nativeGrokWeb){
+        // The single verified provider-native web_search tool is priced
+        // separately from local function declarations.
       } else {
         if(tool.type!=="function")issues.push("Only local function tools are priced; server tools remain unsupported");
         if(tool.function!==undefined) {onlyKeys(tool,"type function","function tool");functionSchema(obj(tool.function));}
@@ -152,7 +165,10 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
       }
       countJson(toolValue);
     }
-    if(Array.isArray(body.tools)&&body.tools.length){textTokens+=1024;assumptions.push("Local function schemas are counted from exact canonical bytes plus a 1,024-token tool framing allowance; no provider-hosted tool fee is assumed.");}
+    if(Array.isArray(body.tools)&&body.tools.length){
+      textTokens+=1024;
+      if(!nativeGrokWeb)assumptions.push("Local function schemas are counted from exact canonical bytes plus a 1,024-token tool framing allowance; no provider-hosted tool fee is assumed.");
+    }
   }
   if(body.toolConfig!==undefined) {
     const config=obj(body.toolConfig);onlyKeys(config,"functionCallingConfig","toolConfig");const fc=obj(config.functionCallingConfig);onlyKeys(fc,"mode allowedFunctionNames","functionCallingConfig");
@@ -281,14 +297,23 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
   if(cacheBreakpoints)assumptions.push("Claude five-minute caching reserves the entire estimated input allowance at the reviewed five-minute write rate (1.25x), including uncached suffix/framing, and assumes no cache hit. This is a deliberately conservative full-input allowance rather than an exact cached-prefix token count.");
   if(price&&inputTokens+outputAllowance>price.maxContextTokens)issues.push("Estimated input plus output exceeds supported context window");
   if(price&&outputAllowance>price.maxOutputTokens)issues.push("Output allowance exceeds supported model limit");
-  const cost=price&&!issues.length?priceTokenUsage(price,inputTokens,outputAllowance,0,cacheWriteInputAllowance,cacheWriteTtl??"5m",imageOutputAllowance):null;
+  const cost=price&&!issues.length?
+    (nativeGrokWeb?boundedGrokWebReservationMicrousd(price,outputAllowance):
+      priceTokenUsage(price,inputTokens,outputAllowance,0,cacheWriteInputAllowance,cacheWriteTtl??"5m",imageOutputAllowance)):null;
   const inputCost=cost&&price?priceTokenUsage(price,inputTokens,0,0,cacheWriteInputAllowance,cacheWriteTtl??"5m"):"0";
-  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:verifiedCount?PROVIDER_COUNT_ESTIMATOR_VERSION:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageOutputAllowance,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,inputCountSource:verifiedCount?"provider":"heuristic",issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?[{dimension:cacheWriteInputAllowance?"full input allowance at selected cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]:[]});
+  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:verifiedCount?PROVIDER_COUNT_ESTIMATOR_VERSION:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageOutputAllowance,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,inputCountSource:verifiedCount?"provider":"heuristic",issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?(nativeGrokWeb?
+    [{dimension:"Two full model-context passes plus one native Web Search call (conservative authorization ceiling)",tokens:2*price.maxContextTokens,costMicrousd:cost}]:
+    [{dimension:cacheWriteInputAllowance?"full input allowance at selected cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]):[]});
 }
 export type BillableUsage = { inputTokens:number;outputTokens:number;cachedInputTokens?:number;cacheReadInputTokens?:number;cacheWriteInputTokens?:number;cacheCreationInputTokens?:number;cacheWriteTtl?:"5m"|"30m"|"12h";[key:string]:unknown };
 export function actualCostFromUsage(request:FrozenPreparedRequest,usage:BillableUsage,snapshot:PricingSnapshot=PRICING_SNAPSHOT):{actualMicrousd:string;pricingVersion:string} {
   const estimate=estimatePreparedRequest(request,snapshot);if(estimate.status!=="estimated")throw new Error("Cannot price unsupported request: "+estimate.issues.join("; "));
   const price=getModelPrice(request.provider,request.model,snapshot)!;
+  if(isBoundedGrokWebRequest(request)){
+    const serverCost=boundedGrokWebCostFromReceipt(
+      usage as Record<string,unknown>,estimate.reservationMicrousd!);
+    return {actualMicrousd:serverCost.actualMicrousd,pricingVersion:snapshot.version};
+  }
   for(const key of ["toolCalls","audioTokens"])if(usage[key]!==undefined&&usage[key]!==0)throw new Error("Unsupported usage dimension: "+key);
   if(usage.cachedInputTokens!==undefined&&usage.cacheReadInputTokens!==undefined&&usage.cachedInputTokens!==usage.cacheReadInputTokens)throw new Error("Conflicting cache-read usage counts");
   if(usage.cacheWriteInputTokens!==undefined&&usage.cacheCreationInputTokens!==undefined&&usage.cacheWriteInputTokens!==usage.cacheCreationInputTokens)throw new Error("Conflicting cache-write usage counts");
