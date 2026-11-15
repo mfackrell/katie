@@ -81,3 +81,13 @@ test("v11 uses Grok Responses API with bounded factual episodes and index-only r
   assert.match(summary,/timeoutCode:"memory_timeout"/);
   assert.doesNotMatch(summary,/withinSummaryDeadline/);
 });
+
+test("post-answer ITM does not inherit a closed HTTP response signal",()=>{
+  const accounting=readFileSync("lib/standalone-accounting/context.ts","utf8");
+  assert.match(accounting,/export function runWithDurablePostAnswerAccounting/);
+  assert.match(accounting,/\.\.\.scope\.context, signal: undefined/);
+  assert.match(route,/cachedWorkflowValue\("memory-summary", \(\) => runWithDurablePostAnswerAccounting\(\(\) => maybeUpdateSummary\(chatId\)\)\)/);
+  assert.match(summary,/standaloneAccountingCause\(error\)/);
+  assert.match(summary,/standaloneFailureDetails\(error\)/);
+  assert.match(summary,/isRequestAbort\(error\)/);
+});

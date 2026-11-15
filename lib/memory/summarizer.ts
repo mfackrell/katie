@@ -1,4 +1,4 @@
-import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
@@ -39,11 +39,24 @@ const anthropicApiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_ke
 function configuredProviders():SummaryProvider[] {
   return [...(grokApiKey ? ["grok" as const] : []), ...(anthropicApiKey ? ["anthropic" as const] : [])];
 }
+function isRequestAbort(error:unknown):boolean {
+  let current:unknown=error;
+  for(let depth=0;current&&typeof current==="object"&&depth<8;depth++){
+    const value=current as {name?:unknown;code?:unknown;cause?:unknown};
+    if(value.name==="AbortError" || value.code==="ABORT_ERR")return true;
+    current=value.cause;
+  }
+  return false;
+}
 function shouldUseNextProvider(error:unknown):boolean {
-  const value=error as {code?:string};
+  // The SDK wraps transport/owner-accounting errors as "Connection error".
+  // Inspect the nested accounting cause first; an owner denial or cancelled
+  // request is not provider unavailability and must not authorize a fallback.
+  const accounting=standaloneAccountingCause(error);
+  if(accounting)return accounting.code==="standalone_memory_timeout" || accounting.code==="standalone_outcome_unknown";
+  if(isRequestAbort(error))return false;
   const message=error instanceof Error ? error.message : String(error);
-  return value?.code==="standalone_memory_timeout" || value?.code==="standalone_outcome_unknown" ||
-    /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message);
+  return /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message);
 }
 function providerClient(provider:SummaryProvider,deadline:number):OpenAI {
   const apiKey=provider==="grok" ? grokApiKey : anthropicApiKey;
@@ -536,11 +549,20 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     });
     return "committed";
   } catch (error) {
-    if (isStandaloneAccountingError(error) && !shouldUseNextProvider(error)) throw error;
+    const diagnostic=standaloneFailureDetails(error);
+    const accountingCause=standaloneAccountingCause(error);
+    if ((accountingCause || isRequestAbort(error)) && !shouldUseNextProvider(error)) {
+      console.error("[Summarizer] Non-retryable post-answer memory transport failure", {
+        chatId, sourceEnd: checkpoint.id, provider, diagnostic,
+      });
+      // Preserve the existing claim for explicit recovery. Do not reclassify
+      // a cancelled/unauthorized attempt as a failed provider available to retry.
+      throw error;
+    }
     const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
       p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
       p_processor_version: processorVersion(provider), p_state: "blocked",
-      p_reason: error instanceof Error ? error.message.slice(0,160) : "Summary stage failed",
+      p_reason: diagnostic.slice(0,160),
     });
     if (recorded.error || recorded.data !== true) {
       console.error("[Summarizer] Failed to persist failure circuit breaker", { chatId, sourceEnd: checkpoint.id, provider });
@@ -548,7 +570,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     const nextProvider=providers[providers.indexOf(provider)+1];
     console.error("[Summarizer] Batch provider attempt blocked without checkpoint advance", {
       chatId, sourceEnd: checkpoint.id, provider, nextProvider:nextProvider??null,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: diagnostic,
     });
     return nextProvider ? "deferred" : "blocked";
   }

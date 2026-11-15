@@ -25,5 +25,10 @@ test("failed source batches preserve the checkpoint and only a later request may
   assert.doesNotMatch(code,/withinSummaryDeadline/);
   assert.match(code,/processorVersion\(candidate\)/);
   assert.match(code,/return nextProvider \? "deferred" : "blocked"/);
-  assert.match(code,/if \(isStandaloneAccountingError\(error\) && !shouldUseNextProvider\(error\)\) throw error/);
+  // SDK-level "Connection error" may wrap a more specific accounting
+  // denial. The nested cause must govern whether a fallback is permissible.
+  assert.match(code,/const accountingCause=standaloneAccountingCause\(error\)/);
+  assert.match(code,/if \(\(accountingCause \|\| isRequestAbort\(error\)\) && !shouldUseNextProvider\(error\)\)/);
+  assert.match(code,/p_state: "blocked"/);
+  assert.match(code,/p_reason: diagnostic\.slice\(0,160\)/);
 });

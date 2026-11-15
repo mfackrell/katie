@@ -32,6 +32,20 @@ export function runWithOrchestratorAccounting<T>(operation: () => T): T {
 }
 
 export function getAccountingScope(): Scope | undefined { return storage.getStore(); }
+
+/** The answer is already saved before post-answer memory persistence begins.
+ * A browser disconnect or closed response must not cancel this accounting work.
+ * Retain the authenticated owner/request identity, provider ordinal counter,
+ * durable accounting admission and explicit owner cancellation mechanisms.
+ * This does not grant a new scope or suppress a provider's own timeout. */
+export function runWithDurablePostAnswerAccounting<T>(operation: () => T): T {
+  const scope = storage.getStore();
+  if (scope?.kind !== 'standalone') return operation();
+  return storage.run({
+    ...scope,
+    context: Object.freeze({ ...scope.context, signal: undefined }),
+  }, operation);
+}
 export function runWithStandaloneActivity<T>(activity: string, operation: () => T, reason?: string): T {
   const scope = storage.getStore();
   if (scope?.kind !== 'standalone') return operation();
