@@ -48,7 +48,7 @@ import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
-import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
+import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, recentImageCorrectionSource, type AttachmentDecision } from "@/lib/chat/attachment-selection";
 import { buildAttachmentSelectionAudit } from "@/lib/chat/attachment-selection-audit";
 import { loadSavedVideoFollowUp, retrieveSavedEvidence } from "@/lib/agents/media";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
@@ -1021,6 +1021,14 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
+    // The user's correction of Katie's immediately previous image response
+    // identifies that precise uploaded source. Do not depend on Gemini's
+    // semantic selector to recover a verified file already in this chat.
+    const correctedImage = !pdfMemoryDecision && !timelineActive && !savedVideoFollowUp
+      ? recentImageCorrectionSource({message,catalog,history:attachmentHistory,
+          actorId,chatId,newAttachmentCount:newAttachments.length})
+      : null;
+    if(correctedImage)mediaMemory=null;
     // Exact source IDs let a saved media-search excerpt recover Katie's own
     // recorded visual episode without falsely treating an arbitrary description
     // as first-hand vision or reopening unrelated actor-owned attachments.
@@ -1035,7 +1043,7 @@ async function executeChat(request: NextRequest) {
     }
     const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
-      : pdfMemoryDecision ?? (timelineActive
+      : pdfMemoryDecision ?? correctedImage ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
       : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
