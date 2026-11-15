@@ -8,6 +8,7 @@ import { countNativePreparedInput } from './native-token-count';
 import { cachedWorkflowValue } from './workflow';
 import { OWNER_SELECTED_UNCACHED, ownerSelectedUncachedEstimate, proposeSelectedModelUncached } from './owner-cache-authorization';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
+import { isBoundedGrokWebRequest, boundedGrokWebCostFromReceipt, GROK_BOUNDED_WEB_POLICY_VERSION } from './grok-web-search';
 import type { ResponseCheckpoint } from './types';
 
 const hosts: Record<AccountingProvider, string> = { openai: 'api.openai.com', anthropic: 'api.anthropic.com', google: 'generativelanguage.googleapis.com', grok: 'api.x.ai' };
@@ -340,7 +341,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       prepared.payload.prompt_cache_key !== undefined || prepared.payload.prompt_cache_retention !== undefined)) {
       throw failure('replay_mismatch', 'Owner-approved uncached preparation must not include unreviewed cache metadata.');
     }
-    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, 'standalone-estimator-v6', PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, 'standalone-estimator-v7', 'standalone-estimator-v6', PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
     // Persisted native counts are immutable evidence for the exact hash and model.
     // Resume must not silently recalculate or substitute a different reservation.
     const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
@@ -461,13 +462,27 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         throw failure('resolved_model_unpriced', 'The provider returned a model without an exact reviewed price. Known usage is saved; spending exposure remains reserved.');
       }
       let actualMicrousd: string;
-      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written,receipt.cacheWriteTtl??'5m',receipt.imageOutputTokens); }
-      catch {
-        await ledger.recordPartialUsage(context.userId, attemptId, usage, { ...evidence, pricedModel: null, pricingUnknown: true });
-        throw failure('usage_unpriced', 'The provider returned an unsupported billing dimension. Known usage is saved; spending exposure remains reserved.');
+      let finalEvidence:Record<string,unknown>=evidence;
+      try {
+        if(isBoundedGrokWebRequest(prepared)){
+          // Provider-reported ticks include both model and native search fees.
+          // Do not settle token-only amounts or assume a search was free.
+          const cost=boundedGrokWebCostFromReceipt(receipt.raw,estimate.reservationMicrousd!);
+          actualMicrousd=cost.actualMicrousd;
+          finalEvidence={...evidence,webSearchPolicy:GROK_BOUNDED_WEB_POLICY_VERSION,
+            webSearchCalls:cost.webSearchCalls,providerCostTicks:cost.providerCostTicks};
+        }else{
+          actualMicrousd=priceTokenUsage(price,receipt.input,receipt.output,receipt.cached,
+            receipt.written,receipt.cacheWriteTtl??'5m',receipt.imageOutputTokens);
+        }
+      } catch {
+        await ledger.recordPartialUsage(context.userId,attemptId,usage,
+          {...evidence,pricedModel:null,pricingUnknown:true,
+            missingDimension:'verified_xai_tool_cost_or_limit'});
+        throw failure('usage_unpriced','The provider returned unsupported or excessive billed usage; full exposure remains reserved.');
       }
       await ledger.settle({ ownerId: context.userId, attemptId, provider, providerReceiptId: receipt.id,
-        actualMicrousd, usage, evidence });
+        actualMicrousd, usage, evidence:finalEvidence });
     };
     if (attempt?.state === 'uncertain') {
       // Only durable server authority can acknowledge exposure. Never claim
