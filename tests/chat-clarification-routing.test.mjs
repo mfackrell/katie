@@ -450,7 +450,10 @@ test('actual route resolves identity before historical attachment retrieval and 
       assert.equal(context.activeProject.text, DISTRIBUTION_POSTING);
       return {method:'summary-selector', selections:[]};
     },
-    pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
+    // The route computes this after task resolution and before attachment
+    // selection. This isolated AST fixture intentionally omits that earlier
+    // source-binding stage and therefore represents no corrective image.
+    pdfMemoryDecision: null, correctedImage: null, timelineActive: false, timelineSelection: {},
     mediaMemory: null, savedVideoFollowUp: null,
     responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
     explicitProjectControl: false, explicitSavedProjectReference: false,
