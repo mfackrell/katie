@@ -30,7 +30,24 @@ function harness({
 } = {}) {
   let memory = copy(prior);
   const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [];
-  const accountingError = error => error && (error.terminal === true || String(error.code ?? "").startsWith("standalone_"));
+  const accountingCause = error => {
+    let current = error;
+    for(let depth=0;current&&typeof current==="object"&&depth<8;depth++){
+      if(current.terminal===true || String(current.code??"").startsWith("standalone_"))return current;
+      current=current.cause;
+    }
+    return undefined;
+  };
+  const accountingError = error => Boolean(accountingCause(error));
+  const failureDetails = error => {
+    const parts=[];
+    let current=error;
+    for(let depth=0;current&&typeof current==="object"&&depth<8;depth++){
+      parts.push([current.name,current.code,current.message].filter(Boolean).join(": "));
+      current=current.cause;
+    }
+    return parts.join(" ← ");
+  };
   class Transport {
     constructor(options) {
       constructors.push(options);
@@ -108,7 +125,11 @@ function harness({
       events.push({ name: "accounting", provider, activity, timeoutCode: policy?.timeoutCode, timeoutMsType: typeof policy?.timeoutMs });
       return async () => { throw Error("Network disallowed in tests"); };
     } },
-    "@/lib/standalone-accounting/context": { isStandaloneAccountingError: accountingError },
+    "@/lib/standalone-accounting/context": {
+      isStandaloneAccountingError: accountingError,
+      standaloneAccountingCause: accountingCause,
+      standaloneFailureDetails: failureDetails,
+    },
     "@/lib/memory/memory-contract": { SHORT_TERM_MESSAGE_LIMIT: 60 },
     "@/lib/memory/short-term": { filterConversationalMessages: m => m },
   };
@@ -365,4 +386,44 @@ test("model prompts require factual narratives and prohibit interpretive memory"
   assert.match(prompts[0], /Do NOT infer motives/);
   assert.match(prompts[1], /When a new episode corrects/);
   assert.match(prompts[1], /No inferred motivations/);
+});
+
+test("SDK Connection error cannot disguise an owner cancellation or authorize Claude fallback", async () => {
+  const terminal=Object.assign(new Error("Owner-request cancellation"), {
+    code: "standalone_cancelled", terminal: true,
+  });
+  const wrapped=Object.assign(new Error("Connection error."), {cause:terminal});
+  const h=harness({fallbackConfigured:true,responses:()=>{throw wrapped;}});
+  await assert.rejects(h.run(),error=>error===wrapped);
+  assert.deepEqual(h.calls.map(call=>call.__provider),["grok"]);
+  assert.equal(h.writes.length,0);
+  assert.ok(h.logs.some(log=>log.args[0]?.includes("Non-retryable") &&
+    String(log.args[1]?.diagnostic??"").includes("standalone_cancelled")));
+  assert.equal(await h.run(),"deferred","same in-flight source claim is never retransmitted");
+});
+
+test("nested SDK timeout is recognized and permits Claude only on a later request", async () => {
+  const timeout=Object.assign(new Error("provider timed out"), {
+    code:"standalone_memory_timeout",terminal:true,
+  });
+  const wrapped=Object.assign(new Error("Connection error."),{cause:timeout});
+  const h=harness({fallbackConfigured:true,responses:(n,body,provider)=>{
+    if(provider==="grok")throw wrapped;
+    return n===2?selected():retained();
+  }});
+  assert.equal(await h.run(),"deferred");
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(call=>call.__provider),["grok","anthropic","anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+});
+
+test("both unavailable providers preserve the original cursor and do not retry a blocked batch", async () => {
+  const h=harness({fallbackConfigured:true,responses:()=>{throw new Error("Connection error.");}});
+  assert.equal(await h.run(),"deferred");
+  assert.equal(await h.run(),"blocked");
+  assert.equal(await h.run(),"blocked");
+  assert.deepEqual(h.calls.map(call=>call.__provider),["grok","anthropic"]);
+  assert.equal(h.writes.length,0);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
 });
