@@ -1,4 +1,4 @@
-import { isStandaloneAccountingError, standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
+import { standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
