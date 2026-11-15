@@ -226,14 +226,14 @@ test("mixed prose then a capability control line is still a valid internal reque
   const line = CAPABILITY_REQUEST_PREFIX +
     ' {"task":"Inspect the saved generated picture","capability":"vision","preferredProvider":"google","reason":"Need a visual assessment"}';
   const result = parseCapabilityEscalationRequest(
-    "Fair point. I don't have direct pixel access in this model.\\n\\n" + line,
+    "Fair point. I don't have direct pixel access in this model.\n\n" + line,
   );
   assert.equal(result?.capability,"vision");
   assert.equal(result?.preferredProvider,"google");
   assert.equal(result?.task,"Inspect the saved generated picture");
   assert.equal(parseCapabilityEscalationRequest("Normal response without an internal request."),null);
-  assert.equal(parseCapabilityEscalationRequest(line+"\\n"+line),null,"duplicate commands cannot be authorized");
-  assert.equal(parseCapabilityEscalationRequest("Here is a quoted example:\\n> "+line),null);
+  assert.equal(parseCapabilityEscalationRequest(line+"\n"+line),null,"duplicate commands cannot be authorized");
+  assert.equal(parseCapabilityEscalationRequest("Here is a quoted example:\n> "+line),null);
 });
 
 test("production regression: apology before vision request never leaks and delegates exactly once", async () => {
@@ -247,9 +247,9 @@ test("production regression: apology before vision request never leaks and deleg
     async generateStream(_params,handlers) {
       pass++;
       const text = pass===1
-        ? "Fair — you're right. I need to inspect the saved generated image.\\n\\n"+control
+        ? "Fair — you're right. I need to inspect the saved generated image.\n\n"+control
         : "Looking at the verified image observations, the portrait is warmly lit and expressive. The rendering is plausible but the pose feels generic.";
-      for(const chunk of text.match(/[\\s\\S]{1,19}/g)??[]) await handlers.onTextDelta?.(chunk);
+      for(const chunk of text.match(/[\s\S]{1,19}/g)??[]) await handlers.onTextDelta?.(chunk);
       return {provider:"anthropic",model:"claude-sonnet-5",text};
     },
   };
@@ -292,9 +292,9 @@ test("malformed internal capability line fails closed without publishing or retr
     async generate(){throw Error("Unexpected non-stream call");},
     async generateStream(_params,handlers) {
       calls++;
-      await handlers.onTextDelta?.("Let me check it.\\n");
+      await handlers.onTextDelta?.("Let me check it.\n");
       await handlers.onTextDelta?.(malformed);
-      return {provider:"anthropic",model:"claude",text:"Let me check it.\\n"+malformed};
+      return {provider:"anthropic",model:"claude",text:"Let me check it.\n"+malformed};
     },
   };
   await assert.rejects(runOnDemandCapabilityEscalation({
