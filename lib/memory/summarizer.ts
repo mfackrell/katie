@@ -29,7 +29,7 @@ const SUMMARY_MAX_TOKENS = 2300; // First prompt: new source batch only.
 const BATCH_SUMMARY_MAX_CHARACTERS = 7500;
 // Semantic reconciliation is now a small edit plan rather than a full rewrite.
 // Earlier paid attempt records remain intact and no retries are automatic.
-const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v11-grok-responses-grounded-factual";
+const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v12-claude-native-failclosed-recovery";
 const processorVersion = (provider:SummaryProvider) => `${ITM_PROCESSOR_VERSION}:${provider}`;
 export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "deferred";
 
@@ -83,8 +83,9 @@ function providerClient(provider:SummaryProvider,deadline:number):OpenAI {
   });
 }
 
-type ChatSummaryResponse = {
-  choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }>;
+type ClaudeMessagesResponse = {
+  stop_reason?: string | null;
+  content?: Array<{ type?: string; text?: string | null }>;
 };
 type GrokResponsesResponse = {
   status?: string | null;
@@ -151,16 +152,53 @@ function formatTranscript(messages: Message[]): string {
   }).join("\n");
 }
 
-function completedText(response: ChatSummaryResponse, phase: string, maxCharacters: number): string {
-  const choice = response.choices?.[0];
-  const output = choice?.message?.content?.trim() ?? "";
-  if (choice?.finish_reason !== "stop" || !output || output.length > maxCharacters) {
-    console.warn("[Summarizer] Incomplete Grok ITM response; cursor retained", {
-      phase, finishReason: choice?.finish_reason ?? "missing", characters: output.length, limit: maxCharacters,
+function completedClaudeText(response: ClaudeMessagesResponse, phase: string, maxCharacters: number): string {
+  const output = (response.content ?? [])
+    .filter(item => item.type === "text" && typeof item.text === "string")
+    .map(item => item.text).join("").trim();
+  if (response.stop_reason !== "end_turn" || !output || output.length > maxCharacters) {
+    console.warn("[Summarizer] Incomplete native Claude ITM response; cursor retained", {
+      phase, stopReason: response.stop_reason ?? "missing", characters: output.length, limit: maxCharacters,
     });
     throw new Error("Intermediate memory " + phase + " incomplete or outside character budget");
   }
   return output;
+}
+
+/** Anthropic's JSON schema subset excludes array size/uniqueness and numeric
+ * bounds. Those limits remain enforced on the returned data by Katie's
+ * source-citation and retention validators, not delegated to the model. */
+function claudeSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(claudeSchema);
+  if (schema !== null && typeof schema === "object") {
+    return Object.fromEntries(
+      Object.entries(schema as Record<string, unknown>)
+        .filter(([key, value]) => !["maxItems", "uniqueItems", "minimum", "maximum", "minLength", "maxLength"].includes(key)
+          && !(key === "minItems" && value !== 0 && value !== 1))
+        .map(([key, value]) => [key, claudeSchema(value)]),
+    );
+  }
+  return schema;
+}
+
+/** Native Anthropic Messages API; never use its OpenAI-compatible
+ * chat-completions path, which is unsupported by the accounting guard. */
+async function claudeStructuredResponse(
+  client: OpenAI,
+  prompt: Array<{ role: "system" | "user"; content: string }>,
+  maxOutputTokens: number,
+  schema: Record<string, unknown>,
+): Promise<ClaudeMessagesResponse> {
+  return await client.post<Record<string, unknown>, ClaudeMessagesResponse>("/messages", {
+    body: {
+      model: SUMMARY_MODELS.anthropic,
+      max_tokens: maxOutputTokens,
+      system: prompt.filter(item => item.role === "system").map(item => item.content).join("\n\n"),
+      messages: prompt.filter(item => item.role === "user"),
+      thinking: { type: "between_tools" },
+      output_config: { effort: "low", format: { type: "json_schema", schema: claudeSchema(schema) } },
+    },
+  });
 }
 
 function completedResponsesText(response: GrokResponsesResponse, phase: string, maxCharacters: number): string {
@@ -293,12 +331,8 @@ async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, 
     const response = await grokStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, "itm_episodes", EPISODE_RESPONSE_SCHEMA);
     return parseGroundedEpisodes(completedResponsesText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
   }
-  const response = await client.chat.completions.create({
-    model: SUMMARY_MODELS[provider],
-    max_tokens: SUMMARY_MAX_TOKENS,
-    messages: prompt,
-  });
-  return parseGroundedEpisodes(completedText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
+  const response = await claudeStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, EPISODE_RESPONSE_SCHEMA);
+  return parseGroundedEpisodes(completedClaudeText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
 }
 
 /**
@@ -363,12 +397,8 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
     const response = await grokStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, "itm_retention", RETENTION_RESPONSE_SCHEMA);
     raw = completedResponsesText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   } else {
-    const response = await client.chat.completions.create({
-      model: SUMMARY_MODELS[provider],
-      max_tokens: RECONCILE_MAX_TOKENS,
-      messages: prompt,
-    });
-    raw = completedText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
+    const response = await claudeStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, RETENTION_RESPONSE_SCHEMA);
+    raw = completedClaudeText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
   const keep = parseRetentionPlan(raw, prior.length);
   if (keep.some(id => prior[id].length > ITM_EPISODE_MAX_CHARACTERS))
@@ -483,8 +513,35 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   const checkpoint = batch[batch.length - 1];
   const expectedCursor = existing?.summarizedThroughMessageId ?? null;
   const admin = getSupabaseAdminClient();
+  // Cross-version recovery gate. Historic metered calls are immutable evidence:
+  // never send the same source batch again to a provider that already received it.
+  // A recent in-flight claim or unresolved approval prevents any new dispatch.
+  const inspection = await admin.rpc<{
+    grok_sent:boolean; anthropic_sent:boolean; paused:boolean; in_flight:boolean;
+  }>("inspect_itm_batch_provider_exposure", {
+    p_actor_id:chat.actorId, p_chat_id:chatId, p_batch_end_message_id:checkpoint.id,
+  });
+  if (inspection.error || !inspection.data ||
+    !["grok_sent","anthropic_sent","paused","in_flight"].every(
+      key => typeof inspection.data?.[key as keyof typeof inspection.data] === "boolean")) {
+    console.error("[Summarizer] Provider exposure inspection unavailable; no claim admitted", {chatId});
+    return "blocked";
+  }
+  if (inspection.data.paused || inspection.data.in_flight) {
+    console.warn("[Summarizer] Prior ITM approval or in-flight batch requires recovery", {
+      chatId, sourceEnd:checkpoint.id, paused:inspection.data.paused, inFlight:inspection.data.in_flight,
+    });
+    return "deferred";
+  }
   let provider:SummaryProvider|undefined;
   for(const candidate of providers){
+    if (candidate === "grok" && inspection.data.grok_sent ||
+        candidate === "anthropic" && inspection.data.anthropic_sent) {
+      console.warn("[Summarizer] Prior paid source batch retained; avoiding same-provider retransmission", {
+        chatId, sourceEnd:checkpoint.id, provider:candidate,
+      });
+      continue;
+    }
     const claim = await admin.rpc<string>("claim_intermediate_memory_batch", {
       p_actor_id: chat.actorId,
       p_chat_id: chatId,
@@ -513,8 +570,8 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   });
 
   const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
-  const client=providerClient(provider,deadline);
   try {
+    const client=providerClient(provider,deadline);
     const newSummary = await summarizeNewBatch(batch,provider,client);
     const episodes = legacyEpisodes(summary);
     const keep = await reconcileEpisodePlan(episodes,newSummary,provider,client);
@@ -551,21 +608,30 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   } catch (error) {
     const diagnostic=standaloneFailureDetails(error);
     const accountingCause=standaloneAccountingCause(error);
+    // Finish the durable claim even when the SDK wraps a terminal accounting
+    // denial. The old early throw stranded rows forever in 'processing'.
+    let recorded:boolean=false;
+    try {
+      const result = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
+        p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
+        p_processor_version: processorVersion(provider), p_state: "blocked",
+        p_reason: diagnostic.slice(0,160),
+      });
+      recorded = result.data === true && !result.error;
+    } catch {
+      recorded = false;
+    }
+    if(!recorded) {
+      console.error("[Summarizer] Failed to persist failure circuit breaker", {
+        chatId, sourceEnd: checkpoint.id, provider, diagnostic,
+      });
+      throw error;
+    }
     if ((accountingCause || isRequestAbort(error)) && !shouldUseNextProvider(error)) {
       console.error("[Summarizer] Non-retryable post-answer memory transport failure", {
         chatId, sourceEnd: checkpoint.id, provider, diagnostic,
       });
-      // Preserve the existing claim for explicit recovery. Do not reclassify
-      // a cancelled/unauthorized attempt as a failed provider available to retry.
       throw error;
-    }
-    const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
-      p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
-      p_processor_version: processorVersion(provider), p_state: "blocked",
-      p_reason: diagnostic.slice(0,160),
-    });
-    if (recorded.error || recorded.data !== true) {
-      console.error("[Summarizer] Failed to persist failure circuit breaker", { chatId, sourceEnd: checkpoint.id, provider });
     }
     const nextProvider=providers[providers.indexOf(provider)+1];
     console.error("[Summarizer] Batch provider attempt blocked without checkpoint advance", {
