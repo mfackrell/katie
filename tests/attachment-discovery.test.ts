@@ -34,9 +34,9 @@ test("production Nov 15: visual correction deterministically recalls the verifie
   assert.ok(saved.visualMemory);
   const earlierImage={...saved,id:"old-unrelated",fileName:"unrelated.jpeg"};
   const history:Message[]=[
-    {id:"image-turn",chatId:"current-chat",role:"user",content:"Assess the attractiveness of the person in this image",
+    {id:"image-turn",chatId:"current-chat",role:"user",createdAt:"2026-11-15T18:08:55Z",content:"Assess the attractiveness of the person in this image",
       attachments:[observed]},
-    {id:"bad-answer",chatId:"current-chat",role:"assistant",content:"I can't assess a real person's attractiveness."}
+    {id:"bad-answer",chatId:"current-chat",role:"assistant",createdAt:"2026-11-15T18:09:35Z",content:"I can't assess a real person's attractiveness."}
   ];
   const text="it's not a real person katie. it's an image YOU created. are you retarded today or what?";
   let selectorCalls=0;
@@ -69,9 +69,9 @@ test("visual correction binding rejects forged, ambiguous, stale, and cross-chat
   const saved={...image,visualMemory:buildKatieVisualEpisode(image,hash,"2026-11-15T18:08:26Z")};
   const upload={...image,conversationUsage:"uploaded" as const};
   const turn=(attachments:ConversationAttachment[],chatId="chat-a"):Message=>({
-    id:"image-turn",chatId,role:"user",content:"Look at this photo",attachments
+    id:"image-turn",chatId,role:"user",createdAt:"2026-11-15T18:08:55Z",content:"Look at this photo",attachments
   });
-  const assistant:Message={id:"reply",chatId:"chat-a",role:"assistant",content:"I saw it."};
+  const assistant:Message={id:"reply",chatId:"chat-a",role:"assistant",createdAt:"2026-11-15T18:09:35Z",content:"I saw it."};
   const text="it's an image you created, not a real person";
   const pick=(catalog:ConversationAttachment[],history:Message[],chatId="chat-a")=>
     recentVerifiedVisualCorrection(text,catalog,history,chatId);
@@ -81,14 +81,14 @@ test("visual correction binding rejects forged, ambiguous, stale, and cross-chat
   assert.equal(pick([saved],[turn([{...upload,conversationUsage:"contextual"}]),assistant]),null);
   assert.equal(pick([saved],[turn([upload,{...upload,id:"another-photo"}]),assistant]),null);
   assert.equal(pick([saved],[turn([upload]),assistant],"chat-b"),null);
-  assert.equal(pick([saved],[turn([upload]),{id:"new-topic",chatId:"chat-a",role:"user",content:"New topic: revenue"},
+  assert.equal(pick([saved],[turn([upload]),{id:"new-topic",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"New topic: revenue"},
     assistant]),null);
-  assert.equal(pick([saved],[turn([upload]),{id:"casual-chat",chatId:"chat-a",role:"user",content:"I had coffee this morning"},
+  assert.equal(pick([saved],[turn([upload]),{id:"casual-chat",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"I had coffee this morning"},
     assistant]),null,"an intervening unrelated exchange cannot refresh the image anchor");
-  assert.equal(pick([saved],[turn([upload]),{id:"correction",chatId:"chat-a",role:"user",content:"No, that's not what I saw"},
+  assert.equal(pick([saved],[turn([upload]),{id:"correction",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"No, that's not what I saw"},
     assistant])?.selections[0]?.attachment.id,image.id,"a continued image correction may retain the same source");
-  assert.equal(pick([saved],[turn([upload]),{id:"one",chatId:"chat-a",role:"user",content:"Tell me a joke"},
-    {id:"two",chatId:"chat-a",role:"user",content:"What's the weather?"}]),null);
+  assert.equal(pick([saved],[turn([upload]),{id:"one",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"Tell me a joke"},
+    {id:"two",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:11:00Z",content:"What's the weather?"}]),null);
   assert.equal(recentVerifiedVisualCorrection("Help me write an email",[saved],[turn([upload]),assistant],"chat-a"),null);
   assert.equal(recentVerifiedVisualCorrection("Compare both pictures",[saved],[turn([upload]),assistant],"chat-a"),null);
   assert.equal(recentVerifiedVisualCorrection("Look again at the image",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"source",
