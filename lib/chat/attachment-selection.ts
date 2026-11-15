@@ -117,7 +117,12 @@ export function recentVerifiedVisualCorrection(
     if (!(turn.attachments?.length)) continue;
     // A newer unrelated user request must break the anchor.
     if (recentUsers.slice(index+1).some(later=>Boolean(later.attachments?.length) ||
-        CLEAR_TOPIC_CHANGE.test(later.content))) return null;
+        CLEAR_TOPIC_CHANGE.test(later.content) ||
+        !(
+          SHORT_CORRECTION.test(later.content) ||
+          VISUAL_EVIDENCE_QUESTION.test(later.content) ||
+          /\\b(?:image|photo|picture|portrait|visual|rendering)\\b/i.test(later.content)
+        ))) return null;
     if (turn.attachments.length!==1) return null;
     const original=turn.attachments[0];
     if (!original.mimeType.startsWith("image/") || original.conversationUsage!=="uploaded" ||
