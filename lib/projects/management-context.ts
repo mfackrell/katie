@@ -24,6 +24,7 @@ type Inputs={
  workPackages:ManagementRow[];
  workPackageAttempts:ManagementRow[];
  work:ManagementRow[];
+ decisions?:ManagementRow[];
 };
 
 function required(condition:unknown,reason:string):asserts condition{
@@ -74,12 +75,22 @@ export function selectManagementEvidenceIds(bindings:AssignmentBinding[],statuse
   const latestComplete=history.find(b=>byStatus.get(b.assignment_id)?.status==='completed');
   const latestFailure=history.find(b=>['failed','blocked','stopped'].includes(byStatus.get(b.assignment_id)?.status??''));
   // Completed management decisions are already in the durable decision ledger.
-  // A manager sees its own unresolved failure, not its entire past transcript.
+  // A ready/replacement decision does not cure the previous failure. Retain
+  // that diagnostic alongside the latest completed result, without full history.
   if(id!==decisionIds[0]&&latestComplete)selected.add(latestComplete.assignment_id);
-  if(latestFailure&&(!latestComplete||String(latestFailure.created_at??'')>String(latestComplete.created_at??'')))
+  if(latestFailure)
    selected.add(latestFailure.assignment_id);
  }
  return [...selected].sort();
+}
+// Current contracts and plans are already projected in full. Historical
+// decisions need action/provenance and changed authority, not duplicate SMART
+// instructions, appointment contracts or whole acceptance reports.
+function decisionReference(d:ManagementRow){
+ const fields=new Set(['action','nodeId','underId','dependsOn','workerId','writerId','reviewerId','assignmentId','exceptionId','packageId',
+  'name','kind','managementLevel','area','reason','tools','expectedTools','deadline','expectedDeadline','paths','milestoneIndex','accepted']);
+ return {id:d.id,node_id:d.node_id,assignment_id:d.assignment_id,created_at:d.created_at,
+  decision:Array.isArray(d.decision)?d.decision.map(c=>Object.fromEntries(Object.entries(c).filter(([k])=>fields.has(k)))):d.decision};
 }
 export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const {principalId,topology,scopedNodes,project}=input;
@@ -108,7 +119,9 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  });
  const immediate=scope.directIds.map(id=>scoped.get(id)!);
  const exceptions=input.exceptions.filter(e=>e.status!=='resolved'&&e.status!=='closed'&&
-  (relevant.has(String(e.owner_id))||relevant.has(String(e.origin_id))));
+  (relevant.has(String(e.owner_id))||relevant.has(String(e.origin_id))))
+  .map(e=>({id:e.id,origin_id:e.origin_id,owner_id:e.owner_id,reason:e.reason,detail:e.detail,status:e.status,
+   created_at:e.created_at,...(e.resolution!=null?{resolution:e.resolution}:{})}));
  const externalDependencies=input.dependencies.filter(d=>!scope.contextIds.includes(String(d.depends_on)))
   .map(d=>{const node=topology.find(n=>n.id===d.depends_on);
    required(node,'unknown dependency target '+String(d.depends_on));
@@ -147,8 +160,21 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
   token_limit:parent.token_limit,deadline:parent.deadline,status:parent.status,
   management_contract:parent.management_contract,
  }:null;
+ const spec=project.spec as ManagementRow|null|undefined;
+ const milestones=spec?.milestones;
+ if(project.phase==='development'&&project.approved_hash)
+  required(spec&&Array.isArray(milestones)&&Number.isSafeInteger(project.milestone_index)&&
+   Number(project.milestone_index)>=0&&Number(project.milestone_index)<milestones.length,'approved current milestone');
+ const currentMilestone=Array.isArray(milestones)?milestones[Number(project.milestone_index)]:undefined;
+ const decisions=scope.decisionIds.flatMap(nodeId=>sortedLatest((input.decisions??[]).filter(d=>d.node_id===nodeId)).slice(0,2));
+ const finalContract=spec?.finalContract;
+ const milestoneContract=(currentMilestone as ManagementRow|undefined)?.contract;
+ const finalContractProjection=finalContract!=null&&JSON.stringify(finalContract)===JSON.stringify(milestoneContract)
+  ?{$ref:'#/project/approvedContract/currentMilestone/contract'}:finalContract;
  const currentProject={objective:project.objective,phase:project.phase,approved_hash:project.approved_hash,
-  verified_sha:project.verified_sha,deadline:project.deadline};
+  verified_sha:project.verified_sha,deadline:project.deadline, milestoneIndex:project.milestone_index,
+  approvedContract:spec?{requirements:spec.requirements,allowedPaths:spec.allowedPaths,
+   finalContract:finalContractProjection,currentMilestone}:undefined};
  const payload={
   project:currentProject,principal,
   reporting:{immediateSuperior,
@@ -161,6 +187,12 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
    reviewMode:(a.config as ManagementRow|null)?.reviewMode})),
   plans:input.plans,dependencies:input.dependencies,externalDependencyStatuses:externalDependencies,
   scopeGrants:input.scopeGrants,exceptions,
+  recentDecisions:decisions.map(decisionReference),
+  latestReplacementDecisions:scope.directIds.flatMap(id=>sortedLatest((input.decisions??[]).filter(d=>
+   d.node_id===principalId&&Array.isArray(d.decision)&&d.decision.some(c=>c.action==='replace_leader'&&c.nodeId===id))).slice(0,1))
+   .filter((d,i,all)=>all.findIndex(other=>other.id===d.id)===i).map(decisionReference),
+  exceptionPolicy:'Open historical exceptions are not resolved by age, replacement, ready or management activity. Continue authorized work to obtain actual subordinate evidence; only then propose resolution. Do not repeat accepted work or invent evidence IDs.',
+  delegationPolicy:'Scope grants and capabilities are separate. Before commissioning implementation, the immediate parent must delegate BOTH development and the approved scope. QA and its descendants never receive development. Exact file inventories must fit the target worker grant; directories are not SMART file inventories.',
   workerContracts:currentContracts,workPackages:activePackages,
   acceptedPackageCount:acceptedPackages.length,workPackageAttempts:attempts,work:currentWork,
   assignments:input.bindings.filter(b=>chosen.has(b.assignment_id)),

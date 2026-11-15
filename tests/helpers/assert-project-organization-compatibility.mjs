@@ -70,6 +70,10 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  assert.match(beforeG6.amendment,/area in \('quality_assurance','independent_qa'\)/);
 
  assert.deepEqual(await snapshot(),before,'Recovery migrations must preserve existing records');
+ await db.query(readFileSync('supabase/migrations/20261114204202_management_loop_recovery.sql','utf8'));
+ assert.deepEqual(await snapshot(),before,'Management recovery migration never mutates existing records');
+ const recoveryAcl=(await db.query("select relrowsecurity,has_table_privilege('service_role','project_management_resume_receipts','INSERT') writable,has_function_privilege('anon','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') anon,has_function_privilege('authenticated','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') authenticated from pg_class where oid='project_management_resume_receipts'::regclass")).rows[0];
+ assert.deepEqual(recoveryAcl,{relrowsecurity:true,writable:false,anon:false,authenticated:false});
  await (await import('./assert-project-scope-ratification.mjs')).assertProjectScopeRatification(db,rival);
  await (await import('./assert-project-qa-compatibility.mjs')).assertProjectQaCompatibility(db);
  if(process.env.KATIE_TEST_DIRECTOR_ONE_SHOT==='1'){

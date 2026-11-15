@@ -157,3 +157,31 @@ test('retired package history never consumes the current decision window; active
  assert.throws(()=>buildManagementDecisionContext(x),/invalid package attempt ordinal/);
  assert.ok(!JSON.stringify(context).includes('archived acceptance'));
 });
+
+test('current approved contract and latest failures survive ready and replacement decisions',()=>{
+ const x=fixture();x.project={...x.project,phase:'development',milestone_index:0,spec:{requirements:['Original requirement'],allowedPaths:['app/game/'],milestones:[{instruction:'Original approved implementation',contract:{path:'/game'}}],finalContract:{path:'/game'}}};
+ x.bindings.push({assignment_id:'failed',node_id:'game',created_at:'2026-11-11T00:00:00Z'});
+ x.statuses.push({id:'failed',status:'failed'});x.evidence.push({id:'failed',status:'failed',detail:'Missing development capability'});
+ x.decisions=[{id:'replacement',node_id:'root',created_at:'2026-11-10',decision:[{action:'replace_leader',nodeId:'game'}]},
+ ...Array.from({length:100},(_,i)=>({id:String(i),node_id:'root',created_at:'2026-11-12',decision:[{action:'ready'}]}))];
+ const ctx=JSON.parse(buildManagementDecisionContext(x));
+ assert.equal(ctx.project.approvedContract.currentMilestone.instruction,'Original approved implementation');
+ assert.equal(ctx.project.milestoneIndex,0);assert.equal(ctx.evidence.find(e=>e.id==='failed').detail,'Missing development capability');
+ assert.equal(ctx.recentDecisions.length,2);assert.equal(ctx.latestReplacementDecisions[0].id,'replacement');
+ assert.throws(()=>buildManagementDecisionContext({...x,project:{...x.project,spec:null}}),/approved current milestone/);
+ assert.throws(()=>buildManagementDecisionContext({...x,project:{...x.project,milestone_index:99}}),/approved current milestone/);
+});
+
+test('shared acceptance contracts are referenced losslessly and historical decisions do not duplicate current contracts',()=>{
+ const x=fixture(),contract={path:'/game',scenarios:[{name:'Exact accepted scenario',steps:[{action:'expectText',selector:'#status',value:'X'.repeat(8000)}]}]};
+ x.project={...x.project,phase:'development',milestone_index:0,spec:{milestones:[{instruction:'Approved implementation',contract}],finalContract:contract}};
+ x.exceptions[0]={...x.exceptions[0],project_id:'redundant-project',resolution:null};
+ x.decisions=[{id:'decision',node_id:'root',assignment_id:'job',created_at:'2026-11-14',decision:[{action:'appoint',name:'Game',area:'game',kind:'manager',tools:['manage'],objective:'Archived repeated contract '.repeat(3000)},{action:'replace_leader',nodeId:'game',reason:'Actual saved reason'}]}];
+ const ctx=JSON.parse(buildManagementDecisionContext(x));
+ assert.deepEqual(ctx.project.approvedContract.currentMilestone.contract,contract);
+ assert.equal(ctx.project.approvedContract.finalContract.$ref,'#/project/approvedContract/currentMilestone/contract');
+ assert.equal(ctx.exceptions[0].detail,x.exceptions[0].detail);assert.equal(ctx.exceptions[0].id,x.exceptions[0].id);
+ assert.equal(ctx.recentDecisions[0].assignment_id,'job');assert.equal(ctx.recentDecisions[0].decision[1].reason,'Actual saved reason');
+ assert.ok(!JSON.stringify(ctx).includes('Archived repeated contract'));
+ assert.equal(ctx.organization[0].objective,x.scopedNodes[1].objective);
+});
