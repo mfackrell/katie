@@ -522,8 +522,10 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     p_actor_id:chat.actorId, p_chat_id:chatId, p_batch_end_message_id:checkpoint.id,
   });
   if (inspection.error || !inspection.data ||
-    !["grok_sent","anthropic_sent","paused","in_flight"].every(
-      key => typeof inspection.data?.[key as keyof typeof inspection.data] === "boolean")) {
+    typeof inspection.data.grok_sent !== "boolean" ||
+    typeof inspection.data.anthropic_sent !== "boolean" ||
+    typeof inspection.data.paused !== "boolean" ||
+    typeof inspection.data.in_flight !== "boolean") {
     console.error("[Summarizer] Provider exposure inspection unavailable; no claim admitted", {chatId});
     return "blocked";
   }
