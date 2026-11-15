@@ -37,7 +37,7 @@ test('post-answer memory survives browser abort without losing owner accounting 
  const {runWithStandaloneAccounting,runWithDurablePostAnswerAccounting,getAccountingScope,nextStandaloneAttempt}=contextExports;
  const aborted=new AbortController();
  await runWithStandaloneAccounting({
-  userId:'owner',actorId:'actor',chatId:'chat',requestId:'saved-request',signal:aborted.signal,
+  userId:'owner',actorId:'actor',chatId:'chat',requestId:'saved-request',activity:'chat',signal:aborted.signal,
  },async()=>{
   // The assistant answer stream is already closed and the client disconnected.
   aborted.abort();
