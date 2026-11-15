@@ -533,6 +533,14 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     });
     return "deferred";
   }
+  // Claude is the terminal fallback. If Claude already received this exact
+  // source batch, returning to Grok would be reverse-order retransmission.
+  if (inspection.data.anthropic_sent) {
+    console.error("[Summarizer] Previous Claude ITM source batch already metered; manual receipt recovery required", {
+      chatId, sourceEnd:checkpoint.id,
+    });
+    return "blocked";
+  }
   let provider:SummaryProvider|undefined;
   for(const candidate of providers){
     if (candidate === "grok" && inspection.data.grok_sent ||
