@@ -35,7 +35,8 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
       );
       create table public.intermediate_memory_batch_attempts(
         actor_id uuid not null,chat_id uuid not null,batch_end_message_id text not null,
-        state text not null,claimed_at timestamptz not null
+        state text not null,claimed_at timestamptz not null,
+        processor_version text, error_code text
       );
     `);
     const migration=readFileSync("supabase/migrations/20261115194500_itm_native_claude_recovery_exposure.sql","utf8");
@@ -45,7 +46,7 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
     const inspect=async()=>(
       await client.query("select public.inspect_itm_batch_provider_exposure($1,$2,$3) flags",[actor,chat,end])
     ).rows[0].flags;
-    const none={grok_sent:false,anthropic_sent:false,paused:false,in_flight:false};
+    const none={grok_sent:false,anthropic_sent:false,paused:false,in_flight:false,terminal:false};
     assert.deepEqual(await inspect(),none);
     const serializedBody=JSON.stringify({messages:[{role:"user",content:`Batch [${end}] quoted source`}]});
     await client.query(`
@@ -67,12 +68,19 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
     assert.deepEqual(await inspect(),{...none,grok_sent:true,paused:true});
     await client.query("update standalone_provider_attempts set state='settled' where provider='anthropic'");
     assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true});
+    await client.query(`
+      update intermediate_memory_batch_attempts
+      set state='blocked',processor_version='two-stage-30-messages-v12-claude-native-failclosed-recovery:grok',
+          error_code='ITM_TERMINAL: standalone_unsupported_billing'
+      where actor_id=$1 and chat_id=$2 and batch_end_message_id=$3
+    `,[actor,chat,end]);
+    assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true,terminal:true});
     const otherBody=JSON.stringify({messages:[{role:"user",content:"Different batch [deadbeef]"}]});
     await client.query(`
       insert into standalone_provider_attempts(actor_id,chat_id,provider,category,state,prepared_payload)
       values($1,$2,'grok','memory-summary','uncertain',jsonb_build_object('serializedBody',$3))
     `,[actor,chat,otherBody]);
-    assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true});
+    assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true,terminal:true});
     await assert.rejects(client.query(
       "select public.inspect_itm_batch_provider_exposure($1,$2,$3)",[other,chat,end]
     ),/Unrecognized actor\/chat/);
@@ -84,7 +92,7 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
     `);
     assert.deepEqual(access.rows[0],{anon:false,service:true});
     await client.query("set role service_role");
-    assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true});
+    assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true,terminal:true});
     await client.query("reset role");
   }finally{
     if(client)await client.end().catch(()=>undefined);

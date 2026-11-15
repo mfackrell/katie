@@ -11,6 +11,7 @@ declare
   v_anthropic_sent boolean := false;
   v_paused boolean := false;
   v_in_flight boolean := false;
+  v_terminal boolean := false;
 begin
   if not exists (
     select 1 from public.chats c
@@ -50,9 +51,21 @@ begin
       and b.claimed_at > now() - interval '10 minutes'
   ) into v_in_flight;
 
+  -- Only the current v12 processor's explicit terminal classifications
+  -- fence cross-provider fallback. Older v11 endpoint defects are not
+  -- mistaken for permanent v12 policy denials.
+  select exists(
+    select 1 from public.intermediate_memory_batch_attempts b
+    where b.actor_id=p_actor_id and b.chat_id=p_chat_id
+      and b.batch_end_message_id=p_batch_end_message_id
+      and b.state='blocked'
+      and b.processor_version like 'two-stage-30-messages-v12-claude-native-failclosed-recovery:%'
+      and b.error_code like 'ITM_TERMINAL:%'
+  ) into v_terminal;
+
   return jsonb_build_object(
     'grok_sent',v_grok_sent, 'anthropic_sent',v_anthropic_sent,
-    'paused',v_paused, 'in_flight',v_in_flight
+    'paused',v_paused, 'in_flight',v_in_flight, 'terminal',v_terminal
   );
 end;
 $$;

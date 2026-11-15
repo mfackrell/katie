@@ -517,7 +517,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   // never send the same source batch again to a provider that already received it.
   // A recent in-flight claim or unresolved approval prevents any new dispatch.
   const inspection = await admin.rpc<{
-    grok_sent:boolean; anthropic_sent:boolean; paused:boolean; in_flight:boolean;
+    grok_sent:boolean; anthropic_sent:boolean; paused:boolean; in_flight:boolean; terminal:boolean;
   }>("inspect_itm_batch_provider_exposure", {
     p_actor_id:chat.actorId, p_chat_id:chatId, p_batch_end_message_id:checkpoint.id,
   });
@@ -525,8 +525,15 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     typeof inspection.data.grok_sent !== "boolean" ||
     typeof inspection.data.anthropic_sent !== "boolean" ||
     typeof inspection.data.paused !== "boolean" ||
-    typeof inspection.data.in_flight !== "boolean") {
+    typeof inspection.data.in_flight !== "boolean" ||
+    typeof inspection.data.terminal !== "boolean") {
     console.error("[Summarizer] Provider exposure inspection unavailable; no claim admitted", {chatId});
+    return "blocked";
+  }
+  if (inspection.data.terminal) {
+    console.error("[Summarizer] Previous non-retryable ITM denial forbids cross-provider fallback", {
+      chatId,sourceEnd:checkpoint.id,
+    });
     return "blocked";
   }
   if (inspection.data.paused || inspection.data.in_flight) {
@@ -627,6 +634,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   } catch (error) {
     const diagnostic=standaloneFailureDetails(error);
     const accountingCause=standaloneAccountingCause(error);
+    const terminalDenial=(Boolean(accountingCause) || isRequestAbort(error)) && !shouldUseNextProvider(error);
     // Finish the durable claim even when the SDK wraps a terminal accounting
     // denial. The old early throw stranded rows forever in 'processing'.
     let recorded:boolean=false;
@@ -634,7 +642,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
       const result = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
         p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
         p_processor_version: processorVersion(provider), p_state: "blocked",
-        p_reason: diagnostic.slice(0,160),
+        p_reason: (terminalDenial ? "ITM_TERMINAL:" + diagnostic : diagnostic).slice(0,160),
       });
       recorded = result.data === true && !result.error;
     } catch {
@@ -646,7 +654,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
       });
       throw error;
     }
-    if ((accountingCause || isRequestAbort(error)) && !shouldUseNextProvider(error)) {
+    if (terminalDenial) {
       console.error("[Summarizer] Non-retryable post-answer memory transport failure", {
         chatId, sourceEnd: checkpoint.id, provider, diagnostic,
       });

@@ -34,6 +34,7 @@ function harness({
 } = {}) {
   let memory = copy(prior);
   const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [];
+  const terminalBatches = new Set();
   const accountingCause = error => {
     let current = error;
     for(let depth=0;current&&typeof current==="object"&&depth<8;depth++){
@@ -89,7 +90,7 @@ function harness({
       events.push({ name, args: copy(args) });
       if (name === "inspect_itm_batch_provider_exposure") {
         return exposureInspectionError ? {data:null,error:{message:"Inspection unavailable"}} :
-          {data:copy(priorExposure),error:null};
+          {data:{...copy(priorExposure),terminal:Boolean(priorExposure.terminal)||terminalBatches.has(args.p_batch_end_message_id)},error:null};
       }
       if (name === "claim_intermediate_memory_batch") {
         if (args.p_expected_cursor !== (memory.summarizedThroughMessageId ?? null))
@@ -112,6 +113,9 @@ function harness({
         const key = args.p_processor_version + ":" + args.p_batch_end_message_id;
         if (claims.get(key) !== "processing") return { data: false, error: null };
         claims.set(key, args.p_state);
+        if (args.p_state === "blocked" && String(args.p_reason??"").startsWith("ITM_TERMINAL:")) {
+          terminalBatches.add(args.p_batch_end_message_id);
+        }
         return { data: true, error: null };
       }
       assert.fail("Unexpected RPC: " + name);
