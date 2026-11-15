@@ -51,12 +51,12 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
     const serializedBody=JSON.stringify({messages:[{role:"user",content:`Batch [${end}] quoted source`}]});
     await client.query(`
       insert into standalone_provider_attempts(actor_id,chat_id,provider,category,state,prepared_payload)
-      values($1,$2,'grok','memory-summary','uncertain',jsonb_build_object('serializedBody',$3))
+      values($1,$2,'grok','memory-summary','uncertain',jsonb_build_object('serializedBody',$3::text))
     `,[actor,chat,serializedBody]);
     assert.deepEqual(await inspect(),{...none,grok_sent:true});
     await client.query(`
       insert into standalone_provider_attempts(actor_id,chat_id,provider,category,state,prepared_payload)
-      values($1,$2,'anthropic','memory-summary','paused',jsonb_build_object('serializedBody',$3))
+      values($1,$2,'anthropic','memory-summary','paused',jsonb_build_object('serializedBody',$3::text))
     `,[actor,chat,serializedBody]);
     assert.deepEqual(await inspect(),{...none,grok_sent:true,paused:true});
     await client.query(`
@@ -78,7 +78,7 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
     const otherBody=JSON.stringify({messages:[{role:"user",content:"Different batch [deadbeef]"}]});
     await client.query(`
       insert into standalone_provider_attempts(actor_id,chat_id,provider,category,state,prepared_payload)
-      values($1,$2,'grok','memory-summary','uncertain',jsonb_build_object('serializedBody',$3))
+      values($1,$2,'grok','memory-summary','uncertain',jsonb_build_object('serializedBody',$3::text))
     `,[actor,chat,otherBody]);
     assert.deepEqual(await inspect(),{...none,grok_sent:true,anthropic_sent:true,terminal:true});
     await assert.rejects(client.query(
