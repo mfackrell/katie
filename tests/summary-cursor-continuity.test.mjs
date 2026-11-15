@@ -28,7 +28,9 @@ test("failed source batches preserve the checkpoint and only a later request may
   // SDK-level "Connection error" may wrap a more specific accounting
   // denial. The nested cause must govern whether a fallback is permissible.
   assert.match(code,/const accountingCause=standaloneAccountingCause\(error\)/);
-  assert.match(code,/if \(\(accountingCause \|\| isRequestAbort\(error\)\) && !shouldUseNextProvider\(error\)\)/);
+  assert.ok(code.includes('const terminalDenial=(Boolean(accountingCause) || isRequestAbort(error)) && !shouldUseNextProvider(error);'));
+  assert.ok(code.includes('if (terminalDenial) {'));
+  assert.ok(code.includes('if (inspection.data.terminal) {'));
   assert.match(code,/p_state: "blocked"/);
-  assert.match(code,/p_reason: diagnostic\.slice\(0,160\)/);
+  assert.ok(code.includes('p_reason: (terminalDenial ? "ITM_TERMINAL:" + diagnostic : diagnostic).slice(0,160)'));
 });
