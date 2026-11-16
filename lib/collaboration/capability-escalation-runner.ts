@@ -1,7 +1,9 @@
 import { requireAgentResearch } from "@/lib/agents/policy";
 import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { ProviderResponseError } from "@/lib/providers/response-errors";
 import {
+  containsCapabilityControlMarker,
   runCapabilityAwareGeneration,
   withCapabilityEscalationInstruction,
 } from "@/lib/collaboration/capability-escalation";
@@ -118,24 +120,21 @@ async function runPlainGeneration(input: {
   onTextDelta: (delta: string) => void | Promise<void>;
 }): Promise<{ result: ProviderResponse; streamedText: string }> {
   let streamedText = "";
-
+  // Finalization is another model call. It must pass the same response
+  // boundary before publishing user-visible text, even if a model ignores
+  // the no-further-escalation instruction.
   const result = input.provider.generateStream
     ? await runWithStandaloneActivity("capability_finalization", () => input.provider.generateStream!(input.params, {
-        async onTextDelta(delta) {
-          streamedText += delta;
-          await input.onTextDelta(delta);
-        },
+        async onTextDelta(delta) { streamedText += delta; },
       }))
     : await runWithStandaloneActivity("capability_finalization", () => input.provider.generate(input.params));
 
-  if (!input.provider.generateStream && result.text) {
-    await input.onTextDelta(result.text);
+  const finalText = result.text || streamedText;
+  if (containsCapabilityControlMarker(finalText) || containsCapabilityControlMarker(streamedText)) {
+    throw new ProviderResponseError("Internal capability control appeared in finalization; no final answer was published.",false,"CAPABILITY_PROTOCOL_INVALID");
   }
-
-  return {
-    result,
-    streamedText: streamedText || result.text,
-  };
+  if (finalText) await input.onTextDelta(finalText);
+  return { result: {...result,text:finalText}, streamedText: finalText };
 }
 
 export async function runOnDemandCapabilityEscalation(input: {
