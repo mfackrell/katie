@@ -1,0 +1,98 @@
+name: QA1063 Independent Exact-Source Retest
+
+on:
+  push:
+    branches:
+      - qa/independent-1063-f2f1c208
+
+permissions:
+  contents: read
+
+jobs:
+  qa1063:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+      KATIE_TEST_PG_TCP: '1'
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+      KATIE_TEST_ORDINARY_AUTHORITY: '1'
+      KATIE_TEST_PROJECT_ORGANIZATION: '1'
+      KATIE_TEST_DIRECTOR_ONE_SHOT: '1'
+      KATIE_TEST_ORG_AMENDMENTS: '1'
+      CI: '1'
+    steps:
+      - name: Checkout exact corrected candidate, not the QA workflow branch
+        uses: actions/checkout@v4
+        with:
+          ref: f2f1c2085d77fa74e9a6f9d9c2001b4d4bf30814
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact commit and tree
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = f2f1c2085d77fa74e9a6f9d9c2001b4d4bf30814
+          test "$(git rev-parse 'HEAD^{tree}')" = 965f96c35c28b9b32a227863cb87754c8fda67c5
+          test -z "$(git status --porcelain)"
+          echo "QA_PINNED_SOURCE_PASS $(git rev-parse HEAD) $(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install exact candidate dependencies
+        run: npm ci
+      - name: Set up disposable loopback PostgreSQL 16
+        run: |
+          set -euo pipefail
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Restore original unchanged Independent QA patch on corrected implementation
+        run: |
+          set -euo pipefail
+          patch=docs/qualification/qa1063-01-evidence/original-negative-probes.patch
+          echo 'dda3e45471eb7adcb8e58bcfa555fd88024b0fe6de5cc1d7dd6711b135beba8d  '${patch} | sha256sum -c -
+          for file in tests/helpers/assert-commissioning-exception-recovery.mjs tests/helpers/assert-management-loop-recovery.mjs tests/helpers/assert-project-organization-compatibility.mjs; do
+            git show 32429a90d31c7b16f3d7e5c9c8bbef48cafeb45e:"$file" > "$file"
+          done
+          git apply --check "$patch"
+          git apply "$patch"
+          diff -u <(printf '%s\n' tests/helpers/assert-commissioning-exception-recovery.mjs tests/helpers/assert-management-loop-recovery.mjs tests/helpers/assert-project-organization-compatibility.mjs) <(git diff --name-only)
+          test "$(git rev-parse HEAD)" = f2f1c2085d77fa74e9a6f9d9c2001b4d4bf30814
+          test "$(git rev-parse 'HEAD^{tree}')" = 965f96c35c28b9b32a227863cb87754c8fda67c5
+          git diff --exit-code -- supabase lib app
+          echo 'QA_ORIGINAL_PATCH_UNCHANGED_PASS'
+      - name: Independently execute original strict negative probes and affected regressions
+        run: |
+          set -euo pipefail
+          mkdir -p qa-evidence-1063
+          node --test tests/benchmark-renewal-postgres.test.mjs 2>&1 | tee qa-evidence-1063/original-strict.log
+      - name: Restore exact corrected regression sources
+        run: |
+          set -euo pipefail
+          git restore -- tests/helpers/assert-commissioning-exception-recovery.mjs tests/helpers/assert-management-loop-recovery.mjs tests/helpers/assert-project-organization-compatibility.mjs
+          test -z "$(git diff --name-only)"
+          test "$(git rev-parse HEAD)" = f2f1c2085d77fa74e9a6f9d9c2001b4d4bf30814
+          test "$(git rev-parse 'HEAD^{tree}')" = 965f96c35c28b9b32a227863cb87754c8fda67c5
+          echo 'QA_CORRECTED_SOURCE_RESTORED_PASS'
+      - name: Independently run strengthened zero-mutation and ordinary-project assertions
+        run: |
+          set -euo pipefail
+          mkdir -p qa-evidence-1063
+          node --test tests/benchmark-renewal-postgres.test.mjs 2>&1 | tee qa-evidence-1063/strengthened.log
+      - name: Preserve independent QA execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa1063-original-and-strengthened-evidence
+          path: qa-evidence-1063/
+          if-no-files-found: warn
+          retention-days: 30
