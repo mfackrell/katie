@@ -57,3 +57,27 @@ export async function recordItmStageReceipt(
   }
   return {responseText,responseSha256};
 }
+
+/** Historical server-authoritative claims supplement legacy provider receipts.
+ * v13 dispatches were outside the old paid ledger and MUST be fenced even
+ * though the original response body was never stored. Conservative denial
+ * is safer than an unauthorized duplicate inference.
+ */
+export async function inspectPriorItmClaims(
+  actorId:string,chatId:string,batchEndMessageId:string,
+):Promise<{grok:boolean;anthropic:boolean}>{
+  const {data,error}=await getSupabaseAdminClient().from("intermediate_memory_batch_attempts")
+    .select("processor_version,state")
+    .eq("actor_id",actorId).eq("chat_id",chatId)
+    .eq("batch_end_message_id",batchEndMessageId)
+    .returns<Array<{processor_version:string;state:string}>>();
+  if(error)throw new Error("ITM_PRIOR_CLAIM_INSPECTION_UNAVAILABLE");
+  const rows=data??[];
+  // No assumptions that blocked means unbilled. Both incomplete and settled
+  // claims fence the corresponding provider unless an exact saved receipt
+  // can be replayed without dispatch.
+  return {
+    grok:rows.some(a=>a.processor_version.endsWith(":grok")),
+    anthropic:rows.some(a=>a.processor_version.endsWith(":anthropic")),
+  };
+}
