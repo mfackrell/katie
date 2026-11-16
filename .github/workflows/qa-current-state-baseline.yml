@@ -1,0 +1,51 @@
+name: Independent QA — owner current-state baseline gap
+
+on:
+  push:
+    branches: [qa/owner-current-state-recovery-1061]
+
+permissions:
+  contents: read
+
+jobs:
+  qa-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: qa-synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: qa-synthetic-service-only
+      CI: '1'
+    steps:
+      - name: Checkout QA-only branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert no replacement production source was supplied
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 3a55f4cb20cbaed8e3f48626dc46299bbca10841 HEAD
+          echo "QA_BASELINE_MAIN=3a55f4cb20cbaed8e3f48626dc46299bbca10841"
+          git diff --name-only 3a55f4cb20cbaed8e3f48626dc46299bbca10841..HEAD
+          test "$(git diff --name-only 3a55f4cb20cbaed8e3f48626dc46299bbca10841..HEAD | grep -v -E '^(.github/workflows/qa-current-state-baseline.yml|docs/qa/independent-owner-current-state-recovery-matrix.md|tests/qa-owner-current-state-baseline.test.mjs)$' | wc -l)" -eq 0
+          echo "QA_ONLY_SOURCE_ISOLATION_PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install existing lockfile dependencies
+        run: npm ci
+      - name: Execute independent baseline-specific authorization-gap probe
+        run: |
+          set -euo pipefail
+          mkdir -p qa-current-state-evidence
+          node --test tests/qa-owner-current-state-baseline.test.mjs 2>&1 | tee qa-current-state-evidence/released-baseline-gap.log
+      - name: Archive QA-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: independent-owner-current-state-baseline-gap
+          path: qa-current-state-evidence/
+          if-no-files-found: warn
+          retention-days: 30
