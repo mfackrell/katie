@@ -87,7 +87,14 @@ export async function qaAssertNoPrematureNewRelease(db,{project,owner,release,cu
  const before=(await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n;
  assert.equal(before,76);
  const decision=(await db.query('select continuation_decision_id d from project_provider_execution where project_id=$1',[project])).rows[0].d;
- const authorized=(await db.query('select project_org_window_authorized($1,$2,$3,$4,$5) ok',[project,owner,release,decision,cutoff])).rows[0].ok;
+ // This predicate intentionally denies service_role direct EXECUTE. Preserve
+ // its production ACL; use only the disposable fixture schema owner to inspect.
+ let authorized;
+ await db.query('reset role');
+ try{
+  authorized=(await db.query('select project_org_window_authorized($1,$2,$3,$4,$5) ok',
+   [project,owner,release,decision,cutoff])).rows[0].ok;
+ }finally{await db.query('set role service_role');}
  assert.equal(authorized,false,'new release cannot claim before separate owner resume');
  const status=(await db.query('select status,active_mission_id from work_projects where id=$1',[project])).rows[0];
  assert.equal(status.status,'blocked');assert.equal(status.active_mission_id,null);
