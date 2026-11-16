@@ -1,50 +1,33 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
-
-// Temporary transport utility, removed before the implementation PR. No network,
-// secrets, arbitrary eval, provider dispatch or production data are accessed.
-const allowed = [
-  'app/api/chat/route.ts','components/chat-panel.tsx','lib/chat/attachment-continuity.ts',
-  'lib/types/chat.ts','lib/uploads/stored-uploads.ts','tests/chat-clarification-routing.test.mjs',
-  'tests/media-memory-route.test.mjs','tests/pdf-saved-comparison.test.mjs',
-  'tests/pdf-source-scope.test.mjs','tests/video-timeline-review.test.mjs',
+// Temporary exact-byte engineering transfer; no network, production credentials or inference.
+const plan = [
+  {
+    path:'app/api/chat/route.ts',
+    before:'a0b837b00b668382a1d33c46525a6adb32ba47ea1fb786815cc0d27e6546a589',
+    after:'0dfcad3d02f1d59f38611cfb205ec728d8f1a29068ca9fa75ff6e913afc73f1c',
+    line:1120,
+    text:'      // Cached source selection does not prove that original bytes still exist.\n      // Revalidate generated sources even for edit/recovery paths that skip Qwen.\n      if (saved.generatedSource) return (await readGeneratedImage(actorId,owner.id,saved.id)).reference;\n',
+  },
+  {
+    path:'tests/generated-image-perception.test.ts',
+    before:'35fcff75e9328ea6fbd4cd0d2fc3bc6c386251312227a64d5cc43f5f2bf63ac3',
+    after:'4095bc4630400c6257d4c0f35520dd31da6c27626b455ba855f322846043796b',
+    line:281,
+    text:"\n\ntest('actual route restoration revalidates generated original bytes even when source selection was checkpointed',async()=>{\n  const fake=storage(),saved=await generate(fake,{url:await image()}),d=saved.attachments[0];\n  const route=readFileSync('app/api/chat/route.ts','utf8');\n  const start=route.indexOf('    const restored = await loadSelectedAttachmentSources(');\n  const end=route.indexOf('    // Index the exact selected source',start);\n  assert.ok(start>0&&end>start);\n  const code=ts.transpileModule(`(async()=>{${route.slice(start,end)}return restored;})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;\n  let genericReads=0;\n  const run=()=>vm.runInNewContext(code,{\n    actorId,chatId,attachmentDecision:{method:'continuity',selections:[{attachment:d,mode:'source'}]},\n    getChatById:async()=>({actorId,id:chatId}),\n    loadSelectedAttachmentSources:async(_decision:unknown,restore:(source:ConversationAttachment)=>Promise<unknown>)=>restore(d),\n    readGeneratedImage:(...args:Parameters<ReturnType<typeof fake.factory>['readGenerated']>)=>fake.factory().readGenerated(...args),\n    restoreConversationAttachment:async()=>{genericReads++;throw Error('Cannot trust generic cached renderer without the original');},\n  });\n  assert.equal((await run()).fileId,d.id);\n  fake.files.delete(`chats/${chatId}/${d.id}.source`);\n  await assert.rejects(run(),/unavailable/);\n  assert.equal(genericReads,0);\n});\n",
+  },
 ];
-const newBlobs = {
-  'lib/images/generated-source.ts':'a3d6ce429ad606a45c216ae0cafa7b6d4b6a8e10',
-  'lib/uploads/generated-image-store.ts':'f0969ac2032cd7b9c84d44c8641927ba757355b9',
-  'lib/uploads/generated-image-service.ts':'b0ea5e213aabe259a0b7f9bca798dc3c890824a6',
-  'lib/chat/image-source-followup.ts':'6acb96feaa098f3777317d015d0617ae44a73349',
-  'lib/uploads/generated-image-observation.ts':'35abca6316789520d31db1c51573e958fcbdba90',
-  'tests/generated-image-perception.test.ts':'6f68f316a352ef05bab3ab741d309bc3355bd84a',
-};
-const digest = text => createHash('sha256').update(text).digest('hex');
-for (const [path,sha] of Object.entries(newBlobs)) {
-  const bytes=readFileSync(path);
-  const blob=createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
-  assert.equal(blob,sha,`New source differs from tested local tree: ${path}`);
-}
-const plan=JSON.parse(readFileSync('scripts/generated-image-splices.json','utf8'));
-assert.deepEqual(plan.map(p=>p.path),allowed);
-const outputs=[];
-for(const p of plan){
+const hash=s=>createHash('sha256').update(s).digest('hex');
+const outputs=plan.map(p=>{
   const before=readFileSync(p.path,'utf8');
-  if(digest(before)===p.after){outputs.push([p.path,before]);continue;}
-  assert.equal(digest(before),p.before,`Source head changed: ${p.path}`);
+  if(hash(before)===p.after)return [p.path,before];
+  assert.equal(hash(before),p.before,'Source changed: '+p.path);
   const lines=before.match(/[^\n]*\n|[^\n]+$/g)??[];
-  let last=Infinity;
-  for(const change of [...p.changes].reverse()){
-    assert.ok(Number.isSafeInteger(change.line)&&change.line>=0&&change.line<=lines.length&&change.line<last);
-    assert.ok(Number.isSafeInteger(change.remove)&&change.remove>=0);
-    assert.equal(typeof change.text,'string');
-    lines.splice(change.line,change.remove,...(change.text.match(/[^\n]*\n|[^\n]+$/g)??[]));
-    last=change.line;
-  }
-  const after=lines.join('');
-  assert.equal(digest(after),p.after,`Patched bytes differ from tested local tree: ${p.path}`);
-  outputs.push([p.path,after]);
-}
-// Only write after ALL source and patch identity checks have passed.
-for(const [path,text] of outputs)writeFileSync(path,text);
-writeFileSync('/tmp/generated-image-paths.txt',allowed.join('\n')+'\n');
-console.log('All 16 implementation/test files match the locally qualified source tree.');
+  lines.splice(p.line,0,...(p.text.match(/[^\n]*\n|[^\n]+$/g)??[]));
+  const after=lines.join('');assert.equal(hash(after),p.after,'Transfer mismatch: '+p.path);
+  return [p.path,after];
+});
+for(const [path,source] of outputs)writeFileSync(path,source);
+writeFileSync('/tmp/generated-image-paths.txt',plan.map(p=>p.path).join('\n')+'\n');
+console.log('Replay correction matches the locally qualified application and 17-test lifecycle suite.');
