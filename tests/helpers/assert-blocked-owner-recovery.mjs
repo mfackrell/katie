@@ -69,6 +69,24 @@ export async function assertBlockedOwnerRecovery(db,x){
   assert.equal(offer.nodeCount,13);assert.equal(offer.status,'blocked');
   assert.equal(offer.priorCutoff,EXPIRED.replace('Z','+00:00'));
   assert.equal(offer.priorWindowId,ORIGINAL_WINDOW);
+  // Dedicated GitHub-hosted race fixture: make the exact 76-mission,
+  // consumed-receipt state AND the new RPC definitions visible to other real
+  // PostgreSQL connections. This flag is used only by the separate test
+  // process; the normal savepoint/rollback qualifications are unchanged.
+  // The IPC parent exclusively owns assertions and disposable PG cleanup.
+  if(process.env.KATIE_TEST_BLOCKED_OWNER_RACE_FIXTURE==='1'){
+   assert.equal(typeof process.send,'function','Committed race fixture requires IPC');
+   await db.query('commit');
+   console.log('BLOCKED_OWNER_COMMITTED_FIXTURE_READY: new RPC DDL and original-project rows committed in disposable PostgreSQL');
+   await new Promise((resolve,reject)=>{
+    const watchdog=setTimeout(()=>reject(Error('Committed race fixture consumer timed out')),180000);
+    process.on('message',message=>{
+     if(message?.kind==='blocked-owner-race-finished'){clearTimeout(watchdog);resolve();}
+    });
+    process.send({kind:'blocked-owner-race-ready',project:ORIGINAL,owner,release:NEW_RELEASE,priorWindow:ORIGINAL_WINDOW,priorCutoff:EXPIRED});
+   });
+   process.exit(0); // fixture process only; the parent Node test owns the PASS verdict
+  }
   const scopedSnapshot=async()=>{
    await db.query('reset role');
    try{
