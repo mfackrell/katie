@@ -224,7 +224,7 @@ test("capability request parser defaults live research to Grok", () => {
 
 test("timestamp-prefixed internal research request parses without exposing its marker", () => {
   const request = parseCapabilityEscalationRequest(
-    '[Message timestamp: 2026-11-16T13:46:22.633Z]\\n\\n' +
+    '[Message timestamp: 2026-11-16T13:46:22.633Z]\n\n' +
     CAPABILITY_REQUEST_PREFIX +
     ' {"task":"Look up the actual ending of Wild Horse Nine","capability":"research","preferredProvider":"grok"}',
   );
@@ -237,7 +237,7 @@ test("timestamp-prefixed internal research request parses without exposing its m
 
 test("fragmented timestamp control request delegates research without streaming private protocol",async()=>{
   let generated=0,researched=0;
-  const control='[Message timestamp: 2026-11-16T13:46:22.633Z]\\n\\n'+CAPABILITY_REQUEST_PREFIX+
+  const control='[Message timestamp: 2026-11-16T13:46:22.633Z]\n\n'+CAPABILITY_REQUEST_PREFIX+
     ' {"task":"Look up the ending of Wild Horse Nine","capability":"research","preferredProvider":"grok"}';
   const lead: LlmProvider={
     name:"anthropic",
