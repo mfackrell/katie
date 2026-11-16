@@ -125,7 +125,7 @@ function fixture() {
     return Response.json(matches.slice(0, Number(url.searchParams.get('limit') ?? matches.length)));
   };
   const modules = new Map();
-  const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
+  const globals = { benchmarkIntake:false, benchmarkRelay:false,imageFollowup:null, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
     // These protocol fixtures exercise route decisions; durable accounting and
     // authenticated resume are covered by the standalone workflow tests.
     workflowTimestamp: () => '2026-10-28T00:00:00.000Z',
@@ -451,7 +451,7 @@ test('actual route resolves identity before historical attachment retrieval and 
       assert.equal(context.activeProject.text, DISTRIBUTION_POSTING);
       return {method:'summary-selector', selections:[]};
     },
-    pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
+    imageFollowup: null, pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
     mediaMemory: null, savedVideoFollowUp: null,
     recentVerifiedVisualCorrection:()=>null,
     responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
