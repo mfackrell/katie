@@ -6,7 +6,7 @@ edits=[
  ("import assert from 'node:assert/strict';",
   "import {qaCaptureAuthority,qaSnapshotPublic,qaAssertInstallation,qaAssertQaIsolationUnderFreshState,qaAssertNoPrematureNewRelease,qaAssertBoundedSchedulerAfterResume} from './qa-blocked-current-state-independent.mjs';\nimport assert from 'node:assert/strict';"),
  ("  await db.query(migration);",
-  "   const qaPreinstallData=await qaSnapshotPublic(db);\n   const qaPreinstallAuthority=await qaCaptureAuthority(db);\n   await db.query(migration);\n   await qaAssertInstallation(db,qaPreinstallData,qaPreinstallAuthority);"),
+  "   const qaPreinstallData=await qaSnapshotPublic(db);\n   const qaPreinstallAuthority=await qaCaptureAuthority(db);\n   await db.query('reset role'); // Restore schema owner after read-only QA probes.\n   await db.query(migration);\n   await qaAssertInstallation(db,qaPreinstallData,qaPreinstallAuthority);"),
  ("  assert.equal(offer.priorWindowId,ORIGINAL_WINDOW);",
   "   assert.equal(offer.priorWindowId,ORIGINAL_WINDOW);\n   await qaAssertQaIsolationUnderFreshState(db,{project:ORIGINAL,owner,release:NEW_RELEASE});"),
  ("  const afterAuthorize=(await get()).rows[0].r;",
