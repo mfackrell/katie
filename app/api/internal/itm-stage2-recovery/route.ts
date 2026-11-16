@@ -35,7 +35,7 @@ export async function GET(request:NextRequest){
         .select("processor_version").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
         .eq("batch_end_message_id",END).eq("source_sha256",SOURCE_SHA)
         .eq("provider","anthropic").eq("stage","retention").limit(10)
-        .returns<Array<{processor_version:string}>>();
+        .returns<{processor_version:string}>();
       if(receiptError)throw new Error("ITM_ONE_SHOT_RECEIPT_READ_UNAVAILABLE");
       if(!(receipts??[]).some(row=>!row.processor_version.endsWith(":incomplete")))
         return NextResponse.json({status:"grant_consumed_no_valid_receipt"});
@@ -53,7 +53,7 @@ export async function GET(request:NextRequest){
     const {data:usage,error:usageError}=await admin.from("memory_provider_usage")
       .select("owner_id").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
       .order("created_at",{ascending:false}).limit(1)
-      .returns<Array<{owner_id:string|null}>>();
+      .returns<{owner_id:string|null}>();
     if(usageError||!usage?.[0]?.owner_id)
       throw new Error("ITM_ONE_SHOT_OWNER_PROVENANCE_UNAVAILABLE");
     const result=await runWithStandaloneAccounting({

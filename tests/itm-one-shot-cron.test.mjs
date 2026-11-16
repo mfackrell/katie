@@ -13,7 +13,7 @@ test("recovery Cron is authenticated, one-grant-bound and cannot run normal ITM 
   assert.match(source,/maybeUpdateSummary\(CHAT\)/);
   assert.match(source,/runWithStandaloneAccounting/);
   assert.match(source,/\.select\("owner_id"\)/);
-  assert.match(source,/\.returns<Array<\{owner_id:string\|null\}>>\(\)/);
+  assert.match(source,/\.returns<\{owner_id:string\|null\}>\(\)/);
   assert.doesNotMatch(source,/\.not\(/);
   assert.ok(source.indexOf("if(!grant)return")<source.indexOf("maybeUpdateSummary(CHAT)"));
   assert.equal(config.crons.filter(x=>x.path==="/api/internal/itm-stage2-recovery").length,1);
