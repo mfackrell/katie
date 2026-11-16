@@ -53,3 +53,31 @@ drop trigger if exists itm_stage_receipt_immutable on public.itm_stage_receipts;
 create trigger itm_stage_receipt_immutable
 before update or delete on public.itm_stage_receipts
 for each row execute function public.reject_itm_stage_receipt_mutation();
+
+-- Read a previously settled, source-bound legacy response for offline
+-- validation/import. This is a read-only service-role operation; no provider
+-- transport, accounting admission, or history mutation occurs here.
+create or replace function public.itm_read_legacy_episode_output(
+  p_actor_id uuid,p_chat_id uuid,p_batch_end_message_id text,p_provider text
+) returns jsonb
+language sql stable security invoker set search_path=public,pg_temp as $$
+  select jsonb_build_object(
+    'response_text',((a.response_checkpoint->>'body')::jsonb->'choices'->0->'message'->>'content'),
+    'ledger_attempt_id',a.id::text
+  )
+  from public.standalone_provider_attempts a
+  where a.actor_id=p_actor_id and a.chat_id=p_chat_id
+    and exists(select 1 from public.chats c where c.id=p_chat_id and c.actor_id=p_actor_id)
+    and p_provider in ('grok','anthropic') and a.provider=p_provider
+    and a.category='memory-summary'
+    and a.state='settled' and a.response_checkpoint->>'status'='200'
+    and a.response_checkpoint->>'body' is not null
+    and strpos(coalesce(a.prepared_payload->>'serializedBody',''),
+      '['||p_batch_end_message_id||']')>0
+  order by a.created_at desc
+  limit 1
+$$;
+revoke all on function public.itm_read_legacy_episode_output(uuid,uuid,text,text)
+  from public,anon,authenticated;
+grant execute on function public.itm_read_legacy_episode_output(uuid,uuid,text,text)
+  to service_role;
