@@ -230,7 +230,7 @@ test("timestamp-prefixed internal research request parses without exposing its m
   );
   assert.equal(request?.capability,"research");
   assert.equal(request?.preferredProvider,"grok");
-  assert.match(request?.task??"","Wild Horse Nine");
+  assert.match(request?.task??"",/Wild Horse Nine/);
   // A marker quoted in ordinary user-facing prose is not a control request.
   assert.equal(parseCapabilityEscalationRequest("User quoted: "+CAPABILITY_REQUEST_PREFIX+' {"task":"not a command"}'),null);
 });
