@@ -7,7 +7,7 @@ import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, curren
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
-import { imageGenerationCapableModel, containsGeneratedImage } from "@/lib/chat/image-generation-contract";
+import { imageGenerationCapableModel, containsGeneratedImage, filterPricedImageFallbacks } from "@/lib/chat/image-generation-contract";
 import { generatedImageService } from "@/lib/uploads/generated-image-service";
 import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
 import { resolveImageFollowup, imageEditSourceUnavailable } from "@/lib/chat/image-source-followup";
@@ -103,6 +103,7 @@ import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/mas
 import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
 import {
   isCreativeNarrativeTurn,
+  shouldApplyCreativeNarrativeContinuity,
   preferredClaudeCreativeModel,
   CREATIVE_CONTINUITY_INSTRUCTIONS,
   CREATIVE_REWRITE_INSTRUCTIONS,
@@ -1924,6 +1925,15 @@ async function executeChat(request: NextRequest) {
       }
     }
 
+    // Output modality wins over text-narrative styling. An earlier fictional scene
+    // must not replace a requested image with a Claude writing specialist.
+    if (resolvedRequestIntent === "image-generation") {
+      fallbackChain = filterPricedImageFallbacks(fallbackChain, candidate =>
+        Boolean(getModelPrice(candidate.provider.name, candidate.modelId, PRICING_SNAPSHOT)?.imageOutputNanoUsd));
+    }
+    const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity(
+      creativeNarrativeRequest, resolvedRequestIntent);
+
     // Select continuity only after classifying the literal current turn. The
     // existence of an unresolved audit in this chat is never enough to resume it.
     // Routing selects execution capabilities, not a different parent task.
@@ -2021,7 +2031,7 @@ async function executeChat(request: NextRequest) {
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
     // and unrelated factual questions retain the router's original decision.
-    if (creativeNarrativeRequest && !storedWebsite.fresh) {
+    if (creativeTextNarrativeRequest && !storedWebsite.fresh) {
       const claude = providers.find(candidate => candidate.name === "anthropic");
       if (claude) {
         try {
@@ -2608,7 +2618,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
                   ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
-                  ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+                  ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
                 message: forReview ? message : visualContinuity
@@ -3055,7 +3065,7 @@ ${chunkWorkflowSummary}`;
                             },
                           });
                         },
-                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
+                        onFinalTextDelta: suppressCalculationScaffolding || creativeTextNarrativeRequest || hasVideoInput
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
                         maxDelegations: collaborationConfig.maxDelegations,
@@ -3179,7 +3189,7 @@ ${chunkWorkflowSummary}`;
                               },
                             });
                           },
-                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
+                          onFinalTextDelta: suppressCalculationScaffolding || creativeTextNarrativeRequest || hasVideoInput
                             ? async () => {}
                             : async (delta) => enqueueDelta(delta),
                           maxEscalations: 2,
@@ -3211,7 +3221,7 @@ ${chunkWorkflowSummary}`;
                 // Inspect the complete draft *before* streaming or saving it.
                 // If it substantially duplicates recent narrative text, request
                 // at most one original continuation from the same model.
-                if (creativeNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
+                if (creativeTextNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
                     generation.result.provider === provider.name &&
                     generation.result.model === modelId &&
                     Date.now() + 45_000 < executionDeadlineMs) {
@@ -3292,6 +3302,8 @@ ${chunkWorkflowSummary}`;
                     : (Boolean(documentProduction) && (isDocumentCapabilityDenial(generationResult.text ?? '') || isDocumentDeliveryNarrative(generationResult.text ?? ''))) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt, attemptedAttempts }) => {
                 if (hasVideoInput) return null;
+                // Image refusals retain only prequalified, priced image fallbacks.
+                if (imageGenerationRequested) return null;
                 // Standalone photo analysis: prefer a real Grok vision model when
                 // the first model returns a generic inability instead of a description.
                 // Never send an uploaded photo to RunPod FLUX (generation-only).

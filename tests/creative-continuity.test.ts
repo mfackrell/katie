@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  isCreativeNarrativeTurn, preferredClaudeCreativeModel,
+  isCreativeNarrativeTurn, shouldApplyCreativeNarrativeContinuity, preferredClaudeCreativeModel,
   looksLikeFictionalPassage, assessCreativeRepetition,
   improveCreativeOriginality, CREATIVE_CONTINUITY_INSTRUCTIONS,
   CREATIVE_REWRITE_INSTRUCTIONS,
@@ -41,6 +41,17 @@ test("factual questions, attachments, tool work, and user model overrides preser
   assert.equal(isCreativeNarrativeTurn("Keep going", history, { hasRepoContext: true }), false);
   assert.equal(isCreativeNarrativeTurn("Continue the scene", history, { hasManualOverride: true }), false);
   assert.equal(isCreativeNarrativeTurn("Again", [{ role: "assistant", content: "Tax bracket: 24%." }]), false);
+});
+
+test("regression: 2026-11-16 fictional history cannot override an image-generation request", () => {
+  const history = [{ role: "assistant" as const, content: JSON.stringify({ text: fictionalPassage }) }];
+  const prompt = "generate a photorealistic image of yourself katie ....😈";
+  // The pre-routing narrative heuristic reproduces the old false continuity signal.
+  assert.equal(isCreativeNarrativeTurn(prompt, history), true);
+  assert.equal(shouldApplyCreativeNarrativeContinuity(isCreativeNarrativeTurn(prompt, history), "image-generation"), false);
+  assert.equal(shouldApplyCreativeNarrativeContinuity(true, "general-text"), true);
+  assert.equal(shouldApplyCreativeNarrativeContinuity(true, "rewrite"), true);
+  assert.equal(shouldApplyCreativeNarrativeContinuity(false, "general-text"), false);
 });
 
 test("Fable 5.1 is preferred when actually available; absent Fable Claude can be preferred", () => {
@@ -108,5 +119,9 @@ test("chat route wires creative routing, continuity context, and originality che
   assert.match(chatRoute, /improveCreativeOriginality\(/);
   assert.match(chatRoute, /CREATIVE_REWRITE_INSTRUCTIONS/);
   assert.match(chatRoute, /Grok secondary fallback retained/);
+  assert.match(chatRoute, /const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity\\(/);
+  const afterCreativeGate = chatRoute.split("// Select continuity only after classifying the literal current turn.")[1];
+  assert.ok(afterCreativeGate, "resolved-intent creative gate must exist");
+  assert.doesNotMatch(afterCreativeGate, /\\bcreativeNarrativeRequest\\b/, "raw narrative signal cannot bypass the output-modality gate");
   assert.match(chatRoute, /fallbackChain\.push\(\{ provider: grok, modelId: grokModel/);
 });

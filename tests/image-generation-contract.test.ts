@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compactImageGenerationContext } from "../lib/providers/image-generation-context";
-import { containsGeneratedImage, imageGenerationCapableModel } from "../lib/chat/image-generation-contract";
+import { containsGeneratedImage, imageGenerationCapableModel, filterPricedImageFallbacks } from "../lib/chat/image-generation-contract";
 import type { ChatGenerateParams } from "../lib/providers/types";
 
 test("image generation retains full user request and references while bounding only background",()=>{
@@ -54,6 +54,20 @@ test("image fallback rejects Gemini text and accepts only actual image-generatio
   assert.equal(imageGenerationCapableModel("anthropic","claude-opus-5-5"),false);
 });
 
+test("image fallback excludes text models and models without reviewed image-output prices",()=>{
+  const candidates = [
+    {provider:{name:"google"},modelId:"gemini-3.1-flash-image"},
+    {provider:{name:"anthropic"},modelId:"claude-fable-5-1"},
+    {provider:{name:"openai"},modelId:"gpt-image-1.5"},
+    {provider:{name:"grok"},modelId:"grok-imagine-image-2.0"},
+    {provider:{name:"google"},modelId:"gemini-3.8-flash"},
+  ];
+  const eligible = filterPricedImageFallbacks(candidates, candidate =>
+    candidate.provider.name === "google" || candidate.provider.name === "openai");
+  assert.deepEqual(eligible.map(candidate => candidate.modelId), ["gemini-3.1-flash-image", "gpt-image-1.5"]);
+  assert.equal(candidates.length, 5, "source fallback candidates remain unchanged");
+});
+
 test("text-only response never satisfies image delivery even when its wording claims success",()=>{
   assert.equal(containsGeneratedImage({content:undefined}),false);
   assert.equal(containsGeneratedImage({content:[]}),false);
@@ -61,7 +75,9 @@ test("text-only response never satisfies image delivery even when its wording cl
   assert.equal(containsGeneratedImage({content:[{type:"image",url:""}]}),false);
   assert.equal(containsGeneratedImage({content:[{type:"image",url:"data:image/png;base64,cmVhbC1iaW5hcnk="}]}),true);
   const route=readFileSync("app/api/chat/route.ts","utf8");
-  assert.match(route,/imageGenerationRequested && !candidate\.runpodImageFallback/);
+  assert.match(route,/imageGenerationRequested && !candidate\\.runpodImageFallback/);
+  assert.match(route,/fallbackChain = filterPricedImageFallbacks\\(/);
+  assert.match(route,/if \\(imageGenerationRequested\\) return null;/);
   assert.match(route,/!imageGenerationCapableModel\(candidate\.provider\.name, candidate\.modelId\)/);
   assert.match(route,/imageGenerationRequested && !containsGeneratedImage\(result\)/);
   assert.match(route,/if \(!imageGenerationRequested\) enqueueDelta\(delta\)/);
