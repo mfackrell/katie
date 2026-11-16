@@ -3892,38 +3892,6 @@ ${chunkWorkflowSummary}`;
               : { text: rawAssistantText, presentation: null };
             const assistantText = presentationResult.text;
             const assistantPresentation = presentationResult.presentation;
-            // Objective fulfillment is audited independently of the model's
-            // claim to have succeeded. Never block a valid response because
-            // diagnostics storage is unavailable, and never trigger a retry.
-            try {
-              const deliveryAudit = await cachedWorkflowValue("routing-delivery-audit:v1", async () => ({
-                ...auditRoutingDelivery({
-                  userMessage: message,
-                  selectedIntent: resolvedRequestIntent,
-                  answer: assistantText,
-                  imageCount: imageAssets.length
-                }),
-                requestId,
-                classifiedIntent: resolvedRequestIntent,
-                provider: result!.provider,
-                model: result!.model,
-                productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
-              }));
-              if (deliveryAudit.status === "fail") {
-                console.warn("[Routing Delivery Audit] primary_objective_not_fulfilled", {
-                  requestId,
-                  status: deliveryAudit.status,
-                  reason: deliveryAudit.reason,
-                  classifiedIntent: resolvedRequestIntent,
-                  auditVersion: deliveryAudit.version
-                });
-              }
-            } catch (error) {
-              console.warn("[Routing Delivery Audit] checkpoint_unavailable", {
-                requestId,
-                cause: error instanceof Error ? error.name : "unknown"
-              });
-            }
             if (presentationFilter && reviewMode !== "always") {
               const tail = presentationFilter.finish();
               if (tail) emitChunk({ type: "delta", text: tail });
@@ -3956,6 +3924,38 @@ ${chunkWorkflowSummary}`;
               ...(generatedImages ? {attachments:generatedImages.attachments} : {}),
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
+            // Objective fulfillment is audited independently of the model's
+            // claim to have succeeded. Never block a valid response because
+            // diagnostics storage is unavailable, and never trigger a retry.
+            try {
+              const deliveryAudit = await cachedWorkflowValue("routing-delivery-audit:v1", async () => ({
+                ...auditRoutingDelivery({
+                  userMessage: message,
+                  selectedIntent: resolvedRequestIntent,
+                  answer: assistantText,
+                  imageCount: imageAssets.length
+                }),
+                requestId,
+                classifiedIntent: resolvedRequestIntent,
+                provider: result!.provider,
+                model: result!.model,
+                productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+              }));
+              if (deliveryAudit.status === "fail") {
+                console.warn("[Routing Delivery Audit] primary_objective_not_fulfilled", {
+                  requestId,
+                  status: deliveryAudit.status,
+                  reason: deliveryAudit.reason,
+                  classifiedIntent: resolvedRequestIntent,
+                  auditVersion: deliveryAudit.version
+                });
+              }
+            } catch (error) {
+              console.warn("[Routing Delivery Audit] checkpoint_unavailable", {
+                requestId,
+                cause: error instanceof Error ? error.name : "unknown"
+              });
+            }
             emitChunk({
               type: "content",
               messageId: assistantMessageId,
