@@ -16,7 +16,7 @@ export const CAPABILITY_REQUEST_PREFIX = "KATIE_CAPABILITY_REQUEST:";
  * that known internal wrapper before inspecting a capability control message.
  * Never scan arbitrary user text for a protocol marker. */
 function stripInternalTimestamp(value: string): string {
-  return value.trimStart().replace(/^\\[Message timestamp: [^\\]\\r\\n]{1,96}\\]\\s*/, "");
+  return value.trimStart().replace(/^\[Message timestamp: [^\r\n]{1,96}\]\s*/, "");
 }
 function mayStartTimestamp(value: string): boolean {
   const start = "[Message timestamp:";
