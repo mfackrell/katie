@@ -418,6 +418,7 @@ test('actual route resolves identity before historical attachment retrieval and 
   const events = [];
   const result = await vm.runInNewContext(compile(`(async () => {
     ${contextResolutionBlock}
+    ${code(statement(declaration('verifiedVisualCorrection')))}
     ${code(statement(declaration('attachmentDecision')))}
     let taskProgress = pdfProgress;
     // Simulate a later capability router incorrectly treating the generic question
@@ -452,6 +453,7 @@ test('actual route resolves identity before historical attachment retrieval and 
     },
     pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
     mediaMemory: null, savedVideoFollowUp: null,
+    recentVerifiedVisualCorrection:()=>null,
     responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
     explicitProjectControl: false, explicitSavedProjectReference: false,
     resolvedRoutingIntentForReroute: { complexity: 'low' },

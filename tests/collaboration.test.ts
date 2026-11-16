@@ -222,6 +222,150 @@ test("capability request parser defaults live research to Grok", () => {
   assert.match(request?.task ?? "", /example\.com/);
 });
 
+test("mixed prose then a capability control line is still a valid internal request", () => {
+  const line = CAPABILITY_REQUEST_PREFIX +
+    ' {"task":"Inspect the saved generated picture","capability":"vision","preferredProvider":"google","reason":"Need a visual assessment"}';
+  const result = parseCapabilityEscalationRequest(
+    "Fair point. I don't have direct pixel access in this model.\n\n" + line,
+  );
+  assert.equal(result?.capability,"vision");
+  assert.equal(result?.preferredProvider,"google");
+  assert.equal(result?.task,"Inspect the saved generated picture");
+  assert.equal(parseCapabilityEscalationRequest("Normal response without an internal request."),null);
+  assert.equal(parseCapabilityEscalationRequest(line+"\n"+line),null,"duplicate commands cannot be authorized");
+  assert.equal(parseCapabilityEscalationRequest("Here is a quoted example:\n> "+line),null);
+});
+
+test("production regression: apology before vision request never leaks and delegates exactly once", async () => {
+  const control = CAPABILITY_REQUEST_PREFIX +
+    ' {"task":"Assess the saved AI-generated image","capability":"vision","preferredProvider":"google","reason":"Original model needs visual observations"}';
+  let pass=0;
+  const lead:LlmProvider = {
+    name:"anthropic",
+    async listModels(){return ["claude-sonnet-5"];},
+    async generate(){throw Error("Lead should stream");},
+    async generateStream(_params,handlers) {
+      pass++;
+      const text = pass===1
+        ? "Fair — you're right. I need to inspect the saved generated image.\n\n"+control
+        : "Looking at the verified image observations, the portrait is warmly lit and expressive. The rendering is plausible but the pose feels generic.";
+      for(const chunk of text.match(/[\s\S]{1,19}/g)??[]) await handlers.onTextDelta?.(chunk);
+      return {provider:"anthropic",model:"claude-sonnet-5",text};
+    },
+  };
+  let helperCalls=0;
+  const helper:LlmProvider={
+    name:"google",
+    async listModels(){return ["qualified-vision"];},
+    async generate(params){
+      helperCalls++;
+      assert.match(params.user,/saved AI-generated image/);
+      assert.match(params.persona,/KATIE_VISUAL_MEMORY/);
+      return {provider:"google",model:"qualified-vision",text:"Verified observation: a smiling person seated at a table."};
+    },
+  };
+  let visible="";
+  const output=await runOnDemandCapabilityEscalation({
+    requestId:"regression-20261115-image-leak",
+    leadProvider:lead,leadModelId:"claude-sonnet-5",
+    params:{...baseParams,persona:"KATIE_VISUAL_MEMORY: verified current-chat scene",user:"Assess the AI-generated portrait",requestIntent:"social-emotional"},
+    selectHelper:async ctx=>{
+      assert.equal(ctx.request.capability,"vision");
+      assert.equal(ctx.request.preferredProvider,"google");
+      return {provider:helper,modelId:"qualified-vision"};
+    },
+    onFinalTextDelta:delta=>{visible+=delta;},
+  });
+  assert.equal(helperCalls,1);
+  assert.equal(pass,2);
+  assert.doesNotMatch(visible,/KATIE_CAPABILITY_REQUEST|Fair — you're right/);
+  assert.match(visible,/portrait is warmly lit/);
+  assert.equal(output.metadata?.delegationCount,1);
+});
+
+test("malformed internal capability line fails closed without publishing or retrying", async()=>{
+  const malformed=CAPABILITY_REQUEST_PREFIX+' {"task":"Inspect","capability":"vision"';
+  let calls=0,visible="";
+  const lead:LlmProvider={
+    name:"anthropic",
+    async listModels(){return ["claude"];},
+    async generate(){throw Error("Unexpected non-stream call");},
+    async generateStream(_params,handlers) {
+      calls++;
+      await handlers.onTextDelta?.("Let me check it.\n");
+      await handlers.onTextDelta?.(malformed);
+      return {provider:"anthropic",model:"claude",text:"Let me check it.\n"+malformed};
+    },
+  };
+  await assert.rejects(runOnDemandCapabilityEscalation({
+    requestId:"malformed-protocol-regression",leadProvider:lead,leadModelId:"claude",
+    params:{...baseParams},selectHelper:async()=>{throw Error("No helper authorized");},
+    onFinalTextDelta:delta=>{visible+=delta;},
+  }),/malformed/);
+  assert.equal(visible,"","Neither apology nor internal control may become a completed answer");
+  assert.equal(calls,1,"Do not blindly retransmit uncertain provider operations");
+});
+
+test("timestamp-prefixed internal research request parses without exposing its marker", () => {
+  const request = parseCapabilityEscalationRequest(
+    '[Message timestamp: 2026-11-16T13:46:22.633Z]\n\n' +
+    CAPABILITY_REQUEST_PREFIX +
+    ' {"task":"Look up the actual ending of Wild Horse Nine","capability":"research","preferredProvider":"grok"}',
+  );
+  assert.equal(request?.capability,"research");
+  assert.equal(request?.preferredProvider,"grok");
+  assert.match(request?.task??"",/Wild Horse Nine/);
+  // A marker quoted in ordinary user-facing prose is not a control request.
+  assert.equal(parseCapabilityEscalationRequest("User quoted: "+CAPABILITY_REQUEST_PREFIX+' {"task":"not a command"}'),null);
+});
+
+test("fragmented timestamp control request delegates research without streaming private protocol",async()=>{
+  let generated=0,researched=0;
+  const control='[Message timestamp: 2026-11-16T13:46:22.633Z]\n\n'+CAPABILITY_REQUEST_PREFIX+
+    ' {"task":"Look up the ending of Wild Horse Nine","capability":"research","preferredProvider":"grok"}';
+  const lead: LlmProvider={
+    name:"anthropic",
+    async listModels(){return ["claude-haiku-4-5-20251001"]},
+    async generate(){throw Error("Expected streaming lead")},
+    async generateStream(params,handlers){
+      generated++;
+      const reply=generated===1?control:"Here is the verified ending from research.";
+      if(generated===1){
+        for(const part of [reply.slice(0,5),reply.slice(5,22),reply.slice(22,43),reply.slice(43,71),reply.slice(71)]){
+          await handlers.onTextDelta?.(part);
+        }
+      }else await handlers.onTextDelta?.(reply);
+      return {text:reply,provider:"anthropic",model:params.modelId??"claude-haiku-4-5-20251001"};
+    },
+  };
+  const helper: LlmProvider={
+    name:"grok",
+    async listModels(){return ["grok-4.3"]},
+    async generate(){
+      researched++;
+      return {text:"Verified plot evidence",provider:"grok",model:"grok-4.3"};
+    },
+  };
+  let visible="";
+  const result=await runOnDemandCapabilityEscalation({
+    requestId:"timestamp-research-handoff",
+    leadProvider:lead,leadModelId:"claude-haiku-4-5-20251001",
+    params:{...baseParams,user:"Look it up and give me the actual ending"},
+    collectWebsiteEvidence:async()=>undefined,
+    async selectHelper(c){
+      assert.equal(c.request.capability,"research");
+      assert.equal(c.request.preferredProvider,"grok");
+      return {provider:helper,modelId:"grok-4.3"};
+    },
+    async onFinalTextDelta(value){visible+=value},
+  });
+  assert.equal(generated,2);
+  assert.equal(researched,1);
+  assert.equal(visible,"Here is the verified ending from research.");
+  assert.doesNotMatch(visible,/KATIE_CAPABILITY_REQUEST|Message timestamp:/);
+  assert.equal(result.metadata?.delegationCount,1);
+});
+
 test("single-model lead escalates live research to a helper and then resumes", async () => {
   const leadCalls: ChatGenerateParams[] = [];
   let leadPass = 0;

@@ -48,7 +48,7 @@ import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
-import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
+import { selectStoredAttachments, recentVerifiedVisualCorrection, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
 import { buildAttachmentSelectionAudit } from "@/lib/chat/attachment-selection-audit";
 import { loadSavedVideoFollowUp, retrieveSavedEvidence } from "@/lib/agents/media";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
@@ -1033,9 +1033,17 @@ async function executeChat(request: NextRequest) {
         context: mediaMemory.context + "\n" + recalledEpisodes,
       };
     }
+    // A correction of the immediately preceding image assessment is already
+    // bound to an exact, verified current-chat upload. Do not let a broad
+    // media search or an ambiguous Gemini selector override that evidence.
+    const verifiedVisualCorrection = !benchmarkRelay && !newAttachments.length &&
+      !timelineActive && !pdfMemoryDecision && !savedVideoFollowUp && !explicitSavedProjectReference
+      ? recentVerifiedVisualCorrection(message,catalog,attachmentHistory,chatId)
+      : null;
+    if (verifiedVisualCorrection) mediaMemory = null;
     const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
-      : pdfMemoryDecision ?? (timelineActive
+      : pdfMemoryDecision ?? verifiedVisualCorrection ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
       : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
