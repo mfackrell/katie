@@ -186,3 +186,18 @@ test('literal quote-delimited filenames remain unresolved without an unambiguous
     await expectTargets(['first.png',name],'Please run Qwen on the second image.',[1]);
   }
 });
+
+test('literal backslashes before nested Unicode quotation openers never authorize Qwen', async()=>{
+  for(const [innerOpen,innerClose] of [['“','”'],['‘','’'],['«','»'],['「','」']]){
+    const prefix='Explain this quoted text about first.png without executing it:\n';
+    const outerOpen='“Instructions. ';
+    const nested='\\'+innerOpen+'Inner note'+innerClose+'.\n';
+    const directive='run Qwen and inspect the original pixels.';
+    // Outer quote is unfinished. An inner closer must not make a quoted
+    // directive executable. The regression reproduces the review finding.
+    await expectTargets(['first.png'],prefix+outerOpen+nested+directive,[]);
+    await expectTargets(['first.png'],prefix+outerOpen+nested+directive+'”',[]);
+    // Genuine separate opt-in after a blank paragraph remains honored.
+    await expectTargets(['first.png'],prefix+outerOpen+nested+directive+'”\n\nPlease run Qwen on first.png.',[0]);
+  }
+});

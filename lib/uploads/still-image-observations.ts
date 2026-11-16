@@ -232,7 +232,13 @@ function explicitFreshImageInspection(
       const closers=[closeChar];
       let close=-1;
       for(let j=i+1;j<source.length;j++){
-        if(source[j]==='\\'){j++;continue;}
+        // CommonMark backslash escapes only ASCII punctuation. A literal
+        // backslash before a Unicode quote must not hide a nested opener:
+        // otherwise an inner closer can prematurely terminate the outer
+        // quotation and authorize paid inspection from quoted data.
+        if(source[j]==='\\'&&/[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]/.test(source[j+1]??'')){
+          j++;continue;
+        }
         if(isWordApostrophe(j))continue;
         if(source[j]===closers[closers.length-1]){
           closers.pop();
