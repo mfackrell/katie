@@ -2,6 +2,7 @@ import {NextRequest,NextResponse} from 'next/server';
 import {z} from 'zod';
 import {verifiedProjectOwnerSession} from '@/lib/projects/owner-authorization';
 import {rpc} from '@/lib/missions/store';
+import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from '@/lib/projects/management-activation';
 import {getMessages} from '@/lib/data/persistence-store';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -33,7 +34,19 @@ const pausedRenewalInput=z.object({
  priorCutoff:z.literal('2026-11-15T18:00:00Z'),cutoff:z.literal('2026-11-16T18:00:00Z'),
  authorizationId:z.string().uuid(),stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput]);
+const managementResumeInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('resume_management'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),authorizationId:z.string().uuid(),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.literal(APPROVED_TTT_CUTOFF),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput]);
+export async function GET(request:NextRequest){
+ if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
+ if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
+  return NextResponse.json({error:'Original project required'},{status:400});
+ try{return NextResponse.json({managementActivation:await managementActivationOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+ catch{return NextResponse.json({error:'Recovery state unavailable or changed. Refresh project status; no activation was performed.'},{status:409});}
+}
 // Neither workers nor cron can activate either kind of owner authority.
 export async function POST(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
@@ -41,9 +54,26 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='resume_management'){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Management resume requires the exact active production release'},{status:409});
+  if(Date.now()>=Date.parse(APPROVED_TTT_CUTOFF)-300000)
+   return NextResponse.json({error:'The approved November 16 noon Central cutoff has expired or has less than five minutes remaining.'},{status:409});
+  return NextResponse.json(await rpc('project_org_resume_management_confirmed',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
+   p_authorization:p.authorizationId,p_state_hash:p.stateHash,
+  }));
+ }
  if('trialAction' in p&&p.trialAction==='renew_paused_window'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'Paused renewal requires the exact active production release'},{status:409});
+  if(Date.now()>=Date.parse(APPROVED_TTT_CUTOFF)-300000)
+   return NextResponse.json({error:'The approved November 16 noon Central cutoff has expired or has less than five minutes remaining.'},{status:409});
+  // Retried HTTP requests verify an existing receipt; they never resume work.
+  const recorded=await managementActivationOffer(p.projectId);
+  if(recorded.stage==='resume'&&recorded.authorizationId===p.authorizationId&&recorded.renewalStateHash===p.stateHash)
+   return NextResponse.json({projectId:p.projectId,authorizationId:p.authorizationId,sourceMissionId:recorded.sourceMissionId,
+    releaseSha:recorded.releaseSha,cutoff:recorded.cutoff,status:'paused',historicalMissions:recorded.historicalMissions,existing:true});
   return NextResponse.json(await rpc('project_org_renew_paused_window',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
    p_expected_release:p.expectedReleaseSha,p_scope_hash:p.scopeHash,p_source_mission:p.sourceMissionId,
@@ -84,5 +114,7 @@ export async function POST(request:NextRequest){
  }
  await rpc('project_org_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_objective_hash:p.objectiveHash,p_ceiling:p.ceilingMicrousd,p_per_call:p.perCallMicrousd,p_autonomous:p.autonomousExecution});
  return NextResponse.json({authorized:true});
- }catch{return NextResponse.json({error:'Owner binding, project objective or execution authority changed'},{status:409});}
+ }catch{return NextResponse.json({error:'trialAction' in p&&['renew_paused_window','resume_management'].includes(p.trialAction)
+  ?'Recovery state changed or the request could not be confirmed. Refresh recovery status before continuing.'
+  :'Owner binding, project objective or execution authority changed'},{status:409});}
 }
