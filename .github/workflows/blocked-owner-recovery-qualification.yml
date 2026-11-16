@@ -9,6 +9,7 @@ on:
       - "app/api/projects/route.ts"
       - "components/director-recovery-control.tsx"
       - "tests/helpers/assert-blocked-owner-recovery.mjs"
+      - "tests/helpers/assert-blocked-owner-browser.mjs"
       - "tests/helpers/assert-paused-window-renewal.mjs"
       - ".github/workflows/blocked-owner-recovery-qualification.yml"
 
@@ -34,6 +35,7 @@ jobs:
       KATIE_TEST_DIRECTOR_ONE_SHOT: "1"
       KATIE_TEST_ORG_AMENDMENTS: "1"
       KATIE_TEST_BLOCKED_OWNER_RECOVERY: "1"
+      KATIE_TEST_BLOCKED_OWNER_BROWSER: "1"
       CI: "1"
     steps:
       - uses: actions/checkout@v4
