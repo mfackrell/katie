@@ -715,7 +715,11 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
     p_processor_version:claimVersion,
   });
   if(claimed.error)throw new Error("ITM_CROSS_STAGE_RECOVERY_CLAIM_UNAVAILABLE");
-  if(claimed.data!=="claimed")return claimed.data==="blocked"?"blocked":"deferred";
+  // Prior offline checkpoint failure may have finalized this exact claim as
+  // blocked. Validated immutable receipts authorize only a second CAS, NEVER
+  // a new provider transmission. The checkpoint RPC remains atomic.
+  if(claimed.data!=="claimed"&&claimed.data!=="blocked")return "deferred";
+  const newlyClaimed=claimed.data==="claimed";
   let committed=false;
   try{
     const payload={
@@ -730,16 +734,20 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
     });
     committed=result.data===true&&!result.error;
   }finally{
-    const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch",{
-      p_actor_id:input.actorId,p_chat_id:input.chatId,
-      p_batch_end_message_id:input.batchEndMessageId,
-      p_processor_version:claimVersion,p_state:committed?"completed":"blocked",
-      p_reason:committed?null:"One-shot cross-provider recovery checkpoint CAS unavailable",
-    });
-    if(finished.error||finished.data!==true)
-      console.error("[Summarizer] Cross-provider recovery claim completion could not be recorded",{
-        chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+    // Never rewrite an earlier terminal attempt: it is immutable historical
+    // evidence. A successful replay is independently proven by checkpoint CAS.
+    if(newlyClaimed){
+      const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch",{
+        p_actor_id:input.actorId,p_chat_id:input.chatId,
+        p_batch_end_message_id:input.batchEndMessageId,
+        p_processor_version:claimVersion,p_state:committed?"completed":"blocked",
+        p_reason:committed?null:"One-shot cross-provider recovery checkpoint CAS unavailable",
       });
+      if(finished.error||finished.data!==true)
+        console.error("[Summarizer] Cross-provider recovery claim completion could not be recorded",{
+          chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+        });
+    }
   }
   if(committed){
     console.info("[Summarizer] Owner-granted Grok Stage 1 / Claude Stage 2 ITM checkpoint committed",{

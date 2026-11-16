@@ -133,3 +133,16 @@ test("one-shot Stage 2 SQL grant prevents replay even for uncertain outcomes",{
     rmSync(root,{recursive:true,force:true});
   }
 });
+
+test("blocked prior checkpoint attempt permits receipt-only CAS retry, never another Claude dispatch",()=>{
+  const helper=source.slice(source.indexOf("async function recoverOwnerApprovedCrossProviderStages("),
+    source.indexOf("export async function maybeUpdateSummary("));
+  assert.match(helper,/claimed\.data!=="claimed"&&claimed\.data!=="blocked"/);
+  assert.match(helper,/const newlyClaimed=claimed\.data==="claimed"/);
+  assert.match(helper,/if\(newlyClaimed\)\{/);
+  // The one-use provider claim is still acquired earlier and may not repeat.
+  assert.match(helper,/if\(permission\.data!==true\)return null/);
+  assert.ok(helper.indexOf('claim_itm_stage2_one_shot')<
+    helper.indexOf('commit_intermediate_memory_checkpoint'));
+  assert.doesNotMatch(helper,/summarizeNewBatch\(/);
+});
