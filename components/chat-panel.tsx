@@ -825,7 +825,7 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const composerValueRef = useRef("");
   const [composerResetVersion, resetComposerInput] = useState(0);
-  const [replyTo, setReplyTo] = useState<Pick<Message, "id" | "role" | "content"> | null>(null);
+  const [replyTo, setReplyTo] = useState<(Pick<Message, "id" | "role" | "content"> & { imageIndex?: number }) | null>(null);
   useEffect(() => setReplyTo(null), [chatId]);
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
@@ -1676,7 +1676,9 @@ export function ChatPanel({
     const replySnapshot = reactionContent ? null : replyTo;
     const documentSourceMessageId = replySnapshot?.role === "assistant" &&
       latestComposerText === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
-    const content = reactionContent ?? (documentSourceMessageId ? latestComposerText : replySnapshot
+    const imageSource = replySnapshot?.role === "assistant" && replySnapshot.imageIndex !== undefined
+      ? { messageId: replySnapshot.id, assetIndex: replySnapshot.imageIndex } : undefined;
+    const content = reactionContent ?? ((documentSourceMessageId || imageSource) ? latestComposerText : replySnapshot
       ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${latestComposerText}`
       : latestComposerText);
     const composerImages = reactionContent ? [] : [...selectedImages];
@@ -1805,6 +1807,7 @@ export function ChatPanel({
           chatId,
           message: requestContent,
           documentSourceMessageId,
+          ...(imageSource ? { imageSource } : {}),
           images: requestImages,
           fileReferences: refsToSend,
           attachmentManifest: countCurrentAttachments([...priorReferences,...filesToUpload.map(file=>({mimeType:file.type})),...videosToUpload.map(file=>({mimeType:file.type}))],composerImages.map(image=>image.preview)),
@@ -3295,6 +3298,16 @@ export function ChatPanel({
                     />
                   </div>
                   {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      aria-label={`Use generated image ${(message.assets?.indexOf(asset) ?? 0) + 1} from this message`}
+                      aria-pressed={replyTo?.id === message.id && replyTo.imageIndex === message.assets?.indexOf(asset)}
+                      onClick={() => setReplyTo({id:message.id,role:message.role,content:message.content,
+                        imageIndex:message.assets?.indexOf(asset) ?? 0})}
+                      className="mt-2 rounded-lg border border-white/20 px-3 py-1.5 text-xs hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    >Use this image in my next message</button>
+                  ) : null}
+                  {message.role === "assistant" ? (
                     <RememberFaceControl
                       actorId={actorId}
                       chatId={message.chatId}
@@ -3393,7 +3406,7 @@ export function ChatPanel({
           {statusMessage}
         </p>
         {replyTo && <div className="mb-2 flex items-start justify-between gap-2 rounded-xl border border-sky-400/20 bg-sky-400/5 px-3 py-2 text-xs text-zinc-300">
-          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
+          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}{replyTo.imageIndex !== undefined ? ` — image ${replyTo.imageIndex + 1}` : ""}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
           <button type="button" aria-label="Cancel reply" onClick={()=>setReplyTo(null)} className="shrink-0 rounded px-2 py-1 hover:bg-white/10">✕</button>
         </div>}
         {!hasValidChatSelection ? (

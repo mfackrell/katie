@@ -1,3 +1,4 @@
+import { createGeneratedImageStore } from './generated-image-store';
 import { inspectPdf, type PdfEvidence } from "./pdf-evidence";
 import { formatVideoTimingForSource } from "@/lib/chat/video-evidence";
 import { indexEvidence, indexReference } from "@/lib/media-memory/evidence";
@@ -140,7 +141,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (indexed.error) throw new Error("Unable to index attachment across actor conversations.");
     }
   }
+  const generatedImages = createGeneratedImageStore({objects,ensureBucket,path:conversationPath,writeCatalogEntry});
   return {
+    ...generatedImages,
     async ingestPdfUploads(files:File[]):Promise<FileReference[]> {
       const references=await buildReferences(files);
       if(references.some(reference=>reference.mimeType==="application/pdf")) {
@@ -1144,3 +1147,7 @@ export const readTimelineSource = (chatId: string, id: string, actorId: string) 
 export const inspectSavedPdf = (currentChat:string,attachment:ConversationAttachment,actorId:string,message:string,owns:(id:string)=>Promise<boolean>,analysisMessage=message) => getUploadService().pdfEvidence(currentChat,attachment,actorId,message,owns,analysisMessage);
 
 export const ingestPdfUploads = (files:File[]) => getUploadService().ingestPdfUploads(files);
+
+export const persistGeneratedImage = (...args:Parameters<ReturnType<typeof createStoredUploadService>["persistGenerated"]>) => getUploadService().persistGenerated(...args);
+export const readGeneratedImage = (...args:Parameters<ReturnType<typeof createStoredUploadService>["readGenerated"]>) => getUploadService().readGenerated(...args);
+export const withGeneratedImageObservation = <T>(input:Parameters<ReturnType<typeof createStoredUploadService>["withGeneratedObservation"]>[0],inspect:()=>Promise<T>) => getUploadService().withGeneratedObservation(input,inspect);
