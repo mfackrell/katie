@@ -30,7 +30,7 @@ function harness({
   missingChat = false, commitResult = true,
   priorExposure = { grok_sent:false, anthropic_sent:false, paused:false, in_flight:false },
   exposureInspectionError = false,
-  transportClass = null, fetchOverride = null,
+  transportClass = null, fetchOverride = null, legacyRaw = null,
 } = {}) {
   let memory = copy(prior);
   const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [], receipts = new Map();
@@ -170,6 +170,12 @@ function harness({
         const versions=[...claims.keys()];
         return {grok:versions.some(k=>k.includes(":grok:")),
           anthropic:versions.some(k=>k.includes(":anthropic:"))};
+      },
+      readLegacyItmEpisodeOutput: async(actorId,chatId,end,provider)=>{
+        events.push({name:"legacy_receipt_lookup",provider,actorId,chatId,end});
+        return legacyRaw && provider==="grok"
+          ? {responseText:legacyRaw,ledgerAttemptId:"historical-settled-grok"}
+          : null;
       },
     },
     "@/lib/memory/memory-contract": { SHORT_TERM_MESSAGE_LIMIT: 60 },
@@ -595,6 +601,20 @@ test("response failing source-grounding is preserved before validation and never
   assert.equal(h.memory().summarizedThroughMessageId??null,null);
   assert.equal(await h.run(),"blocked");
   assert.equal(h.calls.length,1,"read-only recovery must not generate again");
+});
+
+test("source-verified legacy Grok episodes can be imported with zero paid calls",async()=>{
+  const legacy=selected().choices[0].message.content;
+  const h=harness({
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+    legacyRaw:legacy,
+  });
+  assert.equal(await h.run(),"blocked","stage 2 retention plan is still missing");
+  assert.equal(h.calls.length,0,"no fresh Grok or Claude inference authorized");
+  assert.equal(h.receipts.has("grok:episodes"),true);
+  assert.equal(h.receipts.has("grok:retention"),false);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
+  assert.ok(h.events.some(e=>e.name==="legacy_receipt_lookup"&&e.provider==="grok"));
 });
 
 test("completed captured stages replay without provider work after a commit failure",async()=>{
