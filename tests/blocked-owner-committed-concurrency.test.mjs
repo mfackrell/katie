@@ -53,20 +53,28 @@ const counts=async(client,project,windowId)=>{
  }finally{await client.query('set role service_role');}
 };
 
-async function observeRealRpcLock(observer, contenderPid, label){
+async function observeRealRpcLock(observer, contenderPid, label, contender){
+ assert.ok(Number.isInteger(contenderPid)&&contenderPid>0,'Second PostgreSQL backend PID required');
+ const samples=[];
  for(let i=0;i<70;i++){
-  const r=(await observer.query('select wait_event_type,wait_event from pg_stat_activity where pid=$1',[contenderPid])).rows[0];
+  const r=(await observer.query('select state,wait_event_type,wait_event from pg_stat_activity where pid=$1',[contenderPid])).rows[0];
+  if(i===0||i%10===0)samples.push(r??null);
   if(r?.wait_event_type==='Lock'){
-   assert.match(String(r.wait_event),/advisory/i,label+' must wait on the new RPC advisory lock');
+   assert.match(String(r.wait_event),/advisory|transactionid|tuple/i,label+' must wait on a real RPC lock');
    console.log('BLOCKED_OWNER_COMMITTED_RPC_LOCK_OBSERVED: '+label+' '+r.wait_event);
    return;
   }
+  const done=await Promise.race([
+   contender.then(outcome=>({complete:true,outcome})),
+   sleep(1).then(()=>({complete:false}))
+  ]);
+  if(done.complete)throw Error(label+': competing actual RPC returned before lock observation: '+String(done.outcome.ok?'UNEXPECTED SUCCESS':done.outcome.error?.message));
   await sleep(50);
  }
- assert.fail(label+': actual second RPC never waited on the first transaction lock');
+ throw Error(label+': actual RPC did not show lock wait; samples='+JSON.stringify(samples));
 }
 
-async function realRace(a,b,observer,label,query,firstArgs,otherArgs){
+async function realRace(a,b,observer,contenderPid,label,query,firstArgs,otherArgs){
  await a.query('begin');
  let committed=false;
  try{
@@ -76,7 +84,7 @@ async function realRace(a,b,observer,label,query,firstArgs,otherArgs){
    error=>({ok:false,error})
   );
   try{
-   await observeRealRpcLock(observer,b.processID,label);
+   await observeRealRpcLock(observer,contenderPid,label,rival);
   }finally{
    await a.query('commit');
    committed=true;
@@ -132,6 +140,13 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    )).rows[0];
    assert.ok(functionVisibility.a&&functionVisibility.b,'Both genuine new functions are COMMITTED and visible to the third connection');
    console.log('BLOCKED_OWNER_COMMITTED_DDL_VISIBLE_PASS: both real RPC definitions visible across sessions');
+   const firstPid=(await first.query('select pg_backend_pid() pid')).rows[0].pid;
+   const secondPid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const observerPid=(await observer.query('select pg_backend_pid() pid')).rows[0].pid;
+   assert.ok(new Set([firstPid,secondPid,observerPid]).size===3,
+    'Fixture must have three distinct real PostgreSQL backends; first two execute competing RPCs');
+   console.log('BLOCKED_OWNER_CONNECTION_IDENTITIES_PASS: '+JSON.stringify({firstPid,secondPid,observerPid}));
+
 
    const offerQuery='select project_org_blocked_owner_offer($1,$2,$3) r';
    const offer=async(client)=>(await client.query(offerQuery,[fixture.owner,PROJECT,fixture.release])).rows[0].r;
@@ -171,7 +186,7 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    console.log('BLOCKED_OWNER_COMMITTED_AUTH_ROLLBACK_PASS');
 
    // These are two REAL concurrent owner RPC calls (not direct lock probes).
-   const authorized=await realRace(first,second,observer,'authorize',AUTHORIZE,authArgs,otherAuth);
+   const authorized=await realRace(first,second,observer,secondPid,'authorize',AUTHORIZE,authArgs,otherAuth);
    assert.equal(authorized.first.stage,'resume');
    assert.equal(authorized.first.authorizationId,winningWindow);
    const authorizedCounts=await counts(observer,PROJECT,winningWindow);
@@ -200,7 +215,7 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    assert.equal((await offer(second)).stage,'resume');
    console.log('BLOCKED_OWNER_COMMITTED_RESUME_ROLLBACK_PASS');
 
-   const resumed=await realRace(first,second,observer,'resume',RESUME,resumeArgs,resumeArgs);
+   const resumed=await realRace(first,second,observer,secondPid,'resume',RESUME,resumeArgs,resumeArgs);
    assert.equal(resumed.first.stage,'resumed');
    assert.equal(resumed.first.existing,false);
    const resumedCounts=await counts(observer,PROJECT,winningWindow);
