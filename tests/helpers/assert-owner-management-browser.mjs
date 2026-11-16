@@ -140,6 +140,18 @@ export async function assertOwnerManagementBrowser(db,x){
   assert.equal((await get()).status,409,'Changed delegated contracts cannot expose resume');
   await db.query('rollback to savepoint changed_contract');await db.query('release savepoint changed_contract');
 
+  // A still-submitted external task must block both preflight and resume,
+  // even when its historical mission/assignment has already failed.
+  await db.query('savepoint pending_dispatch');await db.query('reset role');
+  await db.query("set local session_replication_role='replica'");
+  const taskChat=crypto.randomUUID();
+  const taskAgent=(await db.query("select a.* from managed_agents a join project_organization_nodes n on n.agent_id=a.id where n.project_id=$1 and n.kind='worker' order by n.id limit 1",[original.project])).rows[0];
+  await db.query("insert into chats(id,actor_id,title) values($1,$2,'Synthetic pending-dispatch fixture')",[taskChat,taskAgent.actor_id]);
+  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,request_id,status) values($1,$2,$3,$4,$5,$6,'general','Synthetic pending task','Synthetic pending task',$7,'submitted')",[x.source.job,taskAgent.id,taskAgent.actor_id,taskChat,taskAgent.config,taskAgent.version,crypto.randomUUID()]);
+  await db.query("set local session_replication_role='origin'");await db.query('set role service_role');
+  assert.equal((await get()).status,409,'Submitted external work cannot expose resume');
+  assert.equal((await post({trialAction:'resume_management',projectId:original.project,releaseSha:activeRelease,cutoff,authorizationId:renewed.authorizationId,stateHash:renewed.stateHash})).status,409,'Submitted external work cannot race resume');
+  await db.query('rollback to savepoint pending_dispatch');await db.query('release savepoint pending_dispatch');
   assert.equal((await post({...renewal,authorizationId:renewed.authorizationId})).status,200,'Retry verifies recorded renewal');
   assert.equal((await db.query('select count(*)::int n from project_paused_window_renewals where project_id=$1',[original.project])).rows[0].n,1);
   const postsBeforeReload=posts;await page.reload();await page.getByRole('button',{name:'Resume approved project management'}).waitFor();assert.equal(posts,postsBeforeReload,'Reload never resumes');

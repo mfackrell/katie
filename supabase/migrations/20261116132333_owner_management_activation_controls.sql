@@ -43,12 +43,14 @@ begin
   or (n.parent_id is not null and not exists(select 1 from project_organization_nodes parent where parent.id=n.parent_id
    and parent.project_id=p.id and parent.depth=n.depth-1 and n.tools<@parent.tools))))
  or exists(with recursive qa as (select id from project_organization_nodes where project_id=p.id and area in ('independent_qa','quality_assurance')
-  union all select n.id from project_organization_nodes n join qa on n.parent_id=qa.id)
+  union select n.id from project_organization_nodes n join qa on n.parent_id=qa.id)
   select 1 from qa join project_organization_nodes n on n.id=qa.id where 'development'=any(n.tools))
  or exists(select 1 from project_work_packages where project_id=p.id)
  or exists(select 1 from agent_missions where project_id=p.id and status in ('draft','running','awaiting_approval'))
  or exists(select 1 from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=p.id and j.status in ('queued','running','waiting_external'))
  or exists(select 1 from project_organization_work where project_id=p.id and status in ('queued','running'))
+ or exists(select 1 from agent_tasks t join mission_assignments j on j.id=t.id join agent_missions m on m.id=j.mission_id
+  where m.project_id=p.id and t.status in ('dispatching','submitted'))
  or project_provider_request_pending(p.id)
  then raise exception 'Paused project, scope, work or preserved resource contracts changed';end if;
  if r.authorization_id is null then
