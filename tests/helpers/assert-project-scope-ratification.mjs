@@ -134,7 +134,7 @@ export async function assertProjectScopeRatification(db,rival){
   // Compare the actual installed test scheduler's authorization and evidence
   // binding against the verified deployed definition, not a replacement mock.
   const schedulerDef=(await db.query(
-    "select pg_get_functiondef('public.project_org_schedule(uuid,uuid)'::regprocedure) body"
+    "select pg_get_functiondef('public.project_org_schedule_before_exception_recovery(uuid,uuid)'::regprocedure) body"
   )).rows[0]?.body;
   assert.ok(schedulerDef,'installed management scheduler must exist');
   for(const contract of [

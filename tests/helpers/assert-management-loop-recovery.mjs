@@ -67,6 +67,7 @@ export async function assertManagementLoopRecovery(db,x){
   await reject(()=>mocked(s,[{action:'dependency',nodeId:coder.id,dependsOn:coder.id}]),/cannot depend on itself/);
   await reject(()=>mocked(s,[{action:'close'}]),/Project Director|incomplete|closure/i);
   // Exercise a genuine failed management mission and the owner recovery boundary.
+  await (await import('./assert-commissioning-exception-recovery.mjs')).assertCommissioningExceptionRecovery(db,{project,s,decide});
   await db.query('savepoint paused_recovery');
   const fail={detail:'Synthetic invalid evidence command retained',managementCommandRejection:{code:'exception_evidence'}};
   await db.query("select commit_mission_work($1,$2,$3,'[]','failed','blocked',null)",[s.job,s.lease,fail]);
@@ -119,6 +120,8 @@ export async function assertManagementLoopRecovery(db,x){
   await db.query('set role authenticated');await reject(()=>resume(),/permission denied/);await db.query('reset role');await db.query('set role service_role');
   // Feed only invalid model decisions through the normal scheduler. Existing
   // per-node failure bounds must stop at the root, never spend the whole limit.
+  for(const rejectedKind of ['dependency','ready']){
+  await db.query('savepoint bounded_failure_kind');
   const initialCount=(await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n;
   let bounded=false,created=0;
   for(let i=0;i<24;i++){
@@ -141,18 +144,48 @@ export async function assertManagementLoopRecovery(db,x){
    const claimed=(await db.query('select claim_mission_work_release($1) c',[newRelease])).rows[0].c;
    assert.equal(claimed?.mission.id,scheduled.missionId,'Corrected release claim: '+JSON.stringify({actual:claimed?.mission.id,kind:claimed?.mission.project_kind,project:claimed?.mission.project_id,expected:scheduled.missionId}));
    const next={mission:claimed.mission.id,job:claimed.job.id,lease:claimed.job.lease,node:scheduled.nodeId};
+   if(rejectedKind==='ready'){
+    await db.query('reset role');
+    await db.query("insert into project_organization_exceptions(project_id,origin_id,owner_id,reason,detail) values($1,$2,$2,'objective','Synthetic unresolved commissioning failure')",[project,next.node]);
+    await db.query('set role service_role');
+   }
    let failure;
-   try{await mocked(next,[{action:'dependency',nodeId:randomUUID(),dependsOn:'malformed'}]);assert.fail('Invalid model command admitted');}
-   catch(error){assert.equal(error.evidence?.code,'immediate_reporting_authority');failure=error.evidence;}
+   try{await mocked(next,rejectedKind==='ready'?[{action:'ready'}]:[{action:'dependency',nodeId:randomUUID(),dependsOn:'malformed'}]);assert.fail('Invalid model command admitted');}
+   catch(error){assert.equal(error.evidence?.code,rejectedKind==='ready'?'unresolved_management_exception':'immediate_reporting_authority');failure=error.evidence;}
    assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','failed','blocked',null) ok",[next.job,next.lease,{detail:failure.reason,managementCommandRejection:failure}])).rows[0].ok,true);
   }
   assert.equal(bounded,true);assert.ok(created<=8,'Existing four-level hierarchy stops within eight invalid calls');
   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,initialCount+created);
-  console.log('MANAGEMENT_INVALID_COMMAND_BOUND_PASS: '+created+' additional missions; no replacement or failure-count reset');
+  console.log((rejectedKind==='ready'?'MANAGEMENT_READY_BOUND_PASS: ':'MANAGEMENT_INVALID_COMMAND_BOUND_PASS: ')+created+' additional missions; no replacement or failure-count reset');
+  await db.query('rollback to savepoint bounded_failure_kind');await db.query('release savepoint bounded_failure_kind');
+  }
   await db.query('rollback to savepoint paused_recovery');await db.query('release savepoint paused_recovery');
   const smart=(role,paths)=>({objective:role+' bounded deliverable',deliverable:role+' evidence',instruction:'Complete only the approved milestone contract',parentObjective:supervisor.objective,capability:'analysis',acceptance:[{criterion:'Approved browser contract passes',evidence:'Same source verification'}],inventory:[{item:'Approved milestone',contextChars:1000}],estimate:{basis:'declared_inventory',rationale:'One bounded deliverable',uncertainty:'Verification required',tokens:1000,seconds:30},tokens:2000,maxAssignments:2,deadline,paths});
   const command={action:'commission_package',workerId:coder.id,writerId:writer.id,reviewerId:reviewer.id,milestoneIndex:0,objective:'Implement the approved game',deliverables:['Approved game and tests'],interfaces:[],dependencies:[],acceptance:['Approved browser contract passes'],paths:scopePaths,deadline,maxAttempts:2,tasks:{development:smart('development',['app/milestone-3-tic-tac-toe/page.tsx']),compose:smart('compose',[]),review:smart('review',[])}};
   for(const paths of [scopePaths,['app/unauthorized.tsx'],['../escape.ts'],['app/milestone-3-tic-tac-toe/*.tsx']])await reject(()=>mocked(s,[{...command,tasks:{...command.tasks,development:smart('development',paths)}}]),/bounded file inventory|scope/);
+  // The unchanged authoritative SQL and runtime diagnostic reject the same
+  // malformed structures; no original production response is invented here.
+  for(const [field,change] of [
+   ['parentObjective',c=>c.parentObjective='Wrong immediate manager'],
+   ['estimate.uncertainty',c=>delete c.estimate.uncertainty],
+   ['inventory[0].contextChars',c=>c.inventory[0].contextChars=-1],
+   ['maxAssignments',c=>c.maxAssignments=0],
+  ]){
+   const invalid=JSON.parse(JSON.stringify(command));change(invalid.tasks.development);
+   await reject(()=>decide(s,[invalid]),/Specific measurable single-worker SMART/);
+   await reject(async()=>{
+    try{await mocked(s,[invalid]);}catch(error){
+     const failure=error.evidence;assert.ok(failure?.smartFields?.includes('tasks.development.'+field));
+     assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','failed','blocked',null) ok",[s.job,s.lease,{detail:failure.reason,managementCommandRejection:failure}])).rows[0].ok,true);
+     const retained=(await db.query('select status,result from mission_assignments where id=$1',[s.job])).rows[0];
+     assert.equal(retained.status,'failed');assert.deepEqual(retained.result.managementCommandRejection.smartFields,Array.from(failure.smartFields));
+     assert.match(retained.result.managementCommandRejection.proposalHash,/^[a-f0-9]{64}$/);
+     throw error;
+    }
+   },e=>e.evidence?.smartFields?.includes('tasks.development.'+field));
+   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+  }
+  console.log('SMART_FIELD_SQL_PARITY_PASS: exact parent, estimate, inventory, and assignment-limit diagnostics; SQL unchanged');
   await mocked(s,[command]);
   const packages=(await db.query('select * from project_work_packages where project_id=$1',[project])).rows;
   assert.equal(packages.length,1);assert.equal(packages[0].manager_id,supervisor.id);assert.equal(packages[0].worker_id,coder.id);

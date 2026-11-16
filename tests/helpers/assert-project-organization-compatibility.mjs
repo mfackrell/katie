@@ -84,6 +84,12 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  assert.deepEqual(await installedRecovery(),beforeOwnerControls,'Reviewed recovery definitions, ACLs and security settings are unchanged');
  console.log('OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: '+JSON.stringify(beforeOwnerControls));
  assert.deepEqual(await snapshot(),before,'Owner activation controls never mutate historical records during installation');
+ const beforeCommissioning=(await db.query("select proname,md5(prosrc) hash from pg_proc where oid in ('project_org_schedule(uuid,uuid)'::regprocedure,'project_org_decide(uuid,uuid,jsonb)'::regprocedure) order by proname")).rows;
+ await db.query(readFileSync('supabase/migrations/20261116172712_commissioning_exception_recovery.sql','utf8'));
+ const afterCommissioning=(await db.query("select replace(proname,'_before_exception_recovery','') proname,md5(prosrc) hash from pg_proc where oid in ('project_org_schedule_before_exception_recovery(uuid,uuid)'::regprocedure,'project_org_decide_before_exception_recovery(uuid,uuid,jsonb)'::regprocedure) order by proname")).rows;
+ assert.deepEqual(afterCommissioning,beforeCommissioning,'Original scheduling and command authority bodies remain byte-identical under guarded wrappers');
+ assert.deepEqual(await snapshot(),before,'Commissioning recovery installation never mutates historical records');
+ assert.deepEqual(await installedRecovery(),beforeOwnerControls,'Commissioning recovery preserves owner activation authority');
  const recoveryAcl=(await db.query("select relrowsecurity,has_table_privilege('service_role','project_management_resume_receipts','INSERT') writable,has_function_privilege('anon','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') anon,has_function_privilege('authenticated','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') authenticated from pg_class where oid='project_management_resume_receipts'::regclass")).rows[0];
  assert.deepEqual(recoveryAcl,{relrowsecurity:true,writable:false,anon:false,authenticated:false});
  await (await import('./assert-project-scope-ratification.mjs')).assertProjectScopeRatification(db,rival);
