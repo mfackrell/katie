@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
+import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from '@/lib/projects/management-activation';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -50,6 +51,16 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
         || !await verifiedProjectOwnerSession(request)) return null;
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
+    if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        try{
+            const activation=await managementActivationOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:activation.cutoff,priorCutoff:activation.priorCutoff,
+                receipt:null,managementActivation:activation};
+        }catch{
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:APPROVED_TTT_CUTOFF,priorCutoff:p.deadline,receipt:null,
+                managementActivationError:'Recovery state is unavailable or changed. Refresh project status before continuing.'};
+        }
+    }
     const cutoff = '2026-11-12T00:00:00Z';
     const priorCutoff = '2026-11-10T18:59:32.547837Z';
     const { data, error } = await getSupabaseAdminClient().from('project_director_recoveries')

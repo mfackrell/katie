@@ -57,6 +57,19 @@ export async function assertPausedWindowRenewal(db,x){
    out.assignments=(await db.query('select to_jsonb(j) r from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 order by j.id',[project])).rows;
    await db.query('set role service_role');return out;
   };
+  const preflight=(sha=newRelease,who=owner)=>db.query('select project_org_management_activation_offer($1,$2,$3) o',[who,project,sha]);
+  const originalOffer=(await preflight()).rows[0].o;
+  assert.equal(originalOffer.stage,'renew');assert.equal(originalOffer.stateHash,state);
+  assert.equal(originalOffer.nodeCount,13);assert.equal(originalOffer.historicalMissions,73);
+  await reject(()=>preflight(newRelease,randomUUID()),/original project owner/);
+  for(const role of ['anon','authenticated']){
+   await db.query('reset role');await db.query('set role '+role);await reject(()=>preflight(),/permission denied/);
+   await reject(()=>db.query('select project_org_resume_management_confirmed($1,$2,$3,$4,$5)',[owner,project,newRelease,args[9],state]),/permission denied/);
+  }
+  await db.query('reset role');await db.query('set role service_role');
+  if(process.env.KATIE_TEST_OWNER_ACTIVATION==='1'){
+   await (await import('./assert-owner-management-browser.mjs')).assertOwnerManagementBrowser(db,{...x,originalWindow,prior,cutoff,intermediate,newRelease});
+  }
   const before=await snapshot();
   assert.equal((await db.query('select project_provider_continued($1) ok',[project])).rows[0].ok,true);
   await reject(()=>resume(),/evidence or authority/);
@@ -122,6 +135,20 @@ export async function assertPausedWindowRenewal(db,x){
   assert.equal((await db.query('select count(*)::int n from project_organization_contract_changes where window_id=$1',[args[9]])).rows[0].n,13);
   assert.equal((await db.query('select count(*)::int n from project_organization_nodes where project_id=$1 and deadline=$2',[project,cutoff])).rows[0].n,13);
   assert.equal((await db.query('select project_provider_continued_assignment($1) ok',[source.job])).rows[0].ok,false,'historical failed assignment remains ineligible');
+  const renewedOffer=(await preflight()).rows[0].o;
+  assert.equal(renewedOffer.stage,'resume');assert.equal(renewedOffer.authorizationId,args[9]);
+  await reject(()=>preflight('f'.repeat(40)),/Renewal receipt/);
+  await reject(()=>db.query('select project_org_resume_management_confirmed($1,$2,$3,$4,$5)',[owner,project,newRelease,args[9],state]),/state changed/);
+  await reject(()=>db.query('select project_org_resume_management_confirmed($1,$2,$3,$4,$5)',[owner,project,newRelease,randomUUID(),renewedOffer.stateHash]),/Verified renewal/);
+  await db.query('savepoint confirmed_resume');
+  const confirmed=async()=>(await db.query('select project_org_resume_management_confirmed($1,$2,$3,$4,$5) r',[owner,project,newRelease,args[9],renewedOffer.stateHash])).rows[0].r;
+  assert.equal((await confirmed()).existing,false);
+  await reject(()=>confirmed(),/state changed/);
+  const recorded=(await preflight()).rows[0].o;
+  assert.equal((await db.query('select project_org_resume_management_confirmed($1,$2,$3,$4,$5) r',[owner,project,newRelease,args[9],recorded.stateHash])).rows[0].r.existing,true);
+  assert.equal((await preflight()).rows[0].o.stage,'resumed');
+  await db.query('rollback to savepoint confirmed_resume');await db.query('release savepoint confirmed_resume');
+
   // A competing actual RPC must wait on the same transaction lock; it cannot
   // bypass or partially renew while the first transaction is uncommitted.
   if(rival){
