@@ -34,7 +34,8 @@ test("one-shot recovery never calls Claude before source-bound Grok validation a
   assert.doesNotMatch(helper,/summarizeNewBatch\(/);
   assert.match(source,/maxRetries:0/);
   assert.match(source,/const rawFromResponse=\(response\.content\?\?\[\]\)/);
-  assert.ok(source.indexOf("if(capture && rawFromResponse.length>0")<
+  assert.match(source,/if\(capture\)await capture\(rawFromResponse,response\.stop_reason==="end_turn",response\)/);
+  assert.ok(source.indexOf('await capture(rawFromResponse,response.stop_reason==="end_turn",response)')<
     source.indexOf('raw = completedClaudeText(response, "retention plan"'));
   assert.ok(source.indexOf("const recoveredCrossProvider=await recoverOwnerApprovedCrossProviderStages")<
     source.indexOf("const recovered=await recoverCapturedItmStages"));

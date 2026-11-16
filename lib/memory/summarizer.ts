@@ -390,7 +390,7 @@ function parseRetentionPlan(raw: string, priorCount: number): number[] {
   return obj.keep as number[];
 }
 
-async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI, capture?: (raw:string,complete:boolean)=>Promise<void>): Promise<number[]> {
+async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI, capture?: (raw:string,complete:boolean,response?:ClaudeMessagesResponse)=>Promise<void>): Promise<number[]> {
   const indexed = prior.map((text, id) => ({
     id, content: text.length > ITM_EPISODE_MAX_CHARACTERS
       ? text.slice(0, ITM_EPISODE_MAX_CHARACTERS - 1) + "…" : text,
@@ -421,9 +421,9 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
     // The strict completion and JSON checks happen only AFTER this capture.
     const rawFromResponse=(response.content??[])
       .filter(item=>item.type==="text" && typeof item.text==="string")
-      .map(item=>item.text).join("").trim();
-    if(capture && rawFromResponse.length>0 && rawFromResponse.length<=16000)
-      await capture(rawFromResponse,response.stop_reason==="end_turn");
+      .map(item=>item.text).join("");
+    // Exact text, including whitespace, is captured before any parsing.
+    if(capture)await capture(rawFromResponse,response.stop_reason==="end_turn",response);
     raw = completedClaudeText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
   const keep = parseRetentionPlan(raw, prior.length);

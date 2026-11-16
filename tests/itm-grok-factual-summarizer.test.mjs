@@ -88,6 +88,7 @@ function harness({
   const admin = {
     async rpc(name, args) {
       events.push({ name, args: copy(args) });
+      if (name === "claim_itm_stage2_one_shot") return {data:false,error:null}; // No owner grant in ordinary ITM test fixtures.
       if (name === "inspect_itm_batch_provider_exposure") {
         const matching=[...claims.entries()].filter(([key])=>key.endsWith(":"+args.p_batch_end_message_id));
         const active=matching.some(([,state])=>state==="processing");
