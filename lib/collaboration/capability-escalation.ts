@@ -12,6 +12,19 @@ import type {
 
 export const CAPABILITY_REQUEST_PREFIX = "KATIE_CAPABILITY_REQUEST:";
 
+/** Model responses can start with Katie's own message timestamp. Strip only
+ * that known internal wrapper before inspecting a capability control message.
+ * Never scan arbitrary user text for a protocol marker. */
+function stripInternalTimestamp(value: string): string {
+  return value.trimStart().replace(/^\\[Message timestamp: [^\\]\\r\\n]{1,96}\\]\\s*/, "");
+}
+function mayStartTimestamp(value: string): boolean {
+  const start = "[Message timestamp:";
+  const trimmed = value.trimStart();
+  return start.startsWith(trimmed) ||
+    (trimmed.startsWith(start) && !trimmed.includes("]"));
+}
+
 const CAPABILITIES: CollaborationCapability[] = [
   "analysis",
   "verification",
@@ -74,7 +87,7 @@ export function getCapabilityEscalationInstruction(): string {
 export function parseCapabilityEscalationRequest(
   raw: string,
 ): CollaborationRequest | null {
-  const trimmed = raw.trim();
+  const trimmed = stripInternalTimestamp(raw).trim();
   if (!trimmed.startsWith(CAPABILITY_REQUEST_PREFIX)) {
     return null;
   }
@@ -159,8 +172,12 @@ export async function runCapabilityAwareGeneration(input: {
           }
 
           bufferedPrefix += delta;
-          const normalized = bufferedPrefix.trimStart();
-
+          // Preserve the complete private control message, including when
+          // the lead first emits "[Message timestamp: ...]" in several chunks.
+          // The timestamp wrapper must not turn a research request into
+          // streamed user-visible protocol text.
+          if (mayStartTimestamp(bufferedPrefix)) return;
+          const normalized = stripInternalTimestamp(bufferedPrefix).trimStart();
           if (
             CAPABILITY_REQUEST_PREFIX.startsWith(normalized) ||
             normalized.startsWith(CAPABILITY_REQUEST_PREFIX)
@@ -175,6 +192,14 @@ export async function runCapabilityAwareGeneration(input: {
 
   const rawText = result.text || rawStreamedText || bufferedPrefix;
   const escalationRequest = parseCapabilityEscalationRequest(rawText);
+
+  // Fail closed if the lead emitted an internal request with malformed JSON.
+  // Its control text must never be presented as a final user answer.
+  const internalRequest = stripInternalTimestamp(rawText).trimStart()
+    .startsWith(CAPABILITY_REQUEST_PREFIX);
+  if (internalRequest && !escalationRequest) {
+    throw new Error("Malformed internal capability request; research was not executed.");
+  }
 
   if (escalationRequest) {
     return {
