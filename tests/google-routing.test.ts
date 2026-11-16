@@ -2075,3 +2075,35 @@ test("provider diagnostic metadata excludes upstream messages and secrets", () =
     status: 400, code: null, type: null, phase: "response-parse", causeCode: "invalid_response",
   });
 });
+
+test("classifier repairs production-style false image intent before capability routing without another inference", async () => {
+  let classifications = 0;
+  const classifier = provider("openai", ["gpt-5.6-sol"], async ({ modelId }) => {
+    classifications += 1;
+    return {
+      text: JSON.stringify({
+        intent: "image-generation",
+        secondary_intents: ["rewrite"],
+        complexity: "medium",
+        response_purpose: "deliverable",
+        preferred_provider: null,
+        primary_objective: "Write a revised dating bio",
+        objective_evidence: ["write me a revised bio"],
+        context_influence: "Prior generated imagery was discussed",
+        selection_justification: "Incorrectly chose image generation"
+      }),
+      model: modelId ?? "gpt-5.6-sol",
+      provider: "openai"
+    };
+  }).provider;
+  const request = "FB is about as far down the rabbit hole i'm willing to go. write me a revised bio that will land! and get me the chick like the one GPT made....😏😂";
+  const classification = await inferRequestClassificationWithSource(request, false, {
+    decisionProviders: [{ provider: classifier, modelId: "gpt-5.6-sol" }],
+    requestId: "regression-nov16-bio"
+  });
+  assert.equal(classifications, 1);
+  assert.equal(classification.classification.intent, "rewrite");
+  assert.equal(classification.source, "router-fallback");
+  assert.equal(classification.classification.decisionEvidence?.primary_objective, "Write a revised dating bio");
+  assert.match(classification.classification.decisionEvidence?.selection_justification ?? "", /Deterministic objective precedence/);
+});
