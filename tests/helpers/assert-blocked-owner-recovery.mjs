@@ -55,7 +55,11 @@ export async function assertBlockedOwnerRecovery(db,x){
   await reject(()=>db.query('select project_org_management_activation_offer($1,$2,$3)',[owner,ORIGINAL,NEW_RELEASE]),/Recorded management resume does not match this release/);
   const migration=readFileSync('supabase/migrations/20261116195500_blocked_owner_window_resume.sql','utf8')
    .replace(/^begin;\s*/,'').replace(/\s*commit;\s*$/,'');
+  // DDL is installed by the disposable fixture's privileged schema owner,
+  // not by the service_role used for real owner RPCs.
+  await db.query('reset role');
   await db.query(migration);
+  await db.query('set role service_role');
   const offer=(await get()).rows[0].r;
   if(process.env.KATIE_TEST_BLOCKED_OWNER_BROWSER==='1')
    await (await import('./assert-blocked-owner-browser.mjs')).assertBlockedOwnerBrowser(db,{
