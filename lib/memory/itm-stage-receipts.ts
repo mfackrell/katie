@@ -81,3 +81,25 @@ export async function inspectPriorItmClaims(
     anthropic:rows.some(a=>a.processor_version.endsWith(":anthropic")),
   };
 }
+
+/** Read a source-bound pre-v14 paid response without transmitting to a model.
+ * The caller must independently validate every citation against its exact
+ * current 30-message batch before accepting or persisting the output. */
+export async function readLegacyItmEpisodeOutput(
+  actorId:string,chatId:string,batchEndMessageId:string,
+  provider:"grok"|"anthropic",
+):Promise<{responseText:string;ledgerAttemptId:string}|null>{
+  const {data,error}=await getSupabaseAdminClient().rpc<{
+    response_text:string|null;ledger_attempt_id:string|null;
+  }|null>("itm_read_legacy_episode_output",{
+    p_actor_id:actorId,p_chat_id:chatId,
+    p_batch_end_message_id:batchEndMessageId,p_provider:provider,
+  });
+  if(error)throw new Error("ITM_LEGACY_RECEIPT_LOOKUP_UNAVAILABLE");
+  if(!data)return null;
+  if(typeof data.response_text!=="string"||data.response_text.length<1||
+    data.response_text.length>16000||
+    typeof data.ledger_attempt_id!=="string")
+    throw new Error("ITM_LEGACY_RECEIPT_MALFORMED");
+  return {responseText:data.response_text,ledgerAttemptId:data.ledger_attempt_id};
+}
