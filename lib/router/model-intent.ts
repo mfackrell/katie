@@ -1386,7 +1386,7 @@ export async function inferRequestClassificationWithSource(
   if (objectiveGuard.overridden) {
     console.info("[Intent Objective Guard] primary_intent_corrected", {
       requestId: options?.requestId ?? null,
-      originalIntent: effectiveClassification.intent,
+      originalIntent: classifiedOutput.intent,
       correctedIntent: objectiveGuard.classification.intent,
       reason: objectiveGuard.reason,
       guardVersion: "written-objective-v1"
