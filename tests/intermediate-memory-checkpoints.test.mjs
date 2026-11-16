@@ -86,7 +86,9 @@ test("post-answer ITM does not inherit a closed HTTP response signal",()=>{
   const accounting=readFileSync("lib/standalone-accounting/context.ts","utf8");
   assert.match(accounting,/export function runWithDurablePostAnswerAccounting/);
   assert.match(accounting,/\.\.\.scope\.context, signal: undefined/);
-  assert.match(route,/cachedWorkflowValue\("memory-summary", \(\) => runWithDurablePostAnswerAccounting\(\(\) => maybeUpdateSummary\(chatId\)\)\)/);
+  assert.match(route,/maybeUpdateSummary\(chatId\)/);
+  assert.match(route,/const retention = maybeUpdateRelevantLongTermMemory/);
+  assert.doesNotMatch(route,/cachedWorkflowValue\("memory-(?:summary|retention|cleanup)"/);
   assert.match(summary,/standaloneAccountingCause\(error\)/);
   assert.match(summary,/standaloneFailureDetails\(error\)/);
   assert.match(summary,/isRequestAbort\(error\)/);
