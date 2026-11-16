@@ -10,6 +10,15 @@ export function imageGenerationCapableModel(provider: string, modelId: string): 
   return false;
 }
 
+/** Image fallback candidates must support image output and have reviewed image prices. */
+export function filterPricedImageFallbacks<T extends { provider: { name: string }; modelId: string }>(
+  candidates: T[],
+  hasReviewedImagePrice: (candidate: T) => boolean,
+): T[] {
+  return candidates.filter(candidate =>
+    imageGenerationCapableModel(candidate.provider.name, candidate.modelId) && hasReviewedImagePrice(candidate));
+}
+
 /** A conversational response, even from an image-capable model, is not an image. */
 export function containsGeneratedImage(result: Pick<ProviderResponse, "content">): boolean {
   return Boolean(result.content?.some(part =>
