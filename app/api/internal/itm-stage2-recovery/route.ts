@@ -2,6 +2,7 @@ import {NextRequest,NextResponse} from "next/server";
 import {assertCronAuth} from "@/lib/runpod/durable-results";
 import {getSupabaseAdminClient} from "@/lib/data/supabase/admin";
 import {maybeUpdateSummary} from "@/lib/memory/summarizer";
+import {runWithStandaloneAccounting} from "@/lib/standalone-accounting/context";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -30,13 +31,13 @@ export async function GET(request:NextRequest){
     // Once claimed, only immutable VALID retention evidence permits offline
     // checkpoint CAS recovery. Never recontact Claude on an uncertain result.
     if(grant.dispatched_at!==null){
-      const {data:receipt,error:receiptError}=await admin.from("itm_stage_receipts")
-        .select("id").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
+      const {data:receipts,error:receiptError}=await admin.from("itm_stage_receipts")
+        .select("processor_version").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
         .eq("batch_end_message_id",END).eq("source_sha256",SOURCE_SHA)
-        .eq("provider","anthropic").eq("stage","retention")
-        .not("processor_version","like","%:incomplete").limit(1);
+        .eq("provider","anthropic").eq("stage","retention").limit(10)
+        .returns<Array<{processor_version:string}>>();
       if(receiptError)throw new Error("ITM_ONE_SHOT_RECEIPT_READ_UNAVAILABLE");
-      if(!receipt?.length)
+      if(!(receipts??[]).some(row=>!row.processor_version.endsWith(":incomplete")))
         return NextResponse.json({status:"grant_consumed_no_valid_receipt"});
     }
     const {data:state,error:stateError}=await admin.from("intermediate_memory")
@@ -46,7 +47,19 @@ export async function GET(request:NextRequest){
     if(!state||state.content.sourceMessageCount!==928||
       state.content.summarizedThroughMessageId!==CURSOR)
       return NextResponse.json({status:"checkpoint_not_928"});
-    const result=await maybeUpdateSummary(CHAT);
+    // Bind memory usage to the original authenticated owner/actor/chat.
+    // This scope is for telemetry ONLY; memory-summary transport bypasses
+    // standalone workflow and request budget admission entirely.
+    const {data:usage,error:usageError}=await admin.from("memory_provider_usage")
+      .select("owner_id").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
+      .order("created_at",{ascending:false}).limit(1)
+      .returns<Array<{owner_id:string|null}>>();
+    if(usageError||!usage?.[0]?.owner_id)
+      throw new Error("ITM_ONE_SHOT_OWNER_PROVENANCE_UNAVAILABLE");
+    const result=await runWithStandaloneAccounting({
+      userId:usage[0].owner_id,actorId:grant.actor_id,chatId:CHAT,
+      requestId:"itm-approved-stage2-"+END,
+    },()=>maybeUpdateSummary(CHAT));
     return NextResponse.json({status:result},{headers:{"cache-control":"no-store"}});
   }catch(error){
     console.error("[ITM One-shot] Protected recovery failed",error instanceof Error?error.message:"unavailable");
