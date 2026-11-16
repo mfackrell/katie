@@ -21,12 +21,17 @@
       "exit": 0,
       "tests": 3,
       "passed": 3
+    },
+    "lint": {
+      "exit": 0,
+      "warnings": 0,
+      "errors": 0
     }
   },
   "sourceSha256": {
     ".github/workflows/hierarchy-recovery-qualification.yml": "db15378d1907378ff5bc86382d8d1f194346c30bb5726a62663893fdd952937a",
     "lib/projects/organization.ts": "d5a0cb4582e57c08f99b241ff0ec5e56e5c1691f6dc67942d4c80306396d36f1",
-    "lib/projects/smart-diagnostics.ts": "951a3dd3b95991e6fe83401bfb375713dee05087284f983b54b89bd99c22f64b",
+    "lib/projects/smart-diagnostics.ts": "b8f88309eedd932b4420f3cd0ba261aae185f3e728dcf0c5a2aaee2def08d5c4",
     "supabase/migrations/20261116172712_commissioning_exception_recovery.sql": "d0062baa5b4872417efd98e0681dcc384b04ce99d5948802739f97f7e82e0924",
     "tests/helpers/assert-commissioning-exception-recovery.mjs": "e527ed07d479e60c02647922dcfdbd16e64375ce954dfe89cf95ed27465891d6",
     "tests/helpers/assert-management-loop-recovery.mjs": "dbca72c91ac2f28e0f71b5a65c6a15da72a72697e36d2d3c3d4f566c715bff09",
@@ -39,8 +44,10 @@
   },
   "logSha256": {
     "baseline-failures.log": "cbf88ad0c47eb03221fba59638dbd43ce18a4bdbf78cd722694cd871fdd684e3",
-    "focused-pass.log": "bdec48d49baf400ab35d83ae1feba0b18579fa6f757d65530e217f85b4d2c004",
+    "focused-pass.log": "dc19a97e7afb2cc3124a4a42900679f343879f065d30d11560629a76b104399a",
+    "lint-pass.log": "4eef2dafb7fb4f0c1090cb6e3d77bfeb98705bd326a56fe116209d23ff4b0cd7",
     "native-pass.log": "2a7d0c4e1ac99377829037d959e1db48696317038811fd34e247e6c6e0b9257b",
     "typecheck.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  }
+  },
+  "nativeLogNote": "Native log predates the type-only lint correction in smart-diagnostics.ts. Final exact-source native evidence is recorded in the PR checks and engineering handoff."
 }

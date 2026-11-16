@@ -6,31 +6,31 @@ TAP version 13
 # Subtest: malformed SMART response records exact field paths before SQL without saving model prose
 ok 1 - malformed SMART response records exact field paths before SQL without saving model prose
   ---
-  duration_ms: 519.415352
+  duration_ms: 628.838342
   type: 'test'
   ...
 # Subtest: ready-only decision cannot abandon an owned open exception; corrective batches still reach SQL
 ok 2 - ready-only decision cannot abandon an owned open exception; corrective batches still reach SQL
   ---
-  duration_ms: 206.30652
+  duration_ms: 302.688281
   type: 'test'
   ...
 # Subtest: definitive SQL SMART rejection retains bounded diagnostic and proposal hash; no replay
 ok 3 - definitive SQL SMART rejection retains bounded diagnostic and proposal hash; no replay
   ---
-  duration_ms: 198.483529
+  duration_ms: 140.218083
   type: 'test'
   ...
 # Subtest: diagnostic preflight checks each structural field without substituting values
 ok 4 - diagnostic preflight checks each structural field without substituting values
   ---
-  duration_ms: 9.698884
+  duration_ms: 9.748707
   type: 'test'
   ...
 # Subtest: unknown SQL outcomes and transport failures are never classified as safe rejection
 ok 5 - unknown SQL outcomes and transport failures are never classified as safe rejection
   ---
-  duration_ms: 7.794032
+  duration_ms: 7.777427
   type: 'test'
   ...
 # (node:13) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
@@ -38,89 +38,89 @@ ok 5 - unknown SQL outcomes and transport failures are never classified as safe 
 # Subtest: regression: legacy project-wide evidence overflows 48k while current manager keeps owner objective and direct contracts
 ok 6 - regression: legacy project-wide evidence overflows 48k while current manager keeps owner objective and direct contracts
   ---
-  duration_ms: 14.277858
+  duration_ms: 28.791608
   type: 'test'
   ...
 # Subtest: completed history grows without changing the manager input; latest accepted evidence is selected by provenance
 ok 7 - completed history grows without changing the manager input; latest accepted evidence is selected by provenance
   ---
-  duration_ms: 18.073567
+  duration_ms: 18.594037
   type: 'test'
   ...
 # Subtest: nested management depth preserves exact ancestors and only the immediate superior/direct reports
 ok 8 - nested management depth preserves exact ancestors and only the immediate superior/direct reports
   ---
-  duration_ms: 1.320935
+  duration_ms: 1.115455
   type: 'test'
   ...
 # Subtest: unresolved owned exceptions, external dependency statuses and current activity cannot silently disappear
 ok 9 - unresolved owned exceptions, external dependency statuses and current activity cannot silently disappear
   ---
-  duration_ms: 1.00492
+  duration_ms: 0.717377
   type: 'test'
   ...
 # Subtest: missing essential evidence fails before inference; no silent truncation or unauthorized decisions
 ok 10 - missing essential evidence fails before inference; no silent truncation or unauthorized decisions
   ---
-  duration_ms: 2.672817
+  duration_ms: 2.028636
   type: 'test'
   ...
 # Subtest: reporting cycle and worker management are not treated as delegable management
 ok 11 - reporting cycle and worker management are not treated as delegable management
   ---
-  duration_ms: 0.709476
+  duration_ms: 0.411077
   type: 'test'
   ...
 # Subtest: selected evidence retains active assignments and only the latest terminal outcomes per report
 ok 12 - selected evidence retains active assignments and only the latest terminal outcomes per report
   ---
-  duration_ms: 0.502785
+  duration_ms: 0.447763
   type: 'test'
   ...
 # Subtest: paginated management evidence loads every historical row and fails closed on a broken page
 ok 13 - paginated management evidence loads every historical row and fails closed on a broken page
   ---
-  duration_ms: 411.115927
+  duration_ms: 515.979942
   type: 'test'
   ...
 # Subtest: retired package history never consumes the current decision window; active contract and latest attempt remain
 ok 14 - retired package history never consumes the current decision window; active contract and latest attempt remain
   ---
-  duration_ms: 1.671692
+  duration_ms: 1.855095
   type: 'test'
   ...
 # Subtest: current approved contract and latest failures survive ready and replacement decisions
 ok 15 - current approved contract and latest failures survive ready and replacement decisions
   ---
-  duration_ms: 2.138082
+  duration_ms: 2.25095
   type: 'test'
   ...
 # Subtest: shared acceptance contracts are referenced losslessly and historical decisions do not duplicate current contracts
 ok 16 - shared acceptance contracts are referenced losslessly and historical decisions do not duplicate current contracts
   ---
-  duration_ms: 0.720773
+  duration_ms: 0.862865
   type: 'test'
   ...
 # (node:14) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
 # (Use `node --trace-warnings ...` to show where the warning was created)
 # [Trial model usage] {
-#   jobId: 'e57abd71-3d31-44d8-adad-da7fc0a012c3',
+#   jobId: 'fcc95c1d-d597-423e-b386-ce99b32fdf84',
 #   model: 'gpt-5.4',
 #   requestId: 'fixture',
 #   usage: undefined
 # }
 # [Missions] Provider attempt ended {
-#   jobId: 'e57abd71-3d31-44d8-adad-da7fc0a012c3',
-#   callId: 'ff5df98f-3e1a-4073-8c48-e0150424dce2',
+#   jobId: 'fcc95c1d-d597-423e-b386-ce99b32fdf84',
+#   callId: '255298a1-4dd6-4173-ad46-b5a3b0bee171',
 #   provider: 'openai',
 #   model: 'gpt-5.4',
-#   durationMs: 0,
+#   durationMs: 1,
 #   reservedTokens: 3148,
 #   countMethod: 'conservative-bytes',
 #   error: 'Provider refused trial request'
 # }
 # [Missions] Management rejection persistence unconfirmed {
-#   jobId: '714c5e10-2f32-48c0-9983-9d3299680f2d',
+#   jobId: '2648c252-84fc-4396-bd90-5df47e8ea413',
 #   detail: 'Management decisions require immediate reporting authority',
 #   managementCommandRejection: {
 #     code: 'immediate_reporting_authority',
@@ -132,7 +132,7 @@ ok 16 - shared acceptance contracts are referenced losslessly and historical dec
 #   }
 # }
 # [Missions] Management rejection persistence unconfirmed {
-#   jobId: '8e68b0ce-0724-4761-ad76-5c5420596e36',
+#   jobId: 'cf69b9b8-e9d3-4435-9a60-5b208740fd32',
 #   detail: 'Management decisions require immediate reporting authority',
 #   managementCommandRejection: {
 #     code: 'immediate_reporting_authority',
@@ -146,121 +146,121 @@ ok 16 - shared acceptance contracts are referenced losslessly and historical dec
 # Subtest: executive selection requires verified fresh OpenAI or Anthropic reasoning; no guessed fallback
 ok 17 - executive selection requires verified fresh OpenAI or Anthropic reasoning; no guessed fallback
   ---
-  duration_ms: 505.792273
+  duration_ms: 553.50692
   type: 'test'
   ...
 # Subtest: management worker dispatches only durable management decisions; never technical execution
 ok 18 - management worker dispatches only durable management decisions; never technical execution
   ---
-  duration_ms: 1748.042585
+  duration_ms: 1708.124209
   type: 'test'
   ...
 # Subtest: technical work uses a separate subordinate completion receipt, never project closure
 ok 19 - technical work uses a separate subordinate completion receipt, never project closure
   ---
-  duration_ms: 1183.539843
+  duration_ms: 1043.832346
   type: 'test'
   ...
 # Subtest: managed coding derives native authority from its project envelope without another owner action
 ok 20 - managed coding derives native authority from its project envelope without another owner action
   ---
-  duration_ms: 534.532876
+  duration_ms: 589.017056
   type: 'test'
   ...
 # Subtest: original envelope requires authenticated explicit autonomous-execution consent
 ok 21 - original envelope requires authenticated explicit autonomous-execution consent
   ---
-  duration_ms: 71.77105
+  duration_ms: 58.14987
   type: 'test'
   ...
 # Subtest: dispatch preserves Functional Director authority and rejects executive worker supervision
 ok 22 - dispatch preserves Functional Director authority and rejects executive worker supervision
   ---
-  duration_ms: 96.022391
+  duration_ms: 94.601616
   type: 'test'
   ...
 # Subtest: coding packages require immediate Functional Director authority at dispatch
 ok 23 - coding packages require immediate Functional Director authority at dispatch
   ---
-  duration_ms: 111.242673
+  duration_ms: 93.790207
   type: 'test'
   ...
 # Subtest: native host authenticates package paths and predecessor before granting execution
 ok 24 - native host authenticates package paths and predecessor before granting execution
   ---
-  duration_ms: 1.522929
+  duration_ms: 0.709536
   type: 'test'
   ...
 # Subtest: explicit management levels restrict appointments without granting technical authority
 ok 25 - explicit management levels restrict appointments without granting technical authority
   ---
-  duration_ms: 96.364746
+  duration_ms: 83.04995
   type: 'test'
   ...
 # Subtest: authenticated trial start and stop use the project controller without a financial approval
 ok 26 - authenticated trial start and stop use the project controller without a financial approval
   ---
-  duration_ms: 15.222885
+  duration_ms: 12.026389
   type: 'test'
   ...
 # Subtest: trial Director can call the provider without any accounting service, and refusal is terminal
 ok 27 - trial Director can call the provider without any accounting service, and refusal is terminal
   ---
-  duration_ms: 352.564615
+  duration_ms: 258.394932
   type: 'test'
   ...
 # Subtest: management rejection locates a premature dependency without storing model prose or foreign IDs
 ok 28 - management rejection locates a premature dependency without storing model prose or foreign IDs
   ---
-  duration_ms: 118.700891
+  duration_ms: 116.441371
   type: 'test'
   ...
 # Subtest: management rejection retries only a failed terminal write and fences inference after a lost receipt
 ok 29 - management rejection retries only a failed terminal write and fences inference after a lost receipt
   ---
-  duration_ms: 3500.457276
+  duration_ms: 3223.335284
   type: 'test'
   ...
 # Subtest: one-shot Director recovery requires the authenticated owner, exact release and explicit cutoff
 ok 30 - one-shot Director recovery requires the authenticated owner, exact release and explicit cutoff
   ---
-  duration_ms: 93.380074
+  duration_ms: 53.427297
   type: 'test'
   ...
 # Subtest: one-shot Director recovery fences a mismatched runtime before inference and sanitizes unsupported commands
 ok 31 - one-shot Director recovery fences a mismatched runtime before inference and sanitizes unsupported commands
   ---
-  duration_ms: 127.153585
+  duration_ms: 77.082728
   type: 'test'
   ...
 # Subtest: delegation amendments require immediate reporting authority and never enter one-shot recovery
 ok 32 - delegation amendments require immediate reporting authority and never enter one-shot recovery
   ---
-  duration_ms: 127.038678
+  duration_ms: 70.851191
   type: 'test'
   ...
 # Subtest: ratified provider trial guides its existing root to delegate Game Delivery, without synthetic model decisions
 ok 33 - ratified provider trial guides its existing root to delegate Game Delivery, without synthetic model decisions
   ---
-  duration_ms: 124.123808
+  duration_ms: 87.264387
   type: 'test'
   ...
 # Subtest: claimed scoped root receives durable approved paths and proposes only validated existing-node delegation
 ok 34 - claimed scoped root receives durable approved paths and proposes only validated existing-node delegation
   ---
-  duration_ms: 100.276988
+  duration_ms: 74.595062
   type: 'test'
   ...
 # Subtest: exception preflight admits only observed completed subordinate evidence and preserves SQL authority
 ok 35 - exception preflight admits only observed completed subordinate evidence and preserves SQL authority
   ---
-  duration_ms: 108.544721
+  duration_ms: 78.62264
   type: 'test'
   ...
 # Subtest: scope-only implementation delegation is diagnosed at its actual parent while both QA identities remain excluded
 ok 36 - scope-only implementation delegation is diagnosed at its actual parent while both QA identities remain excluded
   ---
-  duration_ms: 121.864488
+  duration_ms: 75.788655
   type: 'test'
   ...
 1..36
@@ -271,4 +271,4 @@ ok 36 - scope-only implementation delegation is diagnosed at its actual parent w
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 9903.774324
+# duration_ms 9248.512083

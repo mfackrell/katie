@@ -1,6 +1,6 @@
 // Diagnostic preflight only. Lease-bound PostgreSQL admission remains authoritative
 // for identity, scope, context sizing, cumulative resources, deadlines and dispatch.
-type Row=Record<string,any>;
+type Row=Record<string,unknown>;
 const text=(v:unknown):string|null=>v==null?null:typeof v==='string'?v:JSON.stringify(v);
 const length=(v:unknown)=>Array.from((text(v)??'').replace(/^ +| +$/g,'')).length;
 const object=(v:unknown):v is Row=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -17,14 +17,16 @@ export function smartContractFields(c:unknown, parentObjective:unknown, projectO
  for(const field of ['acceptance','inventory']){
   const entries=c[field];check(Array.isArray(entries)&&entries.length>0,field);
   if(Array.isArray(entries))entries.forEach((entry,index)=>{
-   if(field==='acceptance')for(const key of ['criterion','evidence'])check(length(entry?.[key])>0,`${field}[${index}].${key}`);
-   else {check(length(entry?.item)>0,`${field}[${index}].item`);check(/^[0-9]{1,7}$/.test(text(entry?.contextChars)??''),`${field}[${index}].contextChars`);}
+   const value=object(entry)?entry:{};
+   if(field==='acceptance')for(const key of ['criterion','evidence'])check(length(value[key])>0,`${field}[${index}].${key}`);
+   else {check(length(value.item)>0,`${field}[${index}].item`);check(/^[0-9]{1,7}$/.test(text(value.contextChars)??''),`${field}[${index}].contextChars`);}
   });
  }
- check(c.estimate?.basis==='declared_inventory','estimate.basis');
- for(const key of ['rationale','uncertainty'])check(length(c.estimate?.[key])>0,'estimate.'+key);
- check(/^[1-9][0-9]{0,8}$/.test(text(c.estimate?.tokens)??''),'estimate.tokens');
- check(/^[1-9][0-9]{0,6}$/.test(text(c.estimate?.seconds)??''),'estimate.seconds');
+ const estimate=object(c.estimate)?c.estimate:{};
+ check(estimate.basis==='declared_inventory','estimate.basis');
+ for(const key of ['rationale','uncertainty'])check(length(estimate[key])>0,'estimate.'+key);
+ check(/^[1-9][0-9]{0,8}$/.test(text(estimate.tokens)??''),'estimate.tokens');
+ check(/^[1-9][0-9]{0,6}$/.test(text(estimate.seconds)??''),'estimate.seconds');
  check(/^[1-9][0-9]{0,8}$/.test(text(c.tokens)??''),'tokens');
  check(/^[1-9][0-9]{0,3}$/.test(text(c.maxAssignments)??''),'maxAssignments');
  check(c.deadline!=null,'deadline');
@@ -43,7 +45,7 @@ export function smartSqlRejection(error:unknown):{code:string;reason:string}|nul
  const prefix='Mission state operation failed: ';
  if(!message.startsWith(prefix))return null;
  let payload:Row;try{payload=JSON.parse(message.slice(prefix.length));}catch{return null;}
- if(!object(payload)||payload.code!=='P0001')return null;
+ if(!object(payload)||payload.code!=='P0001'||typeof payload.message!=='string')return null;
  const reasons:Record<string,string>={
   'Ready-only response cannot abandon an owned open exception':'unresolved_management_exception',
   'Specific measurable single-worker SMART contract and traceable sizing estimate required':'smart_contract_fields_sql',
