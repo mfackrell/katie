@@ -1287,6 +1287,12 @@ export function guardExplicitWrittenObjective(
   }
   const textDirective = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.exec(prompt);
   if (!textDirective) return { classification, overridden: false, reason: null };
+  // Putting lettering onto pixels is an image edit, not drafting text for a
+  // separate written deliverable. Preserve the classifier's image capability.
+  const letteringOntoImage = /\\b(?:write|add|put|place|overlay|insert|print)\\b.{0,100}\\b(?:text|words|caption|lettering|title|label)\\b.{0,100}\\b(?:on|onto|over|across|inside|in|to)\\b.{0,65}\\b(?:image|photo|picture|portrait|illustration|canvas|screenshot|graphic)\\b/i.test(prompt);
+  if (letteringOntoImage) {
+    return { classification, overridden: false, reason: null };
+  }
   const imageDirective = /\b(?:generate|create|draw|render|design|make)\s+(?:(?:me|us)\s+)?(?:.{0,80}?)\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\b/i.exec(prompt);
   if (imageDirective && imageDirective.index < textDirective.index) {
     return { classification, overridden: false, reason: null };
