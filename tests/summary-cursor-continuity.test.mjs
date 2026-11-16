@@ -4,9 +4,9 @@ import {readFileSync} from "node:fs";
 
 const code=readFileSync("lib/memory/summarizer.ts","utf8");
 test("ITM source cursor advances only after source-cited Grok factual episodes and retention",()=>{
-  assert.ok(code.indexOf("summarizeNewBatch(batch,provider,client)") < code.indexOf("reconcileEpisodePlan(episodes,newSummary,provider,client)"));
+  assert.ok(code.indexOf("summarizeNewBatch(batch,provider,client,") < code.indexOf("reconcileEpisodePlan(episodes,newSummary,provider,client,"));
   assert.ok(code.indexOf("parseGroundedEpisodes") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
-  assert.match(code,/parseGroundedEpisodes\(completedResponsesText\(response, "factual episodes"/);
+  assert.match(code,/parseGroundedEpisodes\(raw,messages\)/);
   assert.match(code,/response\.status !== "completed"/);
   assert.match(code,/client\.post\("\/responses"/);
   assert.match(code,/assembleEpisodePlan\(episodes, keep, newSummary\)/);

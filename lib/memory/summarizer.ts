@@ -1,5 +1,6 @@
 import { standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
+import {itmReceiptHash,recordItmStageReceipt,readItmStageReceipt,readLegacyItmEpisodeOutput,inspectPriorItmClaims,type ItmReceiptKey} from "@/lib/memory/itm-stage-receipts";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
@@ -29,7 +30,7 @@ const SUMMARY_MAX_TOKENS = 2300; // First prompt: new source batch only.
 const BATCH_SUMMARY_MAX_CHARACTERS = 7500;
 // Semantic reconciliation is now a small edit plan rather than a full rewrite.
 // Earlier paid attempt records remain intact and no retries are automatic.
-const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v13-memory-ungated-metered";
+const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v14-strict-stage-receipts";
 const processorVersion = (provider:SummaryProvider) => `${ITM_PROCESSOR_VERSION}:${provider}`;
 export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "deferred";
 
@@ -270,13 +271,22 @@ function parseGroundedEpisodes(raw: string, messages: Message[]): string[] {
     if (!item || typeof item !== "object" || Array.isArray(item))
       throw new Error("Invalid factual ITM episode");
     const entry = item as Record<string, unknown>;
-    if (Object.keys(entry).some(key => key !== "summary" && key !== "evidence") ||
-        typeof entry.summary !== "string" ||
-        entry.summary !== entry.summary.trim() ||
-        entry.summary.length < 25 || entry.summary.length > 650 ||
-        /[\r\n]/.test(entry.summary) ||
-        !Array.isArray(entry.evidence) || entry.evidence.length < 1 || entry.evidence.length > 3)
-      throw new Error("Invalid attributed ITM summary or evidence count");
+    // Precise non-sensitive diagnostics. No evidence text, names or quotations
+    // enter logs. Every existing factual and length constraint stays enforced.
+    if (Object.keys(entry).some(key => key !== "summary" && key !== "evidence"))
+      throw new Error("ITM_VALIDATION_EPISODE_UNEXPECTED_FIELD");
+    if (typeof entry.summary !== "string")
+      throw new Error("ITM_VALIDATION_EPISODE_SUMMARY_NOT_TEXT");
+    if (entry.summary !== entry.summary.trim())
+      throw new Error("ITM_VALIDATION_EPISODE_SUMMARY_UNTRIMMED");
+    if (entry.summary.length < 25 || entry.summary.length > 650)
+      throw new Error("ITM_VALIDATION_EPISODE_SUMMARY_LENGTH");
+    if (/[\r\n]/.test(entry.summary))
+      throw new Error("ITM_VALIDATION_EPISODE_SUMMARY_MULTILINE");
+    if (!Array.isArray(entry.evidence))
+      throw new Error("ITM_VALIDATION_EPISODE_EVIDENCE_NOT_ARRAY");
+    if (entry.evidence.length < 1 || entry.evidence.length > 3)
+      throw new Error("ITM_VALIDATION_EPISODE_EVIDENCE_COUNT");
 
     const cited: string[] = [];
     for (const rawCitation of entry.evidence) {
@@ -311,7 +321,7 @@ function parseGroundedEpisodes(raw: string, messages: Message[]): string[] {
 }
 
 /** Preserve the conversational storyline using only cited, attributed facts. */
-async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, client:OpenAI): Promise<string[]> {
+async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, client:OpenAI, capture?: (raw:string)=>Promise<void>): Promise<string[]> {
   const prompt = [
     { role: "system" as const, content: [
       "Produce concise, FACTUAL EPISODIC SUMMARIES of what was discussed in Katie's conversation. Katie is one assistant across different model engines; attribute her prior statements to Katie, not to Grok, Claude, or an external narrator.",
@@ -327,12 +337,20 @@ async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, 
     ].join("\n") },
     { role: "user" as const, content: "NEW ROLE-ATTRIBUTED MESSAGES:\n" + formatTranscript(messages) },
   ];
+  let raw:string;
   if (provider === "grok") {
     const response = await grokStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, "itm_episodes", EPISODE_RESPONSE_SCHEMA);
-    return parseGroundedEpisodes(completedResponsesText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
+    raw=completedResponsesText(response, "factual episodes", 16000);
+  } else {
+    const response = await claudeStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, EPISODE_RESPONSE_SCHEMA);
+    raw=completedClaudeText(response, "factual episodes", 16000);
   }
-  const response = await claudeStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, EPISODE_RESPONSE_SCHEMA);
-  return parseGroundedEpisodes(completedClaudeText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
+  // A paid provider response is durable evidence even if its content fails
+  // validation. Save it before parser rejection, with exact source binding.
+  if(capture)await capture(raw);
+  if(raw.length>BATCH_SUMMARY_MAX_CHARACTERS)
+    throw new Error("ITM_VALIDATION_EPISODES_RAW_LENGTH");
+  return parseGroundedEpisodes(raw,messages);
 }
 
 /**
@@ -372,7 +390,7 @@ function parseRetentionPlan(raw: string, priorCount: number): number[] {
   return obj.keep as number[];
 }
 
-async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI): Promise<number[]> {
+async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI, capture?: (raw:string)=>Promise<void>): Promise<number[]> {
   const indexed = prior.map((text, id) => ({
     id, content: text.length > ITM_EPISODE_MAX_CHARACTERS
       ? text.slice(0, ITM_EPISODE_MAX_CHARACTERS - 1) + "…" : text,
@@ -400,6 +418,7 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
     const response = await claudeStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, RETENTION_RESPONSE_SCHEMA);
     raw = completedClaudeText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
+  if(capture)await capture(raw);
   const keep = parseRetentionPlan(raw, prior.length);
   if (keep.some(id => prior[id].length > ITM_EPISODE_MAX_CHARACTERS))
     throw new Error("Oversized old ITM episode requires a separate verified rebuild");
@@ -464,6 +483,131 @@ function parseV2(memory: Record<string, unknown>): IntermediateMemoryV2 | null {
  * previously failed or in-flight batch, including across server instances.
  * Repaired algorithms require an explicit processor version change.
  */
+
+/** Exact source and prior-memory bindings; hashes never expose conversation text. */
+function itmReceiptKey(input:{
+  actorId:string;chatId:string;batchEndMessageId:string;expectedCursor:string|null;
+  provider:SummaryProvider;sourceSha256:string;summary:string;stage:"episodes"|"retention";
+  excerpts?:string[];
+}):ItmReceiptKey{
+  const contextSha256=input.stage==="episodes"
+    ? itmReceiptHash("itm-episodes-v1:"+input.sourceSha256)
+    : itmReceiptHash(JSON.stringify({contract:"itm-retention-v1",summary:input.summary,excerpts:input.excerpts??[]}));
+  return {
+    actorId:input.actorId,chatId:input.chatId,
+    batchEndMessageId:input.batchEndMessageId,expectedCursor:input.expectedCursor,
+    provider:input.provider,sourceSha256:input.sourceSha256,
+    contextSha256,stage:input.stage,
+  };
+}
+
+/** Offline-only recovery: replay two source-bound receipts through the exact
+ * factual validators and checkpoint CAS. Never call a provider in this path.
+ * A single missing/invalid receipt is a recorded blocker, not permission to
+ * retransmit an already-paid source batch. */
+async function recoverCapturedItmStages(input:{
+  actorId:string;chatId:string;batchEndMessageId:string;expectedCursor:string|null;
+  sourceSha256:string;summary:string;batch:Message[];sourceMessageCount:number;
+}):Promise<IntermediateUpdateResult|null>{
+  const admin=getSupabaseAdminClient();
+  const previous=legacyEpisodes(input.summary);
+  let anyReceipt=false;
+  for(const provider of ["grok","anthropic"] as const){
+    const base={...input,provider};
+    const episodeKey=itmReceiptKey({...base,stage:"episodes"});
+    let episode=await readItmStageReceipt(episodeKey);
+    if(!episode) {
+      // Older paid responses may already contain complete source-cited
+      // episodes, even if the old request lifecycle abandoned the batch.
+      // Verify every quote against this exact immutable source window first.
+      const historical=await readLegacyItmEpisodeOutput(
+        input.actorId,input.chatId,input.batchEndMessageId,provider,
+      );
+      if(historical){
+        try{
+          if(historical.responseText.length>BATCH_SUMMARY_MAX_CHARACTERS)
+            throw new Error("ITM_VALIDATION_EPISODES_RAW_LENGTH");
+          parseGroundedEpisodes(historical.responseText,input.batch);
+          episode=await recordItmStageReceipt(
+            episodeKey,historical.responseText,
+            "legacy-settled-attempt:"+historical.ledgerAttemptId,
+          );
+          console.info("[Summarizer] Verified prior paid ITM episode evidence imported without inference",{
+            chatId:input.chatId,sourceEnd:input.batchEndMessageId,provider,
+          });
+        }catch(error){
+          console.warn("[Summarizer] Prior paid ITM episode evidence failed strict source validation",{
+            chatId:input.chatId,sourceEnd:input.batchEndMessageId,provider,
+            reason:error instanceof Error?error.message:"ITM_LEGACY_RECEIPT_INVALID",
+          });
+        }
+      }
+    }
+    if(!episode)continue;
+    anyReceipt=true;
+    try{
+      if(episode.responseText.length>BATCH_SUMMARY_MAX_CHARACTERS)
+        throw new Error("ITM_VALIDATION_EPISODES_RAW_LENGTH");
+      const excerpts=parseGroundedEpisodes(episode.responseText,input.batch);
+      const planKey=itmReceiptKey({...base,stage:"retention",excerpts});
+      const plan=await readItmStageReceipt(planKey);
+      if(!plan) {
+        console.warn("[Summarizer] Captured episode stage lacks a paid retention receipt; no replay permitted",{
+          chatId:input.chatId,sourceEnd:input.batchEndMessageId,provider,
+        });
+        continue;
+      }
+      const keep=parseRetentionPlan(plan.responseText,previous.length);
+      if(keep.some(id=>previous[id].length>ITM_EPISODE_MAX_CHARACTERS))
+        throw new Error("ITM_VALIDATION_OVERSIZED_OLD_EPISODE");
+      const summary=assembleEpisodePlan(previous,keep,excerpts);
+      const claimVersion=processorVersion(provider)+":offline-recovery";
+      const claim=await admin.rpc<string>("claim_intermediate_memory_batch",{
+        p_actor_id:input.actorId,p_chat_id:input.chatId,
+        p_expected_cursor:input.expectedCursor,
+        p_batch_end_message_id:input.batchEndMessageId,
+        p_processor_version:claimVersion,
+      });
+      if(claim.error)throw new Error("ITM_RECEIPT_RECOVERY_CLAIM_UNAVAILABLE");
+      if(claim.data!=="claimed")return claim.data==="blocked"?"blocked":"deferred";
+      const payload={
+        version:2,purpose:"Reconciled context older than the last 30 completed conversational exchanges.",
+        summary,summarizedThroughMessageId:input.batchEndMessageId,
+        summarizedThroughCreatedAt:input.batch[input.batch.length-1].createdAt??null,
+        sourceMessageCount:input.sourceMessageCount, // verified transcript index from caller
+      };
+      const commit=await admin.rpc<boolean>("commit_intermediate_memory_checkpoint",{
+        p_actor_id:input.actorId,p_chat_id:input.chatId,
+        p_expected_cursor:input.expectedCursor,p_content:payload,
+      });
+      const committed=commit.data===true&&!commit.error;
+      const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch",{
+        p_actor_id:input.actorId,p_chat_id:input.chatId,
+        p_batch_end_message_id:input.batchEndMessageId,
+        p_processor_version:claimVersion,
+        p_state:committed?"completed":"blocked",
+        p_reason:committed?null:"Recovery CAS did not advance checkpoint",
+      });
+      if(finished.error||finished.data!==true)
+        console.error("[Summarizer] Recorded recovery completion status unavailable",{
+          chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+        });
+      if(!committed)return "deferred";
+      console.info("[Summarizer] ITM checkpoint recovered from captured provider stages without spending",{
+        chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+        sourceMessageCount:payload.sourceMessageCount,
+      });
+      return "committed";
+    }catch(error){
+      console.warn("[Summarizer] Captured ITM response does not pass strict validation",{
+        chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+        provider,reason:error instanceof Error?error.message:"ITM_RECOVERY_UNKNOWN",
+      });
+    }
+  }
+  return anyReceipt?"blocked":null;
+}
+
 export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUpdateResult> {
   const providers=configuredProviders();
   if (!providers.length) return "skipped";
@@ -513,6 +657,24 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   const checkpoint = batch[batch.length - 1];
   const expectedCursor = existing?.summarizedThroughMessageId ?? null;
   const admin = getSupabaseAdminClient();
+  // First attempt a strictly local replay of complete source-bound stage
+  // receipts; this cannot incur provider costs and still uses the checkpoint CAS.
+  const sourceSha256=itmReceiptHash(formatTranscript(batch));
+  const recovered=await recoverCapturedItmStages({
+    actorId:chat.actorId,chatId,batchEndMessageId:checkpoint.id,
+    expectedCursor,sourceSha256,summary,batch,sourceMessageCount:after+SUMMARY_BATCH_MESSAGES,
+  });
+  if(recovered)return recovered;
+  // v13 bypassed the old paid ledger. Its exact versioned batch claim is
+  // authoritative proof of a previous provider attempt even without a receipt.
+  let historical:{grok:boolean;anthropic:boolean};
+  try{historical=await inspectPriorItmClaims(chat.actorId,chatId,checkpoint.id);}
+  catch(error){
+    console.error("[Summarizer] Historical dispatch inspection unavailable; refusing unverified paid work",{
+      chatId,sourceEnd:checkpoint.id,reason:error instanceof Error?error.message:"ITM_RECOVERY_UNKNOWN",
+    });
+    return "blocked";
+  }
   // Cross-version recovery gate. Historic metered calls are immutable evidence:
   // never send the same source batch again to a provider that already received it.
   // A recent in-flight claim or unresolved approval prevents any new dispatch.
@@ -541,7 +703,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   }
   // Claude is the terminal fallback. If Claude already received this exact
   // source batch, returning to Grok would be reverse-order retransmission.
-  if (inspection.data.anthropic_sent) {
+  if (inspection.data.anthropic_sent || historical.anthropic) {
     console.error("[Summarizer] Previous Claude ITM source batch already metered; manual receipt recovery required", {
       chatId, sourceEnd:checkpoint.id,
     });
@@ -549,8 +711,8 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   }
   let provider:SummaryProvider|undefined;
   for(const candidate of providers){
-    if (candidate === "grok" && inspection.data.grok_sent ||
-        candidate === "anthropic" && inspection.data.anthropic_sent) {
+    if (candidate === "grok" && (inspection.data.grok_sent || historical.grok) ||
+        candidate === "anthropic" && (inspection.data.anthropic_sent || historical.anthropic)) {
       console.warn("[Summarizer] Prior paid source batch retained; avoiding same-provider retransmission", {
         chatId, sourceEnd:checkpoint.id, provider:candidate,
       });
@@ -586,9 +748,21 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
   try {
     const client=providerClient(provider,deadline);
-    const newSummary = await summarizeNewBatch(batch,provider,client);
+    const receiptBase={
+      actorId:chat.actorId,chatId,batchEndMessageId:checkpoint.id,
+      expectedCursor,sourceSha256,summary,provider,
+    };
+    const newSummary = await summarizeNewBatch(batch,provider,client,
+      raw=>recordItmStageReceipt(
+        itmReceiptKey({...receiptBase,stage:"episodes"}),raw,processorVersion(provider),
+      ).then(()=>undefined),
+    );
     const episodes = legacyEpisodes(summary);
-    const keep = await reconcileEpisodePlan(episodes,newSummary,provider,client);
+    const keep = await reconcileEpisodePlan(episodes,newSummary,provider,client,
+      raw=>recordItmStageReceipt(
+        itmReceiptKey({...receiptBase,stage:"retention",excerpts:newSummary}),raw,processorVersion(provider),
+      ).then(()=>undefined),
+    );
     const revisedSummary = assembleEpisodePlan(episodes, keep, newSummary);
     const payload = {
       version: 2,
