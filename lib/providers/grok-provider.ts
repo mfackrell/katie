@@ -426,8 +426,14 @@ ${getKatieReasoningExplainerStatement()}` }]
       body: JSON.stringify({
         model,
         input,
+        // Exact, bounded provider-native search. Pricing reserves both possible
+        // model passes at the reviewed context limit and one web invocation.
+        // A new tool type or broader agentic loop must fail accounting admission.
         tools: [{ type: "web_search" }],
-        include: ["web_search_call.action.sources"]
+        include: ["web_search_call.action.sources"],
+        max_turns: 1,
+        parallel_tool_calls: false,
+        max_output_tokens: 2048
       })
     });
 

@@ -47,6 +47,8 @@ test('unsupported Sonnet 4.5 counting does not infer a count or dispatch paid me
   },{});
   assert.equal(calls,1);assert.equal(count,null);
   assert.equal(standaloneTechnicalBlocker('standalone_context_capacity_unverified'),true);
+  assert.equal(standaloneTechnicalBlocker('standalone_unsupported_billing'),true,
+    'Unknown provider-native tool fees cannot be resolved by owner approval or left processing');
   assert.equal(standaloneTechnicalBlocker('standalone_approval_required'),false);
 });
 
