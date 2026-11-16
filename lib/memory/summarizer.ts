@@ -507,7 +507,7 @@ function itmReceiptKey(input:{
  * retransmit an already-paid source batch. */
 async function recoverCapturedItmStages(input:{
   actorId:string;chatId:string;batchEndMessageId:string;expectedCursor:string|null;
-  sourceSha256:string;summary:string;batch:Message[];
+  sourceSha256:string;summary:string;batch:Message[];sourceMessageCount:number;
 }):Promise<IntermediateUpdateResult|null>{
   const admin=getSupabaseAdminClient();
   const previous=legacyEpisodes(input.summary);
@@ -547,11 +547,8 @@ async function recoverCapturedItmStages(input:{
         version:2,purpose:"Reconciled context older than the last 30 completed conversational exchanges.",
         summary,summarizedThroughMessageId:input.batchEndMessageId,
         summarizedThroughCreatedAt:input.batch[input.batch.length-1].createdAt??null,
-        sourceMessageCount:0, // assigned from verified existing cursor count by caller
+        sourceMessageCount:input.sourceMessageCount, // verified transcript index from caller
       };
-      // Caller supplies exact index independently; no inference from model text.
-      const existing=await getIntermediateMemory(input.chatId);
-      payload.sourceMessageCount=(existing?.sourceMessageCount??0)+SUMMARY_BATCH_MESSAGES;
       const commit=await admin.rpc<boolean>("commit_intermediate_memory_checkpoint",{
         p_actor_id:input.actorId,p_chat_id:input.chatId,
         p_expected_cursor:input.expectedCursor,p_content:payload,
@@ -638,7 +635,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   const sourceSha256=itmReceiptHash(formatTranscript(batch));
   const recovered=await recoverCapturedItmStages({
     actorId:chat.actorId,chatId,batchEndMessageId:checkpoint.id,
-    expectedCursor,sourceSha256,summary,batch,
+    expectedCursor,sourceSha256,summary,batch,sourceMessageCount:after+SUMMARY_BATCH_MESSAGES,
   });
   if(recovered)return recovered;
   // v13 bypassed the old paid ledger. Its exact versioned batch claim is
