@@ -24,7 +24,7 @@ const capture=async(client,project,windowId)=>{
    nodes:"select md5(coalesce(jsonb_agg(to_jsonb(n)-'deadline'-'decision_needed' order by n.id)::text,'[]')) hash from project_organization_nodes n where n.project_id=$1",
    oldRenewal:'select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.project_id)::text,\'[]\')) hash from project_paused_window_renewals r where r.project_id=$1',
    oldResume:'select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.project_id)::text,\'[]\')) hash from project_management_resume_receipts r where r.project_id=$1',
-   priorContracts:'select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.node_id,c.id)::text,\'[]\')) hash from project_organization_contract_changes c where c.project_id=$1 and c.window_id<>$2',
+   priorContracts:'select md5(coalesce(jsonb_agg(to_jsonb(c) order by to_jsonb(c)::text)::text,\'[]\')) hash from project_organization_contract_changes c where c.project_id=$1 and c.window_id<>$2',
    priorEvents:"select md5(coalesce(jsonb_agg(to_jsonb(e) order by e.id)::text,'[]')) hash from project_events e where e.project_id=$1 and e.event not in ('blocked_owner_window_authorized','blocked_owner_management_resumed')",
   };
   for(const [name,sql] of Object.entries(q)){
@@ -93,7 +93,7 @@ async function realRace(a,b,observer,label,query,firstArgs,otherArgs){
 test('new owner authorization and resume RPCs serialize across two committed-schema PostgreSQL connections',
  {timeout:240000},async()=>{
   const child=fork('tests/benchmark-renewal-postgres.test.mjs',[],{
-   cwd:process.cwd(),execArgv:[],silent:false,
+   cwd:process.cwd(),execArgv:[],
    stdio:['ignore','pipe','pipe','ipc'],
    env:{...process.env,KATIE_TEST_BLOCKED_OWNER_RECOVERY:'1',
     KATIE_TEST_BLOCKED_OWNER_BROWSER:'0',KATIE_TEST_BLOCKED_OWNER_RACE_FIXTURE:'1',
@@ -222,7 +222,7 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    finally{await first.query('set role service_role');}
    const project=(await observer.query('select max_missions,token_allowance,approved_hash,approval_hash,active_mission_id,status from work_projects where id=$1',[PROJECT])).rows[0];
    assert.equal(project.max_missions,96);
-   assert.equal(project.token_allowance,'600000');
+   assert.equal(Number(project.token_allowance),600000);
    assert.equal(project.approved_hash,SCOPE);
    assert.equal(project.approval_hash,SCOPE);
    assert.equal(project.active_mission_id,null);
