@@ -157,16 +157,22 @@ function harness({
     "@/lib/memory/itm-stage-receipts": {
       itmReceiptHash: value => "hash:" + String(value).length,
       readItmStageReceipt: async key => {
-        const receipt=receipts.get(key.provider+":"+key.stage);
+        const sourceKey=[key.actorId,key.chatId,key.batchEndMessageId,key.expectedCursor,
+          key.sourceSha256,key.contextSha256].join(":");
+        const receipt=receipts.get(key.provider+":"+key.stage)?.get(sourceKey);
         events.push({name:"stage_receipt_read",provider:key.provider,stage:key.stage,present:Boolean(receipt)});
         return receipt??null;
       },
       recordItmStageReceipt: async (key,text) => {
         const id=key.provider+":"+key.stage;
+        const sourceKey=[key.actorId,key.chatId,key.batchEndMessageId,key.expectedCursor,
+          key.sourceSha256,key.contextSha256].join(":");
         const saved={responseText:text,responseSha256:"receipt-"+text.length};
-        const prior=receipts.get(id);
+        const sameStage=receipts.get(id)??new Map();
+        const prior=sameStage.get(sourceKey);
         if(prior && prior.responseText!==text) throw Error("ITM_RECEIPT_WRITE_UNAVAILABLE_OR_CONFLICT");
-        receipts.set(id,saved);
+        sameStage.set(sourceKey,saved);
+        receipts.set(id,sameStage);
         events.push({name:"stage_receipt_saved",provider:key.provider,stage:key.stage});
         return saved;
       },
