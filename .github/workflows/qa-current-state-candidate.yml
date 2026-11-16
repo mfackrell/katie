@@ -1,0 +1,103 @@
+name: Independent QA — exact-source blocked owner recovery
+
+on:
+  push:
+    branches:
+      - qa/owner-current-state-recovery-1061
+    paths:
+      - 'tests/helpers/qa-blocked-current-state-independent.mjs'
+      - 'tests/qa-native-injector.py'
+      - 'tests/qa-owner-current-state-candidate-api.test.mjs'
+      - '.github/workflows/qa-current-state-candidate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  independent-current-state:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: qa-synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: qa-synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      KATIE_TEST_PG_TCP: '1'
+      KATIE_TEST_COMPLETION_CONTROLS: '1'
+      KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+      KATIE_TEST_CAPACITY_RENEWAL: '1'
+      KATIE_TEST_LIFECYCLE_AUTHORIZATION: '1'
+      KATIE_TEST_ORDINARY_AUTHORITY: '1'
+      KATIE_TEST_PROJECT_ORGANIZATION: '1'
+      KATIE_TEST_DIRECTOR_ONE_SHOT: '1'
+      KATIE_TEST_ORG_AMENDMENTS: '1'
+      KATIE_TEST_BLOCKED_OWNER_RECOVERY: '1'
+      CI: '1'
+    steps:
+      - name: Checkout independent QA probes
+        uses: actions/checkout@v4
+        with:
+          ref: qa/owner-current-state-recovery-1061
+          path: qa
+          persist-credentials: false
+      - name: Checkout exact RRE candidate separately
+        uses: actions/checkout@v4
+        with:
+          ref: b6001fca34ecd6b5a725a818ee61472d89493bda
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+      - name: Bind candidate SHA and Git tree before any test
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = b6001fca34ecd6b5a725a818ee61472d89493bda
+          test "$(git rev-parse 'HEAD^{tree}')" = f1d2eb02c9ed840149f01b8b43e0376c2c6943f9
+          test -z "$(git status --porcelain)"
+          echo 'INDEPENDENT_QA_REVIEWED_SHA=b6001fca34ecd6b5a725a818ee61472d89493bda'
+          echo 'INDEPENDENT_QA_REVIEWED_TREE=f1d2eb02c9ed840149f01b8b43e0376c2c6943f9'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install candidate lockfile dependencies
+        working-directory: candidate
+        run: npm ci
+      - name: Install disposable PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Inject ONLY independent QA assertions into detached source checkout
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          cp ../qa/tests/helpers/qa-blocked-current-state-independent.mjs tests/helpers/
+          cp ../qa/tests/qa-owner-current-state-candidate-api.test.mjs tests/
+          python3 ../qa/tests/qa-native-injector.py
+          test "$(git diff --name-only)" = tests/helpers/assert-blocked-owner-recovery.mjs
+          test -z "$(git diff --name-only -- app lib supabase .github)"
+          test "$(git rev-parse HEAD)" = b6001fca34ecd6b5a725a818ee61472d89493bda
+          test "$(git rev-parse 'HEAD^{tree}')" = f1d2eb02c9ed840149f01b8b43e0376c2c6943f9
+          echo 'INDEPENDENT_QA_ONLY_TEST_EDITS_PASS'
+      - name: Independent first-party owner API negative and two-click tests
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          mkdir -p qa-independent-evidence
+          node --test tests/qa-owner-current-state-candidate-api.test.mjs 2>&1 | tee qa-independent-evidence/api.log
+      - name: Independent original consumed-receipt native PostgreSQL state and authority assertions
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          mkdir -p qa-independent-evidence
+          node --test tests/benchmark-renewal-postgres.test.mjs 2>&1 | tee qa-independent-evidence/native.log
+      - name: Retain independent exact-source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: independent-blocked-owner-current-state-evidence
+          path: candidate/qa-independent-evidence/
+          if-no-files-found: warn
+          retention-days: 30
