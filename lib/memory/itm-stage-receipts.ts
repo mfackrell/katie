@@ -70,7 +70,7 @@ export async function inspectPriorItmClaims(
     .select("processor_version,state")
     .eq("actor_id",actorId).eq("chat_id",chatId)
     .eq("batch_end_message_id",batchEndMessageId)
-    .returns<Array<{processor_version:string;state:string}>>();
+    .returns<{processor_version:string;state:string}>();
   if(error)throw new Error("ITM_PRIOR_CLAIM_INSPECTION_UNAVAILABLE");
   const rows=data??[];
   // No assumptions that blocked means unbilled. Both incomplete and settled
