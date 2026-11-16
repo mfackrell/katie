@@ -1270,6 +1270,46 @@ export type ClassifiedIntentWithSource = {
 // Keep both the chosen intent and its *actual origin*. A failed or unavailable
 // decision model does not become "llm" merely because the fallback happened
 // inside an asynchronous classifier.
+/**
+ * Current-turn deliverable guard. A reference to a prior image never makes
+ * image generation primary when the user explicitly requests written material.
+ * Real compound requests remain classified by instruction order and retain
+ * the secondary image objective for downstream validation.
+ */
+export function guardExplicitWrittenObjective(
+  prompt: string,
+  classification: RequestClassification
+): { classification: RequestClassification; overridden: boolean; reason: string | null } {
+  if (classification.intent !== "image-generation") {
+    return { classification, overridden: false, reason: null };
+  }
+  const textDirective = /\\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\\s+(?:(?:me|us)\\s+)?(?:.{0,90}?)\\b(?:bio|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\\b/i.exec(prompt);
+  if (!textDirective) return { classification, overridden: false, reason: null };
+  const imageDirective = /\\b(?:generate|create|draw|render|design|make)\\s+(?:(?:me|us)\\s+)?(?:.{0,80}?)\\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\\b/i.exec(prompt);
+  if (imageDirective && imageDirective.index < textDirective.index) {
+    return { classification, overridden: false, reason: null };
+  }
+  const explicitCompound = Boolean(imageDirective);
+  return {
+    overridden: true,
+    reason: explicitCompound ? "written_objective_precedes_explicit_image_objective" : "explicit_written_objective_with_image_reference",
+    classification: {
+      ...classification,
+      intent: "rewrite",
+      secondary_intents: Array.from(new Set([
+        ...(classification.secondary_intents ?? []).filter(value => value !== "rewrite" && value !== "image-generation"),
+        ...(explicitCompound ? ["image-generation" as RequestIntent] : [])
+      ])),
+      decision_evidence: {
+        ...classification.decision_evidence,
+        selection_justification: explicitCompound
+          ? "Deterministic objective precedence: explicit writing instruction precedes explicit image creation."
+          : "Deterministic objective precedence: explicit writing instruction; image reference alone is not an image-generation request."
+      }
+    }
+  };
+}
+
 export async function inferRequestClassificationWithSource(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
@@ -1342,7 +1382,18 @@ export async function inferRequestClassificationWithSource(
       requestId: (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? options?.requestId
     }
   });
-  const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedOutput.intent, "control-plane");
+  const objectiveGuard = guardExplicitWrittenObjective(prompt, classifiedOutput);
+  if (objectiveGuard.overridden) {
+    console.info("[Intent Objective Guard] primary_intent_corrected", {
+      requestId: options?.requestId ?? null,
+      originalIntent: effectiveClassification.intent,
+      correctedIntent: objectiveGuard.classification.intent,
+      reason: objectiveGuard.reason,
+      guardVersion: "written-objective-v1"
+    });
+  }
+  const effectiveClassification = objectiveGuard.classification;
+  const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, effectiveClassification.intent, "control-plane");
   const resolvedIntent = sanitizedClassifiedIntent ?? bestHeuristicHint ?? (hasImages || hasVideoInput ? "vision-analysis" : "general-text");
   if (webSearchSignals.urlPresent || webSearchSignals.keywordMatch) {
     console.debug("[Intent Router] web-search-signal-audit", {
@@ -1360,15 +1411,15 @@ export async function inferRequestClassificationWithSource(
     }
     return resolved({
       intent: sanitizedClassifiedIntent,
-      preferredProvider: classifiedOutput.preferred_provider,
-      secondaryIntents: classifiedOutput.secondary_intents ?? [],
-      complexity: classifiedOutput.complexity ?? null,
-      providerRefusalRisk: classifiedOutput.provider_refusal_risk ?? null,
-      ...(classifiedOutput.response_purpose ? { responsePurpose: classifiedOutput.response_purpose } : {}),
-      ...(classifiedOutput.project_relation ? { projectRelation: classifiedOutput.project_relation } : {}),
-      ...(classifiedOutput.project_transition ? { projectTransition: classifiedOutput.project_transition } : {}),
-      ...(classifiedOutput.decision_evidence ? { decisionEvidence: classifiedOutput.decision_evidence } : {})
-    }, "llm");
+      preferredProvider: effectiveClassification.preferred_provider,
+      secondaryIntents: effectiveClassification.secondary_intents ?? [],
+      complexity: effectiveClassification.complexity ?? null,
+      providerRefusalRisk: effectiveClassification.provider_refusal_risk ?? null,
+      ...(effectiveClassification.response_purpose ? { responsePurpose: effectiveClassification.response_purpose } : {}),
+      ...(effectiveClassification.project_relation ? { projectRelation: effectiveClassification.project_relation } : {}),
+      ...(effectiveClassification.project_transition ? { projectTransition: effectiveClassification.project_transition } : {}),
+      ...(effectiveClassification.decision_evidence ? { decisionEvidence: effectiveClassification.decision_evidence } : {})
+    }, objectiveGuard.overridden ? "router-fallback" : "llm");
   }
 
   if (hasImages) return resolved({ intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
