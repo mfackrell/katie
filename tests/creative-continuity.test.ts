@@ -119,9 +119,9 @@ test("chat route wires creative routing, continuity context, and originality che
   assert.match(chatRoute, /improveCreativeOriginality\(/);
   assert.match(chatRoute, /CREATIVE_REWRITE_INSTRUCTIONS/);
   assert.match(chatRoute, /Grok secondary fallback retained/);
-  assert.match(chatRoute, /const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity\\(/);
+  assert.match(chatRoute, /const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity\(/);
   const afterCreativeGate = chatRoute.split("// Select continuity only after classifying the literal current turn.")[1];
   assert.ok(afterCreativeGate, "resolved-intent creative gate must exist");
-  assert.doesNotMatch(afterCreativeGate, /\\bcreativeNarrativeRequest\\b/, "raw narrative signal cannot bypass the output-modality gate");
+  assert.doesNotMatch(afterCreativeGate, /\bcreativeNarrativeRequest\b/, "raw narrative signal cannot bypass the output-modality gate");
   assert.match(chatRoute, /fallbackChain\.push\(\{ provider: grok, modelId: grokModel/);
 });

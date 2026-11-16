@@ -75,9 +75,9 @@ test("text-only response never satisfies image delivery even when its wording cl
   assert.equal(containsGeneratedImage({content:[{type:"image",url:""}]}),false);
   assert.equal(containsGeneratedImage({content:[{type:"image",url:"data:image/png;base64,cmVhbC1iaW5hcnk="}]}),true);
   const route=readFileSync("app/api/chat/route.ts","utf8");
-  assert.match(route,/imageGenerationRequested && !candidate\\.runpodImageFallback/);
-  assert.match(route,/fallbackChain = filterPricedImageFallbacks\\(/);
-  assert.match(route,/if \\(imageGenerationRequested\\) return null;/);
+  assert.match(route,/imageGenerationRequested && !candidate\.runpodImageFallback/);
+  assert.match(route,/fallbackChain = filterPricedImageFallbacks\(/);
+  assert.match(route,/if \(imageGenerationRequested\) return null;/);
   assert.match(route,/!imageGenerationCapableModel\(candidate\.provider\.name, candidate\.modelId\)/);
   assert.match(route,/imageGenerationRequested && !containsGeneratedImage\(result\)/);
   assert.match(route,/if \(!imageGenerationRequested\) enqueueDelta\(delta\)/);
