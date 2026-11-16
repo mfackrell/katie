@@ -70,6 +70,8 @@ export async function assertBlockedOwnerRecovery(db,x){
   assert.equal(offer.priorCutoff,EXPIRED.replace('Z','+00:00'));
   assert.equal(offer.priorWindowId,ORIGINAL_WINDOW);
   const scopedSnapshot=async()=>{
+   await db.query('reset role');
+   try{
    const result={};
    for(const table of ['agent_missions','project_organization_decisions','project_organization_exceptions','project_work_packages','project_provider_requests']){
     result[table]=(await db.query('select to_jsonb(t) r from '+table+' t where project_id=$1 order by to_jsonb(t)::text',[ORIGINAL])).rows;
@@ -81,6 +83,7 @@ export async function assertBlockedOwnerRecovery(db,x){
    result.previousRenewal=(await db.query('select * from project_paused_window_renewals where project_id=$1',[ORIGINAL])).rows;
    result.previousResume=(await db.query('select * from project_management_resume_receipts where project_id=$1',[ORIGINAL])).rows;
    return result;
+   }finally{await db.query('set role service_role');}
   };
   const before=await scopedSnapshot();
   const authorizeArgs=[owner,ORIGINAL,NEW_RELEASE,ORIGINAL_WINDOW,EXPIRED,future,randomUUID(),offer.stateHash];
