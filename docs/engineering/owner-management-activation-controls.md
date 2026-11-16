@@ -1,7 +1,7 @@
 # Original TTT owner renewal and management-resume controls
 
 Assignment: https://github.com/mfackrell/katie/pull/1053#issuecomment-6917034796.
-Baseline: `b01ee96944b7bef12bc30e308958267ff29ac11d` (current main and verified READY production deployment at inspection). This includes the unrelated ITM and accounted web-search changes. They are preserved.
+Current integrated main: `68d6ae20b70d9cae992f1398ae3b56ada747644d`, including the separately released PR #996 composer-height correction. Initial implementation/inspection baseline was `b01ee96944b7bef12bc30e308958267ff29ac11d`. The unrelated ITM, accounted web-search and composer changes are preserved unchanged.
 
 ## Confirmed gap and read-only production evidence
 
@@ -12,7 +12,7 @@ Read-only GitHub/Vercel/PostgreSQL inspection on November 16 confirmed:
 - Original project `fe9d2658-41e3-44c1-ae8e-a0cba98371fe` remains paused on its old November 15 noon Central cutoff.
 - 73 historical missions, cap 96; token allowance 600000; 13 nodes; zero packages; blocked source `62cd8da3-1bcc-41ae-9470-574c6b05e420`.
 - Approved scope `4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6`.
-- Production deployment `dpl_87QfoqLJwDNh5NVogVhygPHErgFq` is READY at the baseline SHA above.
+- Initial production deployment `dpl_87QfoqLJwDNh5NVogVhygPHErgFq` was READY at the initial baseline. Subsequent read-only verification confirms `dpl_DbqUxULSktnqVmALnA3fM8adDg3m` READY at current main `68d6ae20b70d9cae992f1398ae3b56ada747644d`.
 - Installed migration ledger contains `management_loop_recovery` and `paused_expired_window_renewal`. Installed recovery definitions, permissions and search paths were inspected directly. Existing native fixtures reconstruct these definitions before applying the new additive functions.
 
 No production write or activation is part of this assignment. The only approved cutoff remains **November 16, 2026, noon Central (`2026-11-16T18:00:00Z`)**. Runtime controls fail closed when that cutoff expires or fewer than five minutes remain; they cannot select another cutoff.
