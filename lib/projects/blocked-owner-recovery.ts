@@ -36,5 +36,9 @@ export async function blockedOwnerRecoveryOffer(projectId:string):Promise<Blocke
     ||(offer.stage==='resumed'&&offer.status!=='running')
     ||(offer.stage!=='resumed'&&offer.status!=='blocked'))))
   throw Error('Original project or durable blocked recovery evidence changed.');
- return offer;
+ // PostgreSQL serializes timestamptz with +00:00; the owner API uses exact
+ // canonical ISO strings so its strict input literals cannot reject the
+ // authentic preflight receipt before the state/authority checks execute.
+ return {...offer,priorCutoff:ORIGINAL_BLOCKED_CUTOFF,
+  cutoff:offer.cutoff?new Date(offer.cutoff).toISOString():null};
 }
