@@ -10,5 +10,8 @@ test('owner execution windows and parent delegation amendments preserve the live
  assert.match(result.output,/PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS/);
  assert.match(result.output,/MANAGEMENT_LOOP_RECOVERY_POSTGRES_PASS/);
  assert.match(result.output,/MANAGEMENT_INVALID_COMMAND_BOUND_PASS/);
- console.log(result.output.split('\n').filter(line=>/MANAGEMENT_.*PASS|OWNER_MANAGEMENT_BROWSER_POSTGRES_PASS|OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS|PAUSED_WINDOW_RENEWAL_POSTGRES_PASS/.test(line)).join('\n'));
+ assert.match(result.output,/MANAGEMENT_READY_BOUND_PASS/);
+ assert.match(result.output,/SMART_FIELD_SQL_PARITY_PASS/);
+ assert.match(result.output,/COMMISSIONING_EXCEPTION_RECOVERY_PASS/);
+ console.log(result.output.split('\n').filter(line=>/COMMISSIONING_|MANAGEMENT_.*PASS|SMART_FIELD_SQL_PARITY_PASS|OWNER_MANAGEMENT_BROWSER_POSTGRES_PASS|OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS|PAUSED_WINDOW_RENEWAL_POSTGRES_PASS/.test(line)).join('\n'));
 });

@@ -3,6 +3,12 @@ name: hierarchy-recovery-qualification
 on:
   pull_request:
     paths:
+      - "lib/projects/smart-diagnostics.ts"
+      - "supabase/migrations/*commissioning_exception_recovery.sql"
+      - "tests/helpers/assert-commissioning-exception-recovery.mjs"
+      - "lib/projects/organization.ts"
+      - "tests/management-commissioning-diagnostics.test.mjs"
+      - "tests/helpers/assert-management-loop-recovery.mjs"
       - ".github/workflows/hierarchy-recovery-qualification.yml"
       - "app/api/projects/**"
       - "components/director-recovery-control.tsx"

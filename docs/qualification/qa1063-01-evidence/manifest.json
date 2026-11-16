@@ -1,0 +1,28 @@
+{
+  "failed_candidate": "32429a90d31c7b16f3d7e5c9c8bbef48cafeb45e",
+  "integrated_main": "f54a3aaf82d4e9b4ea0f4a55dbfaaaffd65acf50",
+  "node": "22.23.5",
+  "postgres": "18.6 (loopback TCP)",
+  "original_probe_before_exit": 1,
+  "unchanged_original_probe_after_exit": 0,
+  "corrected_focused_native": {
+    "tests": 44,
+    "passed": 44,
+    "failed": 0,
+    "skipped": 0
+  },
+  "source_sha256": {
+    "supabase/migrations/20261116172712_commissioning_exception_recovery.sql": "3f3a479d8267ae29ecec089dcd470c591dc24684636c9e95c97979b040bd0ce5",
+    "tests/helpers/assert-commissioning-exception-recovery.mjs": "f14e3e99b9c153a44aad0832b8c1cb12ce9cbce8851b3385c8def167e463d971",
+    "tests/helpers/assert-management-loop-recovery.mjs": "e066c9242c2f550cabdf70827a8f6dff4f7892285c2b4c20e75d55e7a69888ce",
+    "tests/helpers/assert-project-organization-compatibility.mjs": "e6359b3bb4a4b5b7603757b6c4f046514128207e3f7ae6e27d6c10e679f9bf2a"
+  },
+  "evidence_sha256": {
+    "corrected-focused-native.log": "58226caf476717cb8a2f6afe721f040331588d02104c2ab167bfab92b5bf24d8",
+    "fail-before.log": "50a67150fe8a3e78a34334056dad64e02a5f68e26ab27bea34869ab21e0d6537",
+    "independent-fail-before.log": "9b9bb88cda0c5bdeca6ed4afcf4e06181eeb5c866762e24f71acab201307ea8a",
+    "independent-membership-characterization.log": "a578561b664d28d850e6f806352b5cc00038d009ee5da6d4cb1d096dafacb371",
+    "original-negative-probes.patch": "dda3e45471eb7adcb8e58bcfa555fd88024b0fe6de5cc1d7dd6711b135beba8d",
+    "pass-after.log": "a04abbbdbbee0784ce2d70e58e74e54d765c41880d45774395188a51649b3269"
+  }
+}

@@ -1,0 +1,53 @@
+PAUSED_RENEWAL_INSTALLED_BASELINE_PASS: six installed authority function bodies match production
+OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: [{"proname":"project_org_hierarchy_recovery_state","prosrc_md5":"05a347c978ea882956e201256432da48","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_renew_paused_window","prosrc_md5":"fa27c7d176a2fbd07fb1ba8ec7b0bc5e","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"},{"proname":"project_org_renewed_management_source","prosrc_md5":"dc929acd8a9d6fee1e5ca30f37f0836b","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_resume_management","prosrc_md5":"9b8261fa82efac70ee8fa44af0c0bf80","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"}]
+INDEPENDENT_QA_INSTALLATION_PASS: 89 public tables unchanged; SMART/owner writers and adapters unchanged; four function ACLs verified
+PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS: owner, atomic rollback, full hierarchy, replay, history
+SCOPED_ROOT_RETRY_RELEASE_CLAIM_DELEGATION_PASS
+(node:13) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+COMMISSIONING_STRANDED_BEFORE: predecessor leaves saved ready/open-exception state waiting with no mission
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: actually-paused
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: expired-lease
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: null-lease-until
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: wrong-phase
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: inactive-node
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: expired-node
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: missing-decision
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: mixed-decision
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: foreign-exception-owner
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: mission-not-completed
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: newer-failed-assignment
+INDEPENDENT_QA_MEMBERSHIP_CHARACTERIZATION: {"scenario":"invalid-release-membership","authority":{"continuation_release_sha":"ffffffffffffffffffffffffffffffffffffffff","window_id":"f2c50238-8377-47e0-b404-167291ec2cdc","continued":false,"window_authorized":false,"director_receipts":0},"predecessor":{"detail":"Functional Director must commission the next approved coding package.","waiting":true},"outcome":{"nodeId":"26ce4ab0-098c-4d46-b872-70cba50dcf51","missionId":"2919b411-7e3b-4141-8f9c-2b3266e7334a"},"mission":{"id":"2919b411-7e3b-4141-8f9c-2b3266e7334a","status":"running","project_evidence":{"previousMissionId":null,"organizationNodeId":"26ce4ab0-098c-4d46-b872-70cba50dcf51"}},"missionsBefore":15,"missionsAfter":16,"claims":[{"sha":"cccccccccccccccccccccccccccccccccccccccc","claimsRecovery":false},{"sha":"ffffffffffffffffffffffffffffffffffffffff","claimsRecovery":false}]}
+INDEPENDENT_QA_KNOWN_MEMBERSHIP_FAILURE_CHARACTERIZED: invalid-release-membership
+INDEPENDENT_QA_MEMBERSHIP_CHARACTERIZATION: {"scenario":"invalid-window-membership","authority":{"continuation_release_sha":"cccccccccccccccccccccccccccccccccccccccc","window_id":"dd6a1b39-2f9c-4b68-8264-4389afaeba76","continued":false,"window_authorized":false,"director_receipts":0},"predecessor":{"detail":"Functional Director must commission the next approved coding package.","waiting":true},"outcome":{"nodeId":"26ce4ab0-098c-4d46-b872-70cba50dcf51","missionId":"00a1addc-e550-4f40-834a-9dc35372ae1b"},"mission":{"id":"00a1addc-e550-4f40-834a-9dc35372ae1b","status":"running","project_evidence":{"previousMissionId":null,"organizationNodeId":"26ce4ab0-098c-4d46-b872-70cba50dcf51"}},"missionsBefore":15,"missionsAfter":16,"claims":[{"sha":"cccccccccccccccccccccccccccccccccccccccc","claimsRecovery":false},{"sha":"ffffffffffffffffffffffffffffffffffffffff","claimsRecovery":false}]}
+INDEPENDENT_QA_KNOWN_MEMBERSHIP_FAILURE_CHARACTERIZED: invalid-window-membership
+COMMISSIONING_EXCEPTION_RECOVERY_PASS: one normal management mission; replay, stale lease, paused, expired, resolved, later exception, latest failure, mission cap and public ACL protections; history preserved; no worker dispatch
+PAUSED_WINDOW_RENEWAL_POSTGRES_PASS: 73/96 missions, 600000 tokens, 13 nodes; exact owner/state/release, append-only history, full-write rollback, competing RPC lock, replay, stale claims, terminal-source immutability; no provider calls
+MANAGEMENT_INVALID_COMMAND_BOUND_PASS: 7 additional missions; no replacement or failure-count reset
+MANAGEMENT_READY_BOUND_PASS: 7 additional missions; no replacement or failure-count reset
+INDEPENDENT_QA_CONTEXT_PASS: parentObjective
+INDEPENDENT_QA_CONTEXT_PASS: estimate.uncertainty
+INDEPENDENT_QA_CONTEXT_PASS: inventory[0].contextChars
+INDEPENDENT_QA_CONTEXT_PASS: maxAssignments
+SMART_FIELD_SQL_PARITY_PASS: exact parent, estimate, inventory, and assignment-limit diagnostics; SQL unchanged
+MANAGEMENT_LOOP_RECOVERY_POSTGRES_PASS: real context/client/SQL chain; replacement loop denied; negative commands fail closed; owner resume preserves history and limits; one bounded worker package, no dispatch
+PROJECT_SCOPE_RATIFICATION_POSTGRES_PASS
+G6_QA_COMPATIBILITY_PASS quality_assurance: appointment/amendment/ancestry isolation; real director attestations; 19 closure negatives; valid source-bound closure; identities preserved
+G6_QA_COMPATIBILITY_PASS independent_qa: appointment/amendment/ancestry isolation; real director attestations; 19 closure negatives; valid source-bound closure; identities preserved
+DIRECTOR_ONE_SHOT_POSTGRES_PASS
+PROVIDER_PROJECT_CONTINUATION_POSTGRES_PASS: owner admission race, historical preservation, scheduler membership, release binding and provider replay fencing
+ORGANIZATIONAL_CONTRACT_AMENDMENTS_POSTGRES_PASS: atomic owner window, duplicate/conflict/expiry/ancestor rejection, immutable history, both director identities, parent-only capability delegation, QA isolation and fresh subordinate scheduling
+SMART_MANAGEMENT_PASS: explicit Manager/Supervisor hierarchy; broad/context/capability negatives; cumulative contracts; authentic prepare/checkpoint RPCs; phase jobs locally commissioned; restart and immutable admissions
+PROJECT_ORGANIZATION_NATIVE_DELEGATION_PASS: two real source packages; local rejection/correction; three idempotent native grants; real tests and independent Chromium seeded failure; runner restart; one original owner envelope
+PROJECT_ORGANIZATION_COMBINED_SCHEMA_PASS: historical snapshots preserved; canonical native admission and settlement retained
+ORDINARY_INITIAL_AUTHORITY_POSTGRES_PASS: isolated synthetic consent, no benchmark provenance, atomic first amendment, exact two-slot reservation, preserved eleven historical calls and four completion reserves
+LIFECYCLE_AUTHORIZATION_POSTGRES_PASS: synthetic consent only; duplicate/concurrent exact amendment; historical calls retained; native admission usable; four completion calls protected
+✔ Append-only renewal retains expired authority, hydrates without spending, and fences exact stages (47768.254735ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 48356.208651
