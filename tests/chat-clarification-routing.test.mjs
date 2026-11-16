@@ -233,6 +233,7 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     ${generationParams}
     const visualContinuity = null; // The fixture exercises non-image review routing.
     const imageGenerationRequested = false; // Mirror the real route's resolved image intent in this non-image route slice.
+    const creativeTextNarrativeRequest = false; // Non-image review fixture has no fictional narrative; mirror the production intent gate.
     ${createParams}
     ${enqueueDelta}
     const execute = ${runAttempt};
