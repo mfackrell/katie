@@ -30,7 +30,12 @@ test("failed source batches preserve the checkpoint and only a later request may
   assert.match(code,/const accountingCause=standaloneAccountingCause\(error\)/);
   assert.ok(code.includes('const terminalDenial=(Boolean(accountingCause) || isRequestAbort(error)) && !shouldUseNextProvider(error);'));
   assert.ok(code.includes('if (terminalDenial) {'));
-  assert.ok(code.includes('if (inspection.data.terminal) {'));
+  // A prior v12 terminal *accounting* flag must not block v13 memory
+  // infrastructure. Exact dispatch exposure and in-flight claims remain fenced.
+  assert.doesNotMatch(code,/if \(inspection\.data\.terminal\) \{/);
+  assert.match(code,/if \(inspection\.data\.in_flight\) \{/);
+  assert.match(code,/inspection\.data\.anthropic_sent/);
+  assert.match(code,/inspection\.data\.grok_sent/);
   assert.match(code,/p_state: "blocked"/);
   assert.ok(code.includes('p_reason: (terminalDenial ? "ITM_TERMINAL:" + diagnostic : diagnostic).slice(0,160)'));
 });
