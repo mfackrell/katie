@@ -2107,3 +2107,42 @@ test("classifier repairs production-style false image intent before capability r
   assert.equal(classification.classification.decisionEvidence?.primary_objective, "Write a revised dating bio");
   assert.match(classification.classification.decisionEvidence?.selection_justification ?? "", /Deterministic objective precedence/);
 });
+
+test("master router preserves compound deliverable after deterministic objective correction", async () => {
+  const decisionProvider = provider("openai", ["gpt-5.6-sol"], async ({ user, modelId }) => {
+    if (user.includes("Intent Classifier")) {
+      return {
+        text: JSON.stringify({
+          intent: "image-generation",
+          secondary_intents: ["rewrite"],
+          complexity: "medium",
+          response_purpose: "deliverable",
+          preferred_provider: null,
+          selection_justification: "Mistook the picture reference as an image task"
+        }),
+        model: modelId ?? "gpt-5.6-sol",
+        provider: "openai"
+      };
+    }
+    return {
+      text: JSON.stringify({
+        selected: { provider: "openai", model: "gpt-5.6-sol" },
+        selection_justification: "A capable writing model can produce the requested text."
+      }),
+      model: modelId ?? "gpt-5.6-sol",
+      provider: "openai"
+    };
+  }).provider;
+  const decision = await chooseProvider(
+    "Write a short biography and generate an accompanying portrait.",
+    "Previous discussion included several generated portraits.",
+    [decisionProvider],
+    { routingRequestId: "test-compound-objective-precedence" }
+  );
+  assert.equal(decision.resolvedIntent.intent, "rewrite");
+  assert.deepEqual(decision.resolvedIntent.secondaryIntents, ["image-generation"]);
+  assert.equal(decision.resolvedIntent.responsePurpose, "deliverable");
+  assert.equal(decision.resolvedIntent.objectiveGuardReason, "written_objective_precedes_explicit_image_objective");
+  assert.equal(decision.intentResolutionReason, "deterministic-objective-precedence");
+  assert.equal(decision.explainer?.selection_justification, "A capable writing model can produce the requested text.");
+});
