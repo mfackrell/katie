@@ -18,15 +18,27 @@ export async function GET(request:NextRequest){
   try{
     const admin=getSupabaseAdminClient();
     const {data:grant,error:grantError}=await admin.from("itm_stage2_one_shot_grants")
-      .select("actor_id,expected_cursor,source_sha256")
+      .select("actor_id,expected_cursor,source_sha256,dispatched_at")
       .eq("chat_id",CHAT).eq("batch_end_message_id",END)
-      .is("dispatched_at",null).maybeSingle<{
-        actor_id:string;expected_cursor:string;source_sha256:string;
+      .maybeSingle<{
+        actor_id:string;expected_cursor:string;source_sha256:string;dispatched_at:string|null;
       }>();
     if(grantError)throw new Error("ITM_ONE_SHOT_GRANT_READ_UNAVAILABLE");
     if(!grant)return NextResponse.json({status:"no_pending_grant"});
     if(grant.expected_cursor!==CURSOR||grant.source_sha256!==SOURCE_SHA)
       return NextResponse.json({status:"grant_source_mismatch"},{status:409});
+    // Once claimed, only immutable VALID retention evidence permits offline
+    // checkpoint CAS recovery. Never recontact Claude on an uncertain result.
+    if(grant.dispatched_at!==null){
+      const {data:receipt,error:receiptError}=await admin.from("itm_stage_receipts")
+        .select("id").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
+        .eq("batch_end_message_id",END).eq("source_sha256",SOURCE_SHA)
+        .eq("provider","anthropic").eq("stage","retention")
+        .not("processor_version","like","%:incomplete").limit(1);
+      if(receiptError)throw new Error("ITM_ONE_SHOT_RECEIPT_READ_UNAVAILABLE");
+      if(!receipt?.length)
+        return NextResponse.json({status:"grant_consumed_no_valid_receipt"});
+    }
     const {data:state,error:stateError}=await admin.from("intermediate_memory")
       .select("content").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
       .maybeSingle<{content:{sourceMessageCount?:number;summarizedThroughMessageId?:string}}>();
