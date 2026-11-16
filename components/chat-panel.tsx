@@ -48,6 +48,7 @@ import { Task4aFailedDispatchRecoveryApproval } from "@/components/task4a-failed
 import { Task4aPostpaidContinuationApproval } from "@/components/task4a-postpaid-continuation-approval";
 import { Task4aBlockedDispatchOwnerApproval } from "@/components/task4a-blocked-dispatch-owner-approval";
 import { Task4aSuccessorOwnerApproval } from "@/components/task4a-successor-owner-approval";
+import { DirectorRecoveryControl, type DirectorRecoveryOffer } from "@/components/director-recovery-control";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
@@ -814,6 +815,7 @@ export function ChatPanel({
   useEffect(() => { setDeleteCandidate(null); setDeleteFailure(null); }, [chatId]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
   const [gameTrialRefresh, setGameTrialRefresh] = useState(0);
+  const [directorRecovery, setDirectorRecovery] = useState<{chatId:string;offer:DirectorRecoveryOffer}|null>(null);
   const [gameTrial, setGameTrial] = useState<{chatId:string;mode:'start'|'stop'}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
   const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
@@ -1217,12 +1219,14 @@ export function ChatPanel({
       inFlight=true;
       try {
         const bearer=await ownerSessionBearer();
+        if(!bearer&&!cancelled)setDirectorRecovery(null);
         const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store',...(bearer?{headers:{Authorization:`Bearer ${bearer}`}}:{})});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;trialState?:'active'|'available'|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;trialState?:'active'|'available'|null;directorRecovery?:DirectorRecoveryOffer|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
         setGameTrial(p.trialState==='available'?{chatId,mode:'start'}:p.trialState==='active'&&p.status!=='completed'&&p.status!=='stopped'?{chatId,mode:'stop'}:null);
+        setDirectorRecovery(p.directorRecovery?{chatId,offer:p.directorRecovery}:null);
         setResourceRecovery(p.resourceRecovery?{chatId,proposal:p.resourceRecovery}:null);
         // Executive missions can deliver after the immediate chat reply, even
         // without a software project (or after its completion). Stop only when
@@ -3103,6 +3107,10 @@ export function ChatPanel({
           <DeveloperResourceCard proposal={resourceRecovery.proposal}
            pending={projectApprovalPending||loading} error={projectApprovalError}
            onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
+        ):null}
+        {directorRecovery?.chatId===chatId && !managedAgentId ? (
+          <DirectorRecoveryControl key={actorId+':'+chatId} recovery={directorRecovery.offer}
+            onRefresh={()=>setGameTrialRefresh(value=>value+1)} />
         ):null}
         {gameTrial?.chatId===chatId && !managedAgentId ? (
           <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3">

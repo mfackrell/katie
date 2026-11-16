@@ -8,10 +8,21 @@ import { countNativePreparedInput } from './native-token-count';
 import { cachedWorkflowValue } from './workflow';
 import { OWNER_SELECTED_UNCACHED, ownerSelectedUncachedEstimate, proposeSelectedModelUncached } from './owner-cache-authorization';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
+import { isBoundedGrokWebRequest, boundedGrokWebCostFromReceipt, GROK_BOUNDED_WEB_POLICY_VERSION } from './grok-web-search';
 import type { ResponseCheckpoint } from './types';
 
 const hosts: Record<AccountingProvider, string> = { openai: 'api.openai.com', anthropic: 'api.anthropic.com', google: 'generativelanguage.googleapis.com', grok: 'api.x.ai' };
 const activeTransmissions = new Map<string, AbortController>();
+const DEFAULT_PROVIDER_TRANSMISSION_TIMEOUT_MS = 180_000;
+export type AccountingTransmissionPolicy = {
+  timeoutMs?: number | (() => number);
+  timeoutCode?: string;
+  timeoutMessage?: string | ((timeoutMs: number) => string);
+  uncertaintyReason?: string | ((timeoutMs: number) => string);
+};
+function policyText(value: string | ((timeoutMs: number) => string) | undefined, timeoutMs: number, fallback: string): string {
+  return typeof value === 'function' ? value(timeoutMs) : value ?? fallback;
+}
 /** Owner binding is checked durably before aborting an in-flight local request. */
 export async function cancelStandaloneAttempt(ownerId: string, attemptId: string) {
   const attempt = await createStandaloneLedger().cancel(ownerId, attemptId);
@@ -258,7 +269,7 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
 
 /** Every actual paid HTTP transmission passes here, after SDK serialization.
  * The injected transport and ledger factory allow isolated tests with no paid calls. */
-export function createAccountingFetch(provider: AccountingProvider, transport: typeof fetch = globalThis.fetch.bind(globalThis), ledgerFactory = createStandaloneLedger): typeof fetch {
+export function createAccountingFetch(provider: AccountingProvider, transport: typeof fetch = globalThis.fetch.bind(globalThis), ledgerFactory = createStandaloneLedger, transmissionPolicy: AccountingTransmissionPolicy = {}): typeof fetch {
   return async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
@@ -330,7 +341,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       prepared.payload.prompt_cache_key !== undefined || prepared.payload.prompt_cache_retention !== undefined)) {
       throw failure('replay_mismatch', 'Owner-approved uncached preparation must not include unreviewed cache metadata.');
     }
-    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, 'standalone-estimator-v6', PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, 'standalone-estimator-v7', 'standalone-estimator-v6', PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
     // Persisted native counts are immutable evidence for the exact hash and model.
     // Resume must not silently recalculate or substitute a different reservation.
     const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
@@ -451,13 +462,27 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         throw failure('resolved_model_unpriced', 'The provider returned a model without an exact reviewed price. Known usage is saved; spending exposure remains reserved.');
       }
       let actualMicrousd: string;
-      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written,receipt.cacheWriteTtl??'5m',receipt.imageOutputTokens); }
-      catch {
-        await ledger.recordPartialUsage(context.userId, attemptId, usage, { ...evidence, pricedModel: null, pricingUnknown: true });
-        throw failure('usage_unpriced', 'The provider returned an unsupported billing dimension. Known usage is saved; spending exposure remains reserved.');
+      let finalEvidence:Record<string,unknown>=evidence;
+      try {
+        if(isBoundedGrokWebRequest(prepared)){
+          // Provider-reported ticks include both model and native search fees.
+          // Do not settle token-only amounts or assume a search was free.
+          const cost=boundedGrokWebCostFromReceipt(receipt.raw,estimate.reservationMicrousd!);
+          actualMicrousd=cost.actualMicrousd;
+          finalEvidence={...evidence,webSearchPolicy:GROK_BOUNDED_WEB_POLICY_VERSION,
+            webSearchCalls:cost.webSearchCalls,providerCostTicks:cost.providerCostTicks};
+        }else{
+          actualMicrousd=priceTokenUsage(price,receipt.input,receipt.output,receipt.cached,
+            receipt.written,receipt.cacheWriteTtl??'5m',receipt.imageOutputTokens);
+        }
+      } catch {
+        await ledger.recordPartialUsage(context.userId,attemptId,usage,
+          {...evidence,pricedModel:null,pricingUnknown:true,
+            missingDimension:'verified_xai_tool_cost_or_limit'});
+        throw failure('usage_unpriced','The provider returned unsupported or excessive billed usage; full exposure remains reserved.');
       }
       await ledger.settle({ ownerId: context.userId, attemptId, provider, providerReceiptId: receipt.id,
-        actualMicrousd, usage, evidence });
+        actualMicrousd, usage, evidence:finalEvidence });
     };
     if (attempt?.state === 'uncertain') {
       // Only durable server authority can acknowledge exposure. Never claim
@@ -482,7 +507,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     headers.delete('content-length');
     const controller = new AbortController();
-    const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(180_000)]);
+    const configuredTimeout = typeof transmissionPolicy.timeoutMs === 'function'
+      ? transmissionPolicy.timeoutMs() : transmissionPolicy.timeoutMs ?? DEFAULT_PROVIDER_TRANSMISSION_TIMEOUT_MS;
+    if (!Number.isFinite(configuredTimeout) || configuredTimeout <= 0)
+      throw failure('transport_policy', 'Provider accounting received an invalid transmission timeout policy.');
+    const transmissionTimeoutMs = Math.max(1, Math.floor(configuredTimeout));
+    const timeoutSignal = AbortSignal.timeout(transmissionTimeoutMs);
+    const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), timeoutSignal]);
     const activeKey = `${context.userId}:${attempt.id}`;
     activeTransmissions.set(activeKey, controller);
     let pollingCancellation = false;
@@ -506,10 +537,33 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if(reconciled?.state==='uncertain'&&!safeUncertainCheckpoint(checkpoint,provider,prepared.endpoint))return unavailableUncertainResponse();
       return restore(checkpoint);
     } catch (error) {
-      await ledger.markUncertain(context.userId, attempt.id, error instanceof StandaloneAccountingError ? error.message : 'Transmission or response reconciliation did not complete; reservation remains held.').catch(() => undefined);
+      const timedOut = timeoutSignal.aborted;
+      const timeoutError = timedOut && transmissionPolicy.timeoutCode
+        ? failure(transmissionPolicy.timeoutCode, policyText(
+            transmissionPolicy.timeoutMessage, transmissionTimeoutMs,
+            `Provider transmission timed out after ${transmissionTimeoutMs}ms; provider cancellation was requested and billing outcome is unknown.`,
+          ))
+        : null;
+      const uncertaintyReason = timedOut
+        ? policyText(
+            transmissionPolicy.uncertaintyReason, transmissionTimeoutMs,
+            `Provider transmission timed out after ${transmissionTimeoutMs}ms; reservation remains held because billing outcome is unknown.`,
+          )
+        : error instanceof StandaloneAccountingError
+          ? error.message
+          : 'Transmission or response reconciliation did not complete; reservation remains held.';
+      await ledger.markUncertain(context.userId, attempt.id, uncertaintyReason).catch(() => undefined);
+      if (timeoutError) throw Object.assign(timeoutError, { cause: error, attemptId: attempt.id });
       if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))return unavailableUncertainResponse();
       if (error instanceof StandaloneAccountingError) throw Object.assign(error, { attemptId: attempt.id });
       throw Object.assign(failure('outcome_unknown', 'The provider outcome is uncertain. Spending exposure remains reserved; automatic retry stopped.'), { cause: error, attemptId: attempt.id });
     } finally { clearInterval(cancellationPoll); activeTransmissions.delete(activeKey); }
   };
+}
+
+
+/** Activity-specific callers may override only the transmission boundary policy.
+ * Admission, exact-payload accounting, uncertainty retention, and replay rules remain unchanged. */
+export function createAccountingFetchWithPolicy(provider: AccountingProvider, policy: AccountingTransmissionPolicy): typeof fetch {
+  return createAccountingFetch(provider, globalThis.fetch.bind(globalThis), createStandaloneLedger, policy);
 }

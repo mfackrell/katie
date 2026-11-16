@@ -40,7 +40,48 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  assert.deepEqual(await snapshot(),before,'Provider-controlled mode must not alter historical data');
  await db.query(readFileSync('supabase/migrations/20261110180000_one_shot_director_recovery.sql','utf8'));
  await db.query(readFileSync('supabase/migrations/20261110190600_director_recovery_cutoff_amendment.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261111001700_director_explicit_cutoff_window.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261111201431_provider_project_continuation.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261112020746_organizational_contract_amendments.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261112235000_existing_organization_scope_ratification.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261113182500_expired_hierarchical_authority_recovery.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261113210000_prework_hierarchy_delegation_priority.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261022234500_authorize_saved_project_resources.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261114170000_owner_scoped_mission_capacity_resume.sql','utf8'));
+ await db.query(readFileSync('supabase/migrations/20261114174000_scoped_root_retry_epoch.sql','utf8'));
+ const g6Snapshot=async()=>{
+  const organization={};
+  for(const table of ['project_organization_nodes','project_organization_leadership','project_organization_decisions','project_organization_assignments','project_organization_exceptions','project_organization_scope_grants','project_scope_ratification_approvals','project_organization_closures']){
+   organization[table]=(await db.query('select to_jsonb(t) row from '+table+' t order by to_jsonb(t)::text')).rows;
+  }
+  return {
+  records:await snapshot(),
+  organization,
+  privileges:(await db.query("select proacl,prosecdef,proconfig,proowner,provolatile from pg_proc where oid='public.project_org_decide_hierarchy(uuid,uuid,jsonb)'::regprocedure")).rows,
+  amendment:(await db.query("select pg_get_functiondef('public.project_org_amend_delegation(uuid,uuid,jsonb)'::regprocedure) body")).rows[0].body,
+ };};
+ const beforeG6=await g6Snapshot();
+ const beforeG6Body=(await db.query("select pg_get_functiondef('public.project_org_decide_hierarchy(uuid,uuid,jsonb)'::regprocedure) body")).rows[0].body;
+ await db.query(readFileSync('supabase/migrations/20261114183104_g6_qa_identity_compatibility.sql','utf8'));
+ assert.deepEqual(await g6Snapshot(),beforeG6,'G6 preserves data, identities, history, privileges and the existing amendment correction');
+ const afterG6Body=(await db.query("select pg_get_functiondef('public.project_org_decide_hierarchy(uuid,uuid,jsonb)'::regprocedure) body")).rows[0].body;
+ assert.equal(afterG6Body.replaceAll("in ('quality_assurance','independent_qa')","='quality_assurance'").replaceAll("area ='quality_assurance'","area='quality_assurance'").replace("c->>'area' ='quality_assurance'","c->>'area'='quality_assurance'"),beforeG6Body,'Only the four QA designation predicates may differ');
+ assert.equal((afterG6Body.match(/in \('quality_assurance','independent_qa'\)/g)||[]).length,4);
+ assert.match(beforeG6.amendment,/area in \('quality_assurance','independent_qa'\)/);
+
  assert.deepEqual(await snapshot(),before,'Recovery migrations must preserve existing records');
+ await db.query(readFileSync('supabase/migrations/20261114204202_management_loop_recovery.sql','utf8'));
+ assert.deepEqual(await snapshot(),before,'Management recovery migration never mutates existing records');
+ const installed=JSON.parse(readFileSync('tests/fixtures/paused-window-installed-authority.json','utf8'));
+ const bodies=(await db.query("select proname,md5(prosrc) hash from pg_proc where pronamespace='public'::regnamespace and proname=any($1)",[Object.keys(installed.prosrcMd5)])).rows;
+ assert.deepEqual(Object.fromEntries(bodies.map(r=>[r.proname,r.hash])),installed.prosrcMd5,'Pre-renewal authority definitions match the read-only installed production baseline');
+ console.log('PAUSED_RENEWAL_INSTALLED_BASELINE_PASS: six installed authority function bodies match production');
+ await db.query(readFileSync('supabase/migrations/20261115183518_paused_expired_window_renewal.sql','utf8'));
+ assert.deepEqual(await snapshot(),before,'Paused window migration never mutates existing records');
+ const recoveryAcl=(await db.query("select relrowsecurity,has_table_privilege('service_role','project_management_resume_receipts','INSERT') writable,has_function_privilege('anon','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') anon,has_function_privilege('authenticated','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') authenticated from pg_class where oid='project_management_resume_receipts'::regclass")).rows[0];
+ assert.deepEqual(recoveryAcl,{relrowsecurity:true,writable:false,anon:false,authenticated:false});
+ await (await import('./assert-project-scope-ratification.mjs')).assertProjectScopeRatification(db,rival);
+ await (await import('./assert-project-qa-compatibility.mjs')).assertProjectQaCompatibility(db);
  if(process.env.KATIE_TEST_DIRECTOR_ONE_SHOT==='1'){
   await (await import('./assert-director-one-shot-recovery.mjs')).assertDirectorOneShotRecovery(db,rival);
  }else{

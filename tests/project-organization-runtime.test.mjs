@@ -12,7 +12,7 @@ test('executive selection requires verified fresh OpenAI or Anthropic reasoning;
 test('management worker dispatches only durable management decisions; never technical execution',async()=>{
  const id=randomUUID(),agent=randomUUID(),project=randomUUID(),calls=[];
  const rows={project_organization_nodes:[{id,agent_id:agent,kind:'project_director'}],project_organization_exceptions:[],project_organization_assignments:[],project_organization_scope_grants:[],project_organization_plans:[{purpose:'Original project purpose',direction:'Delegated outcomes'}],project_organization_dependencies:[],work_projects:{objective:'Original project',team:[],phase:'research'}};
- const db={from(table){const q={select(){return q;},eq(){return q;},in(){return q;},single(){return q;},then(ok){return Promise.resolve({data:rows[table],error:null}).then(ok);}};return q;}};
+ const db={from(table){const q={select(){return q;},eq(){return q;},in(){return q;},single(){return q;},then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}};return q;}};
  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return true;},readMission:async()=>{throw Error('Technical mission dispatch reached');}}});
  const claim={mission:{id:randomUUID(),project_id:project,project_kind:'management'},job:{id:randomUUID(),agent_id:agent,lease:randomUUID(),payload:{organizationNodeId:id}}};
  let invoked=0;
@@ -254,4 +254,122 @@ test('one-shot Director recovery fences a mismatched runtime before inference an
   assert.deepEqual(JSON.parse(JSON.stringify(error.evidence.targets)),[{field:'nodeId',status:'malformed'},{field:'dependsOn',status:'missing'}]);
   return true;
  });
+});
+
+test('delegation amendments require immediate reporting authority and never enter one-shot recovery',()=>{
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const root={id:randomUUID(),kind:'project_director',management_level:'project_director'};
+ const direct={id:randomUUID(),parent_id:root.id},other={id:randomUUID(),parent_id:randomUUID()};
+ const command={action:'amend_delegation',nodeId:direct.id,expectedTools:['manage','analysis'],expectedDeadline:'2030-01-01T00:00:00Z',tools:['manage','analysis','development'],reason:'Bounded inherited capability'};
+ assert.doesNotThrow(()=>assertManagementCommands(root,[direct,other],[command]));
+ assert.throws(()=>assertManagementCommands(root,[direct,other],[{...command,nodeId:other.id}]),e=>e.evidence?.action==='amend_delegation'&&e.evidence?.code==='immediate_reporting_authority');
+ assert.throws(()=>assertManagementCommands(root,[direct],[command],true),/Recovery permits/);
+});
+
+
+test('ratified provider trial guides its existing root to delegate Game Delivery, without synthetic model decisions',()=>{
+ const {scopedRootDelegationDirective}=modules()('@/lib/projects/organization');
+ const root=randomUUID(),game=randomUUID(),qa=randomUUID(),scope='f'.repeat(64);
+ const paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const deadline='2026-11-15T18:00:00.000Z';
+ const input={
+  providerControlled:true,principal:{id:root,kind:'project_director'},
+  project:{phase:'development',approved_hash:scope},
+  scopedNodes:[
+   {id:root,kind:'project_director',status:'active'},
+   {id:game,parent_id:root,area:'game_delivery',kind:'manager',management_level:'functional_director',status:'active',tools:['manage','analysis','repository_review'],deadline},
+   {id:qa,parent_id:root,area:'independent_qa',kind:'manager',management_level:'functional_director',status:'active',tools:['manage','analysis','repository_review'],deadline},
+  ],
+  scopeGrants:[{node_id:root,scope_hash:scope,paths}],
+  workPackages:[],
+ };
+ const text=scopedRootDelegationDirective(input);
+ assert.match(text,/RATIFIED DEVELOPMENT PREWORK/);
+ assert.match(text,/Do NOT appoint/);
+ assert.match(text,/amend_delegation/);
+ assert.match(text,/grant_scope/);
+ assert.match(text,new RegExp(game));
+ assert.match(text,/expectedTools exactly/);
+ assert.match(text,/expectedDeadline exactly 2026-11-15T18:00:00.000Z/);
+ assert.match(text,/Independent QA separation/);
+ assert.match(text,/Finish with ready/);
+ assert.equal(text.includes(qa),false,'QA must not receive implementation authority');
+ assert.equal(scopedRootDelegationDirective({...input,providerControlled:false}),'');
+ assert.equal(scopedRootDelegationDirective({...input,project:{...input.project,phase:'research'}}),'');
+ assert.equal(scopedRootDelegationDirective({...input,workPackages:[{id:randomUUID()}]}),'');
+ assert.equal(scopedRootDelegationDirective({...input,scopeGrants:[]}),'');
+
+ const withDev={...input,scopedNodes:input.scopedNodes.map(n=>n.id===game?{...n,tools:[...n.tools,'development']}:n)};
+ const grantOnly=scopedRootDelegationDirective(withDev);
+ assert.match(grantOnly,/grant_scope/);assert.doesNotMatch(grantOnly,/Issue amend_delegation/);
+ const fullyDelegated={...withDev,scopeGrants:[...input.scopeGrants,{node_id:game,scope_hash:scope,paths}]};
+ assert.equal(scopedRootDelegationDirective(fullyDelegated),'');
+});
+
+test('claimed scoped root receives durable approved paths and proposes only validated existing-node delegation',async()=>{
+ const root=randomUUID(),game=randomUUID(),qa=randomUUID(),agent=randomUUID(),project=randomUUID();
+ const scope='f'.repeat(64),paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const deadline='2030-01-01T00:00:00.000Z',tools=['manage','analysis','repository_review'];
+ const nodes=[
+  {id:root,agent_id:agent,kind:'project_director',management_level:'project_director',parent_id:null,status:'active'},
+  {id:game,parent_id:root,kind:'manager',management_level:'functional_director',area:'game_delivery',tools,deadline,status:'active'},
+  {id:qa,parent_id:root,kind:'manager',management_level:'functional_director',area:'independent_qa',tools,deadline,status:'active'},
+ ];
+ const rows={project_organization_nodes:nodes,work_projects:{objective:'Approved original game objective',team:[],phase:'development',approved_hash:scope,deadline,milestone_index:0,spec:{milestones:[{instruction:'Existing approved game'}]}},
+  project_organization_scope_grants:[{node_id:root,scope_hash:scope,paths,parent_id:null}]};
+ const db={from(table){const q={select(){return q;},eq(){return q;},in(){return q;},single(){return q;},then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}};return q;}};
+ const committed=[];
+ const {executeManagementClaim}=modules({
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
+  '@/lib/missions/store':{rpc:async(name,args)=>{if(name==='project_provider_mode')return true;assert.equal(name,'project_org_decide');committed.push(args);return true;}},
+ })('@/lib/projects/organization');
+ const claim={mission:{id:randomUUID(),project_id:project,project_kind:'management',calls:0},job:{id:randomUUID(),agent_id:agent,lease:randomUUID(),payload:{organizationNodeId:root}}};
+ const commands=[{action:'amend_delegation',nodeId:game,expectedTools:tools,tools:[...tools,'development'],expectedDeadline:deadline,reason:'Owner-ratified development scope'},
+  {action:'grant_scope',nodeId:game,paths},{action:'ready'}];
+ let modelCalls=0;
+ // Deterministic model boundary: verifies prompt/context and command admission,
+ // not real-provider compliance. This test performs no inference or dispatch.
+ await executeManagementClaim(claim,async(c,instruction,input,toolMode)=>{
+  modelCalls++;assert.equal(c,claim);assert.equal(toolMode,'none');
+  assert.match(instruction,/MANDATORY FIRST ROOT DECISION/);assert.match(instruction,/Do NOT appoint/);
+  assert.ok(instruction.includes(game));assert.ok(instruction.includes(JSON.stringify(paths)));
+  assert.ok(input.includes(scope));for(const path of paths)assert.ok(input.includes(path));
+  assert.equal(committed.length,0,'no synthetic decision is injected before the model response');
+  return {text:JSON.stringify(commands)};
+ });
+ assert.equal(modelCalls,1);assert.equal(committed.length,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(committed[0])),{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
+});
+
+test('exception preflight admits only observed completed subordinate evidence and preserves SQL authority',()=>{
+ const {assertManagementEvidenceCommands}=modules()('@/lib/projects/organization');
+ const parent={id:randomUUID()},child={id:randomUUID(),parent_id:parent.id},outsider={id:randomUUID()},job=randomUUID(),exception=randomUUID();
+ const context={exceptions:[{id:exception,owner_id:parent.id,status:'open'}],bindings:[{assignment_id:job,node_id:child.id}],evidence:[{id:job,status:'completed',result:{output:'Synthetic test evidence'}}]};
+ const commands=[{action:'resolve',exceptionId:exception,assignmentId:job}];
+ assert.doesNotThrow(()=>assertManagementEvidenceCommands(parent,[parent,child,outsider],commands,context));
+ for(const changed of [
+  {...context,exceptions:[]},{...context,evidence:[]},
+  {...context,evidence:[{...context.evidence[0],status:'failed'}]},
+  {...context,evidence:[{...context.evidence[0],result:null}]},
+  {...context,bindings:[{assignment_id:job,node_id:outsider.id}]},
+  {...context,exceptions:[{...context.exceptions[0],status:'resolved'}]},
+  {...context,exceptions:[{...context.exceptions[0],owner_id:outsider.id}]}
+ ])assert.throws(()=>assertManagementEvidenceCommands(parent,[parent,child,outsider],commands,changed),/authenticated completed assignment evidence/);
+});
+
+test('scope-only implementation delegation is diagnosed at its actual parent while both QA identities remain excluded',()=>{
+ const {scopedImplementationDelegationDirective}=modules()('@/lib/projects/organization');
+ const root={id:randomUUID(),kind:'project_director',tools:['manage','development'],status:'active'};
+ const game={id:randomUUID(),parent_id:root.id,kind:'manager',area:'game_delivery',tools:['manage','development'],status:'active'};
+ const manager={id:randomUUID(),parent_id:game.id,kind:'manager',area:'delivery_management',tools:['manage','analysis'],status:'active',objective:'Manage approved implementation',deadline:'2030-01-01T00:00:00Z'};
+ const project={phase:'development',approved_hash:'scope'};
+ const grants=[{node_id:manager.id,scope_hash:'scope',paths:['app/game/']}];
+ const text=scopedImplementationDelegationDirective(game,[root,game,manager],[root,game,manager],grants,project);
+ assert.match(text,/SCOPED REPORTS WITHOUT IMPLEMENTATION CAPABILITY/);assert.ok(text.includes(manager.id));assert.match(text,/Do not repeat its scope grant or replace/);
+ assert.equal(scopedImplementationDelegationDirective(game,[root,game,manager],[root,game,manager],[],project),'');
+ for(const area of ['independent_qa','quality_assurance']){
+  const qa={...game,area};
+  assert.equal(scopedImplementationDelegationDirective(qa,[root,qa,manager],[root,qa,manager],grants,project),'');
+ }
+ assert.equal(scopedImplementationDelegationDirective({...game,tools:['manage']},[root,game,manager],[root,{...game,tools:['manage']},manager],grants,project),'');
 });

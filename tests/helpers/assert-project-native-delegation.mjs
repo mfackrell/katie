@@ -307,6 +307,17 @@ export async function assertProjectNativeDelegation(db,rival){
   await decide(turn,[{action:'authorize_assignment',assignmentId:pending,smart:task(qa,'plan',[],{maxAssignments:1,tokens:5000})}]);
   await db.query("update mission_assignments set status='running',lease=$2,lease_until=now()+interval '5 minutes' where id=$1",[pending,randomUUID()]);
   assert.equal((await db.query('select count(*)::int n from project_worker_admissions where assignment_id=$1',[pending])).rows[0].n,1);
+  // Simulate restoration of stale legacy authority as the private fixture owner.
+  // The public amendment command rejects busy/accepted targets; cached SMART
+  // admission must independently fail closed even if stored tools were removed.
+  await db.query('reset role');
+  await db.query("update agent_missions set status='blocked' where id=$1",[mid]);
+  await db.query("update mission_assignments set status='queued' where id=$1",[pending]);
+  await db.query("insert into project_organization_contract_changes(project_id,node_id,decision_id,prior_deadline,deadline,prior_tools,tools) select n.project_id,n.id,d.id,n.deadline,n.deadline,n.tools,'{}'::text[] from project_organization_nodes n join project_organization_decisions d on d.assignment_id=$2 where n.id=$1",[worker.id,turn.job]);
+  await db.query("update project_organization_nodes set tools='{}' where id=$1",[worker.id]);
+  await db.query('set role service_role');
+  await db.query("update agent_missions set status='running' where id=$1",[mid]);
+  await assert.rejects(db.query("update mission_assignments set status='running',lease=$2 where id=$1",[pending,randomUUID()]),/Current delegated worker capability/);
   await db.query('rollback');
  }
  console.log('SMART_MANAGEMENT_PASS: explicit Manager/Supervisor hierarchy; broad/context/capability negatives; cumulative contracts; authentic prepare/checkpoint RPCs; phase jobs locally commissioned; restart and immutable admissions');

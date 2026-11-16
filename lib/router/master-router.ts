@@ -20,6 +20,7 @@ import {
   validateRoutingDecision
 } from "@/lib/router/model-intent";
 import { shortlistDecisionCandidates } from "@/lib/router/candidate-shortlist";
+import { getModelPrice } from "@/lib/standalone-accounting/pricing";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
 import { LlmProvider } from "@/lib/providers/types";
@@ -908,6 +909,23 @@ export async function chooseProvider(
     hasVideoInput: Boolean(options?.hasVideoInput),
     registryLookup
   });
+
+  // Native web access is not enough: the exact Grok model must have a
+  // reviewed token price and the one-turn server-search accounting policy.
+  // This only constrains standalone paid chat; project-orchestrator routing
+  // retains its separate authorization and accounting lifecycle.
+  if (getAccountingScope()?.kind === "standalone" &&
+      (intent === "web-search" || intent === "news-summary")) {
+    availableByProvider = availableByProvider
+      .map(entry => ({
+        provider:entry.provider,
+        models:entry.models.filter(modelId =>
+          entry.provider.name === "grok" &&
+          Boolean(getModelPrice("grok",modelId))),
+      }))
+      .filter(entry=>entry.models.length>0);
+    console.info(`[Research Accounting] requestId=${traceRequestId} qualified_models=${availableByProvider.reduce((n,entry)=>n+entry.models.length,0)}`);
+  }
 
   const eligibleCandidateCount = availableByProvider.reduce(
     (total, entry) => total + entry.models.length,

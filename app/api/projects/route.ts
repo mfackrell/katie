@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
+import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { recoveryResourceProposal } from '@/lib/projects/recovery-budget';
@@ -9,6 +11,10 @@ import { hasPendingExecutiveDelivery } from '@/lib/executive/delivery';
 
 const projectIdentity = z.object({ actorId: z.string().uuid(), chatId: z.string().uuid() });
 const approvalInput = projectIdentity.extend({ approvalHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const scopeRatificationInput = projectIdentity.extend({
+    proposalId: z.string().uuid(),
+    approvalHash: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
 
 async function ownedProject(actorId: string, chatId: string) {
     const c = await getChatById(chatId);
@@ -39,6 +45,61 @@ function approvalFor(p: Project | null,providerControlled: boolean) {
     };
 }
 
+async function directorRecoveryFor(p: Project | null, request: NextRequest, providerControlled: boolean): Promise<DirectorRecoveryOffer | null> {
+    if (!p || !providerControlled
+        || !await verifiedProjectOwnerSession(request)) return null;
+    const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
+    if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
+    const cutoff = '2026-11-12T00:00:00Z';
+    const priorCutoff = '2026-11-10T18:59:32.547837Z';
+    const { data, error } = await getSupabaseAdminClient().from('project_director_recoveries')
+        .select('mission_id,assignment_id,cutoff').eq('project_id', p.id).eq('owner_id',process.env.KATIE_OWNER_AUTH_USER_ID).maybeSingle<{
+            mission_id: string; assignment_id: string; cutoff: string;
+        }>();
+    if (error) throw Error('Director recovery admission state unavailable');
+    let continuation: DirectorRecoveryOffer['continuation'];
+    const window=await projectRpc<{decisionId:string;admittedAt:string|null;cutoff:string;maxCutoff:string;authorizationId?:string;authorizedAt?:string}|null>('project_org_owner_window_offer',{
+            p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.id,
+    });
+    const windowReceipt=window&&typeof window==='object'&&typeof window.authorizationId==='string'&&typeof window.authorizedAt==='string'?{authorizationId:window.authorizationId,authorizedAt:window.authorizedAt}:{};
+    // Read-only preflight: the owner will approve a new cutoff in a separate
+    // authenticated action. Never implicitly restore expired appointments.
+    const hierarchyOffer=process.env.VERCEL_ENV==='production'&&p.status==='blocked'&&Date.now()>=Date.parse(p.deadline)
+        ?await projectRpc<{decisionId:string;directorCutoff:string;priorCutoff:string;stateHash:string;nodeCount:number;maxHours:number;activeMissionId:string|null}|null>(
+            'project_org_hierarchy_recovery_offer',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.id})
+        :null;
+    const hierarchyRecovery=hierarchyOffer&&typeof hierarchyOffer==='object'&&
+        /^[a-f0-9]{64}$/.test(hierarchyOffer.stateHash??'')&&
+        typeof hierarchyOffer.decisionId==='string'&&Number.isFinite(Date.parse(hierarchyOffer.directorCutoff))&&
+        Number.isFinite(Date.parse(hierarchyOffer.priorCutoff))&&hierarchyOffer.nodeCount>0
+        ?{decisionId:hierarchyOffer.decisionId,directorCutoff:hierarchyOffer.directorCutoff,
+            priorCutoff:hierarchyOffer.priorCutoff,stateHash:hierarchyOffer.stateHash,
+            nodeCount:hierarchyOffer.nodeCount,maxHours:hierarchyOffer.maxHours,activeMissionId:hierarchyOffer.activeMissionId}
+        :null;
+    if(!data){
+        if(window&&typeof window==='object'&&typeof window.decisionId==='string'
+            &&(Date.now()>=Date.parse(window.cutoff)||window.admittedAt))
+            continuation={decisionId:window.decisionId,admittedAt:window.admittedAt,maxCutoff:window.maxCutoff,...windowReceipt};
+    }
+    if(!data&&!continuation&&(p.id!=='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'||p.status!=='blocked'||p.phase!=='research'
+        ||Date.now()>=Date.parse(cutoff)||Date.parse(p.deadline)!==Date.parse(priorCutoff)))return null;
+    if(data){
+        const db=getSupabaseAdminClient();
+        const [decision,authority]=await Promise.all([
+            db.from('project_organization_decisions').select('id').eq('project_id',p.id).eq('assignment_id',data.assignment_id).maybeSingle<{id:string}>(),
+            db.from('project_provider_execution').select('continued_at').eq('project_id',p.id).single<{continued_at:string|null}>(),
+        ]);
+        if(decision.error||authority.error)throw Error('Project continuation state unavailable');
+        if(decision.data)continuation={decisionId:decision.data.id,admittedAt:authority.data?.continued_at??null,...(window&&typeof window==='object'&&window.maxCutoff?{maxCutoff:window.maxCutoff}:{}),...windowReceipt};
+    }
+    return {
+        projectId: p.id, releaseSha: releaseSha!, cutoff:continuation?p.deadline:cutoff, priorCutoff,
+        receipt: data ? {projectId: p.id, missionId: data.mission_id, assignmentId: data.assignment_id, cutoff: data.cutoff, existing: true} : null,
+        ...(continuation?{continuation}:{}),
+        ...(hierarchyRecovery?{hierarchyRecovery}:{}),
+    };
+}
+
 export async function GET(request: NextRequest) {
     try {
         const { actorId, chatId } = projectIdentity.parse({
@@ -54,6 +115,7 @@ export async function GET(request: NextRequest) {
         const resourceRecovery = p&&!providerControlled ? await recoveryResourceProposal(p) : null;
         return NextResponse.json({
             resourceRecovery,
+            directorRecovery: await directorRecoveryFor(p, request, providerControlled),
             active: p?.status === 'running',
             status: p?.status ?? null,
             approval: approvalFor(p,providerControlled),
@@ -100,6 +162,32 @@ export async function POST(request: NextRequest) {
         });
     } catch {
         return NextResponse.json({ error: 'Approval could not be saved. Refresh the scope and try again.' }, { status: 409 });
+    }
+}
+
+// Scope ratification is deliberately separate from ordinary project approval.
+// The client supplies only the immutable proposal identity and exact digest;
+// specification content and file paths cannot be substituted at approval time.
+export async function PUT(request: NextRequest) {
+    let input: z.infer<typeof scopeRatificationInput>;
+    try { input = scopeRatificationInput.parse(await request.json()); }
+    catch { return NextResponse.json({ error: 'Invalid scope ratification approval' }, { status: 400 }); }
+    if (!await verifiedProjectOwnerSession(request))
+        return NextResponse.json({ error: 'Authenticated Katie owner session required for scope ratification' }, { status: 403 });
+    try {
+        const p = await ownedProject(input.actorId, input.chatId);
+        if (!p) return NextResponse.json({ error: 'Project chat unavailable' }, { status: 404 });
+        const ownerId = process.env.KATIE_OWNER_AUTH_USER_ID;
+        if (!ownerId || !/^[a-f0-9-]{36}$/i.test(ownerId))
+            return NextResponse.json({ error: 'Owner scope identity unavailable' }, { status: 503 });
+        const updated = await projectRpc<Project>('project_org_ratify_scope', {
+            p_owner: ownerId, p_project: p.id, p_proposal: input.proposalId, p_hash: input.approvalHash,
+        });
+        return NextResponse.json({ status: updated.status, approvedScopeHash: updated.approved_hash, messages: await getMessages(input.chatId) }, {
+            headers: { 'Cache-Control': 'no-store' },
+        });
+    } catch {
+        return NextResponse.json({ error: 'Scope ratification is stale, unauthorized, or could not be committed atomically.' }, { status: 409 });
     }
 }
 
