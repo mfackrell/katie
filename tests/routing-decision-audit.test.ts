@@ -47,6 +47,18 @@ test("image critique without a writing command is not converted to rewrite by gu
   );
 });
 
+test("writing lettering onto an attached image remains an image-edit instruction", () => {
+  for (const message of [
+    'Write the text "Happy birthday" onto the attached picture.',
+    "Place a caption over this image.",
+    "Write a label on the screenshot."
+  ]) {
+    const result = guardExplicitWrittenObjective(message, mistaken);
+    assert.equal(result.overridden, false, message);
+    assert.equal(result.classification.intent, "image-generation", message);
+  }
+});
+
 test("explicit image editing is not mistaken for rewriting", () => {
   const input: RequestClassification = { intent: "image-generation", preferred_provider: null };
   assert.equal(guardExplicitWrittenObjective("Edit the background of that portrait.", input).classification.intent, "image-generation");
