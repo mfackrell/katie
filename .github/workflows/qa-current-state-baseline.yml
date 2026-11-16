@@ -3,6 +3,9 @@ name: Independent QA — owner current-state baseline gap
 on:
   push:
     branches: [qa/owner-current-state-recovery-1061]
+    paths:
+      - 'tests/qa-owner-current-state-baseline.test.mjs'
+      - 'docs/qa/independent-owner-current-state-recovery-matrix.md'
 
 permissions:
   contents: read
