@@ -58,7 +58,7 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 test("v11 uses Grok Responses API with bounded factual episodes and index-only retention",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v11-grok-responses-grounded-factual"/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v12-claude-native-failclosed-recovery"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.equal((summary.match(/client\.post\("\/responses"/g)||[]).length,1);
@@ -90,4 +90,16 @@ test("post-answer ITM does not inherit a closed HTTP response signal",()=>{
   assert.match(summary,/standaloneAccountingCause\(error\)/);
   assert.match(summary,/standaloneFailureDetails\(error\)/);
   assert.match(summary,/isRequestAbort\(error\)/);
+});
+
+test("new native Claude transport and prior-provider exposure gate preserve the release contract",()=>{
+  const migration=readFileSync("supabase/migrations/20261115194500_itm_native_claude_recovery_exposure.sql","utf8");
+  assert.match(summary,/client\.post<Record<string, unknown>, ClaudeMessagesResponse>\("\/messages"/);
+  assert.doesNotMatch(summary,/client\.chat\.completions\.create/);
+  assert.match(summary,/thinking: \{ type: "between_tools" \}/);
+  assert.match(summary,/claudeSchema\(schema\)/);
+  assert.match(summary,/inspect_itm_batch_provider_exposure/);
+  assert.match(migration,/security definer/);
+  assert.match(migration,/grant execute on function public\.inspect_itm_batch_provider_exposure/);
+  assert.match(summary,/p_state: "blocked"/);
 });
