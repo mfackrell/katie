@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import OpenAI from "openai";
 
 const source = readFileSync("lib/memory/summarizer.ts", "utf8");
 const compiled = ts.transpileModule(source, {
@@ -27,9 +28,13 @@ function harness({
   history = messageHistory(90), prior = {}, configured = true, fallbackConfigured = false,
   responses = n => n % 2 ? selected() : retained(),
   missingChat = false, commitResult = true,
+  priorExposure = { grok_sent:false, anthropic_sent:false, paused:false, in_flight:false },
+  exposureInspectionError = false,
+  transportClass = null, fetchOverride = null,
 } = {}) {
   let memory = copy(prior);
   const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [];
+  const terminalBatches = new Set();
   const accountingCause = error => {
     let current = error;
     for(let depth=0;current&&typeof current==="object"&&depth<8;depth++){
@@ -58,11 +63,19 @@ function harness({
         return responses(n, body, provider);
       } } };
       this.post = async (path, options) => {
-        assert.equal(path, "/responses");
+        assert.equal(path, provider === "grok" ? "/responses" : "/messages");
         const body = options.body;
         const n = calls.length + 1;
-        calls.push({ ...copy(body), __provider: provider, __transport: "responses" });
+        calls.push({ ...copy(body), __provider: provider, __transport: path.slice(1) });
         const simulated = await responses(n, body, provider);
+        if(provider==="anthropic") {
+          if(simulated?.stop_reason!==undefined)return simulated;
+          const choice=simulated?.choices?.[0];
+          return {
+            stop_reason:choice?.finish_reason==="stop"?"end_turn":"max_tokens",
+            content:[{type:"text",text:choice?.message?.content??""}],
+          };
+        }
         const choice = simulated?.choices?.[0];
         return {
           status: choice?.finish_reason === "stop" ? "completed" : "incomplete",
@@ -75,6 +88,10 @@ function harness({
   const admin = {
     async rpc(name, args) {
       events.push({ name, args: copy(args) });
+      if (name === "inspect_itm_batch_provider_exposure") {
+        return exposureInspectionError ? {data:null,error:{message:"Inspection unavailable"}} :
+          {data:{...copy(priorExposure),terminal:Boolean(priorExposure.terminal)||terminalBatches.has(args.p_batch_end_message_id)},error:null};
+      }
       if (name === "claim_intermediate_memory_batch") {
         if (args.p_expected_cursor !== (memory.summarizedThroughMessageId ?? null))
           return { data: "stale", error: null };
@@ -96,6 +113,9 @@ function harness({
         const key = args.p_processor_version + ":" + args.p_batch_end_message_id;
         if (claims.get(key) !== "processing") return { data: false, error: null };
         claims.set(key, args.p_state);
+        if (args.p_state === "blocked" && String(args.p_reason??"").startsWith("ITM_TERMINAL:")) {
+          terminalBatches.add(args.p_batch_end_message_id);
+        }
         return { data: true, error: null };
       }
       assert.fail("Unexpected RPC: " + name);
@@ -118,12 +138,12 @@ function harness({
   };
   const module = { exports: {} };
   const deps = {
-    openai: Transport,
+    openai: transportClass ?? Transport,
     "@/lib/data/persistence-store": store,
     "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => admin },
     "@/lib/standalone-accounting/activity": { createActivityAccountingFetch: (provider, activity, policy) => {
       events.push({ name: "accounting", provider, activity, timeoutCode: policy?.timeoutCode, timeoutMsType: typeof policy?.timeoutMs });
-      return async () => { throw Error("Network disallowed in tests"); };
+      return fetchOverride ?? (async () => { throw Error("Network disallowed in tests"); });
     } },
     "@/lib/standalone-accounting/context": {
       isStandaloneAccountingError: accountingError,
@@ -321,7 +341,7 @@ test("accounting denial, ambiguous provider failure and concurrency remain bound
     code: "standalone_approval_required", terminal: true });
   const blocked = harness({ responses: () => { throw denial; } });
   await assert.rejects(blocked.run(), e => e === denial);
-  assert.equal(await blocked.run(), "deferred");
+  assert.equal(await blocked.run(), "blocked");
   assert.equal(blocked.calls.length, 1);
   const unknown = harness({ responses: () => { throw new Error("Provider outcome uncertain"); } });
   assert.equal(await unknown.run(), "blocked");
@@ -354,6 +374,11 @@ test("memory transport timeout defers and the next request uses Anthropic withou
   assert.deepEqual(h.calls.map(x => x.__provider), ["grok"]);
   assert.equal(await h.run(), "committed");
   assert.deepEqual(h.calls.map(x => x.__provider), ["grok", "anthropic", "anthropic"]);
+  assert.deepEqual(h.calls.map(x => x.__transport), ["responses","messages","messages"]);
+  assert.ok(h.calls.slice(1).every(x => x.model==="claude-sonnet-5-5" &&
+    x.thinking?.type==="between_tools" && x.output_config?.format?.type==="json_schema" &&
+    x.messages.length===1 && !("temperature" in x) && !("response_format" in x)));
+  assert.equal(h.constructors[1].baseURL, "https://api.anthropic.com/v1/");
   assert.equal(h.memory().summarizedThroughMessageId, "m29");
   assert.ok(h.events.some(x => x.name === "finish_intermediate_memory_batch" &&
     x.args.p_state === "blocked" && /:grok$/.test(x.args.p_processor_version)));
@@ -375,6 +400,8 @@ test("atomic cursor prevents stale writes and preserves previous memory", async 
   assert.equal(await h.run(), "deferred");
   assert.deepEqual(h.memory(), prior);
   assert.equal(h.writes.length, 0);
+  assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
+  assert.equal(await h.run(),"blocked","stale paid claim cannot retransmit");
 });
 
 test("model prompts require factual narratives and prohibit interpretive memory", async () => {
@@ -399,7 +426,7 @@ test("SDK Connection error cannot disguise an owner cancellation or authorize Cl
   assert.equal(h.writes.length,0);
   assert.ok(h.logs.some(log=>log.args[0]?.includes("Non-retryable") &&
     String(log.args[1]?.diagnostic??"").includes("standalone_cancelled")));
-  assert.equal(await h.run(),"deferred","same in-flight source claim is never retransmitted");
+  assert.equal(await h.run(),"blocked","failed source claim remains blocked without retransmission");
 });
 
 test("nested SDK timeout is recognized and permits Claude only on a later request", async () => {
@@ -424,6 +451,152 @@ test("both unavailable providers preserve the original cursor and do not retry a
   assert.equal(await h.run(),"blocked");
   assert.equal(await h.run(),"blocked");
   assert.deepEqual(h.calls.map(call=>call.__provider),["grok","anthropic"]);
+  assert.equal(h.writes.length,0);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
+});
+
+// Independent source-batch recovery must distinguish previous paid provider
+// transmission from a fresh claim under the new processor version.
+test("previous metered Grok batch routes to native Claude without another Grok transmission", async () => {
+  const h = harness({
+    fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+    responses:n=>n===1?selected():retained(),
+  });
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(x=>x.__provider),["anthropic","anthropic"]);
+  assert.deepEqual(h.calls.map(x=>x.__transport),["messages","messages"]);
+  assert.equal(h.memory().sourceMessageCount,30);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+  assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,1);
+  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v12.*:anthropic$/);
+});
+
+test("previously sent Claude source batch never reverses fallback to Grok",async()=>{
+  const h=harness({
+    fallbackConfigured:true,
+    priorExposure:{grok_sent:false,anthropic_sent:true,paused:false,in_flight:false},
+  });
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,0);
+  assert.equal(h.writes.length,0);
+  assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,0);
+});
+
+test("historical exposure inspection blocks duplicate paid work and preserves cursor",async()=>{
+  for(const opts of [
+    {priorExposure:{grok_sent:false,anthropic_sent:false,paused:true,in_flight:false}},
+    {priorExposure:{grok_sent:false,anthropic_sent:false,paused:false,in_flight:true}},
+    {priorExposure:{grok_sent:true,anthropic_sent:true,paused:false,in_flight:false}},
+    {exposureInspectionError:true},
+  ]) {
+    const h=harness({fallbackConfigured:true,...opts});
+    const result=await h.run();
+    assert.ok(["blocked","deferred"].includes(result));
+    assert.equal(h.calls.length,0);
+    assert.equal(h.writes.length,0);
+    assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,0);
+  }
+});
+
+test("native Claude enforces API-compatible schema but retains source validators",async()=>{
+  const h=harness({fallbackConfigured:true,priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false}});
+  assert.equal(await h.run(),"committed");
+  for(const call of h.calls) {
+    assert.equal(call.__provider,"anthropic");
+    assert.equal(call.__transport,"messages");
+    assert.equal(call.max_tokens>0,true);
+    assert.equal(typeof call.system,"string");
+    assert.deepEqual(call.messages.map(m=>m.role),["user"]);
+    assert.equal(call.thinking?.type,"between_tools");
+    assert.equal(call.output_config?.effort,"low");
+    const schema=JSON.stringify(call.output_config.format.schema);
+    assert.doesNotMatch(schema,/"(?:maxItems|uniqueItems|minimum|maximum|minLength|maxLength)":/);
+    assert.equal(JSON.parse(schema).additionalProperties,false);
+  }
+  const malformed=harness({
+    fallbackConfigured:true,priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+    responses:()=>reply(JSON.stringify({episodes:[{summary:"invented unsourced account",evidence:[{messageId:"not-found",quote:"made up"}]}]})),
+  });
+  assert.equal(await malformed.run(),"blocked");
+  assert.equal(malformed.writes.length,0);
+});
+
+test("nonretryable billing error finalizes claim as blocked and never opens a fallback",async()=>{
+  const reason=Object.assign(Error("Unsupported endpoint or billing region"),{
+    code:"standalone_unsupported_billing",terminal:true,
+  });
+  const wrapped=Object.assign(Error("Connection error."),{cause:reason});
+  const h=harness({fallbackConfigured:true,responses:()=>{throw wrapped;}});
+  await assert.rejects(h.run(),e=>e===wrapped);
+  assert.equal(h.writes.length,0);
+  const finish=h.events.find(x=>x.name==="finish_intermediate_memory_batch");
+  assert.equal(finish.args.p_state,"blocked");
+  assert.match(finish.args.p_reason,/standalone_unsupported_billing/);
+  assert.equal(await h.run(),"blocked");
+  assert.deepEqual(h.calls.map(c=>c.__provider),["grok"]);
+});
+
+test("native Claude truncation blocks with unchanged checkpoint",async()=>{
+  const h=harness({
+    fallbackConfigured:true,priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+    responses:()=>({stop_reason:"max_tokens",content:[{type:"text",text:'{"episodes":[]}'}]}),
+  });
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.writes.length,0);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
+  assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
+});
+
+test("installed OpenAI SDK serializes ITM native Claude calls to /v1/messages with no retry",async()=>{
+  const requests=[];
+  const texts=[
+    selected().choices[0].message.content,
+    retained().choices[0].message.content,
+  ];
+  const fetchOverride=async(input,init)=>{
+    requests.push({url:String(input),body:JSON.parse(init.body),headers:new Headers(init.headers)});
+    return new Response(JSON.stringify({
+      id:"msg_synthetic_itm_"+requests.length,
+      type:"message",role:"assistant",model:"claude-sonnet-5-5",
+      stop_reason:"end_turn",content:[{type:"text",text:texts[requests.length-1]}],
+      usage:{input_tokens:1200,output_tokens:400},
+    }),{status:200,headers:{"content-type":"application/json"}});
+  };
+  const h=harness({
+    transportClass:OpenAI,fetchOverride,fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+  });
+  assert.equal(await h.run(),"committed");
+  assert.equal(requests.length,2);
+  assert.ok(requests.every(r=>r.url==="https://api.anthropic.com/v1/messages"));
+  assert.ok(requests.every(r=>r.headers.get("authorization")===null &&
+    r.headers.get("x-api-key")==="test-only-claude-key" &&
+    r.headers.get("anthropic-version")==="2023-06-01"));
+  assert.deepEqual(requests.map(r=>r.body.max_tokens),[2300,2800]);
+  assert.ok(requests.every(r=>r.body.model==="claude-sonnet-5-5" &&
+    r.body.thinking.type==="between_tools" && r.body.output_config.effort==="low" &&
+    r.body.output_config.format.type==="json_schema" &&
+    !("temperature" in r.body) && !("response_format" in r.body)));
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+  assert.equal(h.writes.length,1);
+});
+
+test("installed SDK native Claude truncated output cannot advance ITM checkpoint",async()=>{
+  let sends=0;
+  const fetchOverride=async()=>{
+    sends++;
+    return new Response(JSON.stringify({
+      id:"msg_synthetic_truncated",type:"message",role:"assistant",
+      stop_reason:"max_tokens",content:[{type:"text",text:'{"episodes":[]}'}],
+    }),{status:200,headers:{"content-type":"application/json"}});
+  };
+  const h=harness({
+    transportClass:OpenAI,fetchOverride,fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+  });
+  assert.equal(await h.run(),"blocked");
+  assert.equal(sends,1);
   assert.equal(h.writes.length,0);
   assert.equal(h.memory().summarizedThroughMessageId??null,null);
 });
