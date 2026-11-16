@@ -11,19 +11,27 @@ jobs:
   source:
     if: github.repository == 'mfackrell/katie' && github.ref == 'refs/heads/fix/generated-image-perception-20261116'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Export source only, no secrets or inference
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install frozen dependencies without lifecycle hooks
+        run: npm ci --ignore-scripts
+      - name: Export source and dependency cache, never environment files
         run: |
           git archive --format=tar.gz --output=/tmp/katie-source.tar.gz HEAD
           git rev-parse HEAD > /tmp/source-sha.txt
+          tar -czf /tmp/katie-dependencies.tar.gz node_modules
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: generated-image-engineering-source
+          name: generated-image-engineering-offline
           path: |
             /tmp/katie-source.tar.gz
             /tmp/source-sha.txt
+            /tmp/katie-dependencies.tar.gz
+          compression-level: 0
           retention-days: 1
