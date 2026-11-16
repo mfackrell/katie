@@ -27,14 +27,14 @@ grant select,insert on public.itm_stage_receipts to service_role;
 -- Enforce the authenticated actor/chat identity already established by Katie.
 -- Only the service-role backend may call this insert path; it must still match.
 create or replace function public.assert_itm_stage_receipt_owner()
-returns trigger language plpgsql set search_path=public,pg_temp as $
+returns trigger language plpgsql set search_path=public,pg_temp as $$
 begin
   if not exists(select 1 from public.chats c where c.id=new.chat_id and c.actor_id=new.actor_id) then
     raise exception 'ITM_STAGE_RECEIPT_ACTOR_CHAT_MISMATCH';
   end if;
   return new;
 end;
-$;
+$$;
 revoke all on function public.assert_itm_stage_receipt_owner() from public,anon,authenticated;
 drop trigger if exists itm_stage_receipt_owner_check on public.itm_stage_receipts;
 create trigger itm_stage_receipt_owner_check
