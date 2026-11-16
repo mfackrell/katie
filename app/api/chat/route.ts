@@ -1925,6 +1925,37 @@ async function executeChat(request: NextRequest) {
       }
     }
 
+    // Persist the accepted execution choice before any provider execution.
+    // This complements private classifier/reranker response checkpoints and
+    // remains available even when generation fails before saving an answer.
+    try {
+      await cachedWorkflowValue("routing-execution-decision:v1", async () => ({
+        version: "routing-execution-v1",
+        requestId,
+        classifiedIntent: resolvedRequestIntent,
+        intentAuthority,
+        intentResolutionReason,
+        objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+        chosenProvider: provider.name,
+        chosenModel: modelId,
+        routerChosenProvider: selectionExplainer?.selected_provider ?? null,
+        routerChosenModel: selectionExplainer?.selected_model ?? null,
+        selectedSource: selectionExplainer?.selected_source ?? null,
+        justification: selectionExplainer?.selection_justification ?? null,
+        candidateScore: selectionExplainer?.top_candidate_score ?? null,
+        topFactors: selectionExplainer?.top_factors ?? [],
+        topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+        deterministicOverride: selectionExplainer?.override ?? null,
+        fallbackUsed: selectionExplainer?.fallback_used ?? false,
+        fallbackReason: selectionExplainer?.fallback_reason ?? null,
+        productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+      }));
+    } catch (error) {
+      console.warn("[Routing Execution Audit] checkpoint_unavailable", {
+        requestId, cause: error instanceof Error ? error.name : "unknown"
+      });
+    }
+
     // Select continuity only after classifying the literal current turn. The
     // existence of an unresolved audit in this chat is never enough to resume it.
     // Routing selects execution capabilities, not a different parent task.
