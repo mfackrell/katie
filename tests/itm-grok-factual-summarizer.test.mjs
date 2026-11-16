@@ -469,7 +469,7 @@ test("previous metered Grok batch routes to native Claude without another Grok t
   assert.equal(h.memory().sourceMessageCount,30);
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
   assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,1);
-  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v12.*:anthropic$/);
+  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v13.*:anthropic$/);
 });
 
 test("previously sent Claude source batch never reverses fallback to Grok",async()=>{
@@ -483,9 +483,20 @@ test("previously sent Claude source batch never reverses fallback to Grok",async
   assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,0);
 });
 
+test("v12 accounting-lease terminal marker cannot block fresh v13 infrastructure recovery",async()=>{
+  const h=harness({
+    fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false,terminal:true},
+    responses:n=>n===1?selected():retained(),
+  });
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(x=>x.__provider),["anthropic","anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+});
+
 test("historical exposure inspection blocks duplicate paid work and preserves cursor",async()=>{
   for(const opts of [
-    {priorExposure:{grok_sent:false,anthropic_sent:false,paused:true,in_flight:false}},
+
     {priorExposure:{grok_sent:false,anthropic_sent:false,paused:false,in_flight:true}},
     {priorExposure:{grok_sent:true,anthropic_sent:true,paused:false,in_flight:false}},
     {exposureInspectionError:true},

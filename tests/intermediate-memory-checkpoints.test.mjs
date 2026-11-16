@@ -58,7 +58,7 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 test("v11 uses Grok Responses API with bounded factual episodes and index-only retention",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v12-claude-native-failclosed-recovery"/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v13-memory-ungated-metered"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.equal((summary.match(/client\.post\("\/responses"/g)||[]).length,1);
