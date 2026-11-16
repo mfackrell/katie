@@ -1118,6 +1118,9 @@ async function executeChat(request: NextRequest) {
     const restored = await loadSelectedAttachmentSources(attachmentDecision, async saved => {
       const owner = await getChatById(saved.chatId ?? chatId);
       if (!owner || owner.actorId !== actorId) throw new Error("Source conversation is unavailable to this actor.");
+      // Cached source selection does not prove that original bytes still exist.
+      // Revalidate generated sources even for edit/recovery paths that skip Qwen.
+      if (saved.generatedSource) return (await readGeneratedImage(actorId,owner.id,saved.id)).reference;
       return restoreConversationAttachment(owner.id, saved, actorId);
     });
     // Index the exact selected source by trusted fileId, never filename. Source
