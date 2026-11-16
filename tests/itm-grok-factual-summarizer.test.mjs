@@ -30,10 +30,10 @@ function harness({
   missingChat = false, commitResult = true,
   priorExposure = { grok_sent:false, anthropic_sent:false, paused:false, in_flight:false },
   exposureInspectionError = false,
-  transportClass = null, fetchOverride = null,
+  transportClass = null, fetchOverride = null, legacyRaw = null,
 } = {}) {
   let memory = copy(prior);
-  const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [];
+  const calls = [], events = [], logs = [], writes = [], claims = new Map(), constructors = [], receipts = new Map();
   const terminalBatches = new Set();
   const accountingCause = error => {
     let current = error;
@@ -89,8 +89,12 @@ function harness({
     async rpc(name, args) {
       events.push({ name, args: copy(args) });
       if (name === "inspect_itm_batch_provider_exposure") {
+        const matching=[...claims.entries()].filter(([key])=>key.endsWith(":"+args.p_batch_end_message_id));
+        const active=matching.some(([,state])=>state==="processing");
         return exposureInspectionError ? {data:null,error:{message:"Inspection unavailable"}} :
-          {data:{...copy(priorExposure),terminal:Boolean(priorExposure.terminal)||terminalBatches.has(args.p_batch_end_message_id)},error:null};
+          {data:{...copy(priorExposure),
+            in_flight:priorExposure.in_flight || active,
+            terminal:Boolean(priorExposure.terminal)||terminalBatches.has(args.p_batch_end_message_id)},error:null};
       }
       if (name === "claim_intermediate_memory_batch") {
         if (args.p_expected_cursor !== (memory.summarizedThroughMessageId ?? null))
@@ -104,7 +108,7 @@ function harness({
       if (name === "commit_intermediate_memory_checkpoint") {
         if (args.p_expected_cursor !== (memory.summarizedThroughMessageId ?? null))
           return { data: false, error: null };
-        if (!commitResult) return { data: false, error: null };
+        if (!(typeof commitResult === "function" ? commitResult() : commitResult)) return { data: false, error: null };
         writes.push(copy(args));
         memory = copy(args.p_content);
         return { data: true, error: null };
@@ -150,6 +154,40 @@ function harness({
       standaloneAccountingCause: accountingCause,
       standaloneFailureDetails: failureDetails,
     },
+    "@/lib/memory/itm-stage-receipts": {
+      itmReceiptHash: value => "hash:" + String(value).length,
+      readItmStageReceipt: async key => {
+        const sourceKey=[key.actorId,key.chatId,key.batchEndMessageId,key.expectedCursor,
+          key.sourceSha256,key.contextSha256].join(":");
+        const receipt=receipts.get(key.provider+":"+key.stage)?.get(sourceKey);
+        events.push({name:"stage_receipt_read",provider:key.provider,stage:key.stage,present:Boolean(receipt)});
+        return receipt??null;
+      },
+      recordItmStageReceipt: async (key,text) => {
+        const id=key.provider+":"+key.stage;
+        const sourceKey=[key.actorId,key.chatId,key.batchEndMessageId,key.expectedCursor,
+          key.sourceSha256,key.contextSha256].join(":");
+        const saved={responseText:text,responseSha256:"receipt-"+text.length};
+        const sameStage=receipts.get(id)??new Map();
+        const prior=sameStage.get(sourceKey);
+        if(prior && prior.responseText!==text) throw Error("ITM_RECEIPT_WRITE_UNAVAILABLE_OR_CONFLICT");
+        sameStage.set(sourceKey,saved);
+        receipts.set(id,sameStage);
+        events.push({name:"stage_receipt_saved",provider:key.provider,stage:key.stage});
+        return saved;
+      },
+      inspectPriorItmClaims: async(actorId,chatId,sourceEnd)=>{
+        const versions=[...claims.keys()].filter(key=>key.endsWith(":"+sourceEnd));
+        return {grok:versions.some(k=>k.includes(":grok:")),
+          anthropic:versions.some(k=>k.includes(":anthropic:"))};
+      },
+      readLegacyItmEpisodeOutput: async(actorId,chatId,end,provider)=>{
+        events.push({name:"legacy_receipt_lookup",provider,actorId,chatId,end});
+        return legacyRaw && provider==="grok"
+          ? {responseText:legacyRaw,ledgerAttemptId:"historical-settled-grok"}
+          : null;
+      },
+    },
     "@/lib/memory/memory-contract": { SHORT_TERM_MESSAGE_LIMIT: 60 },
     "@/lib/memory/short-term": { filterConversationalMessages: m => m },
   };
@@ -164,7 +202,7 @@ function harness({
     require: name => { assert.ok(name in deps, "Unknown dependency " + name); return deps[name]; },
   });
   return { run: () => module.exports.maybeUpdateSummary("chat"),
-    calls, writes, events, logs, constructors, memory: () => memory };
+    calls, writes, events, logs, constructors, receipts, memory: () => memory };
 }
 
 test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () => {
@@ -401,7 +439,8 @@ test("atomic cursor prevents stale writes and preserves previous memory", async 
   assert.deepEqual(h.memory(), prior);
   assert.equal(h.writes.length, 0);
   assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
-  assert.equal(await h.run(),"blocked","stale paid claim cannot retransmit");
+  assert.equal(await h.run(),"deferred","cached stage receipts may retry checkpoint CAS without another provider call");
+  assert.equal(h.calls.length,2,"no additional paid provider dispatch");
 });
 
 test("model prompts require factual narratives and prohibit interpretive memory", async () => {
@@ -476,7 +515,7 @@ test("previous metered Grok batch routes to native Claude without another Grok t
   assert.equal(h.memory().sourceMessageCount,30);
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
   assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,1);
-  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v13.*:anthropic$/);
+  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v14.*:anthropic$/);
 });
 
 test("previously sent Claude source batch never reverses fallback to Grok",async()=>{
@@ -559,6 +598,58 @@ test("obsolete accounting billing failure is audited but cannot permanently gate
   assert.equal(await h.run(),"committed");
   assert.deepEqual(h.calls.map(c=>c.__provider),["grok","anthropic","anthropic"]);
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
+});
+
+test("response failing source-grounding is preserved before validation and never retransmitted",async()=>{
+  const h=harness({responses:()=>reply(JSON.stringify({episodes:[{
+    summary:"The user described a specific historical detail during the conversation.",
+    evidence:[],
+  }]}))});
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,1);
+  assert.equal(h.receipts.has("grok:episodes"),true);
+  assert.equal(h.logs.some(log=>String(log.args[1]?.reason??"").includes("ITM_VALIDATION_EPISODE_EVIDENCE_COUNT")),true);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,1,"read-only recovery must not generate again");
+});
+
+test("source-verified legacy Grok episodes can be imported with zero paid calls",async()=>{
+  const legacy=selected().choices[0].message.content;
+  const h=harness({
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false},
+    legacyRaw:legacy,
+  });
+  assert.equal(await h.run(),"blocked","stage 2 retention plan is still missing");
+  assert.equal(h.calls.length,0,"no fresh Grok or Claude inference authorized");
+  assert.equal(h.receipts.has("grok:episodes"),true);
+  assert.equal(h.receipts.has("grok:retention"),false);
+  assert.equal(h.memory().summarizedThroughMessageId??null,null);
+  assert.ok(h.events.some(e=>e.name==="legacy_receipt_lookup"&&e.provider==="grok"));
+});
+
+test("completed captured stages replay without provider work after a commit failure",async()=>{
+  let allowCommit=false;
+  const h=harness({commitResult:()=>allowCommit});
+  assert.equal(await h.run(),"deferred");
+  assert.equal(h.calls.length,2);
+  assert.equal(h.receipts.size,2);
+  allowCommit=true;
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.calls.length,2,"offline receipt recovery has no provider call");
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+  assert.equal(h.events.some(e=>e.name==="finish_intermediate_memory_batch"&&e.args.p_state==="completed"&&
+    e.args.p_processor_version.endsWith(":offline-recovery")),true);
+});
+
+test("specific non-sensitive validation code identifies bad episode summary bounds",async()=>{
+  const h=harness({responses:()=>reply(JSON.stringify({episodes:[{
+    summary:"Too short",
+    evidence:[{messageId:"m0",quote:"Historical detail from turn 0"}],
+  }]}))});
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.receipts.has("grok:episodes"),true);
+  assert.ok(h.logs.some(l=>String(l.args[1]?.reason??"").includes("ITM_VALIDATION_EPISODE_SUMMARY_LENGTH")));
 });
 
 test("native Claude truncation blocks with unchanged checkpoint",async()=>{
