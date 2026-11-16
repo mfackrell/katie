@@ -1558,7 +1558,7 @@ test("signed image chunks are immutable across identical and conflicting retries
   const signedStorage={
     ...fake.storage,
     from: () => {
-      const objects=originalFrom();
+      const objects=originalFrom("katie-attachments");
       return {
         ...objects,
         upload: async (...args: Parameters<typeof objects.upload>) => {
