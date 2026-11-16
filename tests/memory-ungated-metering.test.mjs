@@ -107,7 +107,7 @@ test("metering never bypasses provider destination constraints or ITM recovery f
   await assert.rejects(h.exports.createMemoryMeteredFetch("grok","memory-summary",{},h.fakeFetch)(
     "https://not-x.ai/v1/responses",{method:"POST",body:'{}'}),/Unexpected memory provider destination/);
   assert.equal(h.requests.length,0);
-  assert.match(versionSource,/two-stage-30-messages-v13-memory-ungated-metered/);
+  assert.match(versionSource,/two-stage-30-messages-v14-strict-stage-receipts/);
   assert.match(versionSource,/inspection\.data\.in_flight/);
   assert.match(versionSource,/inspection\.data\.grok_sent/);
   assert.match(versionSource,/inspection\.data\.anthropic_sent/);
