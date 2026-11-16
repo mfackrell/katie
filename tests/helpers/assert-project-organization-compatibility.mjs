@@ -78,6 +78,12 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  console.log('PAUSED_RENEWAL_INSTALLED_BASELINE_PASS: six installed authority function bodies match production');
  await db.query(readFileSync('supabase/migrations/20261115183518_paused_expired_window_renewal.sql','utf8'));
  assert.deepEqual(await snapshot(),before,'Paused window migration never mutates existing records');
+ const installedRecovery=async()=>(await db.query("select proname,md5(prosrc) prosrc_md5,prosecdef,proconfig,proacl::text from pg_proc where pronamespace='public'::regnamespace and proname in ('project_org_renew_paused_window','project_org_resume_management','project_org_hierarchy_recovery_state','project_org_renewed_management_source') order by proname")).rows;
+ const beforeOwnerControls=await installedRecovery();
+ await db.query(readFileSync('supabase/migrations/20261116132333_owner_management_activation_controls.sql','utf8'));
+ assert.deepEqual(await installedRecovery(),beforeOwnerControls,'Reviewed recovery definitions, ACLs and security settings are unchanged');
+ console.log('OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: '+JSON.stringify(beforeOwnerControls));
+ assert.deepEqual(await snapshot(),before,'Owner activation controls never mutate historical records during installation');
  const recoveryAcl=(await db.query("select relrowsecurity,has_table_privilege('service_role','project_management_resume_receipts','INSERT') writable,has_function_privilege('anon','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') anon,has_function_privilege('authenticated','project_org_resume_management(uuid,uuid,text,text,text,uuid)','EXECUTE') authenticated from pg_class where oid='project_management_resume_receipts'::regclass")).rows[0];
  assert.deepEqual(recoveryAcl,{relrowsecurity:true,writable:false,anon:false,authenticated:false});
  await (await import('./assert-project-scope-ratification.mjs')).assertProjectScopeRatification(db,rival);

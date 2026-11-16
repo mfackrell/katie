@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
+import type {ManagementActivationOffer} from "@/lib/projects/management-activation";
+
 export type DirectorRecoveryReceipt = {
   projectId: string;
   missionId: string;
@@ -18,11 +20,13 @@ export type DirectorRecoveryOffer = {
   priorCutoff: string;
   receipt: DirectorRecoveryReceipt | null;
   continuation?: {decisionId:string;admittedAt:string|null;maxCutoff?:string;authorizationId?:string;authorizedAt?:string};
+  managementActivation?:ManagementActivationOffer;
+  managementActivationError?:string;
   hierarchyRecovery?: {decisionId:string;priorCutoff:string;directorCutoff:string;stateHash:string;
     nodeCount:number;maxHours:number;activeMissionId:string|null};
 };
 
-export function DirectorRecoveryControl({
+function LegacyDirectorRecoveryControl({
   recovery,
   onRefresh,
 }: {
@@ -167,4 +171,92 @@ export function DirectorRecoveryControl({
       {error && <p role="alert">{error}</p>}
     </aside>
   );
+}
+
+
+export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;onRefresh:()=>void}){
+ if(props.recovery.managementActivationError)return <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3" aria-label="Approved project recovery">
+  <p role="alert">{props.recovery.managementActivationError}</p>
+  <button type="button" className="min-h-11 rounded border px-3 py-2" onClick={props.onRefresh}>Refresh project status</button>
+ </aside>;
+ return props.recovery.managementActivation
+  ?<ManagementActivationControl key={props.recovery.projectId+':'+props.recovery.releaseSha} initial={props.recovery.managementActivation} onRefresh={props.onRefresh}/>
+  :<LegacyDirectorRecoveryControl {...props}/>;
+}
+
+function ManagementActivationControl({initial,onRefresh}:{initial:ManagementActivationOffer;onRefresh:()=>void}){
+ const [offer,setOffer]=useState(initial);
+ const [pending,setPending]=useState(false);
+ const [error,setError]=useState<string|null>(null);
+ const [notice,setNotice]=useState<string|null>(null);
+ const submitting=useRef(false);
+ const expired=offer.stage==='expired'||Date.now()>=Date.parse('2026-11-16T18:00:00Z')-300000;
+ async function refresh(bearer:string){
+  const response=await fetch('/api/projects/organization?projectId='+encodeURIComponent(initial.projectId),{
+   headers:{Authorization:'Bearer '+bearer},cache:'no-store',
+  });
+  const result=await response.json();
+  const next=result.managementActivation as ManagementActivationOffer|undefined;
+  if(!response.ok||!next||next.projectId!==initial.projectId||next.releaseSha!==initial.releaseSha
+   ||next.cutoff!=='2026-11-16T18:00:00Z'||!['renew','resume','resumed','expired'].includes(next.stage))
+   throw Error(result.error??'Recovery status could not be verified. Refresh project status.');
+  setOffer(next);return next;
+ }
+ async function act(action:'refresh'|'renew'|'resume'){
+  if(submitting.current||(action!=='refresh'&&expired))return;
+  submitting.current=true;setPending(true);setError(null);setNotice(null);
+  let bearer:string|null=null;
+  try{
+   bearer=await ownerSessionBearer();
+   if(!bearer)throw Error('Sign in with the existing Katie owner account to use this control.');
+   if(action==='refresh'){await refresh(bearer);return;}
+   if((action==='renew'&&offer.stage!=='renew')||(action==='resume'&&offer.stage!=='resume'))
+    throw Error('Refresh project status before continuing.');
+   const authorizationId=action==='renew'?crypto.randomUUID():offer.authorizationId;
+   const body=action==='renew'?{
+    trialAction:'renew_paused_window',projectId:offer.projectId,releaseSha:offer.releaseSha,
+    expectedReleaseSha:offer.expectedReleaseSha,scopeHash:offer.scopeHash,sourceMissionId:offer.sourceMissionId,
+    priorWindowId:offer.windowId,priorCutoff:'2026-11-15T18:00:00Z',cutoff:'2026-11-16T18:00:00Z',
+    authorizationId,stateHash:offer.stateHash,
+   }:{trialAction:'resume_management',projectId:offer.projectId,releaseSha:offer.releaseSha,
+    authorizationId,stateHash:offer.stateHash,cutoff:'2026-11-16T18:00:00Z'};
+   const response=await fetch('/api/projects/organization',{
+    method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},body:JSON.stringify(body),
+   });
+   const result=await response.json();
+   if(!response.ok)throw Error(result.error??'Recovery request was rejected. Refresh project status.');
+   if(result.projectId!==offer.projectId||result.releaseSha!==offer.releaseSha||result.authorizationId!==authorizationId
+    ||Date.parse(result.cutoff)!==Date.parse(offer.cutoff)||result.sourceMissionId!==offer.sourceMissionId
+    ||result.status!==(action==='renew'?'paused':'running'))
+    throw Error('The recovery receipt could not be confirmed. Refresh project status.');
+   const next=await refresh(bearer);
+   if(next.authorizationId!==authorizationId||(action==='renew'?next.stage!=='resume':next.stage!=='resumed'))
+    throw Error('The durable recovery receipt could not be verified. Refresh project status.');
+   setNotice(action==='renew'?'Renewal verified. The project remains paused. Resume management separately when ready.':'Management resume verified.');
+   onRefresh();
+  }catch(failure){
+   // A lost response cannot justify repeating a state transition. Read back
+   // the durable state and leave the next action as a separate owner click.
+   if(bearer){try{await refresh(bearer);}catch{ /* Retain the last verified offer and show the actionable failure. */ }}
+   setError(failure instanceof Error?failure.message:'Recovery could not be confirmed. Refresh project status.');
+  }finally{submitting.current=false;setPending(false);}
+ }
+ return <aside className="mx-3 my-2 min-w-0 rounded-xl border border-white/20 p-3" aria-label="Approved project recovery">
+  <p className="font-semibold">Original tic-tac-toe project</p>
+  <p>Approved cutoff: November 16, 2026, noon Central.</p>
+  <p>96-mission cap · 600,000-token allowance · existing scope and organization.</p>
+  <div role="status" aria-live="polite">
+   {offer.stage==='resumed'?<p>Management resume recorded. Current project status: {offer.status}.</p>
+    :expired?<p>The approved cutoff has expired or has less than five minutes remaining. Recovery is unavailable.</p>
+    :offer.stage==='resume'?<p>Renewal receipt verified for all 13 contracts. Project paused; management has not resumed.</p>
+    :<p>The project is paused. Apply the already-approved renewal first; it will remain paused.</p>}
+   {notice&&<p>{notice}</p>}
+  </div>
+  <div className="mt-2 flex flex-wrap gap-2">
+   {!expired&&offer.stage==='renew'&&<button type="button" className="min-h-11 max-w-full rounded border px-3 py-2 font-semibold" disabled={pending} onClick={()=>void act('renew')}>Renew to approved noon Central cutoff</button>}
+   {!expired&&offer.stage==='resume'&&<button type="button" className="min-h-11 max-w-full rounded border px-3 py-2 font-semibold" disabled={pending} onClick={()=>void act('resume')}>Resume approved project management</button>}
+   <button type="button" className="min-h-11 rounded border px-3 py-2" disabled={pending} onClick={()=>void act('refresh')}>{pending?'Checking recovery…':'Refresh recovery status'}</button>
+  </div>
+  {error&&<p role="alert">{error} {offer.stage==='resume'?'The renewal is retained; the project remains paused.':''}</p>}
+ </aside>;
 }
