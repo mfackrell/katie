@@ -3937,8 +3937,23 @@ ${chunkWorkflowSummary}`;
                 }),
                 requestId,
                 classifiedIntent: resolvedRequestIntent,
+                objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
                 provider: result!.provider,
                 model: result!.model,
+                routingSelection: {
+                  initialProvider: selectionExplainer?.selected_provider ?? null,
+                  initialModel: selectionExplainer?.selected_model ?? null,
+                  finalProvider: result!.provider,
+                  finalModel: result!.model,
+                  selectedSource: selectionExplainer?.selected_source ?? null,
+                  selectionJustification: selectionExplainer?.selection_justification ?? null,
+                  score: selectionExplainer?.top_candidate_score ?? null,
+                  topFactors: selectionExplainer?.top_factors ?? [],
+                  topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+                  deterministicOverride: selectionExplainer?.override ?? null,
+                  fallbackUsed: selectionExplainer?.fallback_used ?? false,
+                  fallbackReason: selectionExplainer?.fallback_reason ?? null
+                },
                 productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
               }));
               if (deliveryAudit.status === "fail") {
