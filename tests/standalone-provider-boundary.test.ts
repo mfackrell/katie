@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
 import { createAccountingFetch } from '../lib/standalone-accounting/dispatch';
-import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, isStandaloneAccountingError, standaloneAccountingCause } from '../lib/standalone-accounting/context';
+import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, runWithDurablePostAnswerAccounting, isStandaloneAccountingError, standaloneAccountingCause } from '../lib/standalone-accounting/context';
 import { freezePreparedRequest, prepareStandaloneRequest, estimatePreparedRequest } from '../lib/standalone-accounting/estimate';
 import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
@@ -19,6 +19,85 @@ import { ClaudeProvider } from '../lib/providers/claude-provider';
 import { claudeCachedSystem } from '../lib/providers/claude-cache';
 
 const context = { userId: 'owner', actorId: 'actor', chatId: 'chat', requestId: 'request' };
+
+test('bounded xAI Responses Web Search settles provider reported tool-inclusive cost and replays without a second call',async()=>{
+  const fake=fakeLedger();let sends=0;
+  const body={model:'grok-4.3',input:[{role:'user',content:[{type:'input_text',text:'Find Wild Horse Nine'}]}],
+    tools:[{type:'web_search'}],include:['web_search_call.action.sources'],
+    max_turns:1,parallel_tool_calls:false,max_output_tokens:2048};
+  const result=()=>new Response(JSON.stringify({
+    id:'resp_web_1',status:'completed',model:'grok-4.3',
+    output:[{type:'web_search_call',status:'completed',action:{sources:[{url:'https://example.com/source'}]}},
+      {type:'message',content:[{type:'output_text',text:'Grounded source summary'}]}],
+    usage:{input_tokens:240,output_tokens:80,total_tokens:320,
+      cost_in_usd_ticks:60000000,num_server_side_tools_used:1,
+      server_side_tool_usage_details:{web_search_calls:1,x_search_calls:0,x_posts_fetched:0,x_users_fetched:0,
+        code_interpreter_calls:0,file_search_calls:0,mcp_calls:0,document_search_calls:0,image_generation_calls:0}}
+  }),{headers:{'content-type':'application/json'}});
+  const send=createAccountingFetch('grok',async(_url,init)=>{
+    sends++;assert.equal(JSON.parse(String(init?.body)).max_turns,1);
+    assert.equal(JSON.parse(String(init?.body)).parallel_tool_calls,false);return result();
+  },fake.factory);
+  const first=await runWithStandaloneAccounting(context,()=>send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)}));
+  const replay=await runWithStandaloneAccounting(context,()=>send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)}));
+  assert.equal(await first.text(),await replay.text());
+  assert.equal(sends,1);
+  assert.equal(fake.attempts.length,1);
+  assert.equal(fake.attempts[0].state,'settled');
+  assert.equal(fake.attempts[0].actual_microusd,'6000');
+  assert.equal(fake.attempts[0].usage?.cost_in_usd_ticks,60000000);
+  assert.equal(fake.attempts[0].evidence?.webSearchCalls,1);
+  assert.equal(fake.attempts[0].evidence?.providerCostTicks,'60000000');
+  assert.ok(BigInt(fake.attempts[0].reserved_microusd)>=BigInt(fake.attempts[0].actual_microusd!));
+});
+
+test('unpriced, unbounded or mixed xAI server tools fail preflight without spending',async()=>{
+  const fake=fakeLedger();let sends=0;
+  const send=createAccountingFetch('grok',async()=>{sends++;throw Error('must not send');},fake.factory);
+  const base={model:'grok-4.3',input:'Lookup',max_turns:1,max_output_tokens:2048,
+    parallel_tool_calls:false,include:['web_search_call.action.sources'],tools:[{type:'web_search'}]};
+  const invalid=[
+    {...base,include:['web_search_call.action.sources','unexpected']},
+    {...base,tools:[{type:'web_search'},{type:'x_search'}]},
+    {...base,max_turns:2},
+    {...base,parallel_tool_calls:true},
+    {...base,max_output_tokens:8192},
+    {...base,tools:[{type:'web_search',enable_image_search:true}]},
+    {...base,include:undefined},
+  ];
+  for(const payload of invalid){
+    const checked=Object.fromEntries(Object.entries(payload).filter(([,value])=>value!==undefined));
+    await assert.rejects(runWithStandaloneAccounting({...context,requestId:'blocked-'+invalid.indexOf(payload)},()=>
+      send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(checked)})),isStandaloneAccountingError);
+  }
+  assert.equal(sends,0);
+  assert.equal(fake.attempts.length,0);
+});
+
+test('unverified xAI web usage stays uncertain and can never be retransmitted',async()=>{
+  for(const usageOverride of [
+    {cost_in_usd_ticks:undefined},
+    {server_side_tool_usage_details:{web_search_calls:2}},
+    {server_side_tool_usage_details:{web_search_calls:1,x_search_calls:1}},
+    {cost_in_usd_ticks:100000000000},
+  ]){
+    const fake=fakeLedger();let sends=0;
+    const body={model:'grok-4.3',input:'Look up topic',max_turns:1,max_output_tokens:2048,
+      parallel_tool_calls:false,include:['web_search_call.action.sources'],tools:[{type:'web_search'}]};
+    const usage={input_tokens:200,output_tokens:70,total_tokens:270,
+      cost_in_usd_ticks:60000000,server_side_tool_usage_details:{web_search_calls:1},...usageOverride};
+    const send=createAccountingFetch('grok',async()=>{sends++;
+      return new Response(JSON.stringify({id:'resp_failed',status:'completed',model:'grok-4.3',output:[{type:'message',content:[]}],usage}));
+    },fake.factory);
+    await assert.rejects(runWithStandaloneAccounting(context,()=>
+      send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)})),isStandaloneAccountingError);
+    assert.equal(fake.attempts[0].state,'uncertain');
+    assert.ok(fake.attempts[0].response_checkpoint,'the original response remains durable');
+    await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)})),isStandaloneAccountingError);
+    assert.equal(sends,1);
+  }
+});
+
 const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] }) };
 const receipt = (id = 'receipt-1') => new Response(JSON.stringify({ id, choices: [{ message: { content: 'hello' } }], usage: { prompt_tokens: 100, completion_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
 function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT) {
@@ -101,6 +180,35 @@ test('missing receipts retain exposure and block automatic continuation and repl
   await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
   assert.equal(sends, 1);
   assert.equal(fake.attempts[0].actual_microusd, undefined);
+});
+
+test('closed response signal blocks old ITM admission, but durable post-answer scope preserves metered transport', async () => {
+  const oldHttpRequest = new AbortController();
+  oldHttpRequest.abort();
+  const fake = fakeLedger();
+  let providerSends = 0;
+  const send = createAccountingFetch('openai', async () => {
+    providerSends++;
+    return receipt();
+  }, fake.factory);
+
+  await runWithStandaloneAccounting({ ...context, signal: oldHttpRequest.signal }, async () => {
+    await assert.rejects(
+      send('https://api.openai.com/v1/chat/completions', request),
+      error => standaloneAccountingCause(error)?.code === 'standalone_cancelled',
+    );
+    assert.equal(fake.attempts.length, 0, 'aborted request cannot create an accounting attempt');
+    assert.equal(providerSends, 0);
+
+    const response = await runWithDurablePostAnswerAccounting(
+      () => send('https://api.openai.com/v1/chat/completions', request),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(fake.attempts[0].actor_id, context.actorId);
+    assert.equal(fake.attempts[0].request_id, context.requestId);
+  });
+  assert.equal(providerSends, 1);
+  assert.equal(fake.attempts[0].state, 'settled');
 });
 
 test('cancellation aborts the actual transmission and retains dispatched exposure', async () => {

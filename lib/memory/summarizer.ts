@@ -1,4 +1,4 @@
-import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
@@ -29,7 +29,7 @@ const SUMMARY_MAX_TOKENS = 2300; // First prompt: new source batch only.
 const BATCH_SUMMARY_MAX_CHARACTERS = 7500;
 // Semantic reconciliation is now a small edit plan rather than a full rewrite.
 // Earlier paid attempt records remain intact and no retries are automatic.
-const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v11-grok-responses-grounded-factual";
+const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v12-claude-native-failclosed-recovery";
 const processorVersion = (provider:SummaryProvider) => `${ITM_PROCESSOR_VERSION}:${provider}`;
 export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "deferred";
 
@@ -39,11 +39,24 @@ const anthropicApiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_ke
 function configuredProviders():SummaryProvider[] {
   return [...(grokApiKey ? ["grok" as const] : []), ...(anthropicApiKey ? ["anthropic" as const] : [])];
 }
+function isRequestAbort(error:unknown):boolean {
+  let current:unknown=error;
+  for(let depth=0;current&&typeof current==="object"&&depth<8;depth++){
+    const value=current as {name?:unknown;code?:unknown;cause?:unknown};
+    if(value.name==="AbortError" || value.code==="ABORT_ERR")return true;
+    current=value.cause;
+  }
+  return false;
+}
 function shouldUseNextProvider(error:unknown):boolean {
-  const value=error as {code?:string};
+  // The SDK wraps transport/owner-accounting errors as "Connection error".
+  // Inspect the nested accounting cause first; an owner denial or cancelled
+  // request is not provider unavailability and must not authorize a fallback.
+  const accounting=standaloneAccountingCause(error);
+  if(accounting)return accounting.code==="standalone_memory_timeout" || accounting.code==="standalone_outcome_unknown";
+  if(isRequestAbort(error))return false;
   const message=error instanceof Error ? error.message : String(error);
-  return value?.code==="standalone_memory_timeout" || value?.code==="standalone_outcome_unknown" ||
-    /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message);
+  return /previous provider outcome is unavailable|outcome (?:is )?unknown|outcome_unknown|timed? out|timeout|temporar(?:y|ily)|unavailable|connection|socket|fetch failed/i.test(message);
 }
 function providerClient(provider:SummaryProvider,deadline:number):OpenAI {
   const apiKey=provider==="grok" ? grokApiKey : anthropicApiKey;
@@ -70,8 +83,9 @@ function providerClient(provider:SummaryProvider,deadline:number):OpenAI {
   });
 }
 
-type ChatSummaryResponse = {
-  choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }>;
+type ClaudeMessagesResponse = {
+  stop_reason?: string | null;
+  content?: Array<{ type?: string; text?: string | null }>;
 };
 type GrokResponsesResponse = {
   status?: string | null;
@@ -138,16 +152,53 @@ function formatTranscript(messages: Message[]): string {
   }).join("\n");
 }
 
-function completedText(response: ChatSummaryResponse, phase: string, maxCharacters: number): string {
-  const choice = response.choices?.[0];
-  const output = choice?.message?.content?.trim() ?? "";
-  if (choice?.finish_reason !== "stop" || !output || output.length > maxCharacters) {
-    console.warn("[Summarizer] Incomplete Grok ITM response; cursor retained", {
-      phase, finishReason: choice?.finish_reason ?? "missing", characters: output.length, limit: maxCharacters,
+function completedClaudeText(response: ClaudeMessagesResponse, phase: string, maxCharacters: number): string {
+  const output = (response.content ?? [])
+    .filter(item => item.type === "text" && typeof item.text === "string")
+    .map(item => item.text).join("").trim();
+  if (response.stop_reason !== "end_turn" || !output || output.length > maxCharacters) {
+    console.warn("[Summarizer] Incomplete native Claude ITM response; cursor retained", {
+      phase, stopReason: response.stop_reason ?? "missing", characters: output.length, limit: maxCharacters,
     });
     throw new Error("Intermediate memory " + phase + " incomplete or outside character budget");
   }
   return output;
+}
+
+/** Anthropic's JSON schema subset excludes array size/uniqueness and numeric
+ * bounds. Those limits remain enforced on the returned data by Katie's
+ * source-citation and retention validators, not delegated to the model. */
+function claudeSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(claudeSchema);
+  if (schema !== null && typeof schema === "object") {
+    return Object.fromEntries(
+      Object.entries(schema as Record<string, unknown>)
+        .filter(([key, value]) => !["maxItems", "uniqueItems", "minimum", "maximum", "minLength", "maxLength"].includes(key)
+          && !(key === "minItems" && value !== 0 && value !== 1))
+        .map(([key, value]) => [key, claudeSchema(value)]),
+    );
+  }
+  return schema;
+}
+
+/** Native Anthropic Messages API; never use its OpenAI-compatible
+ * chat-completions path, which is unsupported by the accounting guard. */
+async function claudeStructuredResponse(
+  client: OpenAI,
+  prompt: Array<{ role: "system" | "user"; content: string }>,
+  maxOutputTokens: number,
+  schema: Record<string, unknown>,
+): Promise<ClaudeMessagesResponse> {
+  return await client.post<Record<string, unknown>, ClaudeMessagesResponse>("/messages", {
+    body: {
+      model: SUMMARY_MODELS.anthropic,
+      max_tokens: maxOutputTokens,
+      system: prompt.filter(item => item.role === "system").map(item => item.content).join("\n\n"),
+      messages: prompt.filter(item => item.role === "user"),
+      thinking: { type: "between_tools" },
+      output_config: { effort: "low", format: { type: "json_schema", schema: claudeSchema(schema) } },
+    },
+  });
 }
 
 function completedResponsesText(response: GrokResponsesResponse, phase: string, maxCharacters: number): string {
@@ -280,12 +331,8 @@ async function summarizeNewBatch(messages: Message[], provider:SummaryProvider, 
     const response = await grokStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, "itm_episodes", EPISODE_RESPONSE_SCHEMA);
     return parseGroundedEpisodes(completedResponsesText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
   }
-  const response = await client.chat.completions.create({
-    model: SUMMARY_MODELS[provider],
-    max_tokens: SUMMARY_MAX_TOKENS,
-    messages: prompt,
-  });
-  return parseGroundedEpisodes(completedText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
+  const response = await claudeStructuredResponse(client, prompt, SUMMARY_MAX_TOKENS, EPISODE_RESPONSE_SCHEMA);
+  return parseGroundedEpisodes(completedClaudeText(response, "factual episodes", BATCH_SUMMARY_MAX_CHARACTERS), messages);
 }
 
 /**
@@ -350,12 +397,8 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
     const response = await grokStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, "itm_retention", RETENTION_RESPONSE_SCHEMA);
     raw = completedResponsesText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   } else {
-    const response = await client.chat.completions.create({
-      model: SUMMARY_MODELS[provider],
-      max_tokens: RECONCILE_MAX_TOKENS,
-      messages: prompt,
-    });
-    raw = completedText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
+    const response = await claudeStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, RETENTION_RESPONSE_SCHEMA);
+    raw = completedClaudeText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
   const keep = parseRetentionPlan(raw, prior.length);
   if (keep.some(id => prior[id].length > ITM_EPISODE_MAX_CHARACTERS))
@@ -470,8 +513,52 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   const checkpoint = batch[batch.length - 1];
   const expectedCursor = existing?.summarizedThroughMessageId ?? null;
   const admin = getSupabaseAdminClient();
+  // Cross-version recovery gate. Historic metered calls are immutable evidence:
+  // never send the same source batch again to a provider that already received it.
+  // A recent in-flight claim or unresolved approval prevents any new dispatch.
+  const inspection = await admin.rpc<{
+    grok_sent:boolean; anthropic_sent:boolean; paused:boolean; in_flight:boolean; terminal:boolean;
+  }>("inspect_itm_batch_provider_exposure", {
+    p_actor_id:chat.actorId, p_chat_id:chatId, p_batch_end_message_id:checkpoint.id,
+  });
+  if (inspection.error || !inspection.data ||
+    typeof inspection.data.grok_sent !== "boolean" ||
+    typeof inspection.data.anthropic_sent !== "boolean" ||
+    typeof inspection.data.paused !== "boolean" ||
+    typeof inspection.data.in_flight !== "boolean" ||
+    typeof inspection.data.terminal !== "boolean") {
+    console.error("[Summarizer] Provider exposure inspection unavailable; no claim admitted", {chatId});
+    return "blocked";
+  }
+  if (inspection.data.terminal) {
+    console.error("[Summarizer] Previous non-retryable ITM denial forbids cross-provider fallback", {
+      chatId,sourceEnd:checkpoint.id,
+    });
+    return "blocked";
+  }
+  if (inspection.data.paused || inspection.data.in_flight) {
+    console.warn("[Summarizer] Prior ITM approval or in-flight batch requires recovery", {
+      chatId, sourceEnd:checkpoint.id, paused:inspection.data.paused, inFlight:inspection.data.in_flight,
+    });
+    return "deferred";
+  }
+  // Claude is the terminal fallback. If Claude already received this exact
+  // source batch, returning to Grok would be reverse-order retransmission.
+  if (inspection.data.anthropic_sent) {
+    console.error("[Summarizer] Previous Claude ITM source batch already metered; manual receipt recovery required", {
+      chatId, sourceEnd:checkpoint.id,
+    });
+    return "blocked";
+  }
   let provider:SummaryProvider|undefined;
   for(const candidate of providers){
+    if (candidate === "grok" && inspection.data.grok_sent ||
+        candidate === "anthropic" && inspection.data.anthropic_sent) {
+      console.warn("[Summarizer] Prior paid source batch retained; avoiding same-provider retransmission", {
+        chatId, sourceEnd:checkpoint.id, provider:candidate,
+      });
+      continue;
+    }
     const claim = await admin.rpc<string>("claim_intermediate_memory_batch", {
       p_actor_id: chat.actorId,
       p_chat_id: chatId,
@@ -500,8 +587,8 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   });
 
   const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
-  const client=providerClient(provider,deadline);
   try {
+    const client=providerClient(provider,deadline);
     const newSummary = await summarizeNewBatch(batch,provider,client);
     const episodes = legacyEpisodes(summary);
     const keep = await reconcileEpisodePlan(episodes,newSummary,provider,client);
@@ -521,6 +608,15 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     if (commit.error) throw new Error("Intermediate memory checkpoint unavailable: " + commit.error.message);
     if (commit.data !== true) {
       console.warn("[Summarizer] Checkpoint concurrently advanced; preserve newer version", { chatId });
+      // The source cursor is authoritative. The provider call already ran, so
+      // finalize this losing claim rather than leave an immortal processing row.
+      const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch", {
+        p_actor_id:chat.actorId, p_chat_id:chatId, p_batch_end_message_id:checkpoint.id,
+        p_processor_version:processorVersion(provider), p_state:"blocked",
+        p_reason:"Concurrent ITM checkpoint already advanced; previous provider receipt retained",
+      });
+      if(finished.error || finished.data !== true)
+        console.error("[Summarizer] Concurrent stale claim could not be finalized", {chatId,sourceEnd:checkpoint.id});
       return "deferred";
     }
     const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
@@ -536,19 +632,38 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     });
     return "committed";
   } catch (error) {
-    if (isStandaloneAccountingError(error) && !shouldUseNextProvider(error)) throw error;
-    const recorded = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
-      p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
-      p_processor_version: processorVersion(provider), p_state: "blocked",
-      p_reason: error instanceof Error ? error.message.slice(0,160) : "Summary stage failed",
-    });
-    if (recorded.error || recorded.data !== true) {
-      console.error("[Summarizer] Failed to persist failure circuit breaker", { chatId, sourceEnd: checkpoint.id, provider });
+    const diagnostic=standaloneFailureDetails(error);
+    const accountingCause=standaloneAccountingCause(error);
+    const terminalDenial=(Boolean(accountingCause) || isRequestAbort(error)) && !shouldUseNextProvider(error);
+    // Finish the durable claim even when the SDK wraps a terminal accounting
+    // denial. The old early throw stranded rows forever in 'processing'.
+    let recorded:boolean=false;
+    try {
+      const result = await admin.rpc<boolean>("finish_intermediate_memory_batch", {
+        p_actor_id: chat.actorId, p_chat_id: chatId, p_batch_end_message_id: checkpoint.id,
+        p_processor_version: processorVersion(provider), p_state: "blocked",
+        p_reason: (terminalDenial ? "ITM_TERMINAL:" + diagnostic : diagnostic).slice(0,160),
+      });
+      recorded = result.data === true && !result.error;
+    } catch {
+      recorded = false;
+    }
+    if(!recorded) {
+      console.error("[Summarizer] Failed to persist failure circuit breaker", {
+        chatId, sourceEnd: checkpoint.id, provider, diagnostic,
+      });
+      throw error;
+    }
+    if (terminalDenial) {
+      console.error("[Summarizer] Non-retryable post-answer memory transport failure", {
+        chatId, sourceEnd: checkpoint.id, provider, diagnostic,
+      });
+      throw error;
     }
     const nextProvider=providers[providers.indexOf(provider)+1];
     console.error("[Summarizer] Batch provider attempt blocked without checkpoint advance", {
       chatId, sourceEnd: checkpoint.id, provider, nextProvider:nextProvider??null,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: diagnostic,
     });
     return nextProvider ? "deferred" : "blocked";
   }
