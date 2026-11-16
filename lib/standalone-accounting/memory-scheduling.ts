@@ -1,10 +1,10 @@
-/** Standalone paid background work must reach a durable pause/checkpoint before
- * completing its parent workflow. Existing managed work keeps deferred scheduling. */
+/** Memory maintenance is automatically triggered infrastructure, never a user
+ * spending request. The chat answer and its payment lease must settle before
+ * memory processing, including for standalone workflows. */
 export async function scheduleMemoryPersistence(
-  standaloneWorkflow: boolean,
+  _standaloneWorkflow: boolean,
   persist: () => Promise<void>,
   defer: (persist: () => Promise<void>) => void,
 ): Promise<void> {
-  if (standaloneWorkflow) await persist();
-  else defer(persist);
+  defer(persist);
 }

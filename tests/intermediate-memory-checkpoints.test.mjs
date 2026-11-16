@@ -58,7 +58,7 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 test("v11 uses Grok Responses API with bounded factual episodes and index-only retention",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v12-claude-native-failclosed-recovery"/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v13-memory-ungated-metered"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.equal((summary.match(/client\.post\("\/responses"/g)||[]).length,1);
@@ -86,7 +86,9 @@ test("post-answer ITM does not inherit a closed HTTP response signal",()=>{
   const accounting=readFileSync("lib/standalone-accounting/context.ts","utf8");
   assert.match(accounting,/export function runWithDurablePostAnswerAccounting/);
   assert.match(accounting,/\.\.\.scope\.context, signal: undefined/);
-  assert.match(route,/cachedWorkflowValue\("memory-summary", \(\) => runWithDurablePostAnswerAccounting\(\(\) => maybeUpdateSummary\(chatId\)\)\)/);
+  assert.match(route,/maybeUpdateSummary\(chatId\)/);
+  assert.match(route,/const retention = maybeUpdateRelevantLongTermMemory/);
+  assert.doesNotMatch(route,/cachedWorkflowValue\("memory-(?:summary|retention|cleanup)"/);
   assert.match(summary,/standaloneAccountingCause\(error\)/);
   assert.match(summary,/standaloneFailureDetails\(error\)/);
   assert.match(summary,/isRequestAbort\(error\)/);
