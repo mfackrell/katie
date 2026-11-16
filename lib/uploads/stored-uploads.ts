@@ -1,3 +1,4 @@
+import { createGeneratedImageStore } from './generated-image-store';
 import { inspectPdf, type PdfEvidence } from "./pdf-evidence";
 import { formatVideoTimingForSource } from "@/lib/chat/video-evidence";
 import { indexEvidence, indexReference } from "@/lib/media-memory/evidence";
@@ -6,6 +7,9 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { buildKatieVisualEpisode, verifiedKatieVisualEpisode } from "@/lib/chat/visual-memory";
+
+import type { TrustedVisualCorrection } from "./verified-visual-corrections";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
@@ -139,7 +143,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (indexed.error) throw new Error("Unable to index attachment across actor conversations.");
     }
   }
+  const generatedImages = createGeneratedImageStore({objects,ensureBucket,path:conversationPath,writeCatalogEntry});
   return {
+    ...generatedImages,
     async ingestPdfUploads(files:File[]):Promise<FileReference[]> {
       const references=await buildReferences(files);
       if(references.some(reference=>reference.mimeType==="application/pdf")) {
@@ -215,11 +221,31 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       await ensureBucket();
       const path = useSubChunk ? subChunkPath(ticket, index, subIndex!) : chunkPath(ticket, index);
-      const { error } = await objects.upload(path, bytes, {
-        contentType: "application/octet-stream",
-        upsert: true, // Retry after a mobile network interruption without duplicating bytes.
-      });
-      if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
+      if (ticket.type.startsWith("image/")) {
+        // First image write is immutable. Only byte-for-byte identical retries
+        // are accepted after an ambiguous acknowledgment; a conflicting retry
+        // cannot overwrite a previously accepted private chunk.
+        const saved = await objects.upload(path, bytes, {
+          contentType: "application/octet-stream", upsert: false,
+        });
+        if (saved.error) {
+          const prior = await objects.download(path);
+          if (prior.error || !prior.data)
+            throw new Error(`Unable to store attachment chunk ${index + 1}: ${saved.error.message}`);
+          const priorBytes = new Uint8Array(await prior.data.arrayBuffer());
+          const priorHash = createHash("sha256").update(priorBytes).digest("hex");
+          const incomingHash = createHash("sha256").update(bytes).digest("hex");
+          if (priorBytes.byteLength !== bytes.byteLength || priorHash !== incomingHash)
+            throw new UploadInputError("Conflicting image upload chunk cannot replace saved bytes.");
+        }
+      } else {
+        // Preserve legacy video resumability and non-image semantics unchanged.
+        const { error } = await objects.upload(path, bytes, {
+          contentType: "application/octet-stream",
+          upsert: true,
+        });
+        if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
+      }
       console.info("[Upload API] stored chunk", {
         uploadId: ticket.id, index, ...(useSubChunk ? { subIndex } : {}), chunkCount,
         bytes: bytes.byteLength, transport: ticket.transport ?? "binary-v1",
@@ -406,7 +432,21 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const safeReference: FileReference = privateEntry?.data ? JSON.parse(await privateEntry.data.text()) : { ...reference };
       delete (safeReference as FileReference & { decoderTiming?: unknown }).decoderTiming;
       const decoderTiming = getVideoTiming(reference);
-      const descriptor: ConversationAttachment = { ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType, createdAt: new Date(now()).toISOString(), hasOriginal: hasSource, chatId, actorId: options.actorId };
+      const createdAt = new Date(now()).toISOString();
+      // Only canonical source bytes can promote an observed image into
+      // Katie's actor-owned visual memory; never trust client-supplied claims.
+      const visualHash = safeReference.mimeType.startsWith("image/") && safeReference.imageDataUrl
+        ? createHash("sha256").update(safeReference.imageDataUrl).digest("hex") : undefined;
+      if (visualHash && options.description?.observationSourceHash &&
+          visualHash !== options.description.observationSourceHash)
+        throw new UploadInputError("Visual observation does not match its source image.");
+      const visualMemory = visualHash
+        ? buildKatieVisualEpisode(options.description ?? {}, visualHash, createdAt) : undefined;
+      const descriptor: ConversationAttachment = {
+        ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType,
+        createdAt, hasOriginal: hasSource, chatId, actorId: options.actorId,
+        visualMemory,
+      };
       const sourceFingerprint = source && reference.mimeType.startsWith("video/") ? createHash("sha256").update(Buffer.from(await source.arrayBuffer())).digest("hex") : undefined;
       const canonical = { sourceFingerprint, reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now(), evidenceDescriptor: descriptor, evidenceIndexPending: Boolean(indexSaved && options.actorId && (token || options.source)) };
       const saved = await objects.upload(`${path}.json`, JSON.stringify(canonical), { contentType: "application/json", upsert: true });
@@ -672,8 +712,32 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         createHash('sha256').update(image).digest('hex')!==description.observationSourceHash)
         throw new UploadInputError('Saved image evidence identity does not match its trusted source.');
       const previous=record.evidenceDescriptor??attachment;
-      const descriptor:ConversationAttachment={...previous,...description,id:attachment.id,chatId,actorId,fileName:previous.fileName,mimeType:previous.mimeType};
-      const history=[...(Array.isArray(record.observationHistory)?record.observationHistory:[]),previous];
+      const merged:ConversationAttachment={...previous,...description,id:attachment.id,chatId,actorId,fileName:previous.fileName,mimeType:previous.mimeType};
+      const hash=createHash('sha256').update(image).digest('hex');
+      const latestEpisode=buildKatieVisualEpisode(merged,hash,new Date(now()).toISOString());
+      const priorEpisode=verifiedKatieVisualEpisode(previous);
+      // A model rerun is never authority to overwrite an approved correction.
+      // Keep Qwen's new report in history; only another explicit owner-approved
+      // correction may replace the active manual scene for the same image.
+      const priorManual=previous.manualCorrection?.approvedByUser===true &&
+        previous.summaryModel?.startsWith('manual:') && priorEpisode?.sourceHash===hash;
+      const incomingManual=description.manualCorrection?.approvedByUser===true &&
+        description.summaryModel?.startsWith('manual:');
+      // A refused, metadata-only, or unverified reinspection also cannot erase
+      // an earlier verified perception of the same pixels.
+      const keepPrior=Boolean((priorManual&&!incomingManual)||
+        (!latestEpisode&&priorEpisode?.sourceHash===hash));
+      const descriptor:ConversationAttachment=keepPrior
+        ? {...previous,id:attachment.id,chatId,actorId,fileName:previous.fileName,
+            mimeType:previous.mimeType,visualMemory:priorEpisode}
+        : latestEpisode
+          ? {...merged,visualMemory:latestEpisode}
+          : {...merged,visualMemory:undefined};
+      const history=[
+        ...(Array.isArray(record.observationHistory)?record.observationHistory:[]),
+        previous,
+        ...(!latestEpisode||keepPrior ? [{...merged,visualMemory:undefined}] : []),
+      ];
       const saved=await objects.upload(`${path}.json`,JSON.stringify({...record,evidenceDescriptor:descriptor,observationHistory:history}),{contentType:'application/json',upsert:true});
       if(saved.error)throw new Error('Unable to retain the new image observation.');
       await writeCatalogEntry(chatId,descriptor);
@@ -1091,13 +1155,79 @@ function honestPdfSummary(file: ConversationAttachment): ConversationAttachment 
   } : file;
 }
 
+/** The correction ledger is private and service-authored. Apply it BEFORE any
+ * image-selection or Qwen cache reuse. Write through to the canonical source
+ * and both Storage catalogs so subsequent conversations get the same scene.
+ * If that write fails, keep the verified override in this request and retry
+ * reconciliation on the next catalog load.
+ */
+export async function reconcileActorVisualCorrections(
+  actorId: string,
+  attachments: ConversationAttachment[],
+  updateCanonical: (original: ConversationAttachment, corrected: ConversationAttachment) => Promise<unknown>,
+  listCorrections: (actorId: string) => Promise<TrustedVisualCorrection[]>,
+): Promise<ConversationAttachment[]> {
+  if (!attachments.some(file => file.mimeType.startsWith("image/"))) return attachments;
+  // Load the correction helper only for actor-wide visual reconciliation;
+  // video-only fixtures load stored-uploads without this separate module.
+  const { applyTrustedVisualCorrection } = await import("./verified-visual-corrections");
+  const corrections = await listCorrections(actorId);
+  const byId = new Map(corrections.map(row => [row.attachment_id, row]));
+  const updated = [...attachments];
+  for (let index = 0; index < updated.length; index++) {
+    const original = updated[index];
+    const candidate = byId.get(original.id);
+    if (!candidate) continue;
+    const corrected = applyTrustedVisualCorrection(original, candidate);
+    if (!corrected) {
+      console.warn("[VisualCorrection] source identity mismatch", { actorId, attachmentId: original.id });
+      continue;
+    }
+    updated[index] = corrected;
+    if (original.observedSummary === corrected.observedSummary &&
+        original.summaryModel === corrected.summaryModel &&
+        original.visualMemory?.observedBy === corrected.visualMemory?.observedBy) continue;
+    try {
+      await updateCanonical(original, corrected);
+    } catch (error) {
+      // This turn remains corrected, but the private canonical catalog must
+      // be repaired before a future request can rely on storage alone.
+      console.error("[VisualCorrection] canonical sync pending", {
+        actorId, attachmentId: original.id,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+  return updated;
+}
+
+async function trustedVisualCorrections(actorId: string): Promise<TrustedVisualCorrection[]> {
+  // Lazy-load only on actor-catalog queries. Plain-node upload/recovery fixtures
+  // import the storage module from a temp bundle with no application DB tree.
+  const { getSupabaseAdminClient } = await import("@/lib/data/supabase/admin");
+  const { data, error } = await getSupabaseAdminClient()
+    .from("visual_observation_corrections")
+    .select("actor_id,source_chat_id,attachment_id,source_hash,description,correction_model,corrected_at,original_model,source_message_id,approved_by_user")
+    .eq("actor_id", actorId)
+    .limit(100)
+    .returns<TrustedVisualCorrection>();
+  if (error) throw new Error("Trusted visual correction ledger unavailable.");
+  return data ?? [];
+}
+
 export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: () => Promise<ConversationAttachment[]>): Promise<ConversationAttachment[]> {
   const service = getUploadService();
   const catalog = await service.catalog(actorId, "actor");
-  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId).map(honestPdfSummary);
-  const combined = [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
-  await service.initializeCatalog(actorId, combined, "actor");
-  return combined.map(honestPdfSummary);
+  const attachments = catalog.initialized
+    ? catalog.attachments.filter(file => file.actorId === actorId)
+    : [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
+  if (!catalog.initialized) await service.initializeCatalog(actorId, attachments, "actor");
+  const corrected = await reconcileActorVisualCorrections(
+    actorId, attachments,
+    (original, replacement) => service.updateImageObservation(original.chatId!, original, actorId, replacement),
+    trustedVisualCorrections,
+  );
+  return corrected.map(honestPdfSummary);
 }
 
 export const readSavedVideoTiming = (chatId: string, id: string, actorId: string) => getUploadService().readVideoTiming(chatId, id, actorId);
@@ -1111,3 +1241,7 @@ export const readTimelineSource = (chatId: string, id: string, actorId: string) 
 export const inspectSavedPdf = (currentChat:string,attachment:ConversationAttachment,actorId:string,message:string,owns:(id:string)=>Promise<boolean>,analysisMessage=message) => getUploadService().pdfEvidence(currentChat,attachment,actorId,message,owns,analysisMessage);
 
 export const ingestPdfUploads = (files:File[]) => getUploadService().ingestPdfUploads(files);
+
+export const persistGeneratedImage = (...args:Parameters<ReturnType<typeof createStoredUploadService>["persistGenerated"]>) => getUploadService().persistGenerated(...args);
+export const readGeneratedImage = (...args:Parameters<ReturnType<typeof createStoredUploadService>["readGenerated"]>) => getUploadService().readGenerated(...args);
+export const withGeneratedImageObservation = <T>(input:Parameters<ReturnType<typeof createStoredUploadService>["withGeneratedObservation"]>[0],inspect:()=>Promise<T>) => getUploadService().withGeneratedObservation(input,inspect);

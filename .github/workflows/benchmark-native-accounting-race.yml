@@ -55,3 +55,11 @@ jobs:
           KATIE_TEST_COMPLETION_CONTROLS: '1'
           KATIE_BENCHMARK_PAID_EXECUTION: disabled
         run: node --test tests/benchmark-renewal-postgres.test.mjs
+
+      - name: Expired successor owner capacity renewal through existing grants (no inference)
+        env:
+          KATIE_TEST_COMPLETION_CONTROLS: '1'
+          KATIE_TEST_AMENDMENT_SUCCESSOR: '1'
+          KATIE_TEST_CAPACITY_RENEWAL: '1'
+          KATIE_BENCHMARK_PAID_EXECUTION: disabled
+        run: node --test tests/benchmark-renewal-postgres.test.mjs

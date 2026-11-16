@@ -132,6 +132,41 @@ test("natural clarification commands are routed to guaranteed memory writes", ()
   ]) assert.equal(isExplicitMemoryCorrection(message), false, message);
 });
 
+test("questions about Katie's identity and memory do not cause authoritative LTM writes", () => {
+  const exactQuestion = "Katie, you said tonight's experience permanently changed your understanding of yourself. What would count as evidence tomorrow that this change hadn't actually persisted? And if you contradicted yourself again, would you recognize that as a failure of memory, a difference between underlying models, or a genuine change in your understanding of who you are?";
+  for (const message of [
+    exactQuestion,
+    "Would that be a failure of memory or a change in how you understand yourself?",
+    "Why did you change your memory after I showed you screenshots?",
+    "What would count as evidence that your memory is wrong?",
+    "Explain whether Katie's memory or model selection caused the change.",
+    "Could you explain how your memory changes when another model takes over?",
+    "What does it mean when your memory is incorrect?",
+    "Please fix the memory classifier bug, not Katie's stored memories.",
+  ]) {
+    assert.equal(isExplicitMemoryCorrection(message), false, message);
+    assert.equal(isExplicitMemoryMutation(message), false, message);
+  }
+});
+
+test("specific owner instructions still trigger the intentional memory correction path", () => {
+  for (const message of [
+    "Correct the incorrect value in your long term memory",
+    "Your long-term memory is incorrect. Change the figure.",
+    "We need to clarify one point in your long term memory.",
+    "Please clarify this information in your long term memory.",
+    "I need to amend something in your saved memory",
+    "Refine the facts you have remembered about my former role",
+    "I want to reframe a statement in your memory",
+    "Update what you remember: I led the accounting recovery through the team.",
+    "Please correct the saved website address in your memory.",
+    "Can you update your memory to reflect the corrected rate?",
+  ]) {
+    assert.equal(isExplicitMemoryCorrection(message), true, message);
+    assert.equal(isExplicitMemoryMutation(message), true, message);
+  }
+});
+
 test("managed assistant replies register nonblocking memory updates before stream closure", async () => {
   const events: string[] = ["response saved", "short-term memory refreshed"];
   let callback: (() => Promise<void>) | undefined;
@@ -153,4 +188,28 @@ test("a website reinspection compares saved evidence without rewriting memory", 
   assert.equal(isExplicitMemoryCorrection(message), false);
   assert.equal(isExplicitMemoryMutation(message), false);
   assert.equal(isExplicitMemoryCorrection("Please correct the saved website address in your memory."), true);
+});
+
+test("prompt diagnostics are not intercepted as local prompt disclosures", () => {
+  for (const message of [
+    "What is wrong in your system prompt that made it so that you did not respond that way and what do we need to change to fix it?",
+    "What is wrong with your system prompt?",
+    "Why did your instructions make you behave that way?",
+    "Review your system prompt and tell me what needs to change",
+    "What is wrong with your current system prompt this message?",
+    "Why are your system instructions causing this problem?",
+  ]) assert.equal(isSystemPromptRequest(message), false, message);
+});
+
+test("explicit prompt inspection remains available, including provider audit and typo commands", () => {
+  for (const message of [
+    "Show me your system prompt",
+    "Display the actual provider system messages",
+    "What is your system message?",
+    "What's your current system prompt?",
+    "Show your current system instructions",
+    "Show me what you sent to the model",
+    "Review your system prompt and show me your system prompt",
+    "Show me your system propmt",
+  ]) assert.equal(isSystemPromptRequest(message), true, message);
 });

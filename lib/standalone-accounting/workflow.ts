@@ -5,7 +5,6 @@ import { authorizeStandaloneCaller } from './auth';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { assertCronAuth } from '@/lib/runpod/durable-results';
-import { QWEN_STILL_POLICY } from './runpod-policy';
 import { runWithStandaloneAccounting, isStandaloneAccountingError, standaloneAccountingCause, standaloneFailureDetails, standaloneTechnicalBlocker } from './context';
 import { canonicalJson, type JsonValue } from './estimate';
 
@@ -36,34 +35,62 @@ async function rpc<T>(name:string,args:Record<string,unknown>):Promise<T> {
  * because RunPod was still processing. It cannot create work, approve spending,
  * change the request, or bypass the original actor/chat authorization. */
 async function verifiedCronQwenOwner(actorId:string,chatId:string,requestId:string):Promise<string> {
-  const db=getSupabaseAdminClient();
-  const {data:workflow,error:workflowError}=await db.from('standalone_workflows')
-    .select('owner_id,actor_id,chat_id,status,error')
-    .eq('request_id',requestId).eq('actor_id',actorId).eq('chat_id',chatId)
-    .maybeSingle<{owner_id:string;actor_id:string;chat_id:string;status:string;error:string|null}>();
-  if(workflowError||!workflow||workflow.status!=='paused'||!workflow.error?.includes('standalone_runpod_in_progress'))
+  // The original ledger tables are intentionally not selectable by service_role.
+  // Keep the existing cron bearer check in executeStandaloneWorkflow, and use
+  // only the narrow security-definer lookup for a paused, accepted Qwen job.
+  const {data:ownerId,error}=await getSupabaseAdminClient().rpc<string|null>(
+    'standalone_verified_cron_qwen_owner',
+    {p_actor:actorId,p_chat:chatId,p_request:requestId},
+  );
+  if(error||!ownerId)
     throw new StandaloneAccountingError('resume_denied','No paused Qwen workflow is eligible for automatic continuation.');
-  const {data:attempts,error:attemptError}=await db.from('standalone_provider_attempts')
-    .select('id,provider_request_id').eq('owner_id',workflow.owner_id).eq('request_id',requestId)
-    .eq('actor_id',actorId).eq('chat_id',chatId).eq('provider','runpod')
-    .eq('model',QWEN_STILL_POLICY.model).eq('pricing_version',QWEN_STILL_POLICY.version)
-    .eq('state','dispatched').is('response_checkpoint',null).limit(10);
-  if(attemptError||!attempts?.some(attempt=>
-      /^[A-Za-z0-9-]{8,150}$/.test((attempt as {provider_request_id?:string|null}).provider_request_id??'')))
-    throw new StandaloneAccountingError('resume_denied','No accepted, uncompleted Qwen job is eligible for automatic continuation.');
-  return workflow.owner_id;
+  return ownerId;
 }
 
 /** Persist original user input before any paid preparation. Each resume runs under
  * a fenced lease; completed provider responses replay from the attempt ledger. */
 export async function executeStandaloneWorkflow(request:NextRequest,payload:Record<string,unknown>,execute:(request:NextRequest)=>Promise<Response>):Promise<Response> {
+  return executeScopedStandaloneWorkflow(request,payload,execute);
+}
+
+/**
+ * Private server-only entry for an already claimed reaction job. The owner
+ * derives from the durable job and active actor/chat binding, not a request
+ * header or a synthetic browser credential. All normal workflow admission,
+ * ledger and spending limits below remain mandatory.
+ */
+export async function executeVerifiedReactionReplyWorkflow(
+  request:NextRequest,payload:Record<string,unknown>,
+  execute:(request:NextRequest)=>Promise<Response>,jobId:number,
+):Promise<Response> {
+  const actorId=String(payload.actorId??''),chatId=String(payload.chatId??'');
+  const requestId=request.headers.get('x-request-id')?.trim()??'';
+  if(!Number.isSafeInteger(jobId)||jobId<=0||
+      !/^[0-9a-f-]{36}$/i.test(actorId)||!/^[0-9a-f-]{36}$/i.test(chatId)||
+      !/^[0-9a-f-]{36}$/i.test(requestId))
+    throw new StandaloneAccountingError('reaction_authorization_denied','Invalid internal reaction request identity.');
+  const {data:ownerId,error}=await getSupabaseAdminClient().rpc<string>(
+    'standalone_verified_reaction_reply_owner',
+    {p_job:jobId,p_actor:actorId,p_chat:chatId,p_request:requestId},
+  );
+  if(error||!ownerId)
+    throw new StandaloneAccountingError('reaction_authorization_denied','No verified owner-bound reaction reply is eligible.');
+  return executeScopedStandaloneWorkflow(request,payload,execute,ownerId);
+}
+
+async function executeScopedStandaloneWorkflow(
+  request:NextRequest,payload:Record<string,unknown>,
+  execute:(request:NextRequest)=>Promise<Response>,verifiedReactionOwner?:string,
+):Promise<Response> {
   const actorId=String(payload.actorId??''),chatId=String(payload.chatId??'');
   const requestId=request.headers.get('x-request-id')?.trim();
   if(!requestId||!/^[A-Za-z0-9._:-]{1,128}$/.test(requestId))throw new StandaloneAccountingError('request_id_required','A stable original request ID is required before paid processing.');
   const resumed=payload.standaloneResume===true;
-  const ownerId=resumed&&assertCronAuth(request)
-    ? await verifiedCronQwenOwner(actorId,chatId,requestId)
-    : await authorizeStandaloneCaller(request,actorId,chatId);
+  const ownerId=verifiedReactionOwner
+    ? verifiedReactionOwner
+    : resumed&&assertCronAuth(request)
+      ? await verifiedCronQwenOwner(actorId,chatId,requestId)
+      : await authorizeStandaloneCaller(request,actorId,chatId);
   if(resumed) {
     const saved=await rpc<Workflow|null>('load_workflow',{p_owner:ownerId,p_request:requestId});
     if(!saved||saved.actor_id!==actorId||saved.chat_id!==chatId)throw new StandaloneAccountingError('resume_denied','Saved request not found for this owner and conversation.');
@@ -85,27 +112,77 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
       // result also makes reconnects independent of browser memory.
       const reader=response.body?.getReader();
       if(!reader) {await finish(response.ok?'completed':'failed');return response;}
+      const ndjson=response.headers.get('content-type')?.includes('ndjson')??false;
       const chunks:Uint8Array[]=[];let byteLength=0;
-      while(true){const {value,done}=await reader.read();if(done)break;chunks.push(value);byteLength+=value.byteLength;}
-      const bytes=new Uint8Array(byteLength);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
-      const body=new TextDecoder().decode(bytes);
-      const events = response.headers.get('content-type')?.includes('ndjson') ? body.split('\n').flatMap(line => {try {return [JSON.parse(line)];} catch {return [];} }) : [];
-      let jsonError:unknown;try{jsonError=JSON.parse(body);}catch{/* Streaming body is parsed above. */}
-      const technicalEvent=[...events,...(jsonError&&typeof jsonError==='object'?[jsonError]:[])].find(event=>
-        (['accounting_pause','error','reasoning_error'].includes(event.type)||event.error)&&standaloneTechnicalBlocker(event.code));
-      const technical=Boolean(technicalEvent);
-      const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
-      const executionFailure = events.find(event => event.type === 'error' || event.type === 'reasoning_error');
-      const failureMessage = technicalEvent ? String(technicalEvent.code)+': '+String(technicalEvent.message??technicalEvent.error??'Image inspection is unsupported.').slice(0,1800) : executionFailure ? String(executionFailure.message ?? executionFailure.error ?? 'Saved request execution failed.') : undefined;
-      const result={body,status:response.status,headers:Array.from(response.headers.entries())};
-      const finished = await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
-      if (finished.status === 'paused' && !paused && !executionFailure && !technical) {
-        // PostgreSQL also fences optional work whose caller caught a denial.
-        // Never complete a parent while a hidden paid approval remains pending.
-        const notice = {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
-        if (response.headers.get('content-type')?.includes('ndjson')) return new Response(body + (body.endsWith('\n') ? '' : '\n') + JSON.stringify(notice) + '\n',{status:response.status,headers:response.headers});
-        return NextResponse.json(notice,{status:402});
+      const record=(chunk:Uint8Array)=>{chunks.push(chunk);byteLength+=chunk.byteLength;};
+      const collected=()=>{const bytes=new Uint8Array(byteLength);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}return bytes;};
+      const settle=async(bytes:Uint8Array)=>{
+        const body=new TextDecoder().decode(bytes);
+        const events=ndjson ? body.split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}}) : [];
+        let jsonError:unknown;try{jsonError=JSON.parse(body);}catch{/* Streaming body is parsed above. */}
+        const technicalEvent=[...events,...(jsonError&&typeof jsonError==='object'?[jsonError]:[])].find(event=>
+          (['accounting_pause','error','reasoning_error'].includes(event.type)||event.error)&&standaloneTechnicalBlocker(event.code));
+        // Unsupported image-generation billing is not an approval the owner can grant.
+        // The chat route emits a saved reasoning_error; finalize it as a failure.
+        const terminalImageBilling=events.find(event=>event.type==='reasoning_error'&&event.code==='standalone_unsupported_billing');
+        const technical=Boolean(technicalEvent||terminalImageBilling);
+        const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
+        const executionFailure=events.find(event=>event.type==='error'||event.type==='reasoning_error');
+        const failureMessage=(technicalEvent||terminalImageBilling) ? String((technicalEvent||terminalImageBilling).code)+': '+String((technicalEvent||terminalImageBilling).message??(technicalEvent||terminalImageBilling).error??'Image generation unavailable.').slice(0,1800) : executionFailure ? String(executionFailure.message??executionFailure.error??'Saved request execution failed.') : undefined;
+        const result={body,status:response.status,headers:Array.from(response.headers.entries())};
+        const finished=await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
+        if(finished.status==='paused'&&!paused&&!executionFailure&&!technical)
+          return {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
+        return null;
+      };
+
+      if(ndjson){
+        // Do not wait for the entire standalone workflow before returning HTTP.
+        // Forward bytes as generated while retaining an exact durable replay
+        // and completing the accounting lease before the stream is closed.
+        let disconnected=false;
+        const passthrough=new ReadableStream<Uint8Array>({
+          start(controller){
+            void (async()=>{
+              try{
+                while(true){
+                  const {value,done}=await reader.read();
+                  if(done)break;
+                  if(value){record(value);if(!disconnected)controller.enqueue(value);}
+                }
+                // The answer may already be visible in chat. Settlement must
+                // remain mandatory, but its status is not a reason to hold the
+                // saved answer in a temporary streaming bubble.
+                if(!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify({
+                  type:'processing_update',stage:'accounting',message:'Finalizing the saved request and accounting.'
+                })+'\n'));
+                const notice=await settle(collected());
+                if(notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify(notice)+'\n'));
+                if(!disconnected)controller.close();
+              }catch(error){
+                // A stream read or settlement failure must not silently count
+                // as completed work or abandon an owner-fenced workflow.
+                try{await finish('failed',undefined,standaloneFailureDetails(error));}
+                catch(finishError){console.error('[Standalone Workflow] Failed to record stream failure',finishError);}
+                if(!disconnected)controller.error(error);
+              }
+            })();
+          },
+          // A browser disconnect never cancels the source: paid generation
+          // must reach its saved accounting/replay checkpoint.
+          cancel(){disconnected=true;}
+        });
+        const headers=new Headers(response.headers);
+        headers.set('Cache-Control','no-cache, no-transform');
+        headers.set('X-Accel-Buffering','no');
+        headers.delete('Content-Length');
+        return new Response(passthrough,{status:response.status,headers});
       }
+
+      while(true){const {value,done}=await reader.read();if(done)break;if(value)record(value);}
+      const bytes=collected();
+      const notice=await settle(bytes);
+      if(notice)return NextResponse.json(notice,{status:402});
       return new Response(bytes,{status:response.status,headers:response.headers});
     }));
   } catch(error) {

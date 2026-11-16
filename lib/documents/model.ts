@@ -1,0 +1,115 @@
+import { z } from 'zod';
+import { isDocumentDeliveryNarrative } from './intent';
+import { markdownInlineText, markdownTableRow } from './markdown';
+
+const text = z.string().min(1).max(4000);
+export const blockSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('paragraph'), text }).strict(),
+  z.object({ kind: z.literal('heading'), text, level: z.number().int().min(1).max(3) }).strict(),
+  z.object({ kind: z.literal('bullet'), text }).strict(),
+  z.object({ kind: z.literal('table'), rows: z.array(z.array(text).min(1).max(6)).min(2).max(30) }).strict(),
+]);
+export const documentSchema = z.object({
+  title: z.string().min(1).max(180), blocks: z.array(blockSchema).min(1).max(180),
+  targetPages: z.number().int().min(1).max(8).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (JSON.stringify(value).length > 45000) ctx.addIssue({ code: 'custom', message: 'Document content exceeds bounded production capacity.' });
+  for (const block of value.blocks) if (block.kind === 'table' && block.rows.some(row => row.length !== block.rows[0].length))
+    ctx.addIssue({ code: 'custom', message: 'Table columns must be consistent.' });
+});
+export type DocumentSpec = z.infer<typeof documentSchema>;
+export type Block = z.infer<typeof blockSchema>;
+export const blockText = (block: Block) => block.kind === 'table' ? block.rows.flat().join(' ') : block.text;
+export const normalizedText = (value: string) => value.normalize('NFKC').replace(/[•●]/g, '').replace(/\s+/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
+export const contentText = (spec: DocumentSpec) => spec.blocks.map(blockText).join('\n');
+
+/** PDF.js distinguishes glyphs from its synthetic end-of-line separators.
+ * Never accept missing, changed, duplicated, or reordered non-whitespace
+ * glyphs. Only allow spacing changes caused by explicit PDF.js EOL markers. */
+export type PdfTextFragment = { str: string; hasEOL: boolean; lineBreakAfter?: boolean };
+
+function foldPdfGlyphs(input: string): string {
+  return input.normalize('NFKC')
+    .replace(/[•●]\s*/g, '')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"');
+}
+
+export function pdfTextMatchesSource(extracted: string, source: string, fragments?: readonly PdfTextFragment[]): boolean {
+  const expected = normalizedText(source);
+  const actual = normalizedText(extracted);
+  if (actual === expected ||
+    actual.replace(/([\p{L}\p{N}])-\s+([\p{L}\p{N}])/gu, '$1-$2') === expected) return true;
+  if (!fragments?.length) return false;
+
+  // This preliminary check is strict about character identity and order.
+  // Whitespace alone is ambiguous until we verify each insertion against the
+  // extractor's actual EOL metadata.
+  if (actual.replace(/\s/gu, '') !== expected.replace(/\s/gu, '')) return false;
+
+  let offset = 0;
+  let previousEndOfLine = false;
+  for (const fragment of fragments) {
+    // PDF.js can omit hasEOL at a geometrically verified physical line wrap.
+    // Only the rasterizer may supply this supplementary evidence; never infer
+    // a boundary from a free-standing space inside a normal text run.
+    const endOfLine = fragment.hasEOL || fragment.lineBreakAfter === true;
+    const normalizedFragment = foldPdfGlyphs(fragment.str).replace(/\s+/gu, ' ');
+    const text = endOfLine ? normalizedFragment.replace(/ $/, '') : normalizedFragment;
+    let atStart = true;
+    let sawGlyph = false;
+    for (const glyph of text) {
+      if (glyph === ' ') {
+        if (expected[offset] === ' ') {
+          offset++;
+        } else if (offset === 0 || offset === expected.length || (atStart && previousEndOfLine)) {
+          // PDF.js can add leading whitespace immediately after a wrapped line.
+          // Do not permit arbitrary inserted spaces inside an ordinary text run.
+        } else return false;
+      } else {
+        if (expected[offset] !== glyph) return false;
+        offset++;
+        atStart = false;
+        sawGlyph = true;
+      }
+    }
+    if (endOfLine && expected[offset] === ' ') offset++;
+    // Empty style runs and bullet-marker-only fragments have no surviving
+    // glyphs. They must not erase an immediately preceding PDF line break.
+    if (sawGlyph || endOfLine) previousEndOfLine = endOfLine;
+  }
+  return offset === expected.length;
+}
+
+
+// Only a finite text grammar is accepted; no HTML, images, remote resources, fields or macros.
+const inline = markdownInlineText;
+export function parseDocument(markdown: string, targetPages?: number): DocumentSpec {
+  if (isDocumentDeliveryNarrative(markdown)) throw new Error('The model returned a delivery notice rather than document content. No files were delivered.');
+  if (markdown.length > 50000 || /^\s*(?:`{3,}|~{3,})|!\[|<\/?(?:script|iframe|img|style|html)\b/im.test(markdown)) throw new Error('Document contains unsupported content. No files were delivered.');
+  const lines = markdown.trim().split(/\r?\n/), blocks: Block[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || /^[-*_]{3,}$/.test(line)) continue;
+    if (line.includes('|') && i + 1 < lines.length && /^\|?\s*:?-{3,}/.test(lines[i + 1].trim())) {
+      const row = markdownTableRow;
+      const rows = [row(line)]; i += 2;
+      for (; i < lines.length && lines[i].includes('|'); i++) rows.push(row(lines[i]));
+      i--; blocks.push({ kind: 'table', rows }); continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) blocks.push({ kind: 'heading', level: heading[1].length, text: inline(heading[2]) });
+    else if (/^[-*+]\s/.test(line)) blocks.push({ kind: 'bullet', text: inline(line.slice(2)) });
+    // A standalone bold line is an explicit structural label, not ordinary
+    // body copy. Preserve that relationship so it stays with what follows.
+    else if (/^(?:\*\*(.+)\*\*|__(.+)__)$/u.test(line)) {
+      const label = line.replace(/^\*\*(.+)\*\*$/u, '$1').replace(/^__(.+)__$/u, '$1');
+      blocks.push({ kind: 'heading', level: 3, text: inline(label) });
+    }
+    else blocks.push({ kind: 'paragraph', text: inline(line) });
+  }
+  return documentSchema.parse({ title: blockText(blocks[0] ?? { kind: 'paragraph', text: 'Document' }).slice(0, 180), blocks, targetPages });
+}
+
+export type Finding = { rule: 'overflow' | 'overlap' | 'page-count' | 'reading-order' | 'whitespace' | 'font-size' | 'visual'; page: number; detail: string };
+export type Inspection = { pageCount: number; findings: Finding[]; extractedText: string; pageHashes: string[]; visual: 'pending' | 'passed' | 'technical-only'; };

@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { localRequestAllowed, runScenarios, checkProject, networkBootstrap } from '../scripts/project-browser-check.mjs';
+import { localRequestAllowed, runScenarios, checkProject, networkBootstrap, projectNetworkNamespaceArgs } from '../scripts/project-browser-check.mjs';
 import { prepareTrustedChromium } from '../scripts/project-browser-engine.mjs';
 
 test('acceptance executes actual browser interaction and fails a wrong rendered expectation', { timeout: 60000 }, async () => {
@@ -57,6 +57,14 @@ test('isolated application route cannot contact a host-network service', { timeo
     // This is real server-side application I/O, beyond browser interception.
     const code = `
       import { createServer } from 'node:http';
+      import assert from 'node:assert/strict';
+      import {readlinkSync} from 'node:fs';
+      import {execFileSync} from 'node:child_process';
+      import {sandboxArgs} from ${JSON.stringify(new URL('../scripts/project-sandbox.mjs', import.meta.url).href)};
+      assert.equal(readlinkSync('/proc/self'), String(process.pid), 'procfs must describe the active PID namespace');
+      // Reproduce the actual browser runner's nested sandbox startup, not just
+      // a network-only child. The old host procfs view fails the PID invariant.
+      for(let i=0;i<3;i++)execFileSync('bwrap',[...sandboxArgs(process.cwd(),{network:true}),'/bin/true'],{stdio:'pipe'});
       const server = createServer(async (_req, res) => {
         try {
           await fetch(${JSON.stringify(target)}, { signal: AbortSignal.timeout(1000) });
@@ -71,7 +79,7 @@ test('isolated application route cannot contact a host-network service', { timeo
       console.log(await response.text());
       await new Promise(done => server.close(done));
     `;
-    child = spawn('unshare', ['--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child=SIGKILL', 'python3', '-c', networkBootstrap,
+    child = spawn('unshare', [...projectNetworkNamespaceArgs, 'python3', '-c', networkBootstrap,
       process.execPath, '--input-type=module', '-e', code], {
       env: { PATH: process.env.PATH, HOME: '/tmp' }, stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -121,7 +129,7 @@ test('Chromium font provisioning happens before UID-mapped acceptance browser su
       else console.log('isolated pre-provisioned browser passed');
     }finally{await new Promise(resolve=>server.close(resolve));}
   `;
-  const child=spawn('unshare',['--user','--map-root-user','--net','--pid','--fork','--kill-child=SIGKILL',
+  const child=spawn('unshare',[...projectNetworkNamespaceArgs,
     'python3','-c',networkBootstrap,process.execPath,'--input-type=module','-e',code,executablePath],{
     env:{PATH:process.env.PATH,HOME:'/tmp',TMPDIR:'/tmp'},stdio:['ignore','pipe','pipe']
   });

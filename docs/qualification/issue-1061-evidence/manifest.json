@@ -1,0 +1,53 @@
+{
+  "baseline": "acf85ca0da68621f263197f8397a116337215f7c",
+  "node": "22.23.5",
+  "postgres": "18.6",
+  "qualification": "isolated engineering, not independent QA or live acceptance",
+  "results": {
+    "baselineSelected": {
+      "exit": 1,
+      "tests": 3,
+      "failed": 3
+    },
+    "focused": {
+      "exit": 0,
+      "tests": 36,
+      "passed": 36
+    },
+    "typecheck": {
+      "exit": 0
+    },
+    "native": {
+      "exit": 0,
+      "tests": 3,
+      "passed": 3
+    },
+    "lint": {
+      "exit": 0,
+      "warnings": 0,
+      "errors": 0
+    }
+  },
+  "sourceSha256": {
+    ".github/workflows/hierarchy-recovery-qualification.yml": "db15378d1907378ff5bc86382d8d1f194346c30bb5726a62663893fdd952937a",
+    "lib/projects/organization.ts": "d5a0cb4582e57c08f99b241ff0ec5e56e5c1691f6dc67942d4c80306396d36f1",
+    "lib/projects/smart-diagnostics.ts": "b8f88309eedd932b4420f3cd0ba261aae185f3e728dcf0c5a2aaee2def08d5c4",
+    "supabase/migrations/20261116172712_commissioning_exception_recovery.sql": "d0062baa5b4872417efd98e0681dcc384b04ce99d5948802739f97f7e82e0924",
+    "tests/helpers/assert-commissioning-exception-recovery.mjs": "e527ed07d479e60c02647922dcfdbd16e64375ce954dfe89cf95ed27465891d6",
+    "tests/helpers/assert-management-loop-recovery.mjs": "dbca72c91ac2f28e0f71b5a65c6a15da72a72697e36d2d3c3d4f566c715bff09",
+    "tests/helpers/assert-organizational-contract-amendments.mjs": "5710a3b1dfebd1fc867c589dcbfa2e3dc14fd62112ddcd62e0e17f31e8f31863",
+    "tests/helpers/assert-project-organization-compatibility.mjs": "66e6a6b7d568a2dd79a76afdade9d01607eca4ade14d5d8646c8c3ff95623548",
+    "tests/helpers/assert-project-scope-ratification.mjs": "1e05086a27b15cf77b133875ab6c831328ef850dcad3d57d78105330e91df32c",
+    "tests/management-commissioning-diagnostics.test.mjs": "11f330165927764780887c6c8aa03ec8b1e73e9ef4163906e3e38f1698c37c1c",
+    "tests/organizational-contract-amendments-postgres.test.mjs": "c635ab1d0da9f8db518fe4d1fc049302da5ba29af05f11f7aaaf8f893f5725b6",
+    "vercel.json": "19d3acd98909ce4140504131e10a75ce0377e9b9304f1affdccde92af9af5b9c"
+  },
+  "logSha256": {
+    "baseline-failures.log": "cbf88ad0c47eb03221fba59638dbd43ce18a4bdbf78cd722694cd871fdd684e3",
+    "focused-pass.log": "dc19a97e7afb2cc3124a4a42900679f343879f065d30d11560629a76b104399a",
+    "lint-pass.log": "4eef2dafb7fb4f0c1090cb6e3d77bfeb98705bd326a56fe116209d23ff4b0cd7",
+    "native-pass.log": "2a7d0c4e1ac99377829037d959e1db48696317038811fd34e247e6c6e0b9257b",
+    "typecheck.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "nativeLogNote": "Native log predates the type-only lint correction in smart-diagnostics.ts. Final exact-source native evidence is recorded in the PR checks and engineering handoff."
+}

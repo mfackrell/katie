@@ -6,6 +6,7 @@ import { MemoryContext } from "@/components/memory-context";
 import { ConversationWork } from "@/components/conversation-work";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import { ChatPanel } from "@/components/chat-panel";
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog";
 import { useResource } from "@/components/workspace-data";
 import { useSavedState } from "@/components/saved-workspace-state";
 import type { Actor, ChatThread } from "@/lib/types/chat";
@@ -17,6 +18,7 @@ export default function ChatWorkspace({
   const router = useRouter();
   const deleteInFlight = useRef(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
   const [railReady, setRailReady] = useState(false);
   useEffect(() => { try { const stored = window.localStorage.getItem("katie.statusRail.open"); setRailOpen(stored === null ? window.matchMedia("(min-width: 1024px)").matches : stored === "true"); } catch {} setRailReady(true); }, []);
@@ -69,7 +71,7 @@ export default function ChatWorkspace({
   }
   async function remove() {
     if (!chat || deleteInFlight.current) return;
-    if (!window.confirm(`Permanently delete “${chat.title}” and its messages? This cannot be undone. The specialist and its long-term memory will be kept.`)) return;
+    if (!deleteConfirmOpen) return;
     deleteInFlight.current = true;
     setDeleting(true);
     setError("");
@@ -215,11 +217,22 @@ export default function ChatWorkspace({
         className="my-1 mr-3 min-h-11 shrink-0 rounded-lg px-3 text-sm text-zinc-400 hover:bg-red-500/10 hover:text-red-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-300 disabled:opacity-40"
         aria-label={`Delete chat: ${chat.title}`}
         disabled={deleting}
-        onClick={() => void remove()}
+        onClick={() => { setError(""); setDeleteConfirmOpen(true); }}
       >
         {deleting ? "Deleting…" : "Delete chat"}
       </button>
       </div>
+      {deleteConfirmOpen && (
+        <DeleteConfirmationDialog
+          title="Delete conversation?"
+          description={`Permanently delete “${chat.title}” and its messages? This cannot be undone. The specialist and its long-term memory will be kept.`}
+          confirmLabel="Delete conversation"
+          busy={deleting}
+          error={error}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={() => void remove()}
+        />
+      )}
       <ConversationWork chatId={chat.id} />
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

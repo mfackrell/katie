@@ -33,6 +33,19 @@ export function isExplicitContentRefusal(error: unknown): boolean {
      /\b(?:request|content)\s+(?:violates|is blocked by|goes against)\s+(?:our\s+)?(?:content\s+)?policy\b/i.test(message));
 }
 
+/** Context admission is a local pre-dispatch gate, not a provider outage.
+ * SDK errors may wrap its exact standalone code in a cause chain. */
+function contextAdmissionCode(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const value = current as { code?: unknown; cause?: unknown };
+    if (value.code === "standalone_context_capacity_unverified" || value.code === "standalone_context_window_exceeded")
+      return value.code;
+    current = value.cause;
+  }
+  return null;
+}
+
 const PROVIDER_WIDE_PATTERNS: RegExp[] = [
   /no credits remaining/i,
   /insufficient[_ -]?quota/i,
@@ -51,6 +64,7 @@ const PROVIDER_WIDE_PATTERNS: RegExp[] = [
 ];
 
 export function classifyGenerationFailure(error: unknown): GenerationFailureScope {
+  if (contextAdmissionCode(error)) return "model";
   const text = errorText(error);
   if (isExplicitContentRefusal(error)) return "refusal";
   return PROVIDER_WIDE_PATTERNS.some((pattern) => pattern.test(text))
@@ -59,6 +73,11 @@ export function classifyGenerationFailure(error: unknown): GenerationFailureScop
 }
 
 export function describeGenerationFailure(error: unknown): string {
+  const admission = contextAdmissionCode(error);
+  if (admission === "standalone_context_capacity_unverified")
+    return "context capacity could not be verified before generation";
+  if (admission === "standalone_context_window_exceeded")
+    return "verified input plus output exceeds the selected model's context window";
   const text = errorText(error);
   if (isExplicitContentRefusal(error)) return "the model declined the request";
 

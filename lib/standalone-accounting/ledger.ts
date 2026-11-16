@@ -22,6 +22,7 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
   }
   return {
     workflowStatus:(ownerId:string,requestId:string)=>rpc<{status:string;error?:string|null;error_message?:string|null}|null>('load_workflow',{p_owner:ownerId,p_request:requestId}),
+    recoverableCacheWorkflow:(ownerId:string,actorId:string,chatId:string)=>rpc<{requestId:string}|null>('owner_cache_authorization_recovery',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
     authorizeScope:(ownerId:string,actorId:string,chatId:string)=>rpc<boolean>('authorize_scope',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
     bindScope:(ownerId:string,actorId:string,chatId:string)=>rpc<boolean>('bind_scope',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
     loadPricing:(version:string|null)=>rpc<{snapshot:PricingSnapshot;retrievedAt:string}|null>('load_pricing',{p_version:version}),

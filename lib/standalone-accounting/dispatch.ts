@@ -3,12 +3,26 @@ import { freezeStoredImages } from './immutable-media';
 import { loadStandalonePricing } from './pricing-intake';
 import { createStandaloneLedger, StandaloneAccountingError } from './ledger';
 import { getAccountingScope, nextStandaloneAttempt } from './context';
-import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION } from './estimate';
+import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION, PROVIDER_COUNT_ESTIMATOR_VERSION, type StandaloneEstimate } from './estimate';
+import { countNativePreparedInput } from './native-token-count';
+import { cachedWorkflowValue } from './workflow';
+import { OWNER_SELECTED_UNCACHED, ownerSelectedUncachedEstimate, proposeSelectedModelUncached } from './owner-cache-authorization';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
+import { isBoundedGrokWebRequest, boundedGrokWebCostFromReceipt, GROK_BOUNDED_WEB_POLICY_VERSION } from './grok-web-search';
 import type { ResponseCheckpoint } from './types';
 
 const hosts: Record<AccountingProvider, string> = { openai: 'api.openai.com', anthropic: 'api.anthropic.com', google: 'generativelanguage.googleapis.com', grok: 'api.x.ai' };
 const activeTransmissions = new Map<string, AbortController>();
+const DEFAULT_PROVIDER_TRANSMISSION_TIMEOUT_MS = 180_000;
+export type AccountingTransmissionPolicy = {
+  timeoutMs?: number | (() => number);
+  timeoutCode?: string;
+  timeoutMessage?: string | ((timeoutMs: number) => string);
+  uncertaintyReason?: string | ((timeoutMs: number) => string);
+};
+function policyText(value: string | ((timeoutMs: number) => string) | undefined, timeoutMs: number, fallback: string): string {
+  return typeof value === 'function' ? value(timeoutMs) : value ?? fallback;
+}
 /** Owner binding is checked durably before aborting an in-flight local request. */
 export async function cancelStandaloneAttempt(ownerId: string, attemptId: string) {
   const attempt = await createStandaloneLedger().cancel(ownerId, attemptId);
@@ -21,6 +35,23 @@ function failure(code: string, message: string): StandaloneAccountingError { ret
  * Replaying it never transmits the uncertain operation again. */
 function unavailableUncertainResponse(): Response {
   return Response.json({error:{type:'uncertain_exposure_retained',message:'The previous provider outcome is unavailable. Its full exposure is authorized and retained. This operation was not retransmitted; use the next safe fallback.'}},{status:400,headers:{'x-katie-uncertain-exposure':'retained'}});
+}
+/** Anthropic documents definitive rejected API requests as nonbillable.
+ * Only this exact provider error with its own request ID establishes that
+ * no model inference was performed; timeouts and other errors remain held. */
+function nonbillableAnthropicCreditRejection(checkpoint: ResponseCheckpoint, provider: AccountingProvider): string | null {
+  if (provider !== 'anthropic' || checkpoint.status !== 400) return null;
+  try {
+    const body = JSON.parse(checkpoint.body);
+    const id: unknown = body?.request_id;
+    const headerId = new Headers(checkpoint.headers).get('request-id') ?? new Headers(checkpoint.headers).get('x-request-id');
+    if (body?.type !== 'error' || body?.error?.type !== 'invalid_request_error'
+      || body?.error?.message !== 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'
+      || typeof id !== 'string' || !/^req_[A-Za-z0-9]+$/.test(id)
+      || (headerId !== null && headerId !== id)
+      || body.usage !== undefined || body.content !== undefined || body.output !== undefined) return null;
+    return id;
+  } catch { return null; }
 }
 function restore(checkpoint: ResponseCheckpoint): Response {
   const headers = new Headers(checkpoint.headers);
@@ -58,7 +89,7 @@ function safeUncertainCheckpoint(checkpoint: ResponseCheckpoint, provider: Accou
     return Array.isArray(body.choices)&&body.choices.length>0&&body.choices.every((choice:{finish_reason?:string;message?:unknown})=>Boolean(choice.message)&&['stop','tool_calls','function_call'].includes(choice.finish_reason??''));
   }catch{return false;}
 }
-type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | '30m' | '12h' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; raw: Record<string, unknown> };
+type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | '30m' | '12h' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; imageOutputTokens: number; raw: Record<string, unknown> };
 /** Only actual Anthropic breakpoint locations establish TTL. Arbitrary JSON in
  * tool arguments, schemas or results cannot prove a provider cache policy. */
 function hasOnlyFiveMinuteClaudeCache(payload: Record<string, unknown>): boolean {
@@ -82,7 +113,7 @@ function hasOnlyFiveMinuteClaudeCache(payload: Record<string, unknown>): boolean
     return value.type === 'ephemeral' && (value.ttl === undefined || value.ttl === '5m') && Object.keys(value).every(key => key === 'type' || key === 'ttl');
   });
 }
-function receiptFromResponse(body: string, headers: Headers, provider: AccountingProvider, endpoint: string, streaming: boolean, payload: Record<string, unknown>): Receipt | undefined {
+function receiptFromResponse(body: string, headers: Headers, provider: AccountingProvider, endpoint: string, streaming: boolean, payload: Record<string, unknown>, reviewedImageTokens=0): Receipt | undefined {
   let id = headers.get('x-request-id') ?? headers.get('request-id') ?? headers.get('x-goog-request-id') ?? '';
   let input: number | undefined, output: number | undefined, cached = 0, written = 0;
   let cacheWriteTtl: '5m' | '30m' | '12h' | null = null, cacheWriteUnpriced = false;
@@ -91,6 +122,7 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
   let unsupportedUsage = false;
   let anthropicDelta = false, anthropicStop = false, responseTerminal = false, chatFinish = false, done = false, googleTerminal = false, googleFinalUsage = false, malformed = false;
   let raw: Record<string, unknown> = {};
+  let imageOutputTokens=0, imagePartCount=0, imageDetailVerified=false;
   function inspect(candidate: unknown) {
     if (!candidate || typeof candidate !== 'object') return;
     const item = candidate as Record<string, unknown>;
@@ -102,13 +134,17 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
       responseTerminal = typeof finalUsage?.input_tokens === 'number' && typeof finalUsage?.output_tokens === 'number';
     }
     if (Array.isArray(item.choices) && item.choices.some(choice => choice && typeof choice === 'object' && typeof choice.finish_reason === 'string')) chatFinish = true;
-    // Gemini acknowledges a blocked request without candidate tokens. Only OTHER with
-    // explicit zero output (total equals prompt, no thoughts) is reconcilable.
+    // A blocked Gemini prompt has no generated candidates. Settle only when
+    // provider usage proves zero output; otherwise retain uncertain exposure.
     const feedback = item.promptFeedback as Record<string, unknown> | undefined;
     const blockUsage = item.usageMetadata as Record<string, unknown> | undefined;
-    if (provider === 'google' && feedback?.blockReason === 'OTHER' && !Array.isArray(item.candidates)
+    if (provider === 'google' && (feedback?.blockReason === 'OTHER' || feedback?.blockReason === 'PROHIBITED_CONTENT')
+      && !Array.isArray(item.candidates)
       && typeof blockUsage?.promptTokenCount === 'number'
+      && Number.isSafeInteger(blockUsage.promptTokenCount) && blockUsage.promptTokenCount >= 0
       && blockUsage?.totalTokenCount === blockUsage.promptTokenCount
+      && (blockUsage.candidatesTokenCount === undefined || blockUsage.candidatesTokenCount === 0)
+      && (blockUsage.toolUsePromptTokenCount === undefined || blockUsage.toolUsePromptTokenCount === 0)
       && (blockUsage.thoughtsTokenCount === undefined || blockUsage.thoughtsTokenCount === 0)) {
       googleTerminal = true;
       googleFinalUsage = true;
@@ -123,11 +159,31 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
     if (typeof item.responseId === 'string') id = responseId = item.responseId;
     if (typeof item.model === 'string') resolvedModel = item.model;
     if (typeof item.modelVersion === 'string') resolvedModel = item.modelVersion;
+    if (provider === 'google' && reviewedImageTokens) {
+      const candidates=Array.isArray(item.candidates)?item.candidates:[];
+      for(const candidate of candidates){
+        const parts=(candidate as {content?:{parts?:unknown[]}})?.content?.parts;
+        if(Array.isArray(parts))for(const part of parts){
+          const inline=(part as {inlineData?:{mimeType?:string}})?.inlineData;
+          if(inline?.mimeType?.startsWith('image/'))imagePartCount++;
+        }
+      }
+    }
     if (item.response) inspect(item.response);
     if (item.message) inspect(item.message);
     const usage = (item.usage ?? item.usageMetadata) as Record<string, unknown> | undefined;
     if (!usage) return;
     raw = { ...raw, ...usage };
+    if(provider==='google' && reviewedImageTokens){
+      const parts=usage.candidatesTokensDetails;
+      if(Array.isArray(parts)){
+        const counts=parts.filter(v=>v&&typeof v==='object'&&(v as {modality?:unknown}).modality==='IMAGE').map(v=>(v as {tokenCount?:unknown}).tokenCount);
+        if(counts.length && counts.every(n=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0)){
+          imageOutputTokens=counts.reduce<number>((sum,n)=>sum+(n as number),0);
+          imageDetailVerified=true;
+        }else if(counts.length)unsupportedUsage=true;
+      }
+    }
     const nonzero = (value: unknown): boolean => typeof value === 'number' ? value !== 0
       : !!value && typeof value === 'object' ? Object.values(value).some(nonzero) : false;
     for (const key of ['server_tool_use', 'audio_tokens', 'audioTokenCount', 'image_output_tokens']) {
@@ -143,6 +199,16 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
     if (typeof inValue === 'number') input = inValue;
     if (typeof outValue === 'number') output = outValue;
     if (provider === 'google' && typeof usage.thoughtsTokenCount === 'number') output = (typeof outValue === 'number' ? outValue : 0) + usage.thoughtsTokenCount;
+    if (provider === 'grok' && typeof outValue === 'number') {
+      // Grok bills reasoning separately from visible completion tokens.
+      const reasoning = (usage.completion_tokens_details as Record<string, unknown> | undefined)?.reasoning_tokens;
+      if (reasoning !== undefined && (typeof reasoning !== 'number' || !Number.isSafeInteger(reasoning) || reasoning < 0)) unsupportedUsage = true;
+      else if (typeof reasoning === 'number') output = outValue + reasoning;
+      // Conflicting provider totals cannot be settled as cheap output.
+      if (usage.total_tokens !== undefined &&
+        (typeof usage.total_tokens !== 'number' || !Number.isSafeInteger(usage.total_tokens) ||
+         typeof input !== 'number' || typeof output !== 'number' || input + output !== usage.total_tokens)) unsupportedUsage = true;
+    }
     const details = (usage.input_tokens_details ?? usage.prompt_tokens_details) as Record<string, unknown> | undefined;
     const cachedValue = details?.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount;
     if (typeof cachedValue === 'number') cached = cachedValue;
@@ -189,13 +255,21 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
       else cacheWriteUnpriced = true;
     }
   }
+  if(reviewedImageTokens){
+    const imageConfigured=(payload.generationConfig as {imageConfig?:{imageSize?:string}}|undefined)?.imageConfig?.imageSize==='1K';
+    if(!imageConfigured||imagePartCount>1)return undefined;
+    if(!imageDetailVerified && imagePartCount===1)imageOutputTokens=reviewedImageTokens;
+    if(imagePartCount===1 && imageOutputTokens===0)return undefined;
+    if(imagePartCount===0 && imageOutputTokens!==0)return undefined;
+    if(imageOutputTokens>reviewedImageTokens||imageOutputTokens>(output??0))return undefined;
+  }
   if (!terminal || malformed || unsupportedUsage || !id || ![input, output, cached].every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)) return undefined;
-  return { id, responseId, input: input!, output: output!, cached, written, cacheWriteTtl, cacheWriteUnpriced, resolvedModel, raw };
+  return { id, responseId, input: input!, output: output!, cached, written, cacheWriteTtl, cacheWriteUnpriced, resolvedModel, imageOutputTokens, raw };
 }
 
 /** Every actual paid HTTP transmission passes here, after SDK serialization.
  * The injected transport and ledger factory allow isolated tests with no paid calls. */
-export function createAccountingFetch(provider: AccountingProvider, transport: typeof fetch = globalThis.fetch.bind(globalThis), ledgerFactory = createStandaloneLedger): typeof fetch {
+export function createAccountingFetch(provider: AccountingProvider, transport: typeof fetch = globalThis.fetch.bind(globalThis), ledgerFactory = createStandaloneLedger, transmissionPolicy: AccountingTransmissionPolicy = {}): typeof fetch {
   return async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
@@ -228,6 +302,10 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const { attemptKey } = nextStandaloneAttempt()!;
     const ledger = ledgerFactory();
     let attempt = await ledger.lookupAttempt(context.userId, context.requestId, attemptKey);
+    let pricing = await loadStandalonePricing(ledger, attempt?.pricing_version);
+    await ledger.registerPricing(pricing.version, pricing);
+    let ownerSelectedUncached = (attempt?.preflight_estimate as StandaloneEstimate | undefined)?.ownerApprovalRequired === OWNER_SELECTED_UNCACHED;
+    const stampOwnerApproval = (quote: StandaloneEstimate) => ownerSelectedUncachedEstimate(quote, ownerSelectedUncached);
     let prepared;
     if (attempt && context.resumed) {
       // Resume is bound to the server-loaded original workflow. Mutable routing
@@ -242,6 +320,15 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     } else {
       payload=await freezeStoredImages(payload);
       prepared = prepareStandaloneRequest(provider, model, url.pathname, payload);
+      if (!attempt) {
+        const sameModel = proposeSelectedModelUncached(prepared, pricing);
+        if (sameModel) {
+          // Preparing an approval quote is not permission to transmit.
+          // The SQL ledger will force a pause even below normal thresholds.
+          prepared = sameModel;
+          ownerSelectedUncached = true;
+        }
+      }
       if (attempt && (attempt.source_prepared_hash ?? attempt.prepared_hash) !== prepared.hash) throw failure('replay_mismatch', 'The prepared request changed. Resume requires the exact approved request.');
       if (attempt) {
         const saved = attempt.prepared_payload as unknown as typeof prepared;
@@ -250,25 +337,100 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
           || prepared.model !== model && !attempt.supersedes_attempt_id) throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
       }
     }
-    let pricing=await loadStandalonePricing(ledger,attempt?.pricing_version);
-    await ledger.registerPricing(pricing.version,pricing);
-    if (attempt && attempt.state !== 'settled' && attempt.estimator_version !== ESTIMATOR_VERSION) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    if (ownerSelectedUncached && (prepared.provider !== 'openai' ||
+      prepared.payload.prompt_cache_key !== undefined || prepared.payload.prompt_cache_retention !== undefined)) {
+      throw failure('replay_mismatch', 'Owner-approved uncached preparation must not include unreviewed cache metadata.');
+    }
+    if (attempt && attempt.state !== 'settled' && ![ESTIMATOR_VERSION, 'standalone-estimator-v7', 'standalone-estimator-v6', PROVIDER_COUNT_ESTIMATOR_VERSION, 'standalone-selected-model-uncached-v1'].includes(attempt.estimator_version)) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
+    // Persisted native counts are immutable evidence for the exact hash and model.
+    // Resume must not silently recalculate or substitute a different reservation.
+    const savedEstimate = attempt?.preflight_estimate as StandaloneEstimate | undefined;
+    // The owner-selected uncached quote retains its distinct approval estimator
+    // identity, but can still contain a provider-native input count. Restore the
+    // exact hash-bound evidence on resume instead of reverting to byte heuristics.
+    const savedProviderCount = attempt?.estimator_version === PROVIDER_COUNT_ESTIMATOR_VERSION ||
+      attempt?.estimator_version === 'standalone-selected-model-uncached-v1' &&
+      savedEstimate?.inputCountSource === 'provider';
+    const countedInput = savedProviderCount &&
+      savedEstimate?.inputCountSource === 'provider' &&
+      savedEstimate.requestHash === prepared.hash &&
+      Number.isSafeInteger(savedEstimate.inputTokens) && savedEstimate.inputTokens >= 0
+      ? { inputTokens: savedEstimate.inputTokens, requestHash: prepared.hash } : undefined;
+    if (savedProviderCount && !countedInput) {
+      throw failure('estimate_changed', 'Stored provider count evidence does not match this prepared request.');
+    }
     if(attempt&&['paused','reserved'].includes(attempt.state)){
       const current=await loadStandalonePricing(ledger);
       const oldPrice=getModelPrice(provider,prepared.model,pricing),currentPrice=getModelPrice(provider,prepared.model,current);
       if(!currentPrice)throw failure('unsupported_billing','The current validated catalog has no applicable price for this exact model. The saved attempt remains held.');
       if(!oldPrice||canonicalJson(oldPrice)!==canonicalJson(currentPrice)){
-        const quote=estimatePreparedRequest(prepared,current);
+        const quote=stampOwnerApproval(estimatePreparedRequest(prepared,current,countedInput));
         if(quote.status!=='estimated'||quote.reservationMicrousd===null)throw failure('unsupported_billing','Updated pricing cannot estimate this request: '+quote.issues.join('; '));
         attempt=await ledger.reprice(context.userId,attempt.id,current.version,quote as unknown as Record<string,unknown>);
         pricing=current;
       }
     }
-    const estimate = estimatePreparedRequest(prepared,pricing);
+    let estimate = stampOwnerApproval(estimatePreparedRequest(prepared,pricing,countedInput));
+    const contextIssue = 'Estimated input plus output exceeds supported context window';
+    // Use native counts for ordinary eligible estimates too, not just
+    // oversized byte heuristics. Skip unsupported payloads and replay.
+    if (!attempt && estimate.issues.every(issue => issue === contextIssue) &&
+        (provider === 'anthropic' && prepared.endpoint === '/v1/messages' ||
+         provider === 'openai' && prepared.endpoint === '/v1/responses' ||
+         provider === 'google' && /^\/v1(?:beta)?\/models\/[^/]+:(?:generateContent|streamGenerateContent)$/.test(prepared.endpoint))) {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const nativeCount = await cachedWorkflowValue(
+        `context-count:${attemptKey}:${prepared.hash}`,
+        () => countNativePreparedInput(prepared,transport,headers,signal),
+      );
+      if (nativeCount !== null) {
+        estimate = stampOwnerApproval(estimatePreparedRequest(prepared,pricing,{inputTokens:nativeCount,requestHash:prepared.hash}));
+      }
+    }
+    // A mixed unsupported request is a billing/schema failure, not evidence
+    // that its true context size is over capacity. Do not misroute that failure.
+    if (estimate.issues.includes(contextIssue) && estimate.issues.some(issue => issue !== contextIssue)) {
+      throw Object.assign(failure('unsupported_billing',
+        'This provider request has unsupported fields or billing dimensions: ' + estimate.issues.filter(issue => issue !== contextIssue).join('; ')),
+        { issues: estimate.issues });
+    }
+    if (estimate.issues.includes(contextIssue)) {
+      const confirmed = estimate.inputCountSource === 'provider';
+      const maxContextTokens = getModelPrice(provider, prepared.model, pricing)?.maxContextTokens ?? null;
+      // Include only bounded numeric diagnostics; never log the private prompt.
+      console.warn('[Accounting] Prepared context requires a higher-capacity model', {
+        provider: prepared.provider, model: prepared.model,
+        inputTokens: estimate.inputTokens, outputAllowance: estimate.outputAllowance,
+        maxContextTokens, inputCountSource: estimate.inputCountSource,
+        nativeCountVerified: confirmed,
+      });
+      throw Object.assign(failure(
+        confirmed ? 'context_window_exceeded' : 'context_capacity_unverified',
+        confirmed
+          ? 'Provider-counted input plus the unchanged output allowance exceeds this model\'s reviewed context window. A higher-capacity model is required.'
+          : 'This model cannot verify the full input token count, and its conservative estimate exceeds its reviewed context window. A higher-capacity model is required.'
+      ),{provider:prepared.provider,model:prepared.model,inputTokens:estimate.inputTokens,
+         outputAllowance:estimate.outputAllowance,maxContextTokens,inputCountSource:estimate.inputCountSource});
+    }
     if (estimate.status !== 'estimated' || estimate.reservationMicrousd === null) throw Object.assign(failure('unsupported_billing', 'This provider request cannot be priced: '+estimate.issues.join('; ')), { issues: estimate.issues });
     if (attempt && attempt.state !== 'settled' && BigInt(attempt.reserved_microusd) !== BigInt(estimate.reservationMicrousd)) throw failure('estimate_changed', 'The saved reservation differs from the verified prepared request estimate. A fresh quote is required.');
     const reconcile = async (checkpoint: ResponseCheckpoint, attemptId: string) => {
-      const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload);
+      const rejectedId = nonbillableAnthropicCreditRejection(checkpoint,provider);
+      if (rejectedId) {
+        // An HTTP 400 error remains a real provider error for the caller.
+        // Its saved, exact request identifier proves the nonbillable rejection,
+        // not a generated completion. Do not invent output or retry.
+        await ledger.recordProviderIdentifiers(context.userId,attemptId,rejectedId,null);
+        await ledger.settle({ownerId:context.userId,attemptId,provider,providerReceiptId:rejectedId,
+          actualMicrousd:'0',
+          usage:{inputTokens:0,outputTokens:0,cachedInputTokens:0,nonbillableRejected:true},
+          evidence:{kind:'provider_rejection',requestHash:prepared.hash,httpStatus:400,
+            pricingVersion:pricing.version,requestedModel:prepared.model,
+            resolvedModel:null,pricedModel:null,pricingUnknown:false,
+            providerRequestId:rejectedId,rejectionReason:'insufficient_prepaid_balance'}});
+        return;
+      }
+      const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || /:streamGenerateContent(?:[?]|$)/.test(prepared.endpoint), prepared.payload, getModelPrice(provider,prepared.model,pricing)?.imageOutputTokensPerImage??0);
       if (!receipt) {
         await ledger.markUncertain(context.userId, attemptId, 'Response received without supported complete provider usage and receipt; reservation remains held.');
         if(await ledger.uncertainExposureAccepted(context.userId,attemptId))return;
@@ -276,7 +438,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       }
       const receiptHeaders = new Headers(checkpoint.headers);
       await ledger.recordProviderIdentifiers(context.userId, attemptId, receiptHeaders.get('request-id') ?? receiptHeaders.get('x-request-id') ?? receiptHeaders.get('x-goog-request-id'), receipt.responseId);
-      const usage:Record<string,unknown> = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, cachedInputTokens: receipt.cached,
+      const usage:Record<string,unknown> = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, imageOutputTokens: receipt.imageOutputTokens, cachedInputTokens: receipt.cached,
         ...(['anthropic','openai'].includes(provider) ? { cacheReadInputTokens: receipt.cached, cacheCreationInputTokens: receipt.written, cacheWriteInputTokens: receipt.written, cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
       // A returned dated alias is a distinct billing identity. Missing exact
       // reviewed applicability leaves actual cost unknown, even with full tokens.
@@ -300,13 +462,27 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         throw failure('resolved_model_unpriced', 'The provider returned a model without an exact reviewed price. Known usage is saved; spending exposure remains reserved.');
       }
       let actualMicrousd: string;
-      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written,receipt.cacheWriteTtl??'5m'); }
-      catch {
-        await ledger.recordPartialUsage(context.userId, attemptId, usage, { ...evidence, pricedModel: null, pricingUnknown: true });
-        throw failure('usage_unpriced', 'The provider returned an unsupported billing dimension. Known usage is saved; spending exposure remains reserved.');
+      let finalEvidence:Record<string,unknown>=evidence;
+      try {
+        if(isBoundedGrokWebRequest(prepared)){
+          // Provider-reported ticks include both model and native search fees.
+          // Do not settle token-only amounts or assume a search was free.
+          const cost=boundedGrokWebCostFromReceipt(receipt.raw,estimate.reservationMicrousd!);
+          actualMicrousd=cost.actualMicrousd;
+          finalEvidence={...evidence,webSearchPolicy:GROK_BOUNDED_WEB_POLICY_VERSION,
+            webSearchCalls:cost.webSearchCalls,providerCostTicks:cost.providerCostTicks};
+        }else{
+          actualMicrousd=priceTokenUsage(price,receipt.input,receipt.output,receipt.cached,
+            receipt.written,receipt.cacheWriteTtl??'5m',receipt.imageOutputTokens);
+        }
+      } catch {
+        await ledger.recordPartialUsage(context.userId,attemptId,usage,
+          {...evidence,pricedModel:null,pricingUnknown:true,
+            missingDimension:'verified_xai_tool_cost_or_limit'});
+        throw failure('usage_unpriced','The provider returned unsupported or excessive billed usage; full exposure remains reserved.');
       }
       await ledger.settle({ ownerId: context.userId, attemptId, provider, providerReceiptId: receipt.id,
-        actualMicrousd, usage, evidence });
+        actualMicrousd, usage, evidence:finalEvidence });
     };
     if (attempt?.state === 'uncertain') {
       // Only durable server authority can acknowledge exposure. Never claim
@@ -331,7 +507,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     headers.delete('content-length');
     const controller = new AbortController();
-    const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(180_000)]);
+    const configuredTimeout = typeof transmissionPolicy.timeoutMs === 'function'
+      ? transmissionPolicy.timeoutMs() : transmissionPolicy.timeoutMs ?? DEFAULT_PROVIDER_TRANSMISSION_TIMEOUT_MS;
+    if (!Number.isFinite(configuredTimeout) || configuredTimeout <= 0)
+      throw failure('transport_policy', 'Provider accounting received an invalid transmission timeout policy.');
+    const transmissionTimeoutMs = Math.max(1, Math.floor(configuredTimeout));
+    const timeoutSignal = AbortSignal.timeout(transmissionTimeoutMs);
+    const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), timeoutSignal]);
     const activeKey = `${context.userId}:${attempt.id}`;
     activeTransmissions.set(activeKey, controller);
     let pollingCancellation = false;
@@ -355,10 +537,33 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if(reconciled?.state==='uncertain'&&!safeUncertainCheckpoint(checkpoint,provider,prepared.endpoint))return unavailableUncertainResponse();
       return restore(checkpoint);
     } catch (error) {
-      await ledger.markUncertain(context.userId, attempt.id, error instanceof StandaloneAccountingError ? error.message : 'Transmission or response reconciliation did not complete; reservation remains held.').catch(() => undefined);
+      const timedOut = timeoutSignal.aborted;
+      const timeoutError = timedOut && transmissionPolicy.timeoutCode
+        ? failure(transmissionPolicy.timeoutCode, policyText(
+            transmissionPolicy.timeoutMessage, transmissionTimeoutMs,
+            `Provider transmission timed out after ${transmissionTimeoutMs}ms; provider cancellation was requested and billing outcome is unknown.`,
+          ))
+        : null;
+      const uncertaintyReason = timedOut
+        ? policyText(
+            transmissionPolicy.uncertaintyReason, transmissionTimeoutMs,
+            `Provider transmission timed out after ${transmissionTimeoutMs}ms; reservation remains held because billing outcome is unknown.`,
+          )
+        : error instanceof StandaloneAccountingError
+          ? error.message
+          : 'Transmission or response reconciliation did not complete; reservation remains held.';
+      await ledger.markUncertain(context.userId, attempt.id, uncertaintyReason).catch(() => undefined);
+      if (timeoutError) throw Object.assign(timeoutError, { cause: error, attemptId: attempt.id });
       if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))return unavailableUncertainResponse();
       if (error instanceof StandaloneAccountingError) throw Object.assign(error, { attemptId: attempt.id });
       throw Object.assign(failure('outcome_unknown', 'The provider outcome is uncertain. Spending exposure remains reserved; automatic retry stopped.'), { cause: error, attemptId: attempt.id });
     } finally { clearInterval(cancellationPoll); activeTransmissions.delete(activeKey); }
   };
+}
+
+
+/** Activity-specific callers may override only the transmission boundary policy.
+ * Admission, exact-payload accounting, uncertainty retention, and replay rules remain unchanged. */
+export function createAccountingFetchWithPolicy(provider: AccountingProvider, policy: AccountingTransmissionPolicy): typeof fetch {
+  return createAccountingFetch(provider, globalThis.fetch.bind(globalThis), createStandaloneLedger, policy);
 }

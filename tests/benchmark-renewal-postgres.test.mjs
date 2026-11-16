@@ -9,20 +9,21 @@ import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
 import {gameFixture} from './fixtures/game-project.mjs';
 import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-renewal.mjs';
+import {installHistoricalProviderModeSchema} from './helpers/assert-project-organization-compatibility.mjs';
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
- {timeout:180000},async()=>{
+ {timeout:(process.env.KATIE_TEST_TASK3B==='1'||process.env.KATIE_TEST_TASK3C==='1')?2400000:(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1'||process.env.KATIE_TEST_LIFECYCLE_HOST==='1'||process.env.KATIE_TEST_ORDINARY_HOST==='1'||process.env.KATIE_TEST_TASK2C==='1')?1500000:180000},async()=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
  const root=mkdtempSync(join(tmpdir(),'katie-continuation-')),data=join(root,'data');
  const clients=[];let started=false;
  const run=(name,args)=>{const r=spawnSync(join(bin,name),args,{encoding:'utf8',timeout:30000});
   assert.equal(r.status,0,r.stderr||r.error?.message)};
- const connect=async()=>{const c=new pg.Client({host:root,port:55489,user:'postgres',database:'postgres',connectionTimeoutMillis:5000});
+ const connect=async()=>{const c=new pg.Client({host:process.env.KATIE_TEST_PG_TCP==='1'?'127.0.0.1':root,port:55489,user:'postgres',database:'postgres',connectionTimeoutMillis:5000});
   await c.connect();clients.push(c);return c};
  try{
   run('initdb',['-D',data,'-U','postgres','-A','trust','--no-locale','-E','UTF8']);
-  run('pg_ctl',['-D',data,'-l',join(root,'log'),'-o',`-h '' -k ${root} -p 55489`,'-w','start']);started=true;
+  run('pg_ctl',['-D',data,'-l',join(root,'log'),'-o',process.env.KATIE_TEST_PG_TCP==='1'?"-h 127.0.0.1 -k '' -p 55489":`-h '' -k ${root} -p 55489`,'-w','start']);started=true;
   const db=await connect();
   await db.query(readFileSync('tests/fixtures/project-base.sql','utf8'));
   for(const file of ['20261016211426_agent_management.sql','20261016234048_autonomous_missions.sql',
@@ -54,7 +55,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
     await db.query(readFileSync('supabase/migrations/'+name+'.sql','utf8'));
 
   for(const file of ['20261027233957_benchmark_production_owner_qualification.sql','20261028134500_benchmark_dashboard_task_approval.sql',
-   '20261026120000_project_completion_control.sql','20261027172000_specification_lifecycle_recovery.sql','20261028135500_benchmark_bounded_assessment.sql',
+   '20261026120000_project_completion_control.sql','20261102130000_project_assessment_source_binding.sql','20261027172000_specification_lifecycle_recovery.sql','20261028135500_benchmark_bounded_assessment.sql',
    '20261028180638_specification_draft_history.sql','20261028180911_benchmark_owner_continuation.sql','20261028181030_continuation_specification_scheduler.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   await db.query(`create table provider_health(provider_name text primary key,status text,reason text,failure_count int,blocked_until timestamptz,updated_at timestamptz);grant all on provider_health to service_role`);
@@ -69,8 +70,9 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261024161000_resume_repository_review_context.sql','20261027201000_development_dispatch_recovery.sql',
    '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql','20261029185000_benchmark_zero_call_recovery_chain.sql','20261029213000_benchmark_development_owner_renewal.sql','20261029233500_benchmark_development_pregrant_recovery.sql','20261030001000_benchmark_development_paid_successor.sql','20261030004300_benchmark_owner_resource_amendment.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
+  if(process.env.KATIE_TEST_PROJECT_ORGANIZATION!=='1')await installHistoricalProviderModeSchema(db);
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
-  const protocol=config.protocol;
+  const protocol={...config.protocol};
   await db.query('insert into actors(id,name) values($1,$2)',[actor,'Synthetic continuation fixture']);
   await db.query('insert into chats(id,actor_id,title) values($1,$2,$3)',[chat,actor,'Synthetic continuation fixture']);
   await db.query('insert into repo_sync_runs(id,repository_full_name) values($1,$2)',[repo,'mfackrell/katie']);
@@ -79,7 +81,14 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   const account=(await db.query(`insert into benchmark_budget_accounts(experiment_id,trial_id,arm,owner_actor_id,cap_tokens,spent_tokens) values($1,$2,'full',$3,350000,0) returning id`,[exp,trial,actor])).rows[0].id;
   await db.query('set role service_role');
   const created=(await db.query('select benchmark_create_full_game_project($1,$2,$3,$4,$5,$6,$7,$8,$9) p',
-   [project,'continuation-'+project,actor,chat,'Build Take Eleven from approved original issue 650',repo,trial,protocol.baselineSha,'gpt-5.3-codex'])).rows[0].p;
+   [project,'continuation-'+project,actor,chat,process.env.KATIE_TEST_TASK2C==='1'?'Synthetic Task 2C issue #715 regression: repair /pilot state to Recovered with frozen browser acceptance':'Build Take Eleven from approved original issue 650',repo,trial,protocol.baselineSha,'gpt-5.3-codex'])).rows[0].p;
+  if(process.env.KATIE_TEST_TASK2C==='1'){
+   // Frozen synthetic assignment installed before any scope approval. Never changes production scope.
+   const contract={path:'/pilot',scenarios:[{name:'recovered state',steps:[{action:'expectText',selector:'#state',value:'Recovered'}]}]};
+   const spec={name:'Synthetic recovered state',summary:'Repair an isolated display state',requirements:['The /pilot route displays Recovered in #state','Independent review and browser acceptance pass on the same commit'],allowedPaths:['app/pilot/'],milestones:[{title:'Recovered state',instruction:'Implement and independently verify the frozen display contract',contract}],finalContract:contract};
+   await db.query('update work_projects set spec=$2,baseline_sha=$3 where id=$1',[project,spec,protocol.baselineSha]);
+  }
+  if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')(await import('./helpers/qualify-native-recovery.mjs')).createNativeRecoveryBaseline(protocol.baselineSha);
   const failedMission=randomUUID();
   await db.query('select create_mission($1,$2,$3,120,null)',[failedMission,'Synthetic failed specification',created.team]);
   // Synthetic historical failure setup only; actual continuation uses owner RPC and DO child creation.
@@ -216,5 +225,6 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   rmSync(root,{recursive:true,force:true});
  }
 });
+
 
 

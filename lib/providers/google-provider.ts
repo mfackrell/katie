@@ -9,6 +9,7 @@ import {
   ProviderStreamHandlers
 } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
+import { compactImageGenerationContext } from "@/lib/providers/image-generation-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 import { getKatieOperationalRealityStatement, getKatieReasoningExplainerStatement } from "@/lib/providers/operational-reality";
@@ -183,7 +184,7 @@ export class GoogleProvider implements LlmProvider {
       : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
     const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
-    const baseSystemInstruction = buildSystemInstruction(params);
+    const baseSystemInstruction = buildSystemInstruction(isImageTask ? compactImageGenerationContext(params) : params);
     const systemInstructionBase = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
       : baseSystemInstruction;
@@ -203,6 +204,7 @@ export class GoogleProvider implements LlmProvider {
           abortSignal: params.signal,
           systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
+          ...(isImageTask ? { imageConfig: { imageSize: "1K" as const } } : {}),
           ...(thinkingLevelInput
             ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
             : {})
@@ -265,7 +267,7 @@ export class GoogleProvider implements LlmProvider {
       : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
     const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
-    const baseSystemInstruction = buildSystemInstruction(params);
+    const baseSystemInstruction = buildSystemInstruction(isImageTask ? compactImageGenerationContext(params) : params);
     const systemInstructionBase = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
       : baseSystemInstruction;
@@ -285,6 +287,7 @@ export class GoogleProvider implements LlmProvider {
           abortSignal: params.signal,
           systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
+          ...(isImageTask ? { imageConfig: { imageSize: "1K" as const } } : {}),
           ...(thinkingLevelInput
             ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
             : {})

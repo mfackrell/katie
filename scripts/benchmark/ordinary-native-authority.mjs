@@ -1,0 +1,83 @@
+import {freshNativePhaseWork} from './native-phase-profile.mjs';
+
+// The original Task 4A's successor inherits a historical pregrant-recovery
+// marker through the immutable owner approval chain. That marker is NOT
+// authority to erase or reject the later genuinely paid WIP checkpoint.
+// This pure classifier is deliberately task-specific; it never grants
+// execution, changes stored state, retries a workflow, or reads credentials.
+export function classifyTask4aRecoveryHistory({proof,approval}){
+ const original=proof?.authorityKind==='task4a-developer'&&
+  proof?.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
+  proof?.taskId==='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+ const postpaid=original&&
+  approval?.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'&&
+  approval?.id===proof.approvalId;
+ const pregrant=original&&!postpaid&&
+  approval?.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+ return Object.freeze({postpaid:Boolean(postpaid),pregrant:Boolean(pregrant)});
+}
+
+// Trusted host adapter for ordinary Developer authority. No benchmark provenance
+// is synthesized; the service snapshot authenticates the original project owner.
+export async function readOrdinaryNativeAuthority({db,proof,approval,project,account,task,releaseSha}){
+ const deny=()=>{throw Error('ORDINARY_NATIVE_AUTHORITY_DENIED');};
+ if(approval?.developer_authority&&'task4aCapacityRenewal' in approval.developer_authority){
+  const consent=await db.rpc('task4a_capacity_execution_ready',{p_approval:approval.id,p_release:releaseSha});
+  if(consent.error||consent.data!==true)deny();
+ }
+ // The native host independently rejects a legacy ordinary proof for the
+ // original Task 4A project, even if the GitHub workflow gate were bypassed.
+ if(project?.id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&proof?.authorityKind!=='task4a-developer')deny();
+ if(!['ordinary-developer','task4a-developer'].includes(proof.authorityKind)||
+  (proof.authorityKind==='task4a-developer'?(approval.developer_authority?.task4aContinuationId!==proof.task4aContinuationId||project.id!=='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'):approval.developer_authority?.task4aContinuationId!==undefined)||
+  approval.developer_authority?.version!=='ordinary-developer-v1'
+  ||approval.trial_id!==null||approval.continuation_id!==null||account.arm!=='developer'
+  ||account.trial_id!==null||account.experiment_id!==null||account.developer_project_id!==project.id
+  ||account.developer_task_id!==task.id||proof.accountId!==account.id||approval.account_id!==account.id||approval.task_id!==task.id
+  ||approval.project_id!==project.id||proof.releaseSha!==releaseSha||approval.model!=='gpt-5.3-codex'
+  ||approval.consumed_at||approval.revoked_at||account.frozen_at
+  ||task.external?.developerApprovalId!==approval.id||task.external?.developerReleaseSha!==releaseSha)deny();
+ const result=await db.rpc('benchmark_lifecycle_snapshot',{p_task:task.id});
+ const s=result.data;
+ if(result.error||!s||s.authorityKind!=='ordinary-developer'||s.snapshot?.approval?.id!==approval.id
+  ||s.ownerId!==approval.owner_id||s.accountId!==account.id||s.revoked||s.frozen
+  ||s.position.expiresAt<=Date.now()||project.status!=='running'||project.phase!=='development')deny();
+ for(const key of ['taskId','projectId','scopeHash','contractHash','baselineSha'])if(s.binding[key]!==proof[key])deny();
+ if(proof.authorityKind==='task4a-developer'){
+  const check=await db.rpc('task4a_native_authority_ready',{p_project:project.id,p_task:task.id,p_authority:proof.task4aContinuationId});
+  if(check.error||check.data!==true)deny();
+ }
+ return s;
+}
+
+import {assessLifecycleCapacity,STAGES} from './lifecycle-capacity.mjs';
+import {capacityProgress} from './native-capacity-forecast.mjs';
+export async function readOrdinaryLifecycleCapacity({db,task,project,approval,context,recovery,phase,completedStages=[],notRequiredStages=[],grantId=null,observations=[],now=Date.now()}){
+ const binding={taskId:task.id,projectId:project.id,baselineSha:context.baselineSha,scopeHash:project.approved_hash,contractHash:context.contractHash};
+ const progress=capacityProgress({binding,recovery,phase,completedStages,notRequiredStages});
+ const input={binding,progress,observedAt:now,cohort:binding.scopeHash,work:{...freshNativePhaseWork,repairIterations:progress.completedStages.includes('repair')||progress.notRequiredStages.includes('repair')?0:1,additionalRepairIterations:0},observations:[],pricing:{},
+  authorization:{live:!approval.revoked_at&&Date.parse(approval.deadline)>now,deadline:Date.parse(approval.deadline),executionAuthorized:approval.revoked_at?false:null},
+  otherApiCostMicrousd:Object.fromEntries(Object.keys(STAGES).map(k=>[k,k==='browser_delivery'?null:'0']))};
+ try{
+  const {data:s,error}=await db.rpc('benchmark_lifecycle_snapshot',{p_task:task.id});
+  if(error||!s||s.authorityKind!=='ordinary-developer'||s.snapshot?.approval?.id!==approval.id||Object.keys(binding).some(k=>s.binding[k]!==binding[k]))throw Error('snapshot unavailable');
+  const p=s.position,g=s.snapshot.grants?.find(row=>row.id===grantId);
+  input.authorization={source:'locked_ordinary_lifecycle_snapshot',live:!s.revoked&&!s.frozen&&p.expiresAt>now,deadline:p.expiresAt,
+   executionAuthorized:grantId?Boolean(g&&g.id===grantId&&g.developer_approval_id===approval.id&&!g.revoked_at&&!g.stopped_at&&Date.parse(g.deadline)>now):null,
+   tokens:{cumulativeLimit:p.cumulativeTokens,accountEncumbered:p.accountEncumberedTokens,developmentLimit:p.developmentTokens,developmentEncumbered:p.developmentEncumberedTokens,completionReserveRemaining:p.completionTokens,assessmentReserveRemaining:p.assessmentTokens},
+   calls:{developmentLimit:p.developmentCalls,developmentConsumed:p.developmentConsumedCalls,completionReserveRemaining:p.completionCalls,assessmentLimit:p.assessmentCalls,assessmentConsumed:p.assessmentConsumedCalls},
+   money:{complete:true,ceilingMicrousd:p.ceilingMicrousd,exposureMicrousd:s.exposureMicrousd}};
+  const seen=new Set();
+  input.observations=observations.filter(o=>{
+   if(!Array.isArray(o.operationIds)||!o.operationIds.length||o.operationIds.length!==o.calls||new Set(o.operationIds).size!==o.calls)return false;
+   const rows=o.operationIds.map(id=>s.snapshot.calls?.find(c=>c.id===id));
+   if(rows.some(c=>!c||c.state!=='settled'||c.model!==approval.model||!c.provider_usage||seen.has(c.id)))return false;
+   if(rows.reduce((n,c)=>n+c.provider_usage.input_tokens,0)!==o.inputTokens||rows.reduce((n,c)=>n+c.provider_usage.output_tokens,0)!==o.outputTokens)return false;
+   rows.forEach(c=>seen.add(c.id));return true;
+  });
+  input.pricing.native=s.pricing;
+  return assessLifecycleCapacity(input);
+ }catch{
+  const result=assessLifecycleCapacity(input);result.uncertainties.push('ordinary_authoritative_snapshot_unavailable');return result;
+ }
+}

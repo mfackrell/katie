@@ -90,6 +90,23 @@ export interface FileReference {
   };
 }
 
+export interface ProviderPayloadCaptureTrace {
+  actorId: string;
+  chatId: string;
+  requestId: string;
+  currentUserMessageId: string;
+  historySource: "stm" | "recent_messages";
+  stmVersion: number | null;
+  stmExchangeCount: number;
+  stmLastAssistantId: string | null;
+  persistedLastCompletedAssistantId: string | null;
+  stmMatchesPersistedTail: boolean;
+  historyTurns: Array<{ id: string; role: "user" | "assistant"; createdAt: string }>;
+  recentPersistedTurns: Array<{ id: string; role: string; createdAt: string }>;
+  excludedTurns: Array<{ id: string; role: string; reason: string }>;
+  intermediateSummaryChars: number;
+}
+
 export interface ProviderSystemAudit {
   provider: "openai" | "google" | "grok" | "anthropic";
   model: string;
@@ -101,6 +118,12 @@ export interface ProviderSystemAudit {
   contextSynthesis?: {
     mode: "direct" | "condensed"; sourceHistoryTurns: number;
     sourceSummaryChars: number; sourcePersonaChars: number; truncated: boolean;
+  };
+  /** Owner-authorized, one-request text-only diagnostic. Never populated in ordinary traffic. */
+  requestDiagnostic?: {
+    scope: "initial-provider-call";
+    wireRequest: unknown;
+    source: ProviderPayloadCaptureTrace;
   };
 }
 
@@ -128,6 +151,8 @@ export interface ChatGenerateParams {
   researchEvidence?: ResearchEvidenceBundle;
   /** Inspection hook. Never supplies credentials, binary attachments, or full request headers. */
   onProviderSystemPrepared?: (audit: ProviderSystemAudit) => Promise<void>;
+  /** Server-authorized diagnostics only; callers cannot supply this in a browser request without owner validation. */
+  providerPayloadCaptureTrace?: ProviderPayloadCaptureTrace;
 }
 
 export interface ProviderResponse {

@@ -27,7 +27,7 @@ test('task status is owner-only and stale or expired DB authority cannot be repl
 
 test('unapproved Full task waits without binding or external dispatch; same task resumes after approval',async()=>{
  const source=readFileSync('lib/agents/development.ts','utf8');
- const start=source.indexOf('export async function dispatchDevelopment('),end=source.indexOf('  if (project && nativeDispatchEnabled)',start);
+ const start=source.indexOf('export async function dispatchDevelopment('),end=source.indexOf('  if (project && nativeDispatchEnabled && !providerDeadline)',start);
  const gate=ts.transpileModule(source.slice(start,end)+'return task;}',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  const calls=[],out={};let approved=false;
  const db={from(){return {select(){return this},eq(){return this},is(){return this},maybeSingle:async()=>({data:approved?{id:'approval'}:null,error:null})}},rpc:async(name,args)=>{calls.push({name,args});return {data:{},error:null}}};

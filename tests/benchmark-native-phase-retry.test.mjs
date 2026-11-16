@@ -5,11 +5,11 @@ import vm from 'node:vm';
 import {nativeChildInterruptionRetryable,nativeGatewayFailureClass,createNativeHttpBridge} from '../scripts/benchmark/native-http-bridge.mjs';
 const host=readFileSync(new URL('../scripts/benchmark/native-development-host.mjs',import.meta.url),'utf8');
 const loop=host.slice(host.indexOf(' const safelyRunPhase='),host.indexOf(' stopTimer=setInterval'))+'\n safelyRunPhase("implementation");';
-async function runLoop({signal=null,code=1,gatewayFailure=null,pending=[],live=true,ownerApprovedSuccessor=false}={}){
- let runs=0,reads=0,resets=0;
- const context={ownerApprovedSuccessor,snapshot:()=>{},saveDiagnostics:()=>{},nativeChildInterruptionRetryable,gatewayFailure,account:{id:'account'},proof:{trialId:'trial'},grantToken:'token',executionEpoch:1,tokenDigest:()=>'',trustedCheckpointSha:'head',console:{log:()=>{}},denied:message=>{throw Error(message)},git:()=>resets++,runPhase:async()=>{runs++;if(runs===1)throw Object.assign(Error('child failed'),{nativeChildOutcome:{signal,code}});},db:{from:()=>({select:()=>({eq:()=>({in:()=>({limit:async()=>{reads++;return {data:pending}}})})})}),rpc:async()=>({data:live})}};
+async function runLoop({signal=null,code=1,gatewayFailure=null,pending=[],live=true,liveAtStart=true,ownerApprovedSuccessor=false,capacityShortfall=false}={}){
+ let runs=0,reads=0,resets=0,authorityReads=0,preserved=0;
+ const context={providerExecution:false,task4a:false,activeWipPhase:null,preserveWip:()=>{preserved++;},ordinary:false,pauseForCapacity:()=>{if(capacityShortfall)throw Error('NATIVE_OWNER_APPROVAL_REQUIRED');},forecastCapacity:async()=>{},latestCapacityForecast:{status:'indeterminate'},diagnostics:{capacityForecasts:[]},capacityCompletedStages:new Set(),capacityNotRequiredStages:new Set(),capacityPhase:null,capacityReceipts:[],capacityObservations:[],ownerApprovedSuccessor,snapshot:()=>{},saveDiagnostics:()=>{},nativeChildInterruptionRetryable,gatewayFailure,account:{id:'account'},proof:{trialId:'trial'},grantToken:'token',executionEpoch:1,tokenDigest:()=>'',trustedCheckpointSha:'head',console:{log:()=>{}},denied:message=>{throw Error(message)},git:()=>resets++,runPhase:async()=>{runs++;if(runs===1)throw Object.assign(Error('child failed'),{nativeChildOutcome:{signal,code}});},db:{from:()=>({select:()=>({eq:()=>({in:()=>({limit:async()=>{reads++;return {data:pending}}})})})}),rpc:async()=>({data:++authorityReads===1?liveAtStart:live})}};
  let error;try{await vm.runInNewContext(loop,context);}catch(e){error=e;}
- return {runs,reads,resets,error};
+ return {runs,reads,resets,preserved,error};
 }
 test('actual host recovery loop never repeats deterministic gateway denials or generic exit1',async()=>{
  for(const gatewayFailure of ['admission','authorization','request-schema','upstream-uncertain','gateway-failure',null]){
@@ -25,15 +25,15 @@ test('positive process interruption still needs settled ledger and live grant',a
  assert.equal((await runLoop({signal:'SIGKILL',code:null,live:false})).runs,1);
 });
 test('watchdog state failure and read uncertainty latch a nonretryable host stop before kill',async()=>{
- const watchdog=host.slice(host.indexOf(' stopTimer=setInterval'),host.indexOf(" await safelyRunPhase('implementation')"));
+ const watchdog=host.slice(host.indexOf(' stopTimer=setInterval'),host.indexOf(" const verifyCandidate="));
  for(const mode of ['stopped','read-error']){
   let callback,killed=0;
-  const context={stopTimer:null,gatewayFailure:null,setInterval:fn=>{callback=fn;return 1;},grantId:'grant',proof:{projectId:'project'},child:{kill:()=>killed++},readOne:async table=>{if(mode==='read-error')throw Error('unavailable');return table==='benchmark_execution_grants'?{stopped_at:'stopped',deadline:'2099-01-01'}:{status:'running',deadline:'2099-01-01',approved_hash:'scope',approval_hash:'scope'};}};
+  const context={providerExecution:false,providerAbort:null,stopTimer:null,gatewayFailure:null,setInterval:fn=>{callback=fn;return 1;},grantId:'grant',proof:{projectId:'project'},child:{kill:()=>killed++},readOne:async table=>{if(mode==='read-error')throw Error('unavailable');return table==='benchmark_execution_grants'?{stopped_at:'stopped',deadline:'2099-01-01'}:{status:'running',deadline:'2099-01-01',approved_hash:'scope',approval_hash:'scope'};}};
   vm.runInNewContext(watchdog,context);await callback();assert.equal(killed,1);assert.equal(context.gatewayFailure,'host-stop');assert.equal((await runLoop({signal:'SIGKILL',code:null,gatewayFailure:context.gatewayFailure})).runs,1);
  }
 });
 test('amendment host gate binds record identity, runtime and claimed release',async()=>{
- const gate=host.slice(host.indexOf('if(proof.resourceAmendmentId){'),host.indexOf('const grantToken=randomBytes'));
+ const gate=host.slice(host.indexOf('if(proof.resourceAmendmentId){'),host.indexOf('// Inspect recovery before consuming'));
  const proof={resourceAmendmentId:'amendment',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task',continuationId:'continuation'};
  const row={id:'amendment',renewal_id:'renewal',approval_id:'approval',task_id:'task',continuation_id:'continuation',release_sha:'release',runtime_version:'provider-input-count-v1'};
  const run=async change=>vm.runInNewContext('(async()=>{'+gate+'})()',{proof,productionRuntime:{},NATIVE_INPUT_COUNT_VERSION:'provider-input-count-v1',process:{env:{GITHUB_SHA:'release'}},task:{external:{resourceAmendmentId:'amendment'}},readOne:async()=>({...row,...change}),denied:message=>{throw Error(message);}});
@@ -55,3 +55,23 @@ test('owner-approved successor never retries even a settled live process interru
   assert.equal(r.error?.message,'child failed');
  }
 });
+
+
+test('forecast capacity pause occurs before child dispatch or retry admission',async()=>{
+ const r=await runLoop({capacityShortfall:true,signal:'SIGKILL',code:null});
+ assert.equal(r.runs,0);assert.equal(r.reads,0);assert.equal(r.resets,0);assert.equal(r.error?.message,'NATIVE_OWNER_APPROVAL_REQUIRED');
+});
+
+test('ordinary amended approval selects single-attempt interrupted-phase behavior',async()=>{
+ const assignment=host.slice(host.indexOf('let ownerApprovedSuccessor='),host.indexOf('if(proof.paidSuccessorId){'));
+ const successor=vm.runInNewContext(assignment+'ownerApprovedSuccessor',{ordinary:true,approval:{previous_developer_approval_id:'original'},continuation:null});
+ assert.equal(successor,true);
+ const r=await runLoop({ownerApprovedSuccessor:successor,signal:'SIGKILL',code:null});
+ assert.equal(r.runs,1);assert.equal(r.reads,0);assert.equal(r.resets,0);
+});
+
+ test('expired phase authority preserves checkpoint before any provider attempt',async()=>{
+ const r=await runLoop({liveAtStart:false});
+ assert.equal(r.runs,0);assert.equal(r.reads,0);assert.equal(r.resets,0);assert.equal(r.preserved,1);
+ assert.equal(r.error?.message,'native phase authority stopped or expired');
+ });

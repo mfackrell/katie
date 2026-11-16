@@ -7,7 +7,7 @@ const raw=readFileSync('app/api/benchmark/715/continuation/route.ts','utf8').rep
 const body={approve:true,authorization:'full-development-resource-amendment-550000tokens-10usd-4hours',projectId:'11111111-1111-4111-8111-111111111111',planHash:'c'.repeat(64)};
 function fixture({owner='owner',origin='https://katie.test',release='a'.repeat(40),rpcError=null,throwAt=null}={}){
  const calls=[],logs=[],env={NEXT_PUBLIC_SUPABASE_URL:'https://production.test',NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic',VERCEL_ENV:'production',KATIE_OWNER_AUTH_USER_ID:'owner'};
- const context={console:{warn:(...args)=>logs.push(args)},process:{env},AbortSignal,NextResponse:{json:(body,opts)=>({body,status:opts.status})},config:{productionDatabaseUrl:env.NEXT_PUBLIC_SUPABASE_URL,productionUrl:'https://katie.test'},fetch:async()=>{if(throwAt==='auth')throw Error('secret');return {ok:true,json:async()=>({id:owner})};},qualifiedAmendmentSuccessorRelease:async()=>release,verifiedAmendmentSuccessorRun:async()=>{if(throwAt==='terminal')throw Error('secret');return {id:129,head_sha:'b'.repeat(40)};},qualifiedDevelopmentAmendmentRelease:async()=>{if(throwAt==='release')throw Error('secret');return release;},getSupabaseAdminClient:()=>({rpc:async(name,args)=>{calls.push({name,args});if(throwAt==='rpc')throw Error('secret');return rpcError?{error:{message:rpcError}}:{data:{approved:true,id:'synthetic'}};}})};
+ const context={console:{warn:(...args)=>logs.push(args)},process:{env},AbortSignal,NextResponse:{json:(body,opts)=>({body,status:opts.status})},config:{productionDatabaseUrl:env.NEXT_PUBLIC_SUPABASE_URL,productionUrl:'https://katie.test'},fetch:async()=>{if(throwAt==='auth')throw Error('secret');return {ok:true,json:async()=>({id:owner})};},qualifiedCapacityRenewalRelease:async()=>release,qualifiedAmendmentSuccessorRelease:async()=>release,verifiedAmendmentSuccessorRun:async()=>{if(throwAt==='terminal')throw Error('secret');return {id:129,head_sha:'b'.repeat(40)};},qualifiedDevelopmentAmendmentRelease:async()=>{if(throwAt==='release')throw Error('secret');return release;},getSupabaseAdminClient:()=>({rpc:async(name,args)=>{calls.push({name,args});if(throwAt==='rpc')throw Error('secret');return rpcError?{error:{message:rpcError}}:{data:{approved:true,id:'synthetic'}};}})};
  const api=vm.runInNewContext(stripTypeScriptTypes(raw)+';({POST})',context);
  return {calls,logs,post:(payload=body)=>api.POST({headers:{get:k=>k==='authorization'?'Bearer synthetic-owner':k==='origin'?origin:null},json:async()=>payload})};
 }
@@ -34,4 +34,13 @@ test('successor POST requires owner, origin, explicit consent, release and termi
   const h=fixture(options);assert.equal((await h.post(payload)).status,status);assert.equal(h.calls.length,0);
  }
  const h=fixture();assert.equal((await h.post(successor)).status,200);assert.equal(h.calls[0].name,'benchmark_dashboard_amendment_successor');assert.equal(h.calls[0].args.p_approve,true);assert.equal(h.calls[0].args.p_run.id,129);
+});
+
+test('capacity renewal requires authenticated exact-plan consent and verified terminal evidence',async()=>{
+ const proposal={...body,authorization:'full-capacity-renewal-625000tokens-32calls-10usd-4hours'};
+ for(const [options,payload,status] of [[{owner:'other'},proposal,403],[{origin:'https://other.test'},proposal,403],[{}, {...proposal,approve:false},400],[{release:null},proposal,409],[{throwAt:'terminal'},proposal,503]]){
+  const h=fixture(options);assert.equal((await h.post(payload)).status,status);assert.equal(h.calls.length,0);
+ }
+ const h=fixture();assert.equal((await h.post(proposal)).status,200);assert.equal(h.calls[0].name,'benchmark_dashboard_capacity_renewal');assert.equal(h.calls[0].args.p_approve,true);assert.equal(h.calls[0].args.p_run.id,129);
+ const rejected=fixture({rpcError:'secret database detail'});const response=await rejected.post(proposal);assert.equal(response.status,409);assert.ok(!JSON.stringify(response).includes('secret'));
 });

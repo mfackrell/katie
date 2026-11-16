@@ -11,6 +11,7 @@ on:
         required: true
 
 permissions:
+  actions: read # Read the same task's retained, trusted recovery diagnostics.
   contents: write
   pull-requests: write
   issues: write
@@ -22,7 +23,8 @@ jobs:
   build:
     if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.event.issue.title, '[agent]') && github.event.issue.user.login == github.repository_owner) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Two bounded isolated verifications plus native review/repair fit the owner window.
+    timeout-minutes: 120
     outputs:
       branch: ${{ steps.task.outputs.branch }}
       issue: ${{ steps.task.outputs.issue }}
@@ -33,6 +35,7 @@ jobs:
       contract_hash: ${{ steps.task.outputs.contract_hash }}
       scenario_count: ${{ steps.task.outputs.scenario_count }}
       native: ${{ steps.task.outputs.native }}
+      provider_execution: ${{ steps.task.outputs.provider_execution }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,6 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
           REPAIR_SMOKE: ${{ github.event_name == 'issues' && contains(github.event.issue.title, '[repair-smoke]') }}
+          EXPECT_PROVIDER_EXECUTION: ${{ github.event_name == 'issues' && startsWith(github.event.issue.title, '[agent] [provider-execution] ') }}
           KATIE_NATIVE_HANDOFF_HMAC_KEY: ${{ secrets.KATIE_NATIVE_HANDOFF_HMAC_KEY }}
         run: |
           set -euo pipefail
@@ -84,9 +88,9 @@ jobs:
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
           # Ordinary owner-authored projects must not depend on benchmark files.
-          if grep -Eq '<!--[[:space:]]*katie-native-benchmark:' "$RUNNER_TEMP/original-agent-request.md"; then
+          if grep -Eq -e '<!--[[:space:]]*katie-native-(benchmark|developer|task4a)[:[:space:]]' -e '<!--[[:space:]]*katie-native-provider[:[:space:]]' "$RUNNER_TEMP/original-agent-request.md"; then
             mkdir -p "$RUNNER_TEMP/native-host"
-            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-execution-evidence,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
+            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,developer-dispatch-contract,provider-execution-handoff,provider-execution-native,ordinary-native-authority,native-dispatch-cli,native-development-host,native-capacity-forecast,native-phase-profile,lifecycle-capacity,native-development-child,native-execution-evidence,native-wip-checkpoint,native-wip-recovery,task4a-verifier-recovery,task4a-failed-run-link,native-development-lifecycle,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,task4a-successor-envelope,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
             node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
           else
             echo '{"native":false}' > "$RUNNER_TEMP/native-benchmark.json"
@@ -94,6 +98,17 @@ jobs:
           native="$(jq -r '.native' "$RUNNER_TEMP/native-benchmark.json")"
           echo "native=$native" >> "$GITHUB_OUTPUT"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
+          provider_execution="$(jq -r '.authorityKind == "provider-execution"' "$RUNNER_TEMP/native-benchmark.json")"
+          test "$provider_execution" = "$(jq -r '.providerExecution == true' "$RUNNER_TEMP/project-context.json")" || { echo 'Provider execution requires an authenticated native handoff'; exit 1; }
+          issue_title="$(head -n 1 "$RUNNER_TEMP/original-agent-request.md")"
+          if [[ "${EXPECT_PROVIDER_EXECUTION:-false}" == true || "$issue_title" == '[agent] [provider-execution] '* ]]; then
+            test "$provider_execution" = true || { echo 'Provider execution handoff is missing'; exit 1; }
+          fi
+          if [[ "$provider_execution" == true && "$REPAIR_SMOKE" == true ]]; then
+            echo 'Controlled fixtures are forbidden for provider execution'; exit 1
+          fi
+          echo "provider_execution=$provider_execution" >> "$GITHUB_OUTPUT"
+          node scripts/benchmark/task4a-native-gate.mjs "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/project-context.json" "$RUNNER_TEMP/native-benchmark.json"
           node scripts/recovery-scope.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/recovery-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
           recovery="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/recovery-context.json")"
@@ -142,6 +157,12 @@ jobs:
           npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          /usr/lib/postgresql/16/bin/initdb --version
+          /usr/lib/postgresql/16/bin/pg_ctl --version
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - name: Run approved native Developer through trusted gateway
         if: steps.task.outputs.native == 'true'
@@ -174,6 +195,14 @@ jobs:
           path: ${{ runner.temp }}/native-metered-review.json.diagnostics.json
           retention-days: 7
           if-no-files-found: error
+      - name: Preserve isolated verification screenshots
+        if: always() && steps.task.outputs.native == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-verification-screenshots
+          path: ${{ runner.temp }}/project-test-diagnostics-*/standalone-rail/*.png
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Autonomous developer
         if: steps.task.outputs.native != 'true'
         uses: openai/codex-action@v1
@@ -229,6 +258,7 @@ jobs:
           ISSUE: ${{ steps.task.outputs.issue }}
           BRANCH: ${{ steps.task.outputs.branch }}
           NATIVE: ${{ steps.task.outputs.native }}
+          PROVIDER_EXECUTION: ${{ steps.task.outputs.provider_execution }}
         run: |
           set -euo pipefail
           # Candidate code never gets to select Git hooks, monitoring helpers,
@@ -254,7 +284,10 @@ jobs:
           if [[ "$NATIVE" == true ]]; then
             test -z "$(git status --porcelain)" || { echo 'Native candidate changed after trusted review'; exit 1; }
             node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --verify-committed
-            jq -e --arg sha "$(git rev-parse HEAD)" '.metered == true and .completed == true and .reviewedHeadSha == $sha and .finalReview.verdict == "pass"' "$RUNNER_TEMP/native-metered-review.json" >/dev/null || { echo 'Trusted native review SHA mismatch'; exit 1; }
+            jq -e --arg sha "$(git rev-parse HEAD)" --arg mode "$PROVIDER_EXECUTION" '
+              (if $mode == "true" then .authorityKind == "provider-execution" and .metered == false else .metered == true end) and
+              .completed == true and .reviewedHeadSha == $sha and .finalReview.verdict == "pass"
+            ' "$RUNNER_TEMP/native-metered-review.json" >/dev/null || { echo 'Trusted native review SHA mismatch'; exit 1; }
           else
             git add -A
             git diff --cached --quiet && { echo 'No implementation produced'; exit 1; }
@@ -625,6 +658,13 @@ jobs:
         with:
           name: native-metered-review
           path: ${{ runner.temp }}/native-review
+      - name: Load provider trial execution evidence
+        if: needs.build.outputs.provider_execution == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: native-execution-diagnostics
+          path: ${{ runner.temp }}/provider-execution
       - name: Report success or failure to the owner issue
         shell: bash
         env:
@@ -638,6 +678,7 @@ jobs:
           RETEST: ${{ needs.repair.outputs.passed }}
           FINAL: ${{ needs.final-review.outputs.verdict }}
           NATIVE: ${{ needs.build.outputs.native }}
+          PROVIDER_EXECUTION: ${{ needs.build.outputs.provider_execution }}
           PROJECT: ${{ needs.build.outputs.project }}
           PROJECT_ID: ${{ needs.build.outputs.project_id }}
           CONTRACT_HASH: ${{ needs.build.outputs.contract_hash }}
@@ -648,6 +689,7 @@ jobs:
           FINAL_HEAD: ${{ needs.final-review.outputs.head_sha }}
         run: |
           set -euo pipefail
+          PROVIDER_EXECUTION="${PROVIDER_EXECUTION:-false}"
           outcome='BLOCKED — review or tests require further work'
           if [[ "$REPAIR" == 'skipped' && "$TEST" == 'true' && "$REVIEW" == 'pass' ]]; then
             outcome='READY — awaiting owner approval'
@@ -666,18 +708,30 @@ jobs:
             evidence="$RUNNER_TEMP/native-review/native-metered-review.json"
             outcome='BLOCKED — trusted metered native review missing or mismatched'
             if [[ "$TEST" == true && "$BUILD" == success && "$TEST_HEAD" =~ ^[a-f0-9]{40}$ ]] &&
-              jq -e --arg head "$TEST_HEAD" --arg project "$PROJECT_ID" '
-                .version == 1 and .metered == true and .completed == true and
+              jq -e --arg head "$TEST_HEAD" --arg project "$PROJECT_ID" --arg mode "$PROVIDER_EXECUTION" '
+                .version == 1 and
+                (if $mode == "true" then .authorityKind == "provider-execution" and .metered == false else .metered == true end) and .completed == true and
                 .projectId == $project and .reviewedHeadSha == $head and
                 (.review.verdict == "pass" or .review.verdict == "changes_requested") and
                 .finalReview.verdict == "pass" and
                 ((.repairPerformed == false and .review.verdict == "pass") or
-                 (.repairPerformed == true and .review.verdict == "changes_requested"))
+                 (.repairPerformed == true and
+                   (.review.verdict == "changes_requested" or
+                    (.review.verdict == "pass" and
+                     ((.reviewRepair.before.verdict == "changes_requested" and
+                       (.reviewRepair.before.head | type == "string" and test("^[a-f0-9]{40}$")) and
+                       .reviewRepair.before.head != $head and
+                       .reviewRepair.after.verdict == "pass" and .reviewRepair.after.head == $head and
+                       .finalReview.reviewedHeadSha == $head) or
+                     (.repairVerification.before.passed == false and
+                     (.repairVerification.before.head | type == "string" and test("^[a-f0-9]{40}$")) and
+                     .repairVerification.before.head != $head and
+                     .repairVerification.after.passed == true and .repairVerification.after.head == $head))))))
               ' "$evidence" >/dev/null 2>&1; then
               reviewed_head="$TEST_HEAD"
               tested_head="$TEST_HEAD"
               if [[ "$(jq -r '.repairPerformed' "$evidence")" == true ]]; then
-                REVIEW='changes_requested'; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
+                REVIEW="$(jq -r '.review.verdict' "$evidence")"; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
               else
                 REVIEW='pass'; REPAIR='skipped'; RETEST=''; FINAL=''
               fi
@@ -712,12 +766,30 @@ jobs:
           # receipt rather than guessing a READY status from job conclusion.
           event_outcome='BLOCKED'
           if [[ "$outcome" == READY* ]]; then event_outcome='READY'; fi
+          provider_evidence='null'
+          if [[ "$PROVIDER_EXECUTION" == true ]]; then
+            diagnostics="$RUNNER_TEMP/provider-execution/native-metered-review.json.diagnostics.json"
+            if [[ -f "$diagnostics" ]]; then
+              provider_evidence="$(jq -ec --arg run "$GITHUB_RUN_ID" '
+                select(.runId == $run) | {
+                  failure: ((.providerFailure // .failure // "")[:200]),
+                  findings: ((.lifecycleEvidence.review.findings // "")[:1600]),
+                  verification: ((.lifecycleEvidence.verification.detail // "")[:1600]),
+                  candidateHead: (.lifecycleEvidence.review.reviewedHeadSha // null),
+                  responses: (.providerUsage.responses // 0),
+                  observedTokens: (.providerUsage.observedTokens // 0),
+                  unknownUsage: (.providerUsage.unknownUsage // 0)
+                }
+              ' "$diagnostics")" || provider_evidence='null'
+            fi
+          fi
           jq -n --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" \
             --arg issue "$ISSUE" --arg pr "$PR" --arg result "$event_outcome" \
             --arg build "$BUILD" --arg test "$TEST" --arg review "$REVIEW" \
             --arg repair "$REPAIR" --arg retest "$RETEST" --arg final "$FINAL" \
             --arg tested_head "$tested_head" --arg reviewed_head "$reviewed_head" \
             --argjson project_acceptance "$acceptance" \
+            --argjson provider_evidence "$provider_evidence" \
             '{
               version: 1, repository: $repo, run_id: ($run | tonumber),
               issue_number: ($issue | tonumber),
@@ -727,7 +799,8 @@ jobs:
               reviewed_head_sha: (if ($reviewed_head | test("^[a-f0-9]{40}$")) then $reviewed_head else null end),
               checks: { build: $build, test: $test, review: $review,
                         repair: $repair, retest: $retest, final_review: $final }
-            } + (if $project_acceptance == null then {} else {projectAcceptance: $project_acceptance} end)' > "$RUNNER_TEMP/agent-result.json"
+            } + (if $project_acceptance == null then {} else {projectAcceptance: $project_acceptance} end)
+              + (if $provider_evidence == null then {} else {providerExecutionEvidence: $provider_evidence} end)' > "$RUNNER_TEMP/agent-result.json"
           if [[ -n "$PR" ]]; then gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"; fi
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"
       - name: Upload machine-readable agent completion event

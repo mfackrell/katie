@@ -1,3 +1,4 @@
+import {executeManagementClaim,ManagementCommandRejection,directorRecoveryRelease} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
 import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission,executiveSourceGroups,executiveSourceManifest} from '@/lib/executive/source-handoff';
@@ -23,6 +24,7 @@ import {applyMissionRevisionPatch,recoverMissionRevisionPatch,recoverMissionRevi
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from './review-instructions';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
 import { researchRecoveryEvidence } from './research-evidence';
+import {recoverSavedResearchCompose} from './saved-compose-recovery';
 import { measureDeliverable } from './review-length';
 import { getObjectiveFirstInstruction } from '@/lib/chat/deliverable-standard';
 import { projectReviewAssessment, PROJECT_ACCEPTANCE_IDS, PROJECT_REVIEW_INSTRUCTION } from '@/lib/projects/completion';
@@ -31,6 +33,16 @@ const BASE='You are a worker coordinated by Katie. Complete the assigned outcome
 type Child={key:string;role:string;agent_id:string;instruction:string;dependencies:string[];payload?:Record<string,unknown>};
 export async function executeClaim(claim:Claim,model=missionModel){
  const {mission,job}=claim;
+ if(mission.project_kind==='management'){await executeManagementClaim(claim,model);return;}
+ if(mission.project_kind==='organization_work'){
+   const capability=String(job.payload.capability);
+   if(!['analysis','research','writing','repository_review'].includes(capability))throw Error('Unapproved organization work capability');
+   const inspection=capability==='repository_review'?await repositoryInspection(mission,job.instruction,async input=>(await model(claim,BASE+' Select paths for read-only repository inspection.',input,'none')).text,18000):null;
+   const response=await model(claim,BASE+'\nComplete only this manager-assigned work package. Do not delegate or change your authority.',JSON.stringify({objective:mission.objective,instruction:job.instruction,evidence:mission.project_evidence,inspection}),capability==='research'?'research':'none');
+   await rpc('project_org_finish_work',{p_job:job.id,p_lease:job.lease,p_result:response});
+   return;
+ }
+
  const phaseRule=mission.project_kind==='specification'?'\nSERVER-ASSIGNED PROJECT PHASE: specification. This mission produces the complete specification JSON requested in its objective, using the supplied reviewed research. The original build goal defines requirements for that specification; implementation belongs to later approved development missions. This read-only phase does not need repository execution tools. The project controller checks the connected repository and execution prerequisites before coding approval. Do not infer that the project lacks a repository from this mission having no repository write binding, and do not claim to have inspected it. Follow this phase and the authoritative objective if a generated assignment instead requests implementation or a repository-access blocker report.':mission.project_kind==='research'?'\nSERVER-ASSIGNED PROJECT PHASE: research. Complete only the requested source-supported research. The original build goal is requirements context, not a request to implement or deliver the application in this research mission.':mission.project_kind==='assessment'?'\nSERVER-ASSIGNED PROJECT PHASE: assessment. Independently assess the ENTIRE original user outcome using the supplied integrated source, immutable commit, test, review and deployed-browser evidence in projectEvidence. This is verification of prior implementation, not a new coding assignment. The lack of a repository write binding on this read-only assessment does not mean the project has no connected repository. Do not invent execution or waive any missing requirement, source evidence or actual deployed-browser proof. A partial milestone or a passing subset of scenarios is not whole-project completion.':'';
  const frame=BASE+phaseRule+(mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'?'\n'+GAME_SPECIFICATION_FORMAT:'');
  const saved=await readMission(mission.id);
@@ -77,6 +89,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const patchBase=()=>patchContinuation?.text??originalPatchBase;
  const patchHash=()=>patchContinuation?.revisionPatch.resultHash??String(job.payload.revisionPatchBaseHash);
  const remainingPatchCharacters=()=>typeof originalPatchBase==='string'?Math.min(6000,Math.ceil(originalPatchBase.length*0.35))-(patchContinuation?.changedCharacters??0):0;
+ // Research composer retries preserve the already paid text. Repair only JSON
+ // control-character encoding, without accepting a draft past word limits/review.
+ const savedResearchDraft=job.role==='compose'&&mission.project_kind==='research'?recoverSavedResearchCompose(job.result?.rejectedDeliverableResponse):null;
+ const savedResearchMeasure=savedResearchDraft?measureDeliverable(mission.objective,savedResearchDraft.deliverable):null;
  const context=()=>{
   if(specificationPatchBase)return JSON.stringify({objective:mission.objective,assignment:job.instruction,candidate:{text:specificationPatchBase,sha256:specificationTextHash(specificationPatchBase)},validation:job.result?.specificationValidationFeedback,patchValidation:job.result?.specificationPatchFeedback,independentReviewFindings:priorReviews,instruction:'Return only exact before/after edits resolving these actual diagnostics. Preserve all other requirements, states and test steps. At most eight unique nonoverlapping edits, at most 6000 original characters and 35% of the original candidate. The complete patched candidate must pass unchanged validation and fresh independent review.'});
   if(patchContinuation?.unfinishedSpan)return JSON.stringify({objective:'Finish the one unfinished edit by shortening its actual source span, preserving every fact, source ID, qualification and coverage limitation. All preceding completed edits are already applied. Return only exact before/after edits within editableSpan; no other text can change.',measuredWholeCandidate:measureDeliverable(mission.objective,patchContinuation.text),remainingPatchCharacters:remainingPatchCharacters(),candidateHash:patchHash(),editableSpan:patchContinuation.unfinishedSpan,scope:'Only this remaining span is assigned to this editor. The entire candidate, all source artifacts and prior findings remain saved for full independent review.'});
@@ -86,7 +102,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
      :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
        if(!raw||typeof raw!=='object'||Array.isArray(raw))return raw;
        return Object.fromEntries(Object.entries(raw as Record<string,unknown>)
-         .filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedDeliverable:job.result?.rejectedDeliverable,revisionPatchFeedback:job.result?.revisionPatchFeedback,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,priorReviewFindings:job.role==='revise'?revisionFindings:undefined,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review'&&(job.role!=='work'||job.dependencies.includes(j.job_key))).map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+         .filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,
+   ...(savedResearchDraft?{savedResearchComposition:{text:savedResearchDraft.deliverable,sourceSha256:savedResearchDraft.sourceSha256,measuredWords:savedResearchMeasure?.wordCount,wordLimit:savedResearchMeasure?.wordLimit,instruction:'This was generated and billed previously. Do not redo research. Preserve factual statements and references, correct the prior JSON format, reduce length if needed, and submit the complete deliverable for normal independent review.'}}:{}),
+   deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedDeliverable:job.result?.rejectedDeliverable,revisionPatchFeedback:job.result?.revisionPatchFeedback,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,priorReviewFindings:job.role==='revise'?revisionFindings:undefined,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review'&&(job.role!=='work'||job.dependencies.includes(j.job_key))).map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix='';
@@ -110,6 +128,16 @@ export async function executeClaim(claim:Claim,model=missionModel){
   }
   return rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:{...result,...(operationalEvidence&&job.role!=='plan'?{operationalEvidence}: {})},p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
  };
+ if(savedResearchDraft&&savedResearchMeasure&&
+    (savedResearchMeasure.wordLimit===null||savedResearchMeasure.wordCount<=savedResearchMeasure.wordLimit)){
+  // Fenced normal mission completion, not a database status or approval bypass.
+  // Preserve the rejected raw artifact, model diagnostics and charge record.
+  await commit({...job.result,text:savedResearchDraft.deliverable,
+   composerNotes:savedResearchDraft.composerNotes,sources:[],calculations:[],
+   recovery:{kind:'saved_research_json_normalization',sourceSha256:savedResearchDraft.sourceSha256,
+    escapedLineBreaks:savedResearchDraft.escapedLineBreaks,independentReviewRequired:true}});
+  return;
+ }
  if(targetedPatch&&job.result?.incompleteReason==='max_output_tokens'&&typeof job.result?.partialText==='string'){
   const base=completed.find(j=>j.job_key==='compose')?.result?.text;
   if(typeof base==='string'&&!mission.project_id){
@@ -347,10 +375,28 @@ export async function runMissionBatch(model=missionModel){
  try{await rpc('resume_compact_audit_comparison');await rpc('resume_saved_partial_audit_edits');await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
- for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
+ const release=process.env.VERCEL_ENV==='production'?process.env.VERCEL_GIT_COMMIT_SHA:null;
+ for(let i=0;i<3;i++){
+  const claim=release
+   ?await rpc<Claim|null>('claim_mission_work_release',{p_release:release})
+   :await rpc<Claim|null>('claim_mission_work');
+  if(!claim)break;
+  claims.push(claim);
+ }
  const outcomes=await Promise.all(claims.map(async claim=>{
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
-  catch(error){const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
+  catch(error){
+   if(error instanceof ManagementCommandRejection){
+    const result={detail:error.message,managementCommandRejection:error.evidence};
+    const terminal={p_id:claim.job.id,p_lease:claim.job.lease,p_result:result,p_children:[],p_status:'failed',p_mission_status:'blocked',p_final:null};
+    // Repeat only the identical lease-fenced write if its acknowledgement is lost.
+    // Never send a rejected command or re-enter inference to reconstruct it.
+    const write=()=>rpc<boolean>('commit_mission_work',terminal);
+    const saved=await write().catch(()=>write()).catch(()=>false);
+    if(!saved)console.error('[Missions] Management rejection persistence unconfirmed',{jobId:claim.job.id,...result});
+    return {jobId:claim.job.id,status:saved?'blocked':'failure_record_unconfirmed'};
+   }
+   const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
    const candidate=error instanceof Error?error.message:typeof raw?.message==='string'?raw.message:typeof error==='string'?error:'';
    const detail=(candidate&&candidate!=='Unknown error: {}'?candidate:'Unclassified development integration failure') .slice(0,600);
    const diagnostic={...(error instanceof ProviderAvailabilityError?{providerAvailability:error.failures}:{}),stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};
@@ -375,7 +421,8 @@ export async function runMissionBatch(model=missionModel){
    const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
    const reconcileAcceptedDevelopment=claim.job.role==='development'&&claim.job.attempts<2;
-   const retry=!checkpointFailed&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
+   const unresolvedProvider=error instanceof MissionModelFailure&&error.partial.providerOutcomeUnresolved===true;
+   const retry=!directorRecoveryRelease(claim)&&!checkpointFailed&&!unresolvedProvider&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...((claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))?Object.fromEntries(['rejectedSpecification','specificationValidationFeedback','specificationCharacters'].filter(key=>claim.job.result?.[key]!==undefined).map(key=>[key,claim.job.result![key]])):{}),...(claim.job.role==='review'&&claim.job.result?.sourceChecks?{sourceChecks:claim.job.result.sourceChecks}:{}),...(error instanceof MissionModelFailure?error.partial:{}),...(checkpointFailed?{checkpointFailed:true,specificationCheckpointError:specificationCheckpointError??'Provider response archival failed before settlement'}:{}),detail,diagnostic},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));

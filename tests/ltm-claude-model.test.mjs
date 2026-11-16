@@ -295,3 +295,43 @@ test("no_change and malformed JSON leave existing memory untouched", async () =>
     assert.equal(h.writes.length, 0); assert.equal(h.memory().entries[0].value, "Keep this existing record");
   }
 });
+
+test("incremental LTM edits retrieve only related entries and a compact index", async () => {
+  const source = user("evidence", "At our construction firm I updated WIP monthly for every installation project.");
+  const related = entry("experience.wip", "Mark updated WIP monthly for construction projects.", source);
+  const longPrivateNote = "Unrelated reference context: " + "X".repeat(2000);
+  const unrelated = entry("relationship.unrelated", longPrivateNote, source, "relationship");
+  const h = harness({ entries: [related, unrelated],
+    messages: [source, assistant("answer")],
+    respond(body) {
+      const prompt = body.messages[0].content;
+      assert.match(prompt, /existingMemoryKeyIndex:/);
+      assert.match(prompt, /experience\.wip/);
+      assert.doesNotMatch(prompt, /X{150}/);
+      assert.match(prompt, /updated WIP monthly/);
+      return jsonResponse({ action: "no_change" });
+    },
+  });
+  const api = h.load("@/lib/memory/long-term-editor");
+  assert.deepEqual(api.selectRelatedLongTermMemories(source.content, [unrelated, related]).map(item => item.key), ["experience.wip"]);
+  await api.maybeUpdateLongTermMemory("actor", "chat", source.content);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.writes.length, 0);
+});
+
+test("explicit LTM correction retains full authoritative values and does not use a compact index", async () => {
+  const source = user("correction-source", "Correct my long-term memory to reflect that I updated WIP every month.");
+  const existing = entry("experience.wip", "Original WIP record with supporting details.", source);
+  const h = harness({ entries: [existing], messages: [source],
+    respond(body) {
+      const prompt = body.messages[0].content;
+      assert.match(prompt, /Original WIP record with supporting details/);
+      assert.doesNotMatch(prompt, /existingMemoryKeyIndex:/);
+      return jsonResponse(update([{ ...existing, value: "Mark updated WIP monthly." }]));
+    },
+  });
+  await h.load("@/lib/memory/long-term-editor")
+    .maybeUpdateLongTermMemory("actor", "chat", source.content, { required: true });
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.writes[0].method, "replace");
+});

@@ -17,6 +17,7 @@ function modules(){
  };return load;
 }
 const load=modules(),scope=load('lib/chat/pdf-source-selection.ts');
+const documentIntent=load('lib/documents/intent.ts');
 const route=readFileSync('app/api/chat/route.ts','utf8');
 const part=(from,to)=>{const a=route.indexOf(from),b=route.indexOf(to,a);assert.ok(a>=0 && b>a,from);return route.slice(a,b);};
 const code=source=>ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -33,7 +34,8 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
- const fixture={...load('lib/providers/openai-cache.ts'),workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={...load('lib/providers/openai-cache.ts'),workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,imageFollowup:null,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+  ...documentIntent,documentProduction:documentIntent.documentRequest(message),
   // PDF ownership/source selection runs independently of still-image inference.
   standaloneImageObservation:false,observeImages:async()=>{},retainedImageDescriptors:new Map(),
   catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
@@ -49,8 +51,8 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
   persistConversationAttachment:async(_chat,file,_token,{description})=>{retained.push(file.fileId);return {...file,id:'saved-'+file.fileId,...description};},
   inspectSavedPdf:async(_chat,source,_actor,task,_owns,analysisTask)=>{inspected.push(source.fileId);inspectedTasks.push(task);analysisTasks.push(analysisTask);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
   getChatById:async()=>({actorId:'actor'}),
-  cacheablePersona:'Base',name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
-  visualContinuity:null,saveProviderSystemAudit:async()=>{},requestId:'same',console,
+  cacheablePersona:'Base',name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,creativeTextNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
+  providerPayloadCapture:false,visualContinuity:null,saveProviderSystemAudit:async()=>{},requestId:'same',console,
  };
  const result=await vm.runInNewContext(code(`(async()=>{
  ${part('function buildGenerationParams(', 'async function parseIncomingPayload')}
@@ -123,6 +125,7 @@ for (const excluded of [false,true]) test(`independent ordinary, saved-draft and
  const shared=load('lib/chat/video-evidence.ts');
  for(const mode of ['ordinary','saved','clarification']){
   const assessment=vm.runInNewContext('({'+route.slice(start,end)+'})',{
+   ...documentIntent,documentProduction:documentIntent.documentRequest(message),
    ...shared,createParams:()=>result.params,result:{model:'offline'},hasVideoInput:false,attachments:result.attachments,isVideoAttachment:()=>false,
    savedDraftOriginalTask:mode==='saved'?'Read report.pdf':null,
    pendingReviewClarification:mode==='clarification'?{pending:{sourceTurns:['Read report.pdf'],question:'Which page?'}}:null,
@@ -134,6 +137,31 @@ for (const excluded of [false,true]) test(`independent ordinary, saved-draft and
   assert.ok(!JSON.stringify(assessment).includes('CANDIDATE-DRAFT-LEAK'));
  }
 });
+test('bare [file] from the composer delivers the single fresh resume PDF, never an old copy',async()=>{
+ const fresh=pdf('fresh-resume','Resume-Mark-Fackrell (1).pdf');
+ const older=pdf('old-resume','Resume-Mark-Fackrell (1).pdf');
+ const result=await run('[file]',[fresh],false,undefined,[older]);
+ assert.deepEqual(result.inspected,['fresh-resume']);
+ assert.deepEqual(result.retained,['fresh-resume']);
+ assert.deepEqual(Array.from(result.params.attachments,file=>file.fileId),['fresh-resume']);
+ assert.equal(result.clarification,undefined);
+ assert.ok(JSON.stringify(result.params.attachments).includes('Resume-Mark-Fackrell (1).pdf'));
+ assert.ok(!JSON.stringify(result.params).includes('TEXT-old-resume'));
+});
+
+test('file-only marker accepts whitespace and plural marker only for one fresh PDF',async()=>{
+ const single=await run('  [files]  ',[pdf('one','resume.pdf')]);
+ assert.deepEqual(single.inspected,['one']);
+ const multiple=await run('[file]',[pdf('a','resume-a.pdf'),pdf('b','resume-b.pdf')]);
+ assert.deepEqual(multiple.inspected,[]);
+ assert.deepEqual(multiple.retained,['a','b']);
+ assert.equal(multiple.params.attachments.length,0);
+ assert.match(multiple.clarification,/Which one should I inspect/);
+ const mixed=await run('[file]',[pdf('a','resume.pdf'),{fileId:'note',fileName:'notes.txt',mimeType:'text/plain',preview:'TEXT-note',extractedText:'TEXT-note'}]);
+ assert.deepEqual(mixed.inspected,[]);
+ assert.match(mixed.clarification,/Which one should I inspect/);
+});
+
 test('non-PDF fresh inputs retain ordinary source identity and evidence',async()=>{
  const file={fileId:'text',fileName:'notes.txt',mimeType:'text/plain',preview:'TEXT-text',extractedText:'TEXT-text'};
  const result=await run('Summarize these notes',[file]);
@@ -321,7 +349,7 @@ test('early task identity classification respects PDF source authorization befor
    ${part('    let contextClassification:', '    const pdfReviewContinuation =')}
    return pdfProgress;
   })()`),{
-   benchmarkRelay:false,benchmarkIntake:false,...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
+   benchmarkRelay:false,imageFollowup:null,benchmarkIntake:false,...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
    startProjectIntent:text=>/^Help me (?:apply|prepare a proposal)\b/i.test(text),followupProjectIntent:()=>false,
    attachmentHistory:[],freshVideoReferences:[],taskProgressUserMessageId:'current-turn',
    request:{headers:{get:()=> 'test-request'}},currentAgentTask:()=>null,

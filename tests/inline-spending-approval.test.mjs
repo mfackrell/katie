@@ -48,5 +48,10 @@ test('approved continuation uses the original saved request and does not select 
   assert.match(panel, /"x-request-id":detail\.requestId/);
   assert.match(panel, /standaloneResume:true/);
   assert.match(usage, /onClick=\{\(\) => void decide\(attempt, 'cancel'\)\}/);
-  assert.match(usage, /onClick=\{\(\) => void decide\(attempt, 'reduce_cost'\)\}/);
+  assert.match(usage, /onClick=\{\(\) => void reviewReducedCost\(attempt\)\}/);
+  assert.match(usage, /action:'preview_reductions'/);
+  assert.match(usage, /reducedChoicesFor\(attempt\)/);
+  assert.match(usage, /'truncate_tokens' \| 'switch_model'/);
+  assert.match(usage, /onClick=\{\(\)=>void decide\(attempt,'reduce_cost',option\.strategy\)\}/);
+  assert.match(usage, /Prepare this proposal/);
 });

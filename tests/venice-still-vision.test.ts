@@ -131,7 +131,10 @@ test('limited Qwen observation uses independent Dolphin once; premium route is n
   });
   const result=await runner();
   assert.equal(qwen,1);assert.equal(venice,1);assert.equal(premium,0);
-  assert.equal(result.get('image-one')?.summaryModel,'venice:'+policy.model);
+  assert.match(result.get('image-one')?.summaryModel??'',/Qwen.*venice/);
+  assert.equal(result.get('image-one')?.observationAgreement,'corroborated');
+  assert.equal(result.get('image-one')?.observationReports?.length,2);
+  assert.match(result.get('image-one')?.observedSummary??'',/A cup on a table/);
 });
 test('sufficient Qwen evidence never invokes Dolphin',async()=>{
   const reference={fileId:'image-one',fileName:'photo.png',mimeType:'image/png',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
@@ -152,5 +155,24 @@ test('Dolphin is delayed until after the existing Qwen checkpoint on resume',asy
   const second=await observeStandaloneStillImages([reference],{initial:first,
     qwen:async()=>{qwen++;throw Error('Must not resubmit Qwen');},
     venice:async()=>{venice++;return{text:good,model:'venice:'+policy.model,coverage:'full' as const};}});
-  assert.equal(qwen,1);assert.equal(venice,1);assert.equal(second.get('image-one')?.summaryModel,'venice:'+policy.model);
+  assert.equal(qwen,1);assert.equal(venice,1);
+  assert.equal(second.get('image-one')?.observationAgreement,'unverified', 'brief Qwen output has no identified subject to corroborate');
+  assert.equal(second.get('image-one')?.observationReports?.length,2);
+});
+
+test('conflicting Dolphin subject is retained for audit but never replaces the Qwen description',async()=>{
+  const reference={fileId:'conflict',fileName:'dog.png',mimeType:'image/png',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
+  let qwen=0,venice=0,premium=0;
+  const observations=await observeStandaloneStillImages([reference],{
+    qwen:async()=>{qwen++;return{text:'The image shows a brown dog near a red fence.',model:'runpod:Qwen/Qwen3-VL-8B-Instruct',coverage:'full' as const};},
+    venice:async()=>{venice++;return{text:'Primary focal point: A red car parked near a fence, with a driver at the wheel. Detailed focal-point observations: The car is shiny and red, with reflections across the hood and square headlights facing toward the camera. Spatial relationships and interactions: The car occupies the foreground and sits next to a fence while the driver remains behind the front windshield. Secondary context: A paved driveway appears under the wheels. Uncertainties: The specific make and year cannot be confirmed from the image.',model:'venice:'+policy.model,coverage:'full' as const};},
+    escalate:async()=>{premium++;throw Error('No premium call for contradictory high coverage');}
+  });
+  const o=observations.get('conflict')!;
+  assert.equal(qwen,1);assert.equal(venice,1);assert.equal(premium,0);
+  assert.equal(o.observationAgreement,'conflict');
+  assert.match(o.observedSummary??'',/brown dog/);
+  assert.doesNotMatch(o.observedSummary??'',/driver|car|wheel/);
+  assert.equal(o.observationReports?.length,2);
+  assert.match(o.observationReports![1].text,/red car/);
 });

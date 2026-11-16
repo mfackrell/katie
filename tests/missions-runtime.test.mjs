@@ -296,6 +296,23 @@ test('failed Responses retain provider errors and transient codes retry once wit
  }
  }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
+test('uncertain trial provider outcome never enters the transient retry path',async()=>{
+ const m=mission(),j=job(m);
+ j.attempts=1;
+ let claim={mission:m,job:j},committed;
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{
+  if(name==='claim_mission_work'){const next=claim;claim=null;return next;}
+  if(name==='commit_mission_work')committed=args;
+  return true;
+ }}});
+ const {MissionModelFailure}=load('@/lib/missions/model');
+ await load('@/lib/missions/worker').runMissionBatch(async()=>{
+  throw new MissionModelFailure('Provider fetch failed after dispatch',{providerOutcomeUnresolved:true});
+ });
+ assert.equal(committed.p_status,'failed');
+ assert.equal(committed.p_mission_status,'blocked');
+ assert.equal(committed.p_result.providerOutcomeUnresolved,true);
+});
 test('oversized game specification is rejected before review and repairs once against validation feedback',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture(),valid={name:'Counter',summary:'A controlled counter',requirements:['Increment and reject invalid actions'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Build every approved rule',contract:f.contract}],finalContract:f.contract,game:f.game};
  const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};const j=job(m,'compose','compose');let claimed=false,committed,seen;

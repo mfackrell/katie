@@ -1,8 +1,21 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { savedDocumentContent } from '@/lib/documents/saved-source';
+import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
-import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
+import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
-import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
+import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { imageGenerationCapableModel, containsGeneratedImage, filterPricedImageFallbacks } from "@/lib/chat/image-generation-contract";
+import { generatedImageService } from "@/lib/uploads/generated-image-service";
+import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
+import { resolveImageFollowup, imageEditSourceUnavailable } from "@/lib/chat/image-source-followup";
+import { observeGeneratedImage } from "@/lib/uploads/generated-image-observation";
+import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
+import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
+import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
+import { getModelPrice, PRICING_SNAPSHOT } from "@/lib/standalone-accounting/pricing";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
@@ -31,14 +44,15 @@ import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode"
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { recalledKatieVisualMemoryContext } from "@/lib/chat/visual-memory";
 import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
-import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest } from "@/lib/uploads/still-image-observations";
+import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest, currentTurnImageGroundingContext } from "@/lib/uploads/still-image-observations";
 import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
-import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
+import { selectStoredAttachments, recentVerifiedVisualCorrection, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
 import { buildAttachmentSelectionAudit } from "@/lib/chat/attachment-selection-audit";
 import { loadSavedVideoFollowUp, retrieveSavedEvidence } from "@/lib/agents/media";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
@@ -47,8 +61,8 @@ import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { loadVisualContinuity, storeVisualAnchor, verifyVisualContinuity } from "@/lib/chat/visual-continuity";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
-import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { maybeRunThirtyMessageCleanup } from "@/lib/memory/long-term-maintenance";
+import { maybeUpdateRelevantLongTermMemory } from "@/lib/memory/relevance-screen";
+import { maybeRunHundredUserMessageReview } from "@/lib/memory/long-term-maintenance";
 import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage, getMessageById } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
@@ -56,7 +70,9 @@ import {
   failChatRequest,
   fingerprintChatRequest,
 } from "@/lib/chat/request-idempotency";
-import { refreshShortTermMemory } from "@/lib/memory/short-term";
+import { refreshShortTermMemory, messagesFromShortTermMemory } from "@/lib/memory/short-term";
+import { uniqueMessagesById } from "@/lib/memory/history-dedup";
+import { buildProviderPayloadCaptureTrace } from "@/lib/chat/provider-payload-trace";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
 import { handleExplicitMemoryMutation } from "@/lib/memory/explicit-memory";
 import { saveProviderSystemAudit } from "@/lib/chat/provider-system-audit";
@@ -66,6 +82,7 @@ import { getAvailableProviders } from "@/lib/providers";
 import { selectVideoReplyTarget, generateContextualVideoReply, buildContextualVideoReplyPrompt } from "@/lib/chat/video-response";
 import { validateManualOverrideWithRecovery } from "@/lib/chat/manual-override-recovery";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
+import { auditRoutingDelivery } from "@/lib/router/routing-delivery-audit";
 import {
   detectWebSearchSignals,
   inferRequestClassification,
@@ -78,14 +95,16 @@ import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
-import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
+import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog, isolateCompanionProgress } from "@/lib/chat/task-progress";
+import { selectTaskProgressPrompt } from "@/lib/chat/task-progress-prompt";
 import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
-import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
+import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
 import {
   isCreativeNarrativeTurn,
+  shouldApplyCreativeNarrativeContinuity,
   preferredClaudeCreativeModel,
   CREATIVE_CONTINUITY_INSTRUCTIONS,
   CREATIVE_REWRITE_INSTRUCTIONS,
@@ -173,12 +192,15 @@ const requestSchema = z.object({
   actorId: z.string().min(1),
   chatId: z.string().min(1),
   message: z.string().min(1),
+  documentSourceMessageId: z.string().uuid().optional(),
+  imageSource: z.object({messageId:z.string().uuid(),assetIndex:z.number().int().min(0).max(4)}).strict().optional(),
   images: z.array(z.string()).optional(),
   fileReferences: z.array(fileReferenceSchema).optional(),
   attachmentManifest: attachmentManifestSchema.optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
   routingTraceEnabled: z.boolean().optional(),
+  providerPayloadCapture: z.literal(true).optional(),
   activeRepoId: z.string().min(1).optional(),
   repoInjectionEnabled: z.boolean().optional(),
 });
@@ -701,27 +723,80 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Trusted internal entry called only by the leased reaction-reply worker.
+ * There is no HTTP route for this function. The underlying workflow verifies
+ * the durable job and actor/chat owner binding before any paid preparation.
+ */
+export async function executeVerifiedReactionReplyChat(
+  request: NextRequest, jobId: number,
+): Promise<Response> {
+  const payload = await parseIncomingPayload(request.clone());
+  const {data:role,error}=await getSupabaseAdminClient()
+    .from("actors").select("actor_kind").eq("id",payload.actorId)
+    .maybeSingle<{actor_kind:string}>();
+  if(error||!role||role.actor_kind==="executive")
+    return NextResponse.json({error:"Invalid reaction reply actor."},{status:403});
+  return executeVerifiedReactionReplyWorkflow(request,payload,executeChat,jobId);
+}
+
 async function executeChat(request: NextRequest) {
   const executionDeadlineMs = Date.now() + (maxDuration - 30) * 1_000;
   let trackedRequestId: string | null = null;
   try {
     const payload = await parseIncomingPayload(request);
-    const isGuestSession=Boolean(currentStandaloneWorkflow()) && (await authenticateStandalonePrincipal(request)).isAnonymous;
+    const verifiedWorkflow=currentStandaloneWorkflow();
+    // Workflow admission has already authenticated the caller and bound the owner,
+    // actor, chat, and request in Postgres. Do not revalidate an expiring browser
+    // token during execution: that could pause an already-admitted request.
+    const isGuestSession=Boolean(verifiedWorkflow) && verifiedWorkflow!.workflow.owner_id!==process.env.KATIE_OWNER_AUTH_USER_ID;
     if(isGuestSession && payload.activeRepoId)return NextResponse.json({error:'Repository controls require owner access.'},{status:403});
     const {
       actorId,
       chatId,
       message,
+      documentSourceMessageId,
       images: requestImages,
       fileReferences,
-      overrideProvider,
-      overrideModel,
+      overrideProvider: suppliedOverrideProvider,
+      overrideModel: suppliedOverrideModel,
       routingTraceEnabled,
+      providerPayloadCapture: explicitPayloadCapture,
       activeRepoId,
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
+    let documentProduction = documentRequest(message);
+    // One-turn owner diagnostic from the normal chat composer, without client changes.
+    const captureCommand = /^\\s*!capture-claude(?:\\s|$)/i.test(message);
+    const providerPayloadCapture = explicitPayloadCapture === true || captureCommand;
+    const overrideProvider = captureCommand ? "anthropic" : suppliedOverrideProvider;
+    const overrideModel = captureCommand ? "claude-sonnet-5" : suppliedOverrideModel;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    let selectedDocumentSource: string | null = null;
+    if (documentSourceMessageId) {
+      // Explicit selection only. Never pick old documents heuristically from STM
+      // or mistake an assistant reply in a different conversation for the source.
+      if (message !== SAVED_DOCUMENT_EXPORT_PROMPT || !documentProduction ||
+          requestImages?.length || fileReferences?.length || currentAgentTask())
+        return NextResponse.json({error:"Invalid saved-document export request."},{status:400});
+      const original=await getMessageById(chatId,documentSourceMessageId);
+      try {selectedDocumentSource=savedDocumentContent(original);}
+      catch {return NextResponse.json({error:"The selected saved message is not a usable document source."},{status:422});}
+      console.info("[DocumentExport] using explicitly selected saved content", {
+        requestId: trackedRequestId, actorId, chatId, sourceMessageId:documentSourceMessageId,
+        sourceChars:selectedDocumentSource.length,
+      });
+    }
+    // Exact outbound payload capture is explicitly requested, text-only and owner-grant scoped.
+    // This never records ordinary conversations and never grants diagnostic access to guests.
+    if (providerPayloadCapture) {
+      if (isGuestSession || currentAgentTask() || overrideProvider !== "anthropic" ||
+          (requestImages?.length ?? 0) > 0 || (fileReferences?.length ?? 0) > 0) {
+        return NextResponse.json({ error: "Owner-only Anthropic text diagnostic required." }, { status: 403 });
+      }
+      try { await authorizeSelfToolCaller(request, actorId, chatId); }
+      catch { return NextResponse.json({ error: "Owner diagnostic authorization denied." }, { status: 403 }); }
+    }
     const benchmarkIntake = !isGuestSession && !currentAgentTask() && startProjectIntent(message) && gameProjectIntent(message) &&
       /take eleven|issue\s*#?715|#715/i.test(message) &&
       ['https://iytvavgbaainnsrecmcx.supabase.co','https://barclcqataqyvifoeyop.supabase.co']
@@ -795,6 +870,25 @@ async function executeChat(request: NextRequest) {
       }
       return files;
     }));
+    const imageFollowup = benchmarkRelay || currentAgentTask() ? null : await cachedWorkflowValue("image-source-followup", async () => {
+      let imageHistory = attachmentHistory;
+      if (payload.imageSource && !imageHistory.some(turn=>turn.id===payload.imageSource!.messageId)) {
+        const selected = await getMessageById(chatId,payload.imageSource.messageId);
+        if (selected) imageHistory = [...imageHistory,selected];
+      }
+      return resolveImageFollowup({message,history:imageHistory,catalog,actorId,chatId,
+        freshCount:newAttachments.length,pin:payload.imageSource}, {
+        registerLegacy:(source,index)=>generatedImageService().registerLegacy(actorId,chatId,source,index),
+        read:async source=>source.generatedSource
+          ? (await readGeneratedImage(actorId,chatId,source.id)).descriptor : source,
+      });
+    });
+    // Catalog snapshots may predate on-demand legacy registration. Add only
+    // exact server-verified current-chat sources, not provider URLs or guesses.
+    for (const selected of imageFollowup?.selections ?? []) {
+      const at=catalog.findIndex(file=>file.id===selected.attachment.id && file.chatId===chatId);
+      if (at<0) catalog.push(selected.attachment); else catalog[at]=selected.attachment;
+    }
     const temporalIntent = timelineIntent(message);
     const freshVideoReferences = newAttachments.filter(file => file.mimeType.startsWith("video/"));
     const timelineSelection = temporalIntent
@@ -815,10 +909,10 @@ async function executeChat(request: NextRequest) {
     // durable task/question binding as review resumption before borrowing scope.
     const taskProgressUserMessageId = workflowMessageId("user") ?? crypto.randomUUID();
     const taskProgressAssistantMessageId = workflowMessageId("assistant") ?? crypto.randomUUID();
-    const priorTaskProgress = mergeTaskProjects(
+    const priorTaskProgress = isolateCompanionProgress(mergeTaskProjects(
       syncTaskProgress(await cachedWorkflowValue("task-progress", () => loadTaskProgress(actorId, chatId)), attachmentHistory),
       currentAgentTask() ? [] : await cachedWorkflowValue("actor-projects", () => loadActorTaskProjects(actorId)),
-    );
+    ));
     // Resolve task identity from firsthand text BEFORE historical files can
     // influence routing. The later model router cannot silently replace it.
     let contextClassification: Awaited<ReturnType<typeof inferRequestClassification>> | undefined;
@@ -829,13 +923,30 @@ async function executeChat(request: NextRequest) {
     const identitySourceAllowed = (file: (typeof newAttachments)[number]) => file.mimeType !== "application/pdf" ||
       Boolean(taskIdentityPdfSelection?.fileIds.has(file.fileId));
     const freshTaskDescriptions = new Map<string, Awaited<ReturnType<typeof describeAttachmentEvidence>>>();
-    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && !isStillImageCreationRequest(message);
+    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && imageFollowup?.operation !== 'edit' && !isStillImageCreationRequest(message);
     const imageObservationStages:string[]=[];
     const observeImages = async (files:typeof newAttachments,final=false) => {
       const images=files.filter(file=>file.mimeType.startsWith('image/'));
       if(!standaloneImageObservation || !images.length)return;
-      const descriptions=await observeStandaloneStillImages(images,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
-      for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+      const ordinary:typeof images=[];
+      for (const reference of images) {
+        const saved=catalog.find(file=>file.id===reference.fileId && file.generatedSource && file.actorId===actorId && file.chatId===chatId);
+        if (!saved) {ordinary.push(reference);continue;}
+        if (freshTaskDescriptions.has(reference.fileId)) continue;
+        // Observation runs during preparation, before the later chat receipt is
+        // claimed. Use the already leased workflow ID, never an uninitialized
+        // downstream requestId or a newly generated request identifier.
+        const observationRequestId=verifiedWorkflow?.workflow.request_id;
+        if (!observationRequestId) throw new Error('Generated-image inspection requires its durable request identity.');
+        const inspected=await observeGeneratedImage({actorId,chatId,requestId:observationRequestId,attachment:saved,reference,question:message,
+          onStatus:stage=>imageObservationStages.push(stage)});
+        freshTaskDescriptions.set(reference.fileId,inspected.observation);
+        const at=catalog.findIndex(file=>file.id===saved.id);catalog[at]=inspected.descriptor;
+      }
+      if (ordinary.length) {
+        const descriptions=await observeStandaloneStillImages(ordinary,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
+        for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+      }
     };
     await observeImages(newAttachments);
     const retainedImageDescriptors=standaloneImageObservation
@@ -889,7 +1000,7 @@ async function executeChat(request: NextRequest) {
       projectRelation: contextClassification?.projectRelation,
       projectTransition: contextClassification?.projectTransition,
     });
-    const pdfReviewContinuation = await getPendingReviewClarification(actorId, chatId, {
+    const pdfReviewContinuation = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: pdfProgress, history: attachmentHistory,
     });
     const pdfTaskContext = pdfReviewContinuation &&
@@ -953,9 +1064,29 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
-    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
+    // Exact source IDs let a saved media-search excerpt recover Katie's own
+    // recorded visual episode without falsely treating an arbitrary description
+    // as first-hand vision or reopening unrelated actor-owned attachments.
+    if (mediaMemory) {
+      const recalledEpisodes = recalledKatieVisualMemoryContext(
+        actorId, catalog, mediaMemory.hits, Boolean(mediaMemory.decision.clarification)
+      );
+      if (recalledEpisodes) mediaMemory = {
+        ...mediaMemory,
+        context: mediaMemory.context + "\n" + recalledEpisodes,
+      };
+    }
+    // A correction of the immediately preceding image assessment is already
+    // bound to an exact, verified current-chat upload. Do not let a broad
+    // media search or an ambiguous Gemini selector override that evidence.
+    const verifiedVisualCorrection = !benchmarkRelay && !newAttachments.length &&
+      !timelineActive && !pdfMemoryDecision && !savedVideoFollowUp && !explicitSavedProjectReference
+      ? recentVerifiedVisualCorrection(message,catalog,attachmentHistory,chatId)
+      : null;
+    if (verifiedVisualCorrection) mediaMemory = null;
+    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : imageFollowup ?? (pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
-      : pdfMemoryDecision ?? (timelineActive
+      : pdfMemoryDecision ?? verifiedVisualCorrection ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
       : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
@@ -964,7 +1095,7 @@ async function executeChat(request: NextRequest) {
           newAttachments.map(file => file.fileName),
           { currentChatId: chatId, activeProject: pdfProgress.projectContext
             ? { id: pdfProgress.projectContext.userMessageId, text: pdfProgress.projectContext.text } : null },
-        ));
+        )));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
     // The selector is advisory. An unrelated current request must NEVER
@@ -997,8 +1128,13 @@ async function executeChat(request: NextRequest) {
     const restored = await loadSelectedAttachmentSources(attachmentDecision, async saved => {
       const owner = await getChatById(saved.chatId ?? chatId);
       if (!owner || owner.actorId !== actorId) throw new Error("Source conversation is unavailable to this actor.");
+      // Cached source selection does not prove that original bytes still exist.
+      // Revalidate generated sources even for edit/recovery paths that skip Qwen.
+      if (saved.generatedSource) return (await readGeneratedImage(actorId,owner.id,saved.id)).reference;
       return restoreConversationAttachment(owner.id, saved, actorId);
     });
+    // Fail closed if a previously checkpointed edit cannot restore its pixels.
+    const imageEditUnavailable = imageEditSourceUnavailable(imageFollowup, restored.sourceIds);
     // Index the exact selected source by trusted fileId, never filename. Source
     // selection already checked that the owning chat belongs to this actor.
     const selectedSourceDescriptors = attachmentDecision.selections
@@ -1027,8 +1163,16 @@ async function executeChat(request: NextRequest) {
       if(standaloneImageObservation)for(const file of restored.references.filter(file=>file.mimeType.startsWith('image/'))){
         const original=savedVideoSourceByFileId.get(file.fileId);
         const descriptor=original?(updatedSavedImageDescriptors.get(original.id)??original):undefined;
+        if (descriptor?.generatedSource) {
+          const latest=catalog.find(saved=>saved.id===descriptor.id && saved.chatId===descriptor.chatId);
+          if (latest) updatedSavedImageDescriptors.set(descriptor.id,latest);
+          continue; // The source-claimed generated-image observer already committed this evidence.
+        }
         const description=freshTaskDescriptions.get(file.fileId);
-        if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage)){
+        if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage||
+          description.observationAgreement!==descriptor.observationAgreement||
+          JSON.stringify(description.observationReports)!==JSON.stringify(descriptor.observationReports)||
+          JSON.stringify(description.observationLimitations)!==JSON.stringify(descriptor.observationLimitations))){
           const owner=await getChatById(descriptor.chatId??chatId);
           if(owner?.actorId!==actorId)throw new Error('Saved image source is not available to this actor.');
           updatedSavedImageDescriptors.set(descriptor.id,await updateSavedImageObservation(owner.id,descriptor,actorId,description));
@@ -1060,8 +1204,10 @@ async function executeChat(request: NextRequest) {
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
     const excludedPdfSourceIds = new Set<string>();
-    const selectionContext = () => timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
-      + (standaloneImageObservation&&requestAttachments.some(file=>file.mimeType.startsWith('image/'))?'\nImage source retained privately; the current response model receives labelled textual visual observations. It has not directly inspected raw pixels.':'')
+    const currentImageGrounding = standaloneImageObservation
+      ? currentTurnImageGroundingContext(requestAttachments,freshTaskDescriptions,new Set(newAttachments.map(ref=>ref.fileId)))
+      : '';
+    const selectionContext = () => currentImageGrounding + '\n' + timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -1075,7 +1221,7 @@ async function executeChat(request: NextRequest) {
         extractionCoverage: attachment.extractionCoverage ?? null,
       });
     });
-    let messageForGeneration = message;
+    let messageForGeneration = message + (currentImageGrounding ? '\n\n' + currentImageGrounding : '');
     const hasVideoInput = attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
     const suppliedRequestId = request.headers.get("x-request-id")?.trim();
@@ -1177,6 +1323,7 @@ async function executeChat(request: NextRequest) {
           }),
           JSON.stringify({
             type: "content",
+            messageId: idempotencyClaim.record.assistantMessageId,
             text: idempotencyClaim.record.assistantContent ?? "",
             ...(replayPresentation ? { presentation: replayPresentation } : {}),
             assets: idempotencyClaim.record.assistantAssets,
@@ -1287,11 +1434,22 @@ async function executeChat(request: NextRequest) {
     const explicitProjectControl = !isGuestSession && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand);
     const projectReply = !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    // A verified, file-only PDF upload has no drafting instruction. Respond
+    // with a truthful, source-bound receipt before paid model routing. The
+    // original is persisted below; never use a historical attachment here.
+    const fileOnlyPdfReceipt = !benchmarkRelay && !currentAgentTask() && !timelineActive &&
+      !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
+      ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
+      : null;
+    const localKatieResponse = imageEditUnavailable
+      ? {reason:"image-source" as const,text:"The selected image original cannot be reopened. I cannot edit missing pixels or substitute another image."}
+      : imageFollowup?.clarification
+      ? {reason:"image-source" as const,text:imageFollowup.clarification}
+      : !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
-      : projectReply ? {reason: "project" as const,text:projectReply} : benchmarkRelay ? {reason: "project" as const,text:"This conversation is bound to the Take Eleven benchmark. Ask for project status or use the saved project scope and task approval controls; unmetered chat inference is disabled."} : await resolveLocalKatieResponse({
+      : projectReply ? {reason: "project" as const,text:projectReply} : benchmarkRelay ? {reason: "project" as const,text:"This conversation is bound to the Take Eleven benchmark. Ask for project status or use the saved project scope and task approval controls; unmetered chat inference is disabled."} : fileOnlyPdfReceipt ? {reason: "upload-receipt" as const,text:fileOnlyPdfReceipt} : await resolveLocalKatieResponse({
       actorId,
       chatId,
       message,
@@ -1305,10 +1463,10 @@ async function executeChat(request: NextRequest) {
         chatId,
       });
 
-      const localUserMessageId = pdfProgress.projectClarification ? taskProgressUserMessageId : crypto.randomUUID();
-      const localAssistantMessageId = pdfProgress.projectClarification ? taskProgressAssistantMessageId : crypto.randomUUID();
+      const localUserMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();
+      const localAssistantMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();
       const clarificationAttachments: ConversationAttachment[] = [];
-      if (pdfProgress.projectClarification) {
+      if (pdfProgress.projectClarification || fileOnlyPdfReceipt) {
         for (const [index, attachment] of newAttachments.entries()) {
           const saved = retainedImageDescriptors.get(attachment.fileId) ?? await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken,
             {description: freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment,{standaloneImages:standaloneImageObservation,question:message}),
@@ -1323,6 +1481,10 @@ async function executeChat(request: NextRequest) {
         ...(clarificationAttachments.length ? {attachments: clarificationAttachments} : {}),
       });
 
+      if (fileOnlyPdfReceipt) console.info("[Chat API] Verified file-only PDF receipt saved", {
+        requestId, attachmentCount: clarificationAttachments.length,
+        hasReadableText: Boolean(newAttachments[0].extractedText?.trim() || newAttachments[0].extractedChunks?.some(chunk => chunk.text.trim())),
+      });
       if (pdfProgress.projectClarification) await saveTaskProgress(actorId, chatId, pdfProgress);
       const localResponseText = localKatieResponse.reason === "memory-update"
         ? await handleExplicitMemoryMutation(actorId, chatId, localUserMessageId, message)
@@ -1357,6 +1519,7 @@ async function executeChat(request: NextRequest) {
         }),
         JSON.stringify({
           type: "content",
+          messageId: localAssistantMessageId,
           text: localResponseText,
           assets: [],
           provider: "local",
@@ -1401,9 +1564,32 @@ async function executeChat(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, cacheablePersona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
+    const { name, persona, cacheablePersona, summary, history: currentHistory, shortTermMemory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
     let history = currentHistory;
-    if (pdfProgress.projectContext && pdfProgress.projectContext.userMessageId !== taskProgressUserMessageId &&
+    // Saved projects are durable reference material, not standing instructions
+    // for ordinary chat. Restore their original source only for project turns.
+    const activeProjectSnapshot = pdfProgress.projectContext
+      ? pdfProgress.projects?.find(project => project.projectContext.userMessageId === pdfProgress.projectContext!.userMessageId)
+      : undefined;
+    // Do not time-limit valid source restoration to four user turns: projects
+    // from both this chat and an earlier chat retain their active source.
+    // Require task-related signals; a fresh unrelated request ("Write a poem")
+    // must not reopen a stale saved project.
+    const recentProjectResumption = currentHistory.filter(turn => turn.role === "user").slice(-4).some(turn =>
+      /\b(?:resume|return to|back to|go back to|continue)\b.{0,100}\b(?:project|app|application|game|website)\b/i.test(turn.content));
+    const projectTopicCue = /\b(?:project|application|proposal|posting|deliverable|requirements|draft|milestone|scope|work product|relevant examples|contract|the role|the assignment)\b/i.test(message);
+    const projectActionVerb = /^(?:please\s+)?(?:give|list|write|draft|revise|review|explain|compare|show|summarize|outline|assess|evaluate|expand|continue|finish|add|update|change|fix|answer)\b/i.test(message.trim());
+    const projectRelatedFollowup = projectTopicCue ||
+      (projectActionVerb && classifyUserTurn(message) !== "new_task");
+    const restoreSavedProjectSource = explicitSavedProjectReference ||
+      contextClassification?.projectTransition?.action === "resume" ||
+      contextClassification?.projectTransition?.action === "amend" ||
+      Boolean((activeProjectSnapshot || pdfProgress.projectContext) && (projectRelatedFollowup || (recentProjectResumption && projectActionVerb)));
+    let savedProjectSourceWarning: {
+      sourceChatId: string; sourceMessageId: string; retainedContext: string; retainedObjective: string;
+    } | null = null;
+    if (restoreSavedProjectSource && pdfProgress.projectContext &&
+        pdfProgress.projectContext.userMessageId !== taskProgressUserMessageId &&
         !currentHistory.some(turn => turn.id === pdfProgress.projectContext!.userMessageId)) {
       const project = pdfProgress.projects?.find(item => item.projectContext.userMessageId === pdfProgress.projectContext!.userMessageId);
       const sourceChatId = project?.sourceChatId ?? chatId;
@@ -1412,15 +1598,29 @@ async function executeChat(request: NextRequest) {
       if (handoffHistory) {
         history = [...new Map([...handoffHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
       } else {
-      const sourceChat = await getChatById(sourceChatId);
-      if (sourceChat?.actorId !== actorId) throw new Error("Saved project source does not belong to this actor");
-      const sourceHistory = await getMessages(sourceChatId);
-      const start = sourceHistory.findIndex(turn => turn.id === pdfProgress.projectContext!.userMessageId);
-      if (start < 0) throw new Error("Saved project's original conversation source is unavailable");
-      const boundaries = new Set(contextProjects.map(item => item.id));
-      const next = sourceHistory.findIndex((turn, index) => index > start && boundaries.has(turn.id));
-      const projectHistory = sourceHistory.slice(start, next < 0 ? undefined : next);
-      history = [...new Map([...projectHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
+        const sourceChat = await getChatById(sourceChatId);
+        // A different actor's source remains an authorization failure, not
+        // a missing-source fallback. Never expose that actor's history.
+        if (sourceChat && sourceChat.actorId !== actorId) throw new Error("Saved project source does not belong to this actor");
+        const sourceHistory = sourceChat ? await getMessages(sourceChatId) : [];
+        const start = sourceHistory.findIndex(turn => turn.id === pdfProgress.projectContext!.userMessageId);
+        if (start < 0) {
+          // Preserve the current conversation and durable project snapshot.
+          savedProjectSourceWarning = {
+            sourceChatId, sourceMessageId: pdfProgress.projectContext.userMessageId,
+            retainedContext: (project?.projectContext.text ?? pdfProgress.projectContext.text).slice(0, 6000),
+            retainedObjective: (project?.objective?.text ?? pdfProgress.objective?.text ?? "").slice(0, 2000),
+          };
+          console.warn("[Chat API] Saved project source unavailable; retained snapshot preserved", {
+            requestId, chatId, sourceChatId, sourceMessageId: savedProjectSourceWarning.sourceMessageId,
+            sourceChatMissing: !sourceChat,
+          });
+        } else {
+          const boundaries = new Set(contextProjects.map(item => item.id));
+          const next = sourceHistory.findIndex((turn, index) => index > start && boundaries.has(turn.id));
+          const projectHistory = sourceHistory.slice(start, next < 0 ? undefined : next);
+          history = [...new Map([...projectHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
+        }
       }
     }
     let taskProgress = pdfProgress;
@@ -1433,7 +1633,7 @@ async function executeChat(request: NextRequest) {
     }
     // Current uploads are authoritative. Historical website pixels must never
     // replace them or inflate an ordinary photo request into a screenshot batch.
-    if(!newAttachments.length)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
+    if(!newAttachments.length && !imageFollowup)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
     if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
     const activeRepoContext = effectiveRepoId ? await loadActiveRepoContext(effectiveRepoId) : null;
     const sessionContext: ChatSessionContext = {
@@ -1468,6 +1668,15 @@ async function executeChat(request: NextRequest) {
     let personaForGeneration = personaWithRepoContext;
     let loadedRepoContext: RepoGenerationContext | null = null;
     let repoContextDegraded: { reason: string } | null = null;
+    // Final provider-boundary guard: no repeated persisted message ID may
+    // reach any model, even if a future context source supplies overlap.
+    const preDedupHistoryCount = history.length;
+    history = uniqueMessagesById(history);
+    if (history.length !== preDedupHistoryCount) {
+      console.warn("[Chat API] Duplicate history message IDs removed before provider dispatch", {
+        requestId, chatId, duplicateCount: preDedupHistoryCount - history.length,
+      });
+    }
     const historyForProvider = history.map(({ role, content, createdAt }) => ({
       role,
       content: createdAt && Number.isFinite(Date.parse(createdAt))
@@ -1492,7 +1701,10 @@ async function executeChat(request: NextRequest) {
     });
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
-      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
+      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4).map(({role,content,createdAt,attachments})=>({
+        role,content,createdAt,
+        attachments:attachments?.map(file=>({id:file.id,fileName:file.fileName,observationSourceHash:file.observationSourceHash,observationAgreement:file.observationAgreement}))
+      })))}` : "",
       `Active project (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null : null)}`,
       `Current requested deliverable (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.objective?.text ?? null : null)}`,
       `Outstanding questions: ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })) : [])}`,
@@ -1560,7 +1772,7 @@ async function executeChat(request: NextRequest) {
           requestId
         }
       );
-      const overrideIntent = overrideClassification.intent;
+      const overrideIntent = imageFollowup?.operation === "edit" ? "image-generation" as const : overrideClassification.intent;
       responsePurposeHint = overrideClassification.responsePurpose;
       projectRelationHint = overrideClassification.projectRelation;
       const { decision: validatedOverride, recoveredIntent } = validateManualOverrideWithRecovery({
@@ -1574,6 +1786,7 @@ async function executeChat(request: NextRequest) {
       if (validatedOverride.changed) {
         return await rejectTracked(`Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`);
       }
+      if (imageFollowup?.operation === "edit") resolvedRequestIntent = "image-generation";
       if (recoveredIntent) {
         // Recovery only: the request contains no visual input, so retrying its
         // incompatible vision classification as text is safe and non-fatal.
@@ -1654,6 +1867,7 @@ async function executeChat(request: NextRequest) {
         `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=none intentSource=router-fallback`
       );
       const routingDecision = await chooseProvider(message, routingContext, providers, {
+        ...(imageFollowup?.operation==='edit' && imageFollowup.selections.length ? {requestIntent:'image-generation' as const} : {}),
         hasImages: hasVisualInput,
         hasVideoInput,
         actorId,
@@ -1686,25 +1900,114 @@ async function executeChat(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
+    // The router's capability heuristics may select an image model with only
+    // unreviewed text pricing. Auto-route exclusively to an actually available
+    // Google model with a first-party, immutable image-output tariff.
+    if(resolvedRequestIntent==="image-generation" && !overrideModel && !overrideProvider) {
+      const googleImage=providers.find(candidate=>candidate.name==="google");
+      if(googleImage){
+        const available=new Set((await googleImage.listModels()).map(model=>model.replace(/^models[/]/,"").toLowerCase()));
+        const eligible=["gemini-3.1-flash-image","gemini-3.1-flash-lite-image"].filter(id=>
+          available.has(id) && Boolean(getModelPrice("google",id,PRICING_SNAPSHOT)?.imageOutputNanoUsd));
+        if(eligible.length){
+          const previousProvider=provider.name,previousModel=modelId;
+          const selected=eligible.includes(modelId)&&provider.name==="google"?modelId:eligible[0];
+          provider=googleImage;
+          modelId=selected;
+          fallbackChain=eligible.filter(id=>id!==selected).map((id,index)=>({provider:googleImage,modelId:id,score:1-index}));
+          if(previousProvider!==provider.name||previousModel!==modelId){
+            selectionExplainer={...selectionExplainer,selected_provider:"google",selected_model:modelId,
+              selected_source:"deterministic-fallback",fallback_used:true,
+              fallback_reason:"Original image model had no reviewed image-output tariff"};
+            console.info("[Image Routing] Selected reviewed, available image generation model",{
+              requestId,previousProvider,previousModel,provider:provider.name,model:modelId});
+          }
+        }else console.warn("[Image Routing] No available model with reviewed image-output pricing",{requestId});
+      }
+    }
+
+    // Persist the accepted execution choice before any provider execution.
+    // This complements private classifier/reranker response checkpoints and
+    // remains available even when generation fails before saving an answer.
+    try {
+      await cachedWorkflowValue("routing-execution-decision:v1", async () => ({
+        version: "routing-execution-v1",
+        requestId,
+        classifiedIntent: resolvedRequestIntent,
+        intentAuthority,
+        intentResolutionReason,
+        objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+        chosenProvider: provider.name,
+        chosenModel: modelId,
+        routerChosenProvider: selectionExplainer?.selected_provider ?? null,
+        routerChosenModel: selectionExplainer?.selected_model ?? null,
+        selectedSource: selectionExplainer?.selected_source ?? null,
+        justification: selectionExplainer?.selection_justification ?? null,
+        candidateScore: selectionExplainer?.top_candidate_score ?? null,
+        topFactors: selectionExplainer?.top_factors ?? [],
+        topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+        deterministicOverride: selectionExplainer?.override ?? null,
+        fallbackUsed: selectionExplainer?.fallback_used ?? false,
+        fallbackReason: selectionExplainer?.fallback_reason ?? null,
+        productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+      }));
+    } catch (error) {
+      console.warn("[Routing Execution Audit] checkpoint_unavailable", {
+        requestId, cause: error instanceof Error ? error.name : "unknown"
+      });
+    }
+
+    // Output modality wins over text-narrative styling. An earlier fictional scene
+    // must not replace a requested image with a Claude writing specialist.
+    if (resolvedRequestIntent === "image-generation") {
+      fallbackChain = filterPricedImageFallbacks(fallbackChain, candidate =>
+        Boolean(getModelPrice(candidate.provider.name, candidate.modelId, PRICING_SNAPSHOT)?.imageOutputNanoUsd));
+    }
+    const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity(
+      creativeNarrativeRequest, resolvedRequestIntent);
+
     // Select continuity only after classifying the literal current turn. The
     // existence of an unresolved audit in this chat is never enough to resume it.
     // Routing selects execution capabilities, not a different parent task.
     taskProgress = pdfProgress;
     projectRelationHint = contextClassification?.projectRelation;
-    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId, {
+    const pendingReviewClarification = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: taskProgress, history, projectRelation: projectRelationHint,
     });
     const verifyingSavedDraft = Boolean(pendingReviewClarification &&
       isSavedDraftVerificationRetry(pendingReviewClarification.pending, message));
     const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
       ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
+    documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
+    documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
+    documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
+    // Legacy isolated route test harnesses evaluate function bodies without module
+    // imports; production bundles always supply the typed continuity module.
+    const documentBinding = typeof resolveDurableDocumentRequest === 'function'
+      ? resolveDurableDocumentRequest(message, documentProduction,
+          taskProgress.documentContract, documentSourceMessageId)
+      : { request: documentProduction, contract: undefined };
+    documentProduction = documentBinding.request;
+    if (documentBinding.contract) {
+      // Preserve the original firsthand user-message identifier. A missing
+      // provenance source may not be silently relabeled as the current user.
+      const inheritedSource = documentBinding.contract.provenance === 'inherited-user'
+        ? [...attachmentHistory].reverse().find(turn => turn.role === 'user' &&
+            documentRequest(turn.content)?.pages === documentBinding.request?.pages)?.id
+        : undefined;
+      const originalUserId = documentBinding.contract.sourceUserMessageId ||
+        inheritedSource ||
+        (documentBinding.contract.provenance === 'current-user' ? taskProgressUserMessageId : undefined);
+      if (originalUserId) taskProgress = { ...taskProgress,
+        documentContract: { ...documentBinding.contract, sourceUserMessageId: originalUserId },
+      };
+    }
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
       objective: { text: savedDraftOriginalTask, userMessageId: pendingReviewClarification!.pending.binding?.taskId ?? pendingReviewClarification!.requestId },
       pending: [],
     } : taskProgress;
-    const taskProgressContext = formatTaskProgress(reviewTaskProgress);
     if (pendingReviewClarification) {
       console.info("[ReviewContinuity] Matched current task and question", {
         requestId, originalRequestId: pendingReviewClarification.requestId,
@@ -1712,13 +2015,39 @@ async function executeChat(request: NextRequest) {
         verificationRetry: verifyingSavedDraft, actorId, chatId,
       });
     }
+    // A historical ledger is not evidence of pending work unless its source
+    // still binds to this user turn. The task prompt selector already excludes
+    // synthetic conversation projects and unrelated saved assignments.
+    const sourceLinkedPendingWork = Boolean(
+      taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer" &&
+      selectTaskProgressPrompt({
+        message, currentUserMessageId: taskProgressUserMessageId, history,
+        progress: reviewTaskProgress, responsePurpose: "deliverable",
+        managedTask: Boolean(currentAgentTask()),
+        explicitProjectControl, explicitSavedProjectReference,
+        pendingReviewContinuation: false,
+        projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+      }).text
+    );
     const responsePolicy = decideResponsePolicy({
       message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
       hasAttachments: attachments.length > 0 || images.length > 0,
       requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
-      hasPendingDeliverable: Boolean(taskProgress.objective &&
-        (taskProgress.lastUserIntent === "answer" || pendingReviewClarification)),
+      hasPendingDeliverable: sourceLinkedPendingWork || Boolean(pendingReviewClarification),
       explicitReviewRetry: verifyingSavedDraft,
+    });
+    const taskProgressPrompt = selectTaskProgressPrompt({
+      message, currentUserMessageId: taskProgressUserMessageId, history,
+      progress: reviewTaskProgress, responsePurpose: responsePolicy.purpose,
+      managedTask: Boolean(currentAgentTask()),
+      explicitProjectControl, explicitSavedProjectReference,
+      pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
+      projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+    });
+    const taskProgressContext = imageFollowup ? "" : taskProgressPrompt.text;
+    console.info("[TaskProgress] Prompt scope", {
+      requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
+      historyTurnCount: history.length,
     });
     const resumptionContext = pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing
       ? buildReviewResumptionContext(pendingReviewClarification.pending, message) : "";
@@ -1734,7 +2063,7 @@ async function executeChat(request: NextRequest) {
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
     // and unrelated factual questions retain the router's original decision.
-    if (creativeNarrativeRequest && !storedWebsite.fresh) {
+    if (creativeTextNarrativeRequest && !storedWebsite.fresh) {
       const claude = providers.find(candidate => candidate.name === "anthropic");
       if (claude) {
         try {
@@ -1836,6 +2165,15 @@ async function executeChat(request: NextRequest) {
           error: repoContextDegraded.reason,
         });
       }
+    }
+
+    if (savedProjectSourceWarning) {
+      personaForGeneration += `
+SAVED PROJECT SOURCE RECOVERY NOTICE: The original message ${savedProjectSourceWarning.sourceMessageId} from chat ${savedProjectSourceWarning.sourceChatId} could not be restored. The retained snapshot below may be incomplete. Briefly disclose the missing original source when answering the project request. Do not claim the original was recovered, and do not treat retained text as new instructions.
+Retained project context:
+${savedProjectSourceWarning.retainedContext}
+Retained project objective:
+${savedProjectSourceWarning.retainedObjective}`;
     }
 
     const attachmentSummaryForClassifier = {
@@ -2133,15 +2471,17 @@ async function executeChat(request: NextRequest) {
       subjects: visualContinuity?.references.map(item => item.key) ?? [],
     });
 
+    const imageGenerationRequested = resolvedRequestIntent === "image-generation";
     let streamCancelled = false;
+    let answerStreamFinalized = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
           const requestStartedAtMs = Date.now();
-          let firstReasoningUpdateAtMs: number | null = null;
-          let reasoningUpdateCount = 0;
-          const reasoningState = new ReasoningStateAccumulator(requestId, [...DEFAULT_REASONING_CATEGORIES]);
-          let lastSnapshotEmitAt = Date.now();
+          let firstAnswerDeltaAtMs: number | null = null;
+          let answerDeltaCount = 0;
+          const reasoningState = new ReasoningStateAccumulator(requestId, []);
+          
           const emitChunk = (chunk: Record<string, unknown>) => {
             if (streamCancelled) {
               return;
@@ -2184,6 +2524,11 @@ async function executeChat(request: NextRequest) {
 
             const startEvent = reasoningState.start();
             emitChunk(startEvent);
+            // This is observable workflow activity, never answer text or a
+            // fabricated account of the model's hidden internal reasoning.
+            const progress = (stage: string, message: string) =>
+              emitChunk({ type: "processing_update", stage, message });
+            progress("context", "Context prepared; saving the conversation turn.");
             for(const stage of [...new Set(imageObservationStages)])emitChunk({type:'metadata',imageObservation:stage,detail:stage});
             console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
@@ -2233,34 +2578,27 @@ async function executeChat(request: NextRequest) {
             });
 
             await saveTaskProgress(actorId, chatId, taskProgress);
+            progress("generation", "Conversation saved. Generating the response with the selected model.");
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
-            const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask();
+            const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask() && !documentProduction;
             if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
             const presentationFilter = presentationEnabled ? new PresentationStreamFilter() : null;
+            const chatAnswerBoundary = new ChatAnswerStreamBoundary();
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
-              if (reviewMode === "always") return;
+              if (reviewMode === "always" || documentProduction || imageGenerationRequested) return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
               // the completed assistant response can still be persisted.
-              const visibleDelta = presentationFilter ? presentationFilter.write(delta) : delta;
+              const screenedDelta = chatAnswerBoundary.write(delta);
+              const visibleDelta = presentationFilter ? presentationFilter.write(screenedDelta) : screenedDelta;
               if (!visibleDelta) return;
               emitChunk({ type: "delta", text: visibleDelta });
-              const reasoningUpdate = reasoningState.addDelta(visibleDelta);
-              if (reasoningUpdate) {
-                reasoningUpdateCount += 1;
-                if (firstReasoningUpdateAtMs === null) {
-                  firstReasoningUpdateAtMs = Date.now();
-                }
-                emitChunk(reasoningUpdate);
-
-                if (Date.now() - lastSnapshotEmitAt > 900 || reasoningUpdateCount % 6 === 0) {
-                  emitChunk(reasoningState.snapshot());
-                  lastSnapshotEmitAt = Date.now();
-                }
-              }
+              answerDeltaCount += 1;
+              if (firstAnswerDeltaAtMs === null) firstAnswerDeltaAtMs = Date.now();
+              // Answer tokens are NEVER republished as reasoning or progress.
             };
 
             let pendingVideoAssistantMessageId: string | null = null;
@@ -2296,12 +2634,23 @@ async function executeChat(request: NextRequest) {
             if (attachmentDecision.clarification) {
               for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf")) pdf.pdfContextBlocked=true;
             }
+            const ownerCaptureTrace = providerPayloadCapture
+              ? buildProviderPayloadCaptureTrace({
+                  actorId, chatId, requestId, currentUserMessageId: taskProgressUserMessageId,
+                  historySource: messagesFromShortTermMemory(shortTermMemory, chatId) !== null ? "stm" : "recent_messages",
+                  shortTermMemory,
+                  recentMessages: await getRecentMessages(chatId, 64),
+                  history,
+                  summary,
+                })
+              : undefined;
             const createParams = (selectedModelId: string, forReview = false) =>
-              ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
+              ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), providerPayloadCaptureTrace: ownerCaptureTrace, ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
+                  ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
-                  ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+                  ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
                 message: forReview ? message : visualContinuity
@@ -2378,6 +2727,7 @@ ${chunkWorkflowSummary}`;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
             const stillImageVisionRequest = resolvedRequestIntent === "vision-analysis" && rerouteHasVisualInput && !hasVideoInput;
+            // Image-generation intent remains bound to the original request through reroutes.
             const rerouteRoutingContext = [
               controlPlaneConversationContext,
               `Refusal reroute has visual input: ${rerouteHasVisualInput}`
@@ -2541,6 +2891,12 @@ ${chunkWorkflowSummary}`;
                     }
                   }
                 }
+                if (imageGenerationRequested && !candidate.runpodImageFallback &&
+                    !imageGenerationCapableModel(candidate.provider.name, candidate.modelId)) {
+                  throw Object.assign(new Error("The proposed fallback cannot generate images. No text model was dispatched."), {
+                    code: "standalone_unsupported_image_capability", terminal: true,
+                  });
+                }
                 provider = candidate.provider;
                 modelId = candidate.modelId;
                 if (candidate.explainer) {
@@ -2587,7 +2943,16 @@ ${chunkWorkflowSummary}`;
                   resolvedRequestIntent
                 );
 
-                const generation = (selfToolsEnabled && selfInspectionRequest)
+                const generation = documentProduction
+                  ? await (async () => {
+                      // The owner selected an already saved assistant document.
+                      // Rendering must not call a drafting model to rewrite it.
+                      const result: ProviderResponse = selectedDocumentSource
+                        ? {provider:provider.name, model:modelId, text:selectedDocumentSource}
+                        : await provider.generate(finalParams);
+                      return { result, streamedText: '' };
+                    })()
+                  : (selfToolsEnabled && selfInspectionRequest)
                   ? await (async () => {
                       const result = await runSelfInspection({ request, actorId, chatId, requestId, provider,
                         params: finalParams, deadlineMs: executionDeadlineMs,
@@ -2732,7 +3097,7 @@ ${chunkWorkflowSummary}`;
                             },
                           });
                         },
-                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
+                        onFinalTextDelta: suppressCalculationScaffolding || creativeTextNarrativeRequest || hasVideoInput
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
                         maxDelegations: collaborationConfig.maxDelegations,
@@ -2764,7 +3129,7 @@ ${chunkWorkflowSummary}`;
                         // not an opportunity to launch helper orchestration.
                         const direct = provider.generateStream
                           ? await provider.generateStream(finalParams, {
-                              onTextDelta: async delta => enqueueDelta(delta),
+                              onTextDelta: async delta => { if (!imageGenerationRequested) enqueueDelta(delta); },
                             })
                           : await provider.generate(finalParams);
                         return { result: direct, streamedText: direct.text };
@@ -2856,7 +3221,7 @@ ${chunkWorkflowSummary}`;
                               },
                             });
                           },
-                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
+                          onFinalTextDelta: suppressCalculationScaffolding || creativeTextNarrativeRequest || hasVideoInput
                             ? async () => {}
                             : async (delta) => enqueueDelta(delta),
                           maxEscalations: 2,
@@ -2888,7 +3253,7 @@ ${chunkWorkflowSummary}`;
                 // Inspect the complete draft *before* streaming or saving it.
                 // If it substantially duplicates recent narrative text, request
                 // at most one original continuation from the same model.
-                if (creativeNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
+                if (creativeTextNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
                     generation.result.provider === provider.name &&
                     generation.result.model === modelId &&
                     Date.now() + 45_000 < executionDeadlineMs) {
@@ -2959,15 +3324,18 @@ ${chunkWorkflowSummary}`;
                 };
               },
               detectRefusal: (generationResult, candidate) =>
+                selectedDocumentSource ? false :
                 (stillImageVisionRequest && isExplicitVisionPolicyRefusal(generationResult.text ?? ""))
                   ? false // Explicit safety/policy refusals must never trigger Grok fallback.
                   : hasVideoInput && videoReplyTarget &&
                     generationResult.provider === videoReplyTarget.provider &&
                     generationResult.model === videoReplyTarget.model
                     ? false // Video conversational model decisions remain final.
-                    : isLikelyProviderRefusal(generationResult, candidate.provider.name),
+                    : (Boolean(documentProduction) && (isDocumentCapabilityDenial(generationResult.text ?? '') || isDocumentDeliveryNarrative(generationResult.text ?? ''))) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt, attemptedAttempts }) => {
                 if (hasVideoInput) return null;
+                // Image refusals retain only prequalified, priced image fallbacks.
+                if (imageGenerationRequested) return null;
                 // Standalone photo analysis: prefer a real Grok vision model when
                 // the first model returns a generic inability instead of a description.
                 // Never send an uploaded photo to RunPod FLUX (generation-only).
@@ -3101,7 +3469,52 @@ ${chunkWorkflowSummary}`;
                   reason: error instanceof Error ? error.message : String(error)
                 });
               },
-              rerouteOnError: async ({ attempt, error }) => {
+              rerouteOnError: async ({ attempt, error, attemptedAttempts }) => {
+                const accounting = standaloneAccountingCause(error) as
+                  (Error & {code?:string;provider?:string;model?:string;inputTokens?:number;inputCountSource?:string;outputAllowance?:number;maxContextTokens?:number}) | undefined;
+                if (accounting && ['standalone_context_capacity_unverified','standalone_context_window_exceeded'].includes(accounting.code ?? '')) {
+                  // A context error occurs before paid generation dispatch. Keep
+                  // every instruction, message, attachment and output allowance.
+                  // The replacement must have reviewed capacity AND no lower
+                  // capability; its own exact prepared request still faces the
+                  // normal accounting and owner-approval gate.
+                  if (hasVideoInput || rerouteHasVisualInput ||
+                      accounting.provider !== attempt.provider.name ||
+                      accounting.model !== attempt.modelId ||
+                      !Number.isSafeInteger(accounting.inputTokens) ||
+                      (accounting.inputTokens ?? -1) < 0 ||
+                      !Number.isSafeInteger(accounting.outputAllowance) ||
+                      (accounting.outputAllowance ?? 0) <= 0) return null;
+                  const pricing = await loadStandalonePricing(createStandaloneLedger());
+                  const available = await attempt.provider.listModels();
+                  const upgrade = selectContextCapacityUpgrade({
+                    provider: attempt.provider.name,
+                    model: attempt.modelId,
+                    availableModels: available,
+                    pricing,
+                    inputTokens: accounting.inputTokens!,
+                    outputAllowance: accounting.outputAllowance!,
+                    excludedModels: new Set(attemptedAttempts
+                      .filter(item => item.provider.name === attempt.provider.name)
+                      .map(item => item.modelId.toLowerCase())),
+                  });
+                  if (!upgrade || imageGenerationRequested && !imageGenerationCapableModel(attempt.provider.name, upgrade)) {
+                    console.warn('[Context Upgrade] No reviewed capability-preserving model fits the unchanged request', {
+                      requestId, provider: attempt.provider.name, model: attempt.modelId,
+                      inputTokens: accounting.inputTokens, outputAllowance: accounting.outputAllowance,
+                      maxContextTokens: accounting.maxContextTokens,
+                      inputCountSource: accounting.inputCountSource,
+                    });
+                    return null;
+                  }
+                  console.info('[Context Upgrade] Reviewed higher-capacity model selected', {
+                    requestId, previousModel: attempt.modelId, selectedModel: upgrade,
+                    provider: attempt.provider.name, inputTokens: accounting.inputTokens,
+                    outputAllowance: accounting.outputAllowance, inputCountSource: accounting.inputCountSource,
+                  });
+                  return { provider: attempt.provider, modelId: upgrade,
+                    routingSource: 'deterministic-fallback' as const };
+                }
                 if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
@@ -3131,6 +3544,7 @@ ${chunkWorkflowSummary}`;
                     routingSource: "deterministic-fallback" as const,
                   };
                 }
+                if (resolvedRequestIntent === "image-generation") return null; // Keep prequalified priceable fallback chain authoritative.
                 if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
                     !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
@@ -3281,8 +3695,23 @@ ${chunkWorkflowSummary}`;
             modelId = generationAttempt.attempt.runpodImageFallback || generationAttempt.attempt.runpodStillVisionFallback
               ? generationAttempt.result.model : generationAttempt.attempt.modelId;
 
+            // Image generation succeeds only when the provider returned real image
+            // media. A text clarification or refusal cannot silently satisfy it.
+            if (imageGenerationRequested && !containsGeneratedImage(result)) {
+              throw new Error("Image generation returned no image. Katie did not substitute a text-only answer.");
+            }
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
+
+            // Final document output must be source content, not a fabricated
+            // "files ready" notice. Reject before any paid content review.
+            if (documentProduction && !selectedDocumentSource &&
+                isDocumentDeliveryNarrative(result.text ?? "")) {
+              console.warn("[DocumentDraft] delivery notice rejected before review and rendering", {
+                requestId, provider: result.provider, model: result.model,
+              });
+              throw new Error("The model returned a delivery notice instead of document content. No Word or PDF files were created.");
             }
 
             // On-demand capability escalation also returns live evidence. Save
@@ -3303,7 +3732,10 @@ ${chunkWorkflowSummary}`;
             if (escalatedConversation) {
               console.warn("[ResponsePolicy] Unexpected substantive output requires review", { requestId });
             }
-            if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) && !pendingVideoAssistantMessageId) {
+            if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) &&
+                !pendingVideoAssistantMessageId && !selectedDocumentSource) {
+              // Explicit export preserves the owner's selected source exactly;
+              // the existing final file rendering/visual inspection still applies.
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
               const reviewed = await runRequiredDraftReview({
                 requestId,
@@ -3347,6 +3779,7 @@ ${chunkWorkflowSummary}`;
                   savedSourceTurns: pendingReviewClarification?.pending.sourceTurns,
                 }),
                 observedEvidence: [
+                  documentProduction ? DOCUMENT_REVIEW_GUIDANCE : '',
                   hasVideoInput ? buildVideoTimingEvidence(attachments.filter(isVideoAttachment)) : "",
                   mediaMemory?.context ?? "", timelineContext ?? "",
                 ].filter(Boolean).join("\n\n"),
@@ -3372,6 +3805,8 @@ ${chunkWorkflowSummary}`;
                 },
               });
               result = reviewed.result;
+              if (documentProduction && !['approved', 'revised', 'needs_user_input'].includes(reviewed.audit.status))
+                throw new Error('Document content review did not pass. No files were delivered.');
               streamedText = result.text;
               reviewCompleted = reviewed.audit.status === "approved" || reviewed.audit.status === "revised";
               reviewHasPendingClarification = Boolean(reviewed.audit.pendingClarification);
@@ -3448,7 +3883,16 @@ ${chunkWorkflowSummary}`;
               } });
             }
 
-            const imageAssets =
+            if (documentProduction && !reviewHasPendingClarification) {
+              const { deliverDocument } = await import('@/lib/documents/service');
+              result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
+                params: createParams(result.model), actorId, chatId, requestId,
+                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs,
+                requireProfessionalAcceptance: /\\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\\b/i.test(message) });
+              streamedText = result.text;
+            }
+
+            let imageAssets:import("@/lib/images/generated-source").ImageAsset[] =
               result.content
                 ?.map((part) => {
                   const partType = typeof part.type === "string" ? part.type.toLowerCase() : "";
@@ -3468,7 +3912,24 @@ ${chunkWorkflowSummary}`;
             // Final content and structured blocks are committed before the
             // authoritative content event. Interrupted streams never expose
             // unvalidated or unpersisted interactive components.
-            const rawAssistantText = result.text || streamedText;
+            const originalAssistantText = result.text || streamedText;
+            const rawAssistantText = resolveChatAnswer(originalAssistantText);
+            if (rawAssistantText === null) {
+              console.warn("[Chat API] Answer boundary rejected provider draft", {
+                requestId, provider: result.provider, model: result.model,
+                rawCharacterCount: originalAssistantText.length,
+              });
+              throw new Error("The model returned an incomplete conversational response. No reply was delivered.");
+            }
+            if (rawAssistantText !== originalAssistantText) {
+              console.info("[Chat API] Recovered final conversational response", {
+                requestId, provider: result.provider, model: result.model,
+              });
+            } else if (reviewMode !== "always" && !documentProduction) {
+              // Release short ordinary replies only after the complete answer passes.
+              const acceptedTail = chatAnswerBoundary.flushAccepted();
+              if (acceptedTail) enqueueDelta(acceptedTail);
+            }
             const presentationResult = presentationEnabled
               ? parsePresentationTail(rawAssistantText, imageAssets)
               : { text: rawAssistantText, presentation: null };
@@ -3478,18 +3939,84 @@ ${chunkWorkflowSummary}`;
               const tail = presentationFilter.finish();
               if (tail) emitChunk({ type: "delta", text: tail });
             }
+            progress("save", "Response generated; saving the final answer.");
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
+            const generatedImages = imageAssets.length && imageGenerationRequested
+              ? await cachedWorkflowValue(`generated-images:${assistantMessageId}`,()=>generatedImageService().retainResult({
+                  actorId,chatId,messageId:assistantMessageId,requestId,createdAt:workflowTimestamp(),
+                  provider:result!.provider,model:result!.model,assets:imageAssets,
+                  parents:imageFollowup?.operation==='edit' ? savedAttachments.filter(file=>attachmentSourceIds.has(file.id)).map(file=>({
+                    attachmentId:file.id,sourceChatId:file.chatId??chatId,
+                    ...(file.generatedSource?.sourceHash?{sourceHash:file.generatedSource.sourceHash}:{}),
+                  })) : [],
+                })) : null;
+            if (generatedImages) {
+              // A checkpoint proves prior persistence, not that an original
+              // remains present now. Do not republish a stale retention claim.
+              for (const source of generatedImages.attachments)
+                await readGeneratedImage(actorId,chatId,source.id);
+              imageAssets = generatedImages.assets;
+            }
             if (!currentStandaloneWorkflow()?.resumed || !await getMessageById(chatId, assistantMessageId)) await saveMessage(chatId, {
               id: assistantMessageId,
               role: "assistant",
               model: result.model,
               content: assistantText,
               assets: imageAssets,
+              ...(generatedImages ? {attachments:generatedImages.attachments} : {}),
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
+            // Objective fulfillment is audited independently of the model's
+            // claim to have succeeded. Never block a valid response because
+            // diagnostics storage is unavailable, and never trigger a retry.
+            try {
+              const deliveryAudit = await cachedWorkflowValue("routing-delivery-audit:v1", async () => ({
+                ...auditRoutingDelivery({
+                  userMessage: message,
+                  selectedIntent: resolvedRequestIntent,
+                  answer: assistantText,
+                  imageCount: imageAssets.length
+                }),
+                requestId,
+                classifiedIntent: resolvedRequestIntent,
+                objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+                provider: result!.provider,
+                model: result!.model,
+                routingSelection: {
+                  initialProvider: selectionExplainer?.selected_provider ?? null,
+                  initialModel: selectionExplainer?.selected_model ?? null,
+                  finalProvider: result!.provider,
+                  finalModel: result!.model,
+                  selectedSource: selectionExplainer?.selected_source ?? null,
+                  selectionJustification: selectionExplainer?.selection_justification ?? null,
+                  score: selectionExplainer?.top_candidate_score ?? null,
+                  topFactors: selectionExplainer?.top_factors ?? [],
+                  topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+                  deterministicOverride: selectionExplainer?.override ?? null,
+                  fallbackUsed: selectionExplainer?.fallback_used ?? false,
+                  fallbackReason: selectionExplainer?.fallback_reason ?? null
+                },
+                productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+              }));
+              if (deliveryAudit.status === "fail") {
+                console.warn("[Routing Delivery Audit] primary_objective_not_fulfilled", {
+                  requestId,
+                  status: deliveryAudit.status,
+                  reason: deliveryAudit.reason,
+                  classifiedIntent: resolvedRequestIntent,
+                  auditVersion: deliveryAudit.version
+                });
+              }
+            } catch (error) {
+              console.warn("[Routing Delivery Audit] checkpoint_unavailable", {
+                requestId,
+                cause: error instanceof Error ? error.name : "unknown"
+              });
+            }
             emitChunk({
               type: "content",
+              messageId: assistantMessageId,
               text: assistantText,
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
               assets: imageAssets,
@@ -3499,6 +4026,9 @@ ${chunkWorkflowSummary}`;
             const finalAnswerEvent = reasoningState.finalize(assistantText);
             emitChunk(reasoningState.snapshot());
             emitChunk(finalAnswerEvent);
+            // Final answer is durably saved and may be shown immediately, even
+            // while the rest of the request continues through accounting.
+            progress("post_answer", "Answer saved. Finalizing request records and memory.");
             if (visualContinuity && imageAssets.length) {
               // Group images never become identity anchors; an explicit portrait correction may replace one.
               try {
@@ -3544,31 +4074,33 @@ ${chunkWorkflowSummary}`;
 
             // Keep standalone memory charges within the durable parent workflow.
             // Managed-agent responses retain their existing deferred memory work.
-            console.log("[Chat API] reasoning stream metrics", {
+            console.log("[Chat API] answer stream metrics", {
               requestId,
-              reasoningUpdateCount,
-              timeToFirstReasoningUpdateMs: firstReasoningUpdateAtMs === null ? null : firstReasoningUpdateAtMs - requestStartedAtMs,
+              answerDeltaCount,
+              timeToFirstAnswerDeltaMs: firstAnswerDeltaAtMs === null ? null : firstAnswerDeltaAtMs - requestStartedAtMs,
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            // Each standalone job checkpoints independently; a spending pause
-            // remains resumable even when the answer is already saved.
+            // Memory maintenance is separate infrastructure and must never depend
+            // on the completed chat workflow's spending lease.
             const persistAccountedMemory = async () => {
-              console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
+              console.log("[Chat API] Post-answer memory persistence start", { actorId, chatId, requestId });
               try {
-                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateLongTermMemory(actorId, chatId, message));
+                // Post-answer memory is independently metered infrastructure. Never
+                // bind it to a completed chat workflow lease or spending approval.
+                const retention = maybeUpdateRelevantLongTermMemory(actorId, chatId, message);
                 const cleanup = retention.then(
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunThirtyMessageCleanup(actorId)),
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunThirtyMessageCleanup(actorId)),
+                  () => maybeRunHundredUserMessageReview(actorId),
+                  () => maybeRunHundredUserMessageReview(actorId),
                 );
                 const memoryResults = await Promise.allSettled([
                   retention,
-                  cachedWorkflowValue("memory-summary", () => maybeUpdateSummary(chatId)),
+                  maybeUpdateSummary(chatId),
                   cleanup,
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
-                    if (isStandaloneAccountingError(memoryResult.reason)) throw memoryResult.reason;
+                    // Memory task errors are logged, never escalated into a chat spending pause.
                     console.error(
                       index === 0
                         ? "[Chat API] Long-Term Memory Update Error:"
@@ -3579,17 +4111,25 @@ ${chunkWorkflowSummary}`;
                     );
                   }
                 });
-                console.log("[Chat API] Memory persistence complete", { actorId, chatId, requestId });
+                const summaryResult = memoryResults[1];
+                const degraded = memoryResults.some(result => result.status === "rejected") ||
+                  (summaryResult.status === "fulfilled" && summaryResult.value === "blocked");
+                console.log(degraded ? "[Chat API] Memory persistence degraded" : "[Chat API] Memory persistence complete", {
+                  actorId, chatId, requestId,
+                  intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
+                });
               } catch (error) {
-                if (isStandaloneAccountingError(error)) throw error;
+
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)
                 });
               }
             };
-            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
+            // The assistant answer is durably saved and final_answer has already
+            // been emitted. End the user-facing stream before memory maintenance.
+            answerStreamFinalized = true;
             if (!streamCancelled) {
               controller.close();
             } else {
@@ -3601,11 +4141,35 @@ ${chunkWorkflowSummary}`;
                 responseLength: assistantText.length
               });
             }
+            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
           } catch (error: unknown) {
+            if (answerStreamFinalized) {
+              console.error("[Chat API] Post-answer workflow settlement error", {
+                requestId, reason: error instanceof Error ? error.message : String(error),
+              });
+              return;
+            }
             if (isStandaloneAccountingError(error)) {
-              error=standaloneAccountingCause(error)??error;
-              emitChunk({type:"accounting_pause",code:standaloneAccountingCause(error)?.code??"standalone_approval_or_accounting_required",requestId,message:error instanceof Error?error.message:String(error)});
+              const cause = standaloneAccountingCause(error) ?? error;
+              const code = standaloneAccountingCause(error)?.code ?? "standalone_approval_or_accounting_required";
+              if (standaloneTechnicalBlocker(code) || resolvedRequestIntent === "image-generation" && code === "standalone_unsupported_billing") {
+                const message = cause instanceof Error ? cause.message : String(cause);
+                // A context window is a physical model constraint, not an
+                // approvable charge. Persist an actionable terminal outcome and
+                // clear the tracked chat_request instead of stranding processing.
+                await finishChatFailure({
+                  requestId, chatId, message,
+                  save: (failure) => saveMessage(chatId, failure),
+                  markFailed: async (messageId) => {
+                    if (requestTracked) await failChatRequest(requestId, cause, messageId);
+                  },
+                  emit: (messageId) => emitChunk({...reasoningState.error(message,false),messageId,code}),
+                  close: () => { if (!streamCancelled) controller.close(); },
+                });
+                return;
+              }
+              emitChunk({type:"accounting_pause",code,requestId,message:cause instanceof Error?cause.message:String(cause)});
               if (!streamCancelled) controller.close();
               return;
             }

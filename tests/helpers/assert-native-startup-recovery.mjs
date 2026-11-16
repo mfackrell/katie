@@ -5,6 +5,7 @@ export async function assertNativeStartupRecovery(db,rival,{project,account,tria
  const mission=randomUUID(),task=randomUUID(),approval=randomUUID(),grant=randomUUID(),scope='c'.repeat(64);
  await db.query('reset role');
  await db.query('select create_mission($1,$2,$3,120,null)',[mission,'Synthetic native startup failure',team]);
+ if(process.env.KATIE_TEST_NATIVE_RECOVERY_LIFECYCLE==='1')await db.query('update agent_missions set max_calls=20 where id=$1',[mission]);
  const agent=(await db.query("select * from managed_agents where id=any($1::uuid[]) and (config->>'development')::boolean limit 1",[team])).rows[0];assert.ok(agent);
  const taskChat=randomUUID();await db.query("insert into chats(id,actor_id,title) values($1,$2,'Startup fixture')",[taskChat,agent.actor_id]);
  await db.query("update agent_missions set project_id=$2,project_kind='development',repository_id=$3,status='blocked',deadline=now()+interval '30 minutes' where id=$1",[mission,project,repo]);
@@ -80,3 +81,4 @@ export async function assertNativeStartupRecovery(db,rival,{project,account,tria
  await assert.rejects(db.query(issue,[recovery.id,'a'.repeat(64),approval,task,'f'.repeat(40)]),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
 }
+

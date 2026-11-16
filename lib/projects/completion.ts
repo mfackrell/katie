@@ -1,6 +1,27 @@
 import type { IndependentAssessment } from '@/lib/collaboration/review-contract';
 import type { Project } from './store';
 import { createHash } from 'node:crypto';
+import { digest } from './contract';
+import type { Mission } from '@/lib/missions/types';
+
+export function assertProjectAssessmentBinding(p: Project, mission: Mission, taskId: string): void {
+    const evidence = mission.project_evidence as Record<string, unknown> | null;
+    const final = evidence?.finalIntegratedEvidence as Record<string, unknown> | undefined;
+    const verification = final?.verification as Record<string, unknown> | undefined;
+    if (mission.project_id !== p.id || mission.project_kind !== 'assessment' ||
+        mission.id !== p.active_mission_id || mission.status !== 'completed' ||
+        !p.verified_sha || !p.approved_hash || !p.spec ||
+        evidence?.approvedScopeHash !== p.approved_hash ||
+        digest(evidence?.approvedFinalContract ?? null) !== digest(p.spec.finalContract) ||
+        !p.preview?.browserAcceptance?.passed ||
+        digest(evidence?.preview ?? null) !== digest(p.preview) ||
+        final?.taskId !== taskId || final?.head !== p.verified_sha ||
+        verification?.observedHeadSha !== p.verified_sha ||
+        verification?.testedHeadSha !== p.verified_sha ||
+        verification?.reviewedHeadSha !== p.verified_sha) {
+        throw Error('Final assessment is not bound to the accepted task, candidate and approved contract');
+    }
+}
 
 // The controller assigns the phase and objective before any candidate exists.
 // Review and repair use this SAME contract; a critic cannot create a new rubric.

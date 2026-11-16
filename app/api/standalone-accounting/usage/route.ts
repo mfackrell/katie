@@ -55,9 +55,13 @@ export async function GET(request: NextRequest) {
       id: attempt.id, createdAt:attempt.created_at, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category,
       preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision,
       reservedMicrousd: attempt.reserved_microusd, reason: attempt.reason, pauseReason: attempt.pause_reason, resolvedModel: attempt.resolved_model, estimatorVersion: attempt.estimator_version, tradeoffs: attempt.tradeoffs,
-      preview: { textBytes, imageCount, imageBytes, inputTokens: estimate.inputTokens, imageTokens: estimate.imageTokens, outputAllowance: estimate.outputAllowance, assumptions: estimate.assumptions, issues: estimate.issues, status: estimate.status },
+      preview: { textBytes, imageCount, imageBytes, inputTokens: estimate.inputTokens, imageTokens: estimate.imageTokens, outputAllowance: estimate.outputAllowance, assumptions: estimate.assumptions, issues: estimate.issues, status: estimate.status, ownerApprovalRequired: estimate.ownerApprovalRequired ?? null },
       requestExposure,
     }; });
+    // The service-role RPC verifies owner, actor and chat before returning
+    // one request ID. Completed/estimated Qwen jobs are absent from the active
+    // usage snapshot, so enumeration from that snapshot cannot recover them.
+    const recoverable = await ledger.recoverableCacheWorkflow(ownerId, scope.actorId, scope.chatId);
     const scopedAttempts = attempts.filter(attempt => scope.scope === 'all' || attempt.actor_id === scope.actorId);
     const alerts = scopedAttempts.flatMap<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }>(attempt => {
       const base = { attemptId: attempt.id, provider: attempt.provider, model: attempt.model };
@@ -72,6 +76,6 @@ export async function GET(request: NextRequest) {
     }
     const last=snapshot.attempts.length===100?snapshot.attempts[snapshot.attempts.length-1]:null;
     const workPage={next:last?{before:last.created_at,beforeId:last.id}:null};
-    return NextResponse.json({ workPage, configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts }, { headers: noStore });
+    return NextResponse.json({ workPage, configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts, recoverable }, { headers: noStore });
   } catch (error) { return accountingError(error); }
 }

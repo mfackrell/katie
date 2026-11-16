@@ -1,0 +1,333 @@
+(node:5) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+TAP version 13
+# (node:12) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: recovery offer is restricted to the authenticated owner project and preserves consumed receipts
+ok 1 - recovery offer is restricted to the authenticated owner project and preserves consumed receipts
+  ---
+  duration_ms: 249.960367
+  type: 'test'
+  ...
+# Subtest: Chromium recovery authenticates, prevents duplicate clicks, confirms receipts and shows server errors
+ok 2 - Chromium recovery authenticates, prevents duplicate clicks, confirms receipts and shows server errors
+  ---
+  duration_ms: 3932.561984
+  type: 'test'
+  ...
+# Subtest: continuation API requires owner, production release and exact decision binding
+ok 3 - continuation API requires owner, production release and exact decision binding
+  ---
+  duration_ms: 42.715842
+  type: 'test'
+  ...
+# Subtest: expired hierarchy API is owner-only, production-release bound and requires an exact immutable proposal
+ok 4 - expired hierarchy API is owner-only, production-release bound and requires an exact immutable proposal
+  ---
+  duration_ms: 34.080048
+  type: 'test'
+  ...
+# Subtest: real Chromium owner confirmation renews only the existing expired hierarchy
+ok 5 - real Chromium owner confirmation renews only the existing expired hierarchy
+  ---
+  duration_ms: 933.535147
+  type: 'test'
+  ...
+# (node:108) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: malformed SMART response records exact field paths before SQL without saving model prose
+ok 6 - malformed SMART response records exact field paths before SQL without saving model prose
+  ---
+  duration_ms: 522.854078
+  type: 'test'
+  ...
+# Subtest: ready-only decision cannot abandon an owned open exception; corrective batches still reach SQL
+ok 7 - ready-only decision cannot abandon an owned open exception; corrective batches still reach SQL
+  ---
+  duration_ms: 275.145396
+  type: 'test'
+  ...
+# Subtest: definitive SQL SMART rejection retains bounded diagnostic and proposal hash; no replay
+ok 8 - definitive SQL SMART rejection retains bounded diagnostic and proposal hash; no replay
+  ---
+  duration_ms: 132.455434
+  type: 'test'
+  ...
+# Subtest: diagnostic preflight checks each structural field without substituting values
+ok 9 - diagnostic preflight checks each structural field without substituting values
+  ---
+  duration_ms: 8.000065
+  type: 'test'
+  ...
+# Subtest: unknown SQL outcomes and transport failures are never classified as safe rejection
+ok 10 - unknown SQL outcomes and transport failures are never classified as safe rejection
+  ---
+  duration_ms: 14.775942
+  type: 'test'
+  ...
+# (node:116) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: regression: legacy project-wide evidence overflows 48k while current manager keeps owner objective and direct contracts
+ok 11 - regression: legacy project-wide evidence overflows 48k while current manager keeps owner objective and direct contracts
+  ---
+  duration_ms: 11.622128
+  type: 'test'
+  ...
+# Subtest: completed history grows without changing the manager input; latest accepted evidence is selected by provenance
+ok 12 - completed history grows without changing the manager input; latest accepted evidence is selected by provenance
+  ---
+  duration_ms: 11.304327
+  type: 'test'
+  ...
+# Subtest: nested management depth preserves exact ancestors and only the immediate superior/direct reports
+ok 13 - nested management depth preserves exact ancestors and only the immediate superior/direct reports
+  ---
+  duration_ms: 1.070077
+  type: 'test'
+  ...
+# Subtest: unresolved owned exceptions, external dependency statuses and current activity cannot silently disappear
+ok 14 - unresolved owned exceptions, external dependency statuses and current activity cannot silently disappear
+  ---
+  duration_ms: 0.495354
+  type: 'test'
+  ...
+# Subtest: missing essential evidence fails before inference; no silent truncation or unauthorized decisions
+ok 15 - missing essential evidence fails before inference; no silent truncation or unauthorized decisions
+  ---
+  duration_ms: 1.435956
+  type: 'test'
+  ...
+# Subtest: reporting cycle and worker management are not treated as delegable management
+ok 16 - reporting cycle and worker management are not treated as delegable management
+  ---
+  duration_ms: 0.367772
+  type: 'test'
+  ...
+# Subtest: selected evidence retains active assignments and only the latest terminal outcomes per report
+ok 17 - selected evidence retains active assignments and only the latest terminal outcomes per report
+  ---
+  duration_ms: 0.373391
+  type: 'test'
+  ...
+# Subtest: paginated management evidence loads every historical row and fails closed on a broken page
+ok 18 - paginated management evidence loads every historical row and fails closed on a broken page
+  ---
+  duration_ms: 306.793593
+  type: 'test'
+  ...
+# Subtest: retired package history never consumes the current decision window; active contract and latest attempt remain
+ok 19 - retired package history never consumes the current decision window; active contract and latest attempt remain
+  ---
+  duration_ms: 1.709917
+  type: 'test'
+  ...
+# Subtest: current approved contract and latest failures survive ready and replacement decisions
+ok 20 - current approved contract and latest failures survive ready and replacement decisions
+  ---
+  duration_ms: 2.457149
+  type: 'test'
+  ...
+# Subtest: shared acceptance contracts are referenced losslessly and historical decisions do not duplicate current contracts
+ok 21 - shared acceptance contracts are referenced losslessly and historical decisions do not duplicate current contracts
+  ---
+  duration_ms: 5.043156
+  type: 'test'
+  ...
+# (node:124) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# \# \\\# OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: [{"proname":"project_org_hierarchy_recovery_state","prosrc_md5":"05a347c978ea882956e201256432da48","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_renew_paused_window","prosrc_md5":"fa27c7d176a2fbd07fb1ba8ec7b0bc5e","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"},{"proname":"project_org_renewed_management_source","prosrc_md5":"dc929acd8a9d6fee1e5ca30f37f0836b","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_resume_management","prosrc_md5":"9b8261fa82efac70ee8fa44af0c0bf80","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"}]
+# \# \\\# OWNER_MANAGEMENT_BROWSER_POSTGRES_PASS: real mobile control → HTTP route → verified owner auth → native PostgreSQL; separate renewal/resume, 13 contracts, wrong owner/origin/state/release/cutoff, double clicks, reload, receipt retry, lost response and final-write rollback; unchanged 73/96, 600000 tokens, no inference or dispatch
+# \# \\\# PAUSED_WINDOW_RENEWAL_POSTGRES_PASS: 73/96 missions, 600000 tokens, 13 nodes; exact owner/state/release, append-only history, full-write rollback, competing RPC lock, replay, stale claims, terminal-source immutability; no provider calls
+# Subtest: mobile owner recovery uses the actual API and native PostgreSQL without live activation
+ok 22 - mobile owner recovery uses the actual API and native PostgreSQL without live activation
+  ---
+  duration_ms: 57206.747072
+  type: 'test'
+  ...
+# (node:884) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: paused renewal: authenticated original owner, exact project/cutoff and active production release only
+ok 23 - paused renewal: authenticated original owner, exact project/cutoff and active production release only
+  ---
+  duration_ms: 165.922935
+  type: 'test'
+  ...
+# (node:892) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: organization migration composes with installed ordinary authority and native financial controls
+ok 24 - organization migration composes with installed ordinary authority and native financial controls
+  ---
+  duration_ms: 74868.595847
+  type: 'test'
+  ...
+# (node:2243) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# [Trial model usage] {
+#   jobId: 'c1eefdf5-20fa-4857-8345-eace4413129a',
+#   model: 'gpt-5.4',
+#   requestId: 'fixture',
+#   usage: undefined
+# }
+# [Missions] Provider attempt ended {
+#   jobId: 'c1eefdf5-20fa-4857-8345-eace4413129a',
+#   callId: '0f1d1a9f-9096-4d42-8ee3-885cce879a81',
+#   provider: 'openai',
+#   model: 'gpt-5.4',
+#   durationMs: 0,
+#   reservedTokens: 3148,
+#   countMethod: 'conservative-bytes',
+#   error: 'Provider refused trial request'
+# }
+# [Missions] Management rejection persistence unconfirmed {
+#   jobId: '7cfc13e6-049a-4e1e-9923-ee1fca28cdbd',
+#   detail: 'Management decisions require immediate reporting authority',
+#   managementCommandRejection: {
+#     code: 'immediate_reporting_authority',
+#     reason: 'Management decisions require immediate reporting authority',
+#     position: 1,
+#     action: 'dependency',
+#     targets: [ [Object], [Object] ],
+#     priorAppointments: 0
+#   }
+# }
+# [Missions] Management rejection persistence unconfirmed {
+#   jobId: '40219185-c68e-4ba3-b033-17dda30aeac5',
+#   detail: 'Management decisions require immediate reporting authority',
+#   managementCommandRejection: {
+#     code: 'immediate_reporting_authority',
+#     reason: 'Management decisions require immediate reporting authority',
+#     position: 1,
+#     action: 'dependency',
+#     targets: [ [Object], [Object] ],
+#     priorAppointments: 0
+#   }
+# }
+# Subtest: executive selection requires verified fresh OpenAI or Anthropic reasoning; no guessed fallback
+ok 25 - executive selection requires verified fresh OpenAI or Anthropic reasoning; no guessed fallback
+  ---
+  duration_ms: 500.425108
+  type: 'test'
+  ...
+# Subtest: management worker dispatches only durable management decisions; never technical execution
+ok 26 - management worker dispatches only durable management decisions; never technical execution
+  ---
+  duration_ms: 2305.774657
+  type: 'test'
+  ...
+# Subtest: technical work uses a separate subordinate completion receipt, never project closure
+ok 27 - technical work uses a separate subordinate completion receipt, never project closure
+  ---
+  duration_ms: 1583.308702
+  type: 'test'
+  ...
+# Subtest: managed coding derives native authority from its project envelope without another owner action
+ok 28 - managed coding derives native authority from its project envelope without another owner action
+  ---
+  duration_ms: 731.799165
+  type: 'test'
+  ...
+# Subtest: original envelope requires authenticated explicit autonomous-execution consent
+ok 29 - original envelope requires authenticated explicit autonomous-execution consent
+  ---
+  duration_ms: 121.375013
+  type: 'test'
+  ...
+# Subtest: dispatch preserves Functional Director authority and rejects executive worker supervision
+ok 30 - dispatch preserves Functional Director authority and rejects executive worker supervision
+  ---
+  duration_ms: 127.441327
+  type: 'test'
+  ...
+# Subtest: coding packages require immediate Functional Director authority at dispatch
+ok 31 - coding packages require immediate Functional Director authority at dispatch
+  ---
+  duration_ms: 178.296349
+  type: 'test'
+  ...
+# Subtest: native host authenticates package paths and predecessor before granting execution
+ok 32 - native host authenticates package paths and predecessor before granting execution
+  ---
+  duration_ms: 2.723049
+  type: 'test'
+  ...
+# Subtest: explicit management levels restrict appointments without granting technical authority
+ok 33 - explicit management levels restrict appointments without granting technical authority
+  ---
+  duration_ms: 667.000725
+  type: 'test'
+  ...
+# Subtest: authenticated trial start and stop use the project controller without a financial approval
+ok 34 - authenticated trial start and stop use the project controller without a financial approval
+  ---
+  duration_ms: 32.9436
+  type: 'test'
+  ...
+# Subtest: trial Director can call the provider without any accounting service, and refusal is terminal
+ok 35 - trial Director can call the provider without any accounting service, and refusal is terminal
+  ---
+  duration_ms: 414.173208
+  type: 'test'
+  ...
+# Subtest: management rejection locates a premature dependency without storing model prose or foreign IDs
+ok 36 - management rejection locates a premature dependency without storing model prose or foreign IDs
+  ---
+  duration_ms: 133.25323
+  type: 'test'
+  ...
+# Subtest: management rejection retries only a failed terminal write and fences inference after a lost receipt
+ok 37 - management rejection retries only a failed terminal write and fences inference after a lost receipt
+  ---
+  duration_ms: 4435.621382
+  type: 'test'
+  ...
+# Subtest: one-shot Director recovery requires the authenticated owner, exact release and explicit cutoff
+ok 38 - one-shot Director recovery requires the authenticated owner, exact release and explicit cutoff
+  ---
+  duration_ms: 78.642773
+  type: 'test'
+  ...
+# Subtest: one-shot Director recovery fences a mismatched runtime before inference and sanitizes unsupported commands
+ok 39 - one-shot Director recovery fences a mismatched runtime before inference and sanitizes unsupported commands
+  ---
+  duration_ms: 94.18193
+  type: 'test'
+  ...
+# Subtest: delegation amendments require immediate reporting authority and never enter one-shot recovery
+ok 40 - delegation amendments require immediate reporting authority and never enter one-shot recovery
+  ---
+  duration_ms: 106.572587
+  type: 'test'
+  ...
+# Subtest: ratified provider trial guides its existing root to delegate Game Delivery, without synthetic model decisions
+ok 41 - ratified provider trial guides its existing root to delegate Game Delivery, without synthetic model decisions
+  ---
+  duration_ms: 106.13863
+  type: 'test'
+  ...
+# Subtest: claimed scoped root receives durable approved paths and proposes only validated existing-node delegation
+ok 42 - claimed scoped root receives durable approved paths and proposes only validated existing-node delegation
+  ---
+  duration_ms: 96.456791
+  type: 'test'
+  ...
+# Subtest: exception preflight admits only observed completed subordinate evidence and preserves SQL authority
+ok 43 - exception preflight admits only observed completed subordinate evidence and preserves SQL authority
+  ---
+  duration_ms: 99.990492
+  type: 'test'
+  ...
+# Subtest: scope-only implementation delegation is diagnosed at its actual parent while both QA identities remain excluded
+ok 44 - scope-only implementation delegation is diagnosed at its actual parent while both QA identities remain excluded
+  ---
+  duration_ms: 85.225349
+  type: 'test'
+  ...
+1..44
+# tests 44
+# suites 0
+# pass 44
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 154086.474007

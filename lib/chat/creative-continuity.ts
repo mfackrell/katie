@@ -58,6 +58,14 @@ export function isCreativeNarrativeTurn(
   return prompt.length <= 550 || CONTINUE_SIGNAL.test(prompt);
 }
 
+/** A fiction-style preference cannot displace an explicit image deliverable. */
+export function shouldApplyCreativeNarrativeContinuity(
+  narrativeCandidate: boolean,
+  resolvedIntent: string | undefined,
+): boolean {
+  return narrativeCandidate && resolvedIntent !== "image-generation";
+}
+
 export function preferredClaudeCreativeModel(availableModels: string[]): string | null {
   const usable = availableModels.filter(model =>
     /^claude-[a-z0-9.-]+$/i.test(model) &&

@@ -129,7 +129,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
   }
   return (
     <details aria-label="Katie optional account tools" className="shrink-0 border-t border-white/10 bg-zinc-900 px-4 py-2 text-sm text-zinc-100">
-      <summary className="cursor-pointer text-zinc-400">Owner account (optional)</summary>
+      <summary className="cursor-pointer text-zinc-300">Owner sign in (optional)</summary>
       <section className="py-3">
       {!sessionReady ? (
         <p role="status">Restoring owner session…</p>

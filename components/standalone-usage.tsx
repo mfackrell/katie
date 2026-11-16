@@ -7,16 +7,38 @@ import { ownerSessionBearer } from '@/lib/tools/browser-owner-session';
 import type { DailyAttempt, DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily';
 
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
-interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
+interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string; ownerApprovalRequired?: "selected_model_uncached" | null }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
+type ReductionStrategy = 'truncate_tokens' | 'switch_model';
+type ReductionChoice = {
+  strategy: ReductionStrategy; available: boolean; provider: string; model: string;
+  estimateMicrousd: string | null; inputTokens: number | null; outputAllowance: number | null;
+  changes: Array<{kind:string;path:string;before:string|number;after:string|number}>; tradeoffs: string[];
+};
+type ReductionReview = {
+  attemptId: string; preparedHash: string; pricingVersion: string; budgetRevision: number;
+  reservedMicrousd: string; options: ReductionChoice[];
+};
 interface ActiveAttempt extends DecisionAttempt { createdAt?: string; provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
-interface Snapshot { workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
+interface Snapshot { recoverable?: { requestId:string } | null; workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; inlinePendingOnly?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
 function dollars(value: string) {
   const amount = BigInt(value), fraction = (amount % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
   return `$${(amount / 1_000_000n).toString()}${fraction ? `.${fraction}` : '.00'}`;
+}
+// Presentation only: ledger values retain their full micro-USD precision.
+function cents(value: string) {
+  const amount = BigInt(value);
+  const rounded = (amount + 5_000n) / 10_000n;
+  return String.fromCharCode(36) + (rounded / 100n).toString() + '.' + (rounded % 100n).toString().padStart(2, '0');
+}
+function compactTokens(value: number) {
+  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : value.toLocaleString();
+}
+function summaryTokens(totals: UsageTotals) {
+  return `${compactTokens(totals.inputTokens)}${totals.missingInputCount ? ' + ?' : ''} / ${compactTokens(totals.outputTokens)}${totals.missingOutputCount ? ' + ?' : ''}`;
 }
 function decimal(value: string | null) { return value === null ? '' : dollars(value).slice(1); }
 function parseDollars(value: string) {
@@ -63,6 +85,8 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     if (!inlinePendingOnly) setInlineTarget(document.getElementById('katie-inline-spending-approval'));
   }, [chatId, inlinePendingOnly]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
+  const [reductionReview,setReductionReview] = useState<ReductionReview | null>(null);
+  useEffect(() => setReductionReview(null),[actorId,chatId]);
   const [usageOpen, setUsageOpen] = useState(false), [reviewOpen, setReviewOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false), [timezone, setTimezone] = useState(''), [callLimit, setCallLimit] = useState(''), [requestLimit, setRequestLimit] = useState('');
   const api = useCallback(async (path: string, init?: RequestInit) => {
@@ -132,7 +156,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   }, [onResumeAttempt, actorId, chatId]);
   useEffect(() => {
     if (inlinePendingOnly || busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
-    const candidate = snapshot?.active?.find(attempt => attempt.uncertainAutoAuthorized && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
+    const candidate = snapshot?.active?.find(attempt => (attempt.uncertainAutoAuthorized || attempt.pollableRunpod === true) && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
       !automaticResumes.current.has(`${actorId}:${chatId}:${attempt.requestId}`) &&
       (automaticRetryAfter.current.get(`${actorId}:${chatId}:${attempt.requestId}`) ?? 0) <= Date.now() &&
       !snapshot.pending.some(other => other.requestId === attempt.requestId) &&
@@ -141,11 +165,20 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     automaticResumes.current.add(`${actorId}:${chatId}:${candidate.requestId}`);
     setBusy(candidate.id); setNotice(''); setError('');
     void requestSavedResume({attemptId:candidate.id,requestId:candidate.requestId})
-      .then(() => { setNotice('Automatically continued within owner spending limits.'); })
+      .then(() => {
+        if (candidate.pollableRunpod) {
+          // Still queued: the same saved job remains pollable; schedule another
+          // bounded resume after refresh rather than requiring owner interaction.
+          const key = `${actorId}:${chatId}:${candidate.requestId}`;
+          automaticResumes.current.delete(key);
+          automaticRetryAfter.current.set(key, Date.now()+30_000);
+          setNotice('Qwen recovery checked automatically; saved job will be checked again if still running.');
+        } else setNotice('Automatically continued within owner spending limits.');
+      })
       .catch(failure => {
         const key = `${actorId}:${chatId}:${candidate.requestId}`;
         automaticResumes.current.delete(key);
-        automaticRetryAfter.current.set(key,Date.now()+5000);
+        automaticRetryAfter.current.set(key,Date.now()+(candidate.pollableRunpod ? 30_000 : 5000));
         setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.');
       })
       .finally(() => { setBusy(''); void refresh(); });
@@ -176,42 +209,101 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     }
     finally { await refresh(); setBusy(''); }
   }
-  async function decide(attempt: DecisionAttempt, action: 'approve_once' | 'reduce_cost' | 'cancel') {
+  async function prepareSavedAuthorization(requestId: string) {
+    setBusy('recover:'+requestId);setError('');setNotice('');
+    try {
+      // This only replays the original owner-bound workflow. The ledger will
+      // prepare an exact-model quote and STOP before a new paid model call.
+      await requestSavedResume({attemptId:'',requestId});
+      setNotice('Saved request completed.');
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Saved authorization could not be prepared.';
+      if (/standalone_approval_required|spending approval|approval required/i.test(message)) {
+        setNotice('Authorization proposal prepared. Review the selected model and choose whether to approve.');
+      } else setError(message);
+    } finally { await refresh();setBusy(''); }
+  }
+  async function reviewReducedCost(attempt: DecisionAttempt) {
+    setBusy(attempt.id);setError('');setNotice('');setReductionReview(null);
+    try {
+      const result=await api('attempts',{method:'POST',body:JSON.stringify({
+        actorId,chatId,attemptId:attempt.id,action:'preview_reductions',
+        preparedHash:attempt.preparedHash,pricingVersion:attempt.pricingVersion,
+        budgetRevision:attempt.budgetRevision,reservedMicrousd:attempt.reservedMicrousd,
+      })}) as ReductionReview;
+      if(result.attemptId!==attempt.id||result.preparedHash!==attempt.preparedHash||
+        result.pricingVersion!==attempt.pricingVersion||result.budgetRevision!==attempt.budgetRevision||
+        result.reservedMicrousd!==attempt.reservedMicrousd||!Array.isArray(result.options)) {
+        throw Error('The saved proposal changed. Refresh and review its current estimate.');
+      }
+      setReductionReview(result);
+    } catch(failure) {setError(failure instanceof Error?failure.message:'Reduced-cost choices are unavailable.');}
+    finally {setBusy('');}
+  }
+  async function decide(attempt: DecisionAttempt, action: 'approve_once' | 'reduce_cost' | 'cancel', strategy?: ReductionStrategy) {
     setBusy(attempt.id); setError(''); setNotice('');
     try {
-      const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action, preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: attempt.budgetRevision, reservedMicrousd: attempt.reservedMicrousd }) });
+      const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action, ...(strategy ? {strategy} : {}), preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: attempt.budgetRevision, reservedMicrousd: attempt.reservedMicrousd }) });
       if (action === 'approve_once') {
         await requestSavedResume({ attemptId: result.attemptId as string, requestId: result.requestId as string });
         setNotice('Approved saved work completed.');
-      } else setNotice(action === 'cancel' ? result.message || 'Cancellation requested. Any dispatched spending exposure remains visible.' : 'A smaller proposal was prepared. Review its new estimate before approval.');
+      } else { setReductionReview(null);setNotice(action === 'cancel' ? result.message || 'Cancellation requested. Any dispatched spending exposure remains visible.' : 'Your selected reduced-cost proposal is saved. Review the new model, token allowance and estimate before approving.'); }
       await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Decision could not be saved.'); await refresh(); }
     finally { setBusy(''); }
   }
+  // A proposal preview is bound to the exact frozen attempt; a stale review cannot be used.
+  function reducedChoicesFor(attempt:DecisionAttempt) {
+    const review=reductionReview;
+    if(!review||review.attemptId!==attempt.id||review.preparedHash!==attempt.preparedHash||
+      review.pricingVersion!==attempt.pricingVersion||review.budgetRevision!==attempt.budgetRevision||
+      review.reservedMicrousd!==attempt.reservedMicrousd)return null;
+    return <div role="region" aria-label="Reduced-cost choices" className="mt-3 space-y-2 rounded border border-white/20 bg-white/[0.035] p-3">
+      <p className="font-semibold text-white">Choose a lower-cost proposal</p>
+      <p className="text-zinc-400">These are estimates, not spending ceilings. Reviewing does not send a model request. Preparing a choice creates a new proposal that still requires your separate approval.</p>
+      <div className="grid gap-3 lg:grid-cols-2">{review.options.map(option=><div key={option.strategy} className="space-y-2 rounded border border-white/20 p-3">
+        <p className="font-semibold">{option.strategy==='truncate_tokens'?'Truncate tokens':'Switch to a different model'}</p>
+        <p className="text-zinc-300">{option.strategy==='truncate_tokens'?'Keep the selected model. Reduce earlier conversation context and the maximum output allowance; preserve system instructions, the current request and tool dependencies.':'Preserve the complete prompt and output allowance. Change only to a cheaper compatible, reviewed model from the same provider.'}</p>
+        {option.available&&option.estimateMicrousd!==null?<><p>Model: <strong>{option.provider} / {option.model}</strong></p>
+          <p>Estimated reservation: <strong>{dollars(option.estimateMicrousd)}</strong> · savings {dollars((BigInt(attempt.reservedMicrousd)-BigInt(option.estimateMicrousd)).toString())}</p>
+          <p>Estimated input {option.inputTokens?.toLocaleString()??'?'} tokens · output allowance {option.outputAllowance?.toLocaleString()??'?'} tokens.</p>
+          <p className="text-zinc-400">{option.tradeoffs.join(' ')}</p>
+          <button type="button" disabled={Boolean(busy)} onClick={()=>void decide(attempt,'reduce_cost',option.strategy)} className="rounded border border-amber-200/60 px-3 py-2 font-medium text-amber-100 disabled:opacity-50">Prepare this proposal</button>
+        </>:<p className="text-zinc-400">Not available: {option.tradeoffs.join(' ')||'No supported saving for this request.'}</p>}
+      </div>)}</div>
+    </div>;
+  }
   const daily = snapshot?.daily;
   const activeAttempts = snapshot?.active ?? [];
   const configurationComplete = snapshot?.configuration && snapshot.configuration.per_call_limit_microusd !== null && snapshot.configuration.request_limit_microusd !== null;
-  const approvals = snapshot?.pending.length ?? 0;
+  const approvals = (snapshot?.pending.length ?? 0) + (snapshot?.recoverable ? 1 : 0);
   const unresolved = activeAttempts.length;
   const alerts = snapshot?.alerts?.length ?? 0;
   const workNavigation = <div>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{snapshot?.workPage?.next && <button type="button" className="ml-3 underline" onClick={()=>{const next=snapshot.workPage?.next;if(next)setWorkCursor({key:`${actorId}:${chatId}`,...next});}}>Older active work</button>}</div>;
   // Surface the existing exact-attempt approval flow in the chat itself.
   // Approval and continuation remain owned by the same audited endpoints.
-  const inlinePendingContent = snapshotScope.current === `${actorId}:${chatId}` && snapshot?.pending.length ? (
+  const inlinePendingContent = snapshotScope.current === `${actorId}:${chatId}` && (snapshot?.pending.length || snapshot?.recoverable) ? (
     <section aria-label="Spending authorization required" role="region" className="shrink-0 max-h-[38dvh] space-y-3 overflow-y-auto border-t border-amber-400/30 bg-zinc-950 px-4 py-3 text-xs text-zinc-200 sm:px-6">
       <h3 className="text-sm font-semibold text-amber-100">Approve the selected model to continue</h3>
+      {snapshot.recoverable && <div className="space-y-2 rounded-lg border border-amber-400/30 p-3">
+        <p>The saved image analysis completed, but Katie stopped before generating the reply because the selected model&apos;s optional cache-billing policy was not reviewed.</p>
+        <p>No new model call will be sent until you review and approve the same-model standard-rate quote.</p>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === 'recover:'+snapshot.recoverable.requestId ? 'Preparing…' : 'Prepare saved authorization'}</button>
+      </div>}
       {snapshot.pending.map(attempt => <div key={attempt.id} className="space-y-2 rounded-lg border border-amber-400/30 p-3">
         <p>Selected model: <strong className="text-zinc-100">{attempt.provider} / {attempt.model}</strong> · {attempt.category}</p>
         <p>Estimated reservation: <strong className="text-amber-100">{dollars(attempt.reservedMicrousd)}</strong> · automatic per-call threshold: <strong>{snapshot.configuration?.per_call_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.per_call_limit_microusd)}</strong></p>
         <p>Original request: settled {dollars(attempt.requestExposure.estimatedCostMicrousd)} · pending (including this proposal) {dollars(attempt.requestExposure.pendingExposureMicrousd)} · uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)} · automatic request threshold {snapshot.configuration?.request_limit_microusd == null ? 'not configured' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
         <p>Estimated input {attempt.preview.inputTokens.toLocaleString()} tokens · output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
+         {attempt.preview.ownerApprovalRequired === 'selected_model_uncached' && <p className="font-semibold text-amber-100">Owner decision required: keep this exact OpenAI model and complete prompt, but omit the optional unreviewed cache hints. The amount above uses standard uncached rates. Nothing is sent until you authorize this one request.</p>}
         {attempt.tradeoffs && <p className="text-amber-100">Changes in this proposal: {attempt.tradeoffs}</p>}
         <p className="text-zinc-400">The estimate is not a guaranteed actual-cost ceiling. Your approval authorizes only this exact saved attempt, keeps your normal thresholds unchanged, and resumes the original request without repeating settled calls.</p>
         <div className="flex flex-wrap gap-3">
-          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === attempt.id ? 'Processing…' : 'Approve selected model once'}</button>
-          {attempt.provider !== 'runpod' && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Review reduced-cost proposal</button>}
+          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-2 font-semibold text-zinc-950 disabled:opacity-50">{busy === attempt.id ? 'Processing…' : attempt.preview.ownerApprovalRequired === 'selected_model_uncached' ? 'Authorize selected model at uncached rate' : 'Approve selected model once'}</button>
+          {attempt.provider !== 'runpod' && <button type="button" disabled={Boolean(busy)} onClick={() => void reviewReducedCost(attempt)} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Review reduced-cost proposal</button>}
           <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="rounded border border-white/25 px-3 py-2 disabled:opacity-50">Cancel</button>
         </div>
+        {reducedChoicesFor(attempt)}
       </div>)}
       {error && <p role="alert" className="text-amber-200">{error}</p>}
       {refreshError && <p role="alert" className="text-amber-200">{refreshError} Refresh to verify the current proposal.</p>}
@@ -224,7 +316,44 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     <section className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Daily usage</h3>
       <div className="flex flex-wrap gap-2"><label>Scope <select aria-label="Scope" className="rounded bg-zinc-900 p-1" value={scope} onChange={e=>setScope(e.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label><button type="button" className="underline" onClick={openSettings}>Budget & timezone</button><button type="button" className="underline" onClick={()=>void refresh()}>Refresh</button></div>
-      {daily ? <div className="space-y-1"><p>Today <strong>{displayedCost(daily.totals)}</strong>{BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && ' including infrastructure estimate'}</p><p>Pending {dollars(daily.totals.pendingExposureMicrousd)}</p><p>Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p><p><Tokens totals={daily.totals}/></p>{daily.totals.estimatedInfrastructureMicrousd !== '0' && <p><InfrastructureEstimate totals={daily.totals}/></p>}{daily.providers.map(provider=><p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div> : <p>{error || refreshError || "Loading usage…"}</p>}
+      {daily ? <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2" aria-label="Daily spending summary">
+          {[
+            { label: 'Spent', amount: (BigInt(daily.totals.estimatedCostMicrousd) + BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0')).toString() },
+            { label: 'Pending', amount: daily.totals.pendingExposureMicrousd },
+            { label: 'Uncertain', amount: daily.totals.uncertainExposureMicrousd },
+          ].map(item => <div key={item.label} className="min-w-0 rounded-lg bg-zinc-900 px-2 py-2">
+            <p className="text-[11px] text-zinc-400">{item.label}</p>
+            <p className="text-sm font-semibold tabular-nums text-white">{cents(item.amount)}</p>
+          </div>)}
+        </div>
+        <div className="space-y-2" aria-label="Usage by provider">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] gap-2 border-b border-white/10 pb-1 text-[11px] text-zinc-400">
+            <span>Provider</span><span className="text-right">In / Out</span><span className="text-right">Cost</span>
+          </div>
+          {daily.providers.map(provider => <div key={provider.provider} className="group relative">
+            <button type="button" aria-label={`Show model usage for ${provider.provider}`} className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-center gap-2 rounded py-1 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400" >
+              <span className="min-w-0 truncate capitalize text-zinc-200">{provider.provider}</span>
+              <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{provider.provider === 'runpod' ? 'Infrastructure' : summaryTokens(provider)}</span>
+              <span className="whitespace-nowrap text-right font-medium tabular-nums text-white">{cents((BigInt(provider.estimatedCostMicrousd) + BigInt(provider.estimatedInfrastructureMicrousd ?? '0')).toString())}{provider.unknownCostCount > 0 ? '*' : ''}</span>
+            </button>
+            <div role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-50 mb-1 hidden w-[min(340px,calc(100vw-32px))] max-w-none rounded-lg border border-white/20 bg-zinc-950 p-3 text-zinc-200 shadow-2xl group-hover:block group-focus-within:block">
+              <p className="mb-2 font-semibold capitalize">{provider.provider} · model usage</p>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-2">
+                <span className="text-zinc-400">Model</span><span className="text-right text-zinc-400">In / Out</span><span className="text-right text-zinc-400">Cost</span>
+                {daily.models.filter(model => model.provider === provider.provider).map(model => <div key={JSON.stringify([model.provider,model.model,model.category])} className="col-span-3 grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-3">
+                  <span className="min-w-0 break-words">{model.model}<span className="block text-[10px] text-zinc-500">{model.category}</span></span>
+                  <span className="whitespace-nowrap text-right tabular-nums text-zinc-400">{model.provider === 'runpod' ? 'Infrastructure' : summaryTokens(model)}</span>
+                  <span className="whitespace-nowrap text-right tabular-nums">{cents((BigInt(model.estimatedCostMicrousd) + BigInt(model.estimatedInfrastructureMicrousd ?? '0')).toString())}{model.unknownCostCount > 0 ? '*' : ''}</span>
+                </div>)}
+              </div>
+              {provider.unknownCostCount > 0 && <p className="mt-2 text-amber-200">* Some model costs remain unconfirmed.</p>}
+            </div>
+          </div>)}
+        </div>
+        {(daily.totals.unknownCostCount > 0 || daily.totals.missingInputCount > 0 || daily.totals.missingOutputCount > 0) && <p className="text-[11px] text-amber-200">* Some costs or token counts are unconfirmed. Details below.</p>}
+        {BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && <p className="text-[11px] text-zinc-400">Includes estimated infrastructure cost; actual RunPod cost unconfirmed.</p>}
+      </div> : <p>{error || refreshError || "Loading usage…"}</p>}
       <details className="rounded border border-white/10 p-2"><summary className="cursor-pointer">Models, activity & earlier exposure</summary>
     {daily && <>
       <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {displayedCost(daily.totals)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
@@ -242,7 +371,11 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       </details>
     </section>
     {workNavigation}
-    {(snapshot?.pending.length || activeAttempts.length) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
+    {(snapshot?.pending.length || activeAttempts.length || snapshot?.recoverable) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
+      {snapshot?.recoverable && <div className="rounded border border-amber-400/30 p-2">
+        <p>The saved image request needs a same-model uncached quote before approval.</p>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void prepareSavedAuthorization(snapshot.recoverable!.requestId)} className="mt-2 rounded border border-amber-300 px-2 py-1 disabled:opacity-50">Prepare saved authorization</button>
+      </div>}
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
       <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
@@ -250,13 +383,13 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
         {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.uncertainAutoAuthorized ? 'auto-authorized within owner limits' : attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
         {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
-        {(attempt.state === 'reserved' || attempt.pollableRunpod) && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
+        {attempt.state === 'reserved' && !attempt.pollableRunpod && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
         {attempt.state === 'uncertain' && attempt.continuationActionable === true && <>
           <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
           {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
           {!attempt.continuationBlockedReason && !attempt.pollableRunpod && <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>}
         </>}
-        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
+        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Katie automatically checks the saved job without submitting another image analysis.</p>}
         {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
         {attempt.cancellationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
       </div>)}
@@ -266,13 +399,15 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
       <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
       <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
+       {attempt.preview.ownerApprovalRequired === 'selected_model_uncached' && <p className="mt-1 font-semibold text-amber-100">Explicit owner choice: use this same model and full prompt without unreviewed optional cache hints, at the quoted standard uncached rates. No call will be sent before approval.</p>}
       <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
       <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
       <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
       <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}</details>
       {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
-      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void reviewReducedCost(attempt)} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+      {reducedChoicesFor(attempt)}
     </div>)}
 
 
@@ -362,13 +497,13 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
         {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.uncertainAutoAuthorized ? 'auto-authorized within owner limits' : attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
         {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
-        {(attempt.state === 'reserved' || attempt.pollableRunpod) && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
+        {attempt.state === 'reserved' && !attempt.pollableRunpod && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
         {attempt.state === 'uncertain' && attempt.continuationActionable === true && <>
           <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
           {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
           {!attempt.continuationBlockedReason && !attempt.pollableRunpod && <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>}
         </>}
-        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
+        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Katie automatically checks the saved job without submitting another image analysis.</p>}
         {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
         {attempt.cancellationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
       </div>)}
@@ -384,7 +519,8 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>{!historyEnd && <button type="button" className="mt-2 underline disabled:opacity-50" disabled={historyBusy} onClick={()=>void olderActivity()}>Older activity</button>}</details>
       {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
-      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void reviewReducedCost(attempt)} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+      {reducedChoicesFor(attempt)}
     </div>)}
 
     </div>}

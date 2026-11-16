@@ -117,6 +117,16 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   const pdfs = fresh.filter(file=>file.mimeType === "application/pdf");
   if (!pdfs.length) return null;
   const none = (clarification?:string):FreshPdfSelection => ({fileIds:new Set(),...(clarification?{clarification}:{})});
+  // The chat composer uses "[file]" for a turn consisting solely of a fresh
+  // upload. It is an explicit current-file handoff, not an empty text query
+  // and never permission to retrieve similarly named historical sources.
+  // Scope the sole attached PDF by immutable fileId; ambiguous batches must
+  // ask which file instead of silently inspecting or dropping all content.
+  if (/^\s*\[(?:file|files)\]\s*$/i.test(message)) {
+    return fresh.length === 1 && pdfs.length === 1
+      ? {fileIds:new Set([pdfs[0].fileId])}
+      : none("Several files were attached. Which one should I inspect?");
+  }
   if (!isPdfContentRequest(message,[...pdfs,...saved].map(file=>file.fileName))) return none();
   const literal = resolvePdfNames(message,[...pdfs,...saved]);
   if (literal.clarification) return none(literal.clarification);

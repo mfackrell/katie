@@ -23,6 +23,8 @@ const fixture = `
 import { StructuredResponseView } from "@/components/structured-response-view";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
 import { ChatPanel } from "@/components/chat-panel";
+import { Profiler } from "react";
+function onChatRender() { const browser = window as typeof window & { __katieChatCommits?: number }; browser.__katieChatCommits = (browser.__katieChatCommits ?? 0) + 1; }
 import type { StructuredResponse } from "@/lib/chat/structured-response";
 const response = {
   version: 1, fallbackMarkdown: "Before. After.",
@@ -39,7 +41,10 @@ export default function PresentationAcceptancePage() {
   return <main className="mx-auto max-w-2xl p-6" data-testid="presentation-fixture">
     <StructuredResponseView response={response} ordered assets={[{ type: "image", url: "https://images.example.test/saved.png" }]} />
     <div data-testid="equation"><AssistantMarkdown>{${JSON.stringify(equationMarkdown)}}</AssistantMarkdown></div>
-    <div className="h-[700px]" data-testid="stream-chat"><ChatPanel actorId="11111111-1111-4111-8111-111111111111" chatId="22222222-2222-4222-8222-222222222222" activeActorName="Acceptance" activeChatTitle="Streaming regression" activeRepoId="" repoInjectionEnabled={false} /></div>
+    <div className="h-[700px]" data-testid="stream-chat">
+      <aside id="katie-live-status" data-testid="thinking-status-rail" />
+      <Profiler id="chat" onRender={onChatRender}><ChatPanel actorId="11111111-1111-4111-8111-111111111111" chatId="22222222-2222-4222-8222-222222222222" activeActorName="Acceptance" activeChatTitle="Streaming regression" activeRepoId="" repoInjectionEnabled={false} statusRailOpen /></Profiler>
+    </div>
   </main>;
 }
 `;
@@ -80,11 +85,28 @@ try {
     headless: true,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  let historySize = 0;
+  let stalledRecoveryFixture = false;
   await page.route("**/api/**", route => {
     const url = new URL(route.request().url());
     const body = route.request().postDataJSON();
     const payload = url.pathname === "/api/models" ? { openai: ["fixture"] }
-      : url.pathname === "/api/messages" ? { messages: [] }
+      : url.pathname === "/api/chat/status" && stalledRecoveryFixture ? {
+        requestId:url.searchParams.get("requestId"),
+        chatId:url.searchParams.get("chatId"),
+        status:"completed", assistantMessageId:"fixture-saved-reply", workflowStatus:"completed"
+      }
+      : url.pathname === "/api/messages" ? { messages: [
+        ...Array.from({ length: historySize }, (_, i) => ({
+          id: `fixture-message-${i}`, role: i % 2 === 0 ? "user" : "assistant",
+          content: i % 2 === 0 ? "Historical question "+i : "## Historical answer "+i+"\\n\\n".concat("Financial modeling and operations context. ".repeat(12)),
+          chatId: "22222222-2222-4222-8222-222222222222", createdAt: "2026-11-03T12:00:00.000Z"
+        })),
+        ...(stalledRecoveryFixture ? [
+          {id:"fixture-stalled-user",role:"user",content:"Recover a saved reply from stalled stream.",chatId:"22222222-2222-4222-8222-222222222222",createdAt:"2026-11-03T13:00:00.000Z"},
+          {id:"fixture-saved-reply",role:"assistant",content:"Recovered saved answer after the stream stopped.",model:"fixture",chatId:"22222222-2222-4222-8222-222222222222",createdAt:"2026-11-03T13:00:01.000Z"},
+        ] : []),
+      ] }
       : url.pathname === "/api/ui-state" ? { state: { key: body?.key ?? url.searchParams.get("key"), version: 1, value: body?.value ?? {} } }
       : url.pathname === "/api/version" ? { version: "fixture" } : {};
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
@@ -95,21 +117,34 @@ try {
     const original = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       if (new URL(input instanceof Request ? input.url : String(input), location.href).pathname !== "/api/chat") return original(input, init);
+      window.__lastChatPayload = JSON.parse(init.body);
       const encoder = new TextEncoder();
+      if (window.__forceStalledStream) {
+        window.__stalledChatCalls = (window.__stalledChatCalls ?? 0) + 1;
+        return new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(encoder.encode(JSON.stringify({type:"metadata",modelId:"fixture",provider:"openai"})+"\\n"));
+          controller.enqueue(encoder.encode(JSON.stringify({type:"delta",text:"A response began, then the transport stalled."})+"\\n"));
+          init?.signal?.addEventListener("abort",() =>
+            controller.error(new DOMException("Verified saved reply supersedes lost stream","AbortError")),{once:true});
+          // No close: server persistence and settlement occur independently.
+        }}), {headers:{"content-type":"application/x-ndjson"}});
+      }
       return new Response(new ReadableStream({ start(controller) {
         const emit = value => controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
         emit({ type: "metadata", provider: "openai", modelId: "fixture" });
         emit({ type: "delta", text: "Streaming first part. " });
         window.__finishPresentationStream = () => {
-          emit({ type: "content", provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
+          window.__fixtureSavedMessageCounter = (window.__fixtureSavedMessageCounter ?? 0) + 1;
+          emit({ type: "content", messageId: "55555555-5555-4555-8555-" + String(window.__fixtureSavedMessageCounter).padStart(12, "0"), provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
             version: 1, fallbackMarkdown: "Streaming first part. Final answer.", blocks: [
               { type: "markdown", text: "Streaming first part. " },
               { type: "metric", label: "Stream complete", value: "Ready" },
               { type: "markdown", text: "Final answer." },
             ],
           } });
-          controller.close();
+          // Keep the HTTP stream open to prove saved content is visible before final_answer or EOF.
         };
+        window.__closePresentationStream = () => controller.close();
       } }), { headers: { "content-type": "application/x-ndjson" } });
     };
   });
@@ -145,19 +180,120 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   const mobile = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   if (mobile.width > mobile.viewport + 20) throw new Error("Mobile presentation overflows: " + JSON.stringify(mobile));
+  // Qualify the central conversation progress UI at desktop width, where the
+  // separate right-side status rail is also present in the real workspace.
+  await page.setViewportSize({ width: 1280, height: 860 });
   const composer = page.getByPlaceholder("Ask Acceptance…");
   await composer.fill("Exercise the gated stream.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  const preview = page.getByLabel("Streaming assistant response", { exact: true });
+  const centralProgress = page.getByLabel("Katie response progress", { exact: true });
+  await centralProgress.waitFor();
+  const preview = centralProgress.getByLabel("Streaming assistant response", { exact: true });
   await preview.waitFor();
-  if (!(await preview.innerText()).includes("Streaming first part.")) throw new Error("Answer deltas are not rendered before completion");
+  if (!(await preview.innerText()).includes("Streaming first part.")) {
+    throw new Error("Streamed answer is missing from the central conversation progress bubble");
+  }
+  if (!(await centralProgress.innerText()).includes("Katie is responding")) {
+    throw new Error("Central progress stage was not updated when answer streaming began");
+  }
+  const rightRail = page.getByTestId("thinking-status-rail");
+  if ((await rightRail.innerText()).includes("Streaming first part.")) {
+    throw new Error("The small right-side Thinking rail duplicated the answer");
+  }
   if (await page.getByText("Stream complete", { exact: true }).count()) throw new Error("Uncommitted visual rendered during stream");
   if (!(await page.getByRole("button", { name: "Cancel", exact: true }).isVisible())) throw new Error("Stream completed before preview assertion");
   await page.evaluate(() => window.__finishPresentationStream());
-  await preview.waitFor({ state: "hidden" });
   await page.getByText("Stream complete", { exact: true }).waitFor();
+  // The saved answer becomes a normal message before final_answer and before the stream closes.
+  await centralProgress.waitFor({ state: "hidden" });
+  if (!(await page.getByRole("button", { name: "Cancel", exact: true }).isVisible())) throw new Error("Stream was prematurely settled after saved content");
+  if ((await page.getByText("Stream complete", { exact: true }).count()) !== 1) throw new Error("Saved content published twice");
+  await page.evaluate(() => window.__closePresentationStream());
   if ((await page.locator('[data-testid="stream-chat"]').innerText()).includes("<katie-presentation-v1>")) throw new Error("Internal presentation markup leaked");
-  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true }));
+
+  // Measure the real composer in Chromium, with React commits tracked by a
+  // Profiler around ChatPanel. The same text must survive draft persistence.
+  const probeInput = async label => {
+    const result = await page.evaluate(async () => {
+      const textarea = document.querySelector('textarea[placeholder="Ask Acceptance…"]');
+      if (!textarea) throw new Error("Composer missing");
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+      const runtime = window;
+      const beforeCommits = runtime.__katieChatCommits ?? 0;
+      const observerResults = [];
+      const observer = new PerformanceObserver(list => observerResults.push(...list.getEntries().map(entry=>entry.duration)));
+      try { observer.observe({ type: "longtask", buffered: false }); } catch {}
+      const durations = [];
+      let expected = textarea.value;
+      const characters = "Keystrokes must remain responsive even after long conversations.";
+      for (const char of characters) {
+        const before = performance.now();
+        expected += char;
+        nativeSetter.call(textarea, expected);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        if (textarea.value !== expected) throw new Error("Composer lost a keystroke before paint");
+        durations.push(performance.now() - before);
+      }
+      observer.disconnect();
+      const sorted = [...durations].sort((a,b)=>a-b);
+      return {
+        p95: sorted[Math.ceil(sorted.length*0.95)-1],
+        commits: (runtime.__katieChatCommits ?? 0) - beforeCommits,
+        strokes: characters.length,
+        longTasks: observerResults.length,
+        maxLongTask: Math.max(0,...observerResults),
+        text: expected,
+      };
+    });
+    if (result.p95 >= 50) throw new Error(label + " p95 typing latency exceeds 50ms: " + JSON.stringify(result));
+    if (result.commits > result.strokes * 2 + 4) throw new Error(label + " React commits per keystroke regressed: " + JSON.stringify(result));
+    if (!Number.isFinite(result.maxLongTask)) throw new Error(label + " invalid long task measurement");
+    return result;
+  };
+  await composer.fill("");
+  const shortTyping = await probeInput("short history");
+  await page.waitForTimeout(1000);
+  const recoveredDraft = await page.evaluate(() => sessionStorage.getItem("katie.draft.v1.22222222-2222-4222-8222-222222222222"));
+  if (recoveredDraft !== shortTyping.text) throw new Error("Debounced composer draft not persisted");
+  await page.reload();
+  // Saved draft restoration is asynchronous; verify eventual recovery rather
+  // than inspecting the initial empty textarea before hydration finishes.
+  await page.waitForFunction(expected =>
+    document.querySelector('textarea[placeholder="Ask Acceptance…"]')?.value === expected,
+    shortTyping.text,
+    { timeout: 10_000 },
+  );
+  historySize = 160;
+  await page.reload();
+  await page.getByText("Historical answer 159", { exact: false }).waitFor();
+  await composer.fill("");
+  const longTyping = await probeInput("160-message history");
+  await composer.fill("Quick Enter should send without waiting for draft debounce.");
+  await composer.press("Enter");
+  await page.getByLabel("Katie response progress", { exact: true }).waitFor();
+  const sent = await page.evaluate(() => window.__lastChatPayload?.message);
+  if (sent !== "Quick Enter should send without waiting for draft debounce.") throw new Error("Enter submitted stale composer text: " + sent);
+  await page.evaluate(() => { window.__finishPresentationStream(); window.__closePresentationStream(); });
+  await page.getByLabel("Katie response progress", { exact: true }).waitFor({state:"hidden"});
+  // Regression: a lost in-flight response stream must recover the exact
+  // persisted answer and terminal workflow, without a duplicate paid request.
+  stalledRecoveryFixture = true;
+  await page.evaluate(() => {
+    window.__forceStalledStream = true;
+    window.__stalledChatCalls = 0;
+  });
+  await composer.fill("Recover a saved reply from stalled stream.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByLabel("Katie response progress", {exact:true}).waitFor();
+  await page.getByText("Recovered saved answer after the stream stopped.",{exact:true}).waitFor({timeout:30_000});
+  await page.getByLabel("Katie response progress", {exact:true}).waitFor({state:"hidden",timeout:10_000});
+  const recoveredCopies=await page.getByText("Recovered saved answer after the stream stopped.",{exact:true}).count();
+  const stalledCalls=await page.evaluate(() => window.__stalledChatCalls ?? 0);
+  if(recoveredCopies!==1 || stalledCalls!==1) throw Error("Stalled stream recovery duplicate/missing reply: "+JSON.stringify({recoveredCopies,stalledCalls}));
+  if(await page.getByRole("button",{name:"Cancel",exact:true}).count()) throw Error("Recovered request left a stuck spinner or Cancel control");
+  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true, centralProgressStream: true, noRightRailDuplication: true, savedReplyRecovery:true, composerPerformance: { shortTyping, longTyping, persistedDraft: true, quickEnter: true } }));
+
 } finally {
   await cleanup();
 }

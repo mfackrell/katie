@@ -1,0 +1,161 @@
+{
+  "qualification": "nonbillable-real-source-three-repairs",
+  "baseline": "43345347f6ea2b55c42d36fda9356db8f102a32d",
+  "frozenAcceptance": "\nimport assert from 'node:assert/strict';\nimport {pathToFileURL} from 'node:url';\nconst api=await import(pathToFileURL(process.argv[2]).href);\nconst rows=[{cents:120},{cents:80},{cents:999,void:true}];\nconst checks=[\n ['total',()=>{assert.equal(api.total(rows),200);assert.equal(api.total([]),0);}],\n ['count',()=>{assert.equal(api.count(rows),2);assert.equal(api.count([]),0);}],\n ['largest',()=>{assert.equal(api.largest(rows),120);assert.equal(api.largest([]),0);}]\n];\nconst failures=[];for(const [id,run]of checks){try{run();}catch(error){failures.push(id+': '+error.message);}}\nconsole.log(JSON.stringify({pid:process.pid,failures}));\n",
+  "finalSource": "export const total = rows => rows.filter(r => !r.void).reduce((n,r) => n+r.cents,0);\nexport const count = rows => rows.filter(r => !r.void).length;\nexport const largest = rows => rows.filter(r => !r.void).reduce((n,r) => Math.max(n,r.cents),0);\n",
+  "checkpoints": [
+    "fca636d27ab8cfcb17f6cb08a1a37d55edb3abbd",
+    "1bd727a614202b81554bb57b6a10ad2e58de2501",
+    "0002178d3a0392f5cb758ec2d75dc939217423f3",
+    "55b54d3168e71384ec8c9ac59eae07a91ef311cc"
+  ],
+  "reviews": [
+    {
+      "head": "fca636d27ab8cfcb17f6cb08a1a37d55edb3abbd",
+      "phase": "review",
+      "verdict": "changes_requested",
+      "findings": "total: Expected values to be strictly equal:\n\n201 !== 200\n\ncount: Expected values to be strictly equal:\n\n3 !== 2\n\nlargest: Expected values to be strictly equal:\n\n999 !== 120\n",
+      "reviewedHeadSha": "fca636d27ab8cfcb17f6cb08a1a37d55edb3abbd",
+      "failures": [
+        "total: Expected values to be strictly equal:\n\n201 !== 200\n",
+        "count: Expected values to be strictly equal:\n\n3 !== 2\n",
+        "largest: Expected values to be strictly equal:\n\n999 !== 120\n"
+      ],
+      "pid": 45
+    },
+    {
+      "head": "1bd727a614202b81554bb57b6a10ad2e58de2501",
+      "phase": "final-review",
+      "verdict": "changes_requested",
+      "findings": "count: Expected values to be strictly equal:\n\n3 !== 2\n\nlargest: Expected values to be strictly equal:\n\n999 !== 120\n",
+      "reviewedHeadSha": "1bd727a614202b81554bb57b6a10ad2e58de2501",
+      "failures": [
+        "count: Expected values to be strictly equal:\n\n3 !== 2\n",
+        "largest: Expected values to be strictly equal:\n\n999 !== 120\n"
+      ],
+      "pid": 71
+    },
+    {
+      "head": "0002178d3a0392f5cb758ec2d75dc939217423f3",
+      "phase": "final-review",
+      "verdict": "changes_requested",
+      "findings": "largest: Expected values to be strictly equal:\n\n999 !== 120\n",
+      "reviewedHeadSha": "0002178d3a0392f5cb758ec2d75dc939217423f3",
+      "failures": [
+        "largest: Expected values to be strictly equal:\n\n999 !== 120\n"
+      ],
+      "pid": 98
+    },
+    {
+      "head": "55b54d3168e71384ec8c9ac59eae07a91ef311cc",
+      "phase": "final-review",
+      "verdict": "pass",
+      "findings": "All frozen acceptance assertions passed.",
+      "reviewedHeadSha": "55b54d3168e71384ec8c9ac59eae07a91ef311cc",
+      "failures": [],
+      "pid": 125
+    }
+  ],
+  "verifications": [
+    {
+      "passed": false,
+      "detail": "total: Expected values to be strictly equal:\n\n201 !== 200\n\ncount: Expected values to be strictly equal:\n\n3 !== 2\n\nlargest: Expected values to be strictly equal:\n\n999 !== 120\n",
+      "head": "fca636d27ab8cfcb17f6cb08a1a37d55edb3abbd"
+    },
+    {
+      "passed": false,
+      "detail": "count: Expected values to be strictly equal:\n\n3 !== 2\n\nlargest: Expected values to be strictly equal:\n\n999 !== 120\n",
+      "head": "1bd727a614202b81554bb57b6a10ad2e58de2501"
+    },
+    {
+      "passed": false,
+      "detail": "largest: Expected values to be strictly equal:\n\n999 !== 120\n",
+      "head": "0002178d3a0392f5cb758ec2d75dc939217423f3"
+    },
+    {
+      "passed": true,
+      "detail": "",
+      "head": "55b54d3168e71384ec8c9ac59eae07a91ef311cc"
+    }
+  ],
+  "trace": [
+    {
+      "iteration": 1,
+      "candidateHead": "1bd727a614202b81554bb57b6a10ad2e58de2501",
+      "sourceHash": "d22a396f241c3955a92a666250ecf347c023cf83",
+      "verification": {
+        "passed": false,
+        "detail": "count: Expected values to be strictly equal:\n\n3 !== 2\n\nlargest: Expected values to be strictly equal:\n\n999 !== 120\n",
+        "head": "1bd727a614202b81554bb57b6a10ad2e58de2501"
+      },
+      "review": {
+        "phase": "final-review",
+        "verdict": "changes_requested",
+        "findings": "count: Expected values to be strictly equal:\n\n3 !== 2\n\nlargest: Expected values to be strictly equal:\n\n999 !== 120\n",
+        "reviewedHeadSha": "1bd727a614202b81554bb57b6a10ad2e58de2501"
+      },
+      "outstandingFindings": [
+        "count: Expected values to be strictly equal:",
+        "3 !== 2",
+        "largest: Expected values to be strictly equal:",
+        "999 !== 120"
+      ],
+      "resolvedFindings": [
+        "total: Expected values to be strictly equal:",
+        "201 !== 200"
+      ],
+      "newFindings": [],
+      "reason": "repair_required"
+    },
+    {
+      "iteration": 2,
+      "candidateHead": "0002178d3a0392f5cb758ec2d75dc939217423f3",
+      "sourceHash": "939536ecc984d97ce32aee80f5b7c746bbe45bca",
+      "verification": {
+        "passed": false,
+        "detail": "largest: Expected values to be strictly equal:\n\n999 !== 120\n",
+        "head": "0002178d3a0392f5cb758ec2d75dc939217423f3"
+      },
+      "review": {
+        "phase": "final-review",
+        "verdict": "changes_requested",
+        "findings": "largest: Expected values to be strictly equal:\n\n999 !== 120\n",
+        "reviewedHeadSha": "0002178d3a0392f5cb758ec2d75dc939217423f3"
+      },
+      "outstandingFindings": [
+        "largest: Expected values to be strictly equal:",
+        "999 !== 120"
+      ],
+      "resolvedFindings": [
+        "count: Expected values to be strictly equal:",
+        "3 !== 2"
+      ],
+      "newFindings": [],
+      "reason": "repair_required"
+    },
+    {
+      "iteration": 3,
+      "candidateHead": "55b54d3168e71384ec8c9ac59eae07a91ef311cc",
+      "sourceHash": "324ed264fc32819dd418b77633c05e0032aaa9f3",
+      "verification": {
+        "passed": true,
+        "detail": "",
+        "head": "55b54d3168e71384ec8c9ac59eae07a91ef311cc"
+      },
+      "review": {
+        "phase": "final-review",
+        "verdict": "pass",
+        "findings": "All frozen acceptance assertions passed.",
+        "reviewedHeadSha": "55b54d3168e71384ec8c9ac59eae07a91ef311cc"
+      },
+      "outstandingFindings": [],
+      "resolvedFindings": [
+        "largest: Expected values to be strictly equal:",
+        "999 !== 120"
+      ],
+      "newFindings": [],
+      "reason": "verified"
+    }
+  ],
+  "paidInferenceCalls": 0
+}

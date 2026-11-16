@@ -4,6 +4,12 @@ import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/cont
 const test = (name: string, fn: () => Promise<void>) => nodeTest(name, () => runWithOrchestratorAccounting(fn));
 import assert from "node:assert/strict";
 import { ClaudeProvider } from "../lib/providers/claude-provider";
+import { decideResponsePolicy } from "../lib/chat/response-policy";
+import { emptyTaskProgress, type TaskProgressState } from "../lib/chat/task-progress";
+import { selectTaskProgressPrompt } from "../lib/chat/task-progress-prompt";
+import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
+import { getAdaptiveResponseCompositionInstruction } from "../lib/chat/adaptive-response-composition";
+import { readFileSync } from "node:fs";
 
 const baseParams = {
   name: "Katie",
@@ -288,3 +294,268 @@ for (const streaming of [false, true]) {
     } finally { globalThis.fetch = originalFetch; }
   });
 }
+
+test("captured first pass matches sent JSON", async () => {
+  const priorFetch = globalThis.fetch;
+  let sent: any;
+  let captured: any;
+  globalThis.fetch = (async (_url, init) => {
+    sent = JSON.parse(String(init?.body));
+    return jsonResponse({ content: [{ type: "text", text: "Ok." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const provider = new ClaudeProvider("test-key");
+    await provider.generate({
+      ...baseParams,
+      history: [{role:"user",content:"Hello"},{role:"assistant",content:"Hi"}],
+      providerPayloadCaptureTrace: {
+        actorId:"actor",chatId:"chat",requestId:"req",currentUserMessageId:"u2",
+        historySource:"stm",stmVersion:2,stmExchangeCount:1,stmLastAssistantId:"a1",
+        persistedLastCompletedAssistantId:"a1",stmMatchesPersistedTail:true,
+        historyTurns:[],recentPersistedTurns:[],excludedTurns:[],intermediateSummaryChars:0
+      },
+      onProviderSystemPrepared: async audit => { captured = audit.requestDiagnostic?.wireRequest; },
+    });
+    assert.deepEqual(captured, sent);
+    assert.equal(sent.messages.at(-1).content, baseParams.user);
+  } finally { globalThis.fetch = priorFetch; }
+});
+
+test("Claude requests only a final user-facing reply and no intermediate snippets", async () => {
+  const priorFetch = globalThis.fetch;
+  let system = "";
+  globalThis.fetch = (async (_url, init) => {
+    const payload = JSON.parse(String(init?.body)) as { system: string | Array<{ text: string }> };
+    system = typeof payload.system === "string"
+      ? payload.system
+      : payload.system.map(block => block.text).join("");
+    return jsonResponse({ content: [{ type: "text", text: "A direct answer." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const response = await new ClaudeProvider("test-key").generate(baseParams);
+    assert.equal(response.text, "A direct answer.");
+    assert.match(system, /Respond only with the final answer intended for the user/);
+    assert.doesNotMatch(system, /intermediate snippets can be safely shown in a live explainer UI/);
+  } finally { globalThis.fetch = priorFetch; }
+});
+
+test("actual Anthropic system payload changes only the style for personal conversation", async () => {
+  const previousFetch = globalThis.fetch;
+  const wirePayloads: Array<{ system: string | Array<{ text: string }>; messages: unknown[] }> = [];
+  const auditSystems: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    wirePayloads.push(JSON.parse(String(init?.body)) as { system: string | Array<{ text: string }>; messages: unknown[] });
+    return jsonResponse({ content: [{ type: "text", text: "A plain answer." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    // The same actor + global professional instructions are present in both
+    // outgoing requests; only responsePolicy.generationInstruction differs.
+    const actorAndGlobal = [
+      "Katie actor personality (unchanged).",
+      getDeliverableStandardInstruction(),
+      getAdaptiveResponseCompositionInstruction(),
+    ].join("\n\n");
+    const work = decideResponsePolicy({
+      message: "What does sponsor reporting mean?",
+      intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true,
+    });
+    const personal = decideResponsePolicy({
+      message: "I discovered I don't like being alone.",
+      intent: "social-emotional", responsePurpose: "conversation",
+    });
+    for (const choice of [work, personal]) {
+      await new ClaudeProvider("offline-test-key").generate({
+        ...baseParams,
+        cacheablePersona: actorAndGlobal,
+        persona: [actorAndGlobal, choice.generationInstruction].filter(Boolean).join("\n\n"),
+        user: "Fixture conversation message.",
+        onProviderSystemPrepared: async audit => { auditSystems.push(audit.systemMessages.join("\n")); },
+      });
+    }
+    assert.equal(wirePayloads.length, 2);
+    const systems = wirePayloads.map(payload => typeof payload.system === "string"
+      ? payload.system
+      : payload.system.map(part => part.text).join(""));
+    assert.deepEqual(auditSystems, systems);
+    assert.match(systems[0], /KATIE_DELIVERABLE_COMPLETION_STANDARD/);
+    assert.match(systems[1], /KATIE_DELIVERABLE_COMPLETION_STANDARD/);
+    assert.match(systems[0], /NEXT RESPONSE: a brief conversational answer or clarification/);
+    assert.match(systems[1], /Engage naturally rather than simply acknowledging or summarizing/);
+    assert.doesNotMatch(systems[1], /normally under 150 words|ask at most one necessary follow-up/);
+    assert.equal(systems[1].replace(personal.generationInstruction!, work.generationInstruction!), systems[0],
+      "Only the personal-conversation instructions may differ in the actual provider system payload");
+    assert.deepEqual(wirePayloads[0].messages, wirePayloads[1].messages);
+    const route = readFileSync("app/api/chat/route.ts", "utf8");
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("outbound provider system payload follows final personal response purpose, not router label", async () => {
+  const priorFetch = globalThis.fetch;
+  const sentSystems: string[] = [];
+  const auditedSystems: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    const payload = JSON.parse(String(init?.body)) as { system: string | Array<{ text: string }> };
+    sentSystems.push(typeof payload.system === "string" ? payload.system : payload.system.map(part => part.text).join(""));
+    return jsonResponse({ content: [{ type: "text", text: "A direct response." }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const base = [ "Actor instructions stay unchanged.", getDeliverableStandardInstruction(), getAdaptiveResponseCompositionInstruction() ].join("\n\n");
+    const cases = [
+      { message: "Hi Katie", intent: "general-text", responsePurpose: "conversation" },
+      { message: "Why did you respond that way?", intent: "assistant-reflection", responsePurpose: "deliverable" },
+      { message: "I don't like being alone.", intent: "social-emotional", responsePurpose: "deliverable" },
+      { message: "What does sponsor reporting mean?", intent: "general-text", responsePurpose: "conversation", hasPendingDeliverable: true },
+      { message: "Analyze the cash flow.", intent: "social-emotional", responsePurpose: "conversation" },
+    ] as const;
+    for (const fixture of cases) {
+      const decision = decideResponsePolicy(fixture);
+      await new ClaudeProvider("offline-test-key").generate({
+        ...baseParams,
+        cacheablePersona: base,
+        persona: [base, decision.generationInstruction].filter(Boolean).join("\n\n"),
+        user: fixture.message,
+        onProviderSystemPrepared: async audit => { auditedSystems.push(audit.systemMessages.join("\n")); },
+      });
+    }
+    assert.equal(sentSystems.length, cases.length);
+    assert.deepEqual(auditedSystems, sentSystems, "Captured provider audit must match outgoing system messages");
+    for (const i of [0, 1, 2]) {
+      assert.match(sentSystems[i], /Engage naturally rather than simply acknowledging/);
+      assert.doesNotMatch(sentSystems[i], /normally under 150 words/);
+    }
+    assert.match(sentSystems[3], /NEXT RESPONSE: a brief conversational answer or clarification/);
+    assert.doesNotMatch(sentSystems[4], /NEXT RESPONSE: a natural personal conversation/);
+    assert.ok(sentSystems.every(system => system.includes("Actor instructions stay unchanged.")));
+    const route = readFileSync("app/api/chat/route.ts", "utf8");
+    assert.match(route, /responsePurpose: responsePurposeHint, intent: resolvedRequestIntent/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
+
+test("Nov 3 nine-turn production routing replay sends only personal guidance on the Anthropic wire", async () => {
+  // Message content is privacy-safe paraphrase. The ordering, primary intent
+  // labels, Haiku handoffs, stale checkpoint, and observed instruction split
+  // are recovered from the Nov 3 production audit.
+  const turns = [
+    { message: "We adjusted how you respond. Can you just chat normally?", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "That is much better; I wanted you to start the conversation.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "I still have business tasks to do today. Right now we're chatting.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "It is another place to find projects. I am not sure if it is any good.", intent: "general-text", model: "claude-haiku-5-5" },
+    { message: "I have been working already. This chat is just a way to test conversational continuity.", intent: "general-text", model: "claude-haiku-5-5" },
+    { message: "Other agents are handling the testing. I just need normal conversation with you.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "The work is never really finished.", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "So what do you want to talk about?", intent: "social-emotional", model: "claude-sonnet-5" },
+    { message: "I used to raise two animals, and the breeding plan did not work out.", intent: "social-emotional", model: "claude-sonnet-5" },
+  ] as const;
+  const originalInstructionSelections = [
+    "personal", "personal", "restrictive", "restrictive", "restrictive",
+    "personal", "restrictive", "personal", "restrictive",
+  ];
+  assert.equal(originalInstructionSelections.filter(value => value === "personal").length, 4);
+  assert.equal(originalInstructionSelections.filter(value => value === "restrictive").length, 5);
+
+  const stale: TaskProgressState = {
+    ...emptyTaskProgress(),
+    projectContext: {
+      userMessageId: "old-synthetic-image-turn",
+      text: "Ok, fine. How about this one?\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n[redacted historical image observation]",
+    },
+    objective: { userMessageId: "old-conversation-turn", text: "A casual personal remark" },
+    lastUserIntent: "answer",
+    pending: [{ id: "old-q", assistantMessageId: "old-assistant", index: 0, text: "A historical question?" }],
+  };
+  const history: Array<{ id: string; role: "user" | "assistant"; content: string }> = [
+    { id: "seed-user", role: "user", content: "Can we just talk normally?" },
+    { id: "seed-assistant", role: "assistant", content: "Sure. What is on your mind?" },
+  ];
+  const actor = [
+    "Katie actor instructions remain unchanged.",
+    getDeliverableStandardInstruction(),
+    getAdaptiveResponseCompositionInstruction(),
+  ].join("\n\n");
+  const priorFetch = globalThis.fetch;
+  const sentSystems: string[] = [];
+  const auditedSystems: string[] = [];
+  const sentModels: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    const payload = JSON.parse(String(init?.body)) as {
+      model: string; system: string | Array<{ text: string }>;
+    };
+    sentModels.push(payload.model);
+    sentSystems.push(typeof payload.system === "string"
+      ? payload.system : payload.system.map(part => part.text).join(""));
+    return jsonResponse({
+      content: [{ type: "text", text: "An ordinary reply." }],
+      stop_reason: "end_turn",
+    });
+  }) as typeof fetch;
+
+  try {
+    const provider = new ClaudeProvider("offline-test-key");
+    for (const [index, fixture] of turns.entries()) {
+      // A bad same-project hint cannot resurrect this synthetic checkpoint.
+      const taskScope = selectTaskProgressPrompt({
+        message: fixture.message,
+        currentUserMessageId: "replay-user-" + index,
+        history,
+        progress: stale,
+        responsePurpose: "deliverable",
+        managedTask: false,
+        explicitProjectControl: false,
+        explicitSavedProjectReference: false,
+        pendingReviewContinuation: false,
+        projectRelation: "same_project",
+      });
+      assert.equal(taskScope.text, "", "Turn " + (index + 1) + ": no stale project");
+      const sourceLinkedPendingWork = Boolean(
+        stale.projectContext && stale.objective && stale.lastUserIntent === "answer" && taskScope.text
+      );
+      assert.equal(sourceLinkedPendingWork, false, "Turn " + (index + 1) + ": no false pending work");
+      const decision = decideResponsePolicy({
+        message: fixture.message,
+        intent: fixture.intent,
+        responsePurpose: "conversation",
+        hasPendingDeliverable: sourceLinkedPendingWork,
+      });
+      assert.equal(decision.purpose, "conversation", "Turn " + (index + 1));
+      assert.equal(decision.reason, fixture.intent === "general-text"
+        ? "contextual_personal_conversation" : "personal_conversation", "Turn " + (index + 1));
+      const result = await provider.generate({
+        ...baseParams,
+        modelId: fixture.model,
+        cacheablePersona: actor,
+        persona: [actor, taskScope.text, decision.generationInstruction].filter(Boolean).join("\n\n"),
+        user: fixture.message,
+        history: history.map(({ role, content }) => ({ role, content })),
+        onProviderSystemPrepared: async audit => { auditedSystems.push(audit.systemMessages.join("\n")); },
+      });
+      assert.equal(result.text, "An ordinary reply.");
+      history.push({ id: "replay-user-" + index, role: "user", content: fixture.message });
+      history.push({ id: "replay-assistant-" + index, role: "assistant", content: "An ordinary reply." });
+    }
+    assert.equal(sentSystems.length, 9);
+    assert.deepEqual(auditedSystems, sentSystems,
+      "The wire payload must match the provider-system audit for every replayed turn.");
+    assert.deepEqual(sentModels, turns.map(turn => turn.model));
+    for (const [index, system] of sentSystems.entries()) {
+      assert.match(system, /NEXT RESPONSE: a natural personal conversation/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /NEXT RESPONSE: a brief conversational answer or clarification/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /normally under 150 words/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /KATIE_DURABLE_TASK_PROGRESS/, "Turn " + (index + 1));
+      assert.match(system, /Katie actor instructions remain unchanged/, "Turn " + (index + 1));
+    }
+    const route = readFileSync("app/api/chat/route.ts", "utf8");
+    assert.match(route, /const sourceLinkedPendingWork = Boolean/);
+    assert.match(route, /progress: reviewTaskProgress, responsePurpose: "deliverable"/);
+    assert.match(route, /hasPendingDeliverable: sourceLinkedPendingWork \|\| Boolean\(pendingReviewClarification\)/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});

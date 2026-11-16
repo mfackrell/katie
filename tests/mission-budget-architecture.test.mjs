@@ -68,7 +68,8 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
  const choices=[pick('anthropic','preferred'),pick('google','next-compatible')];
  const c={mission:{id:'mission',project_id:'project',project_kind:'specification',project_evidence:{projectProfile:'game'},objective:'Original game requirements',team:[{id:'agent',config:{research:true}}],deadline:new Date(Date.now()+600000).toISOString()},job:{id:'job',agent_id:'agent',role:'compose',instruction:'Write the complete specification',lease:'lease',lease_until:new Date(Date.now()+360000).toISOString(),payload:{}}};
  const load=modules({
-  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from:table=>{assert.equal(table,'benchmark_full_project_bindings');const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:null,error:null})};return q;}})},
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from:table=>{assert.ok(['benchmark_full_project_bindings','project_continuation_authorizations'].includes(table));const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:null,error:null})};return q;}})},
+  '@/lib/providers':{getAvailableProviders:()=>assert.fail('Legacy routing owns provider selection')},
   'openai':unusedOpenAI,'openai/helpers/zod':{zodTextFormat:()=>({})},
   '@/lib/projects/contract':{projectPlanSchema:{omit:()=>({})}},
   [resolve('scripts/project-game-rules.mjs')]:{GAME_RULE_CATEGORIES:['setup','action']},
@@ -76,6 +77,8 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
   '@/lib/orchestration/routing':{orchestrationChoices:async input=>{routes++;events.push({kind:'route',planning:input.planning});return choices;},orchestrationFailure:async()=> 'provider'},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    events.push({kind:name,...args});
+   if(name==='project_provider_mode')return false;
+   if(name==='developer_bound_mission_authority')return null;
    if(name==='reserve_mission_call'){
     if(!authorized||used+args.p_tokens>remaining){denials++;return false;}
     used+=args.p_tokens;reservations.push(args);perCall.set(args.p_call,{reserved:args.p_tokens,settled:false});return true;
@@ -105,7 +108,7 @@ test('timeout reservation stays charged but accurate next-provider counting leav
  assert.equal(result.provider,'google');assert.equal(h.inferences.length,2);
  assert.equal(h.reservations[0].p_tokens,10000+256+16000);
  assert.equal(h.used(),h.reservations[0].p_tokens+30,'unknown first call was not refunded');
- assert.equal(h.actual(),30);assert.equal(h.events[0].planning,true);
+ assert.equal(h.actual(),30);assert.equal(h.events.find(e=>e.kind==='route').planning,true);
 });
 
 test('one unaffordable candidate is skipped without inference; next compatible model may fit',async()=>{

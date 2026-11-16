@@ -58,6 +58,12 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const body = request.postData() ? request.postDataJSON() : null;
       const reply = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+      if (url.pathname === '/api/projects/lifecycle-approval') {
+        assert.equal(request.method(), 'GET');
+        assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
+        assert.equal(url.searchParams.get('chatId'), chatId);
+        return reply({ state: 'none' });
+      }
       if (url.pathname.startsWith('/api/standalone-accounting/')) {
         assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
         if (url.pathname.endsWith('/usage')) {
@@ -90,6 +96,15 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
             running = running.filter(attempt => attempt.id !== original.id);
             return reply({ attemptId: original.id, requestId: original.requestId, state: 'uncertain', cancellationRequested: true, heldExposureMicrousd: original.reservedMicrousd, message: 'Cancellation requested for remaining work. This attempt was already dispatched; its spending exposure remains held until provider usage is reconciled.' });
           }
+          if (body.action === 'preview_reductions') return reply({
+            attemptId:original.id,preparedHash:original.preparedHash,pricingVersion:original.pricingVersion,
+            budgetRevision:original.budgetRevision,reservedMicrousd:original.reservedMicrousd,
+            options:[
+              {strategy:'truncate_tokens',available:true,provider:original.provider,model:original.model,estimateMicrousd:'120000',inputTokens:200,outputAllowance:2048,changes:[{kind:'output',path:'max_output_tokens',before:4096,after:2048}],tradeoffs:['Some older context may be omitted. A smaller output allowance can shorten the answer.']},
+              {strategy:'switch_model',available:true,provider:original.provider,model:'gpt-4o-mini',estimateMicrousd:'100000',inputTokens:500,outputAllowance:4096,changes:[{kind:'model',path:'model',before:original.model,after:'gpt-4o-mini'}],tradeoffs:['The cheaper model may have weaker instruction following.']},
+            ],
+          });
+          if (body.action === 'reduce_cost') assert.equal(body.strategy,'truncate_tokens','The owner selected truncation rather than an implicit model switch');
           if (body.action === 'reduce_cost') proposals = proposals.map(attempt => attempt.id === original.id ? pending('revised', { requestId: original.requestId, reservedMicrousd: '120000', preparedHash: 'b'.repeat(64), pauseReason: 'cost_reduction_review', tradeoffs: 'Older context was omitted. A smaller output allowance can shorten the answer.', preview: { ...attempt.preview, outputAllowance: 2048 } }) : attempt);
           else { proposals = proposals.filter(attempt => attempt.id !== original.id); if (body.action === 'approve_once') running.push({ ...original, state: 'dispatched' }); }
           return reply({ attemptId: original.id, requestId: original.requestId, state: body.action === 'approve_once' ? 'reserved' : body.action === 'cancel' ? 'cancelled' : 'paused', ...(body.action === 'cancel' ? { cancellationRequested: true, message: 'Attempt cancelled before dispatch.' } : {}) });
@@ -99,7 +114,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
         const requestId = request.headers()['x-request-id']; resumes.push({ body, requestId });
         running = running.map(attempt => attempt.requestId === requestId && attempt.state === 'reserved' ? { ...attempt, state: 'dispatched' } : attempt);
         if (resumeMode === 'failed') return reply({ error: 'Saved attempt failed: exact fixture cause' }, 500);
-        if (resumeMode === 'completed') { const qwenPoll=running.some(attempt=>attempt.requestId===requestId && attempt.pollableRunpod); if (qwenPoll) {running=[]; infrastructureTotal='20000';} savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; const stages=qwenPoll?['Analyzing image with Qwen…','Qwen image analysis queued…','Qwen image analysis complete','Using saved Qwen observation']:[]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: [...stages.map(imageObservation=>({type:'metadata',imageObservation})),{ type: 'content', text: savedMessages[0].content }].map(chunk=>JSON.stringify(chunk)).join('\n') + '\n' }); }
+        if (resumeMode === 'completed') { const qwenPoll=running.some(attempt=>attempt.requestId===requestId && attempt.pollableRunpod); if (qwenPoll) {running=[]; infrastructureTotal='20000';} savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; const stages=qwenPoll?['Analyzing image with Qwen…','Qwen image analysis queued…','Qwen image analysis complete','Using saved Qwen observation']:[]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: [...stages.map(imageObservation=>({type:'metadata',imageObservation})),{ type: 'content', messageId: savedMessages[0].id, text: savedMessages[0].content }].map(chunk=>JSON.stringify(chunk)).join('\n') + '\n' }); }
         return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'accounting_pause', code: 'standalone_approval_required', message: 'Supporting work paused: per_request_threshold' }) + '\n' });
       }
       if (url.pathname === '/api/actors') return reply({ actors: [{ id: actorId, name: 'Fixture standalone', purpose: 'Browser verification', actorKind: 'standard' }] });
@@ -153,6 +168,12 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByLabel('Per request approval threshold (USD)').fill('0.05');
     await usage.getByRole('button', { name: 'Save settings' }).click();
     await usage.getByText('$0.25', { exact: true }).first().waitFor();
+    // Provider tooltip exposes only that provider's model statistics.
+    const providerTooltip = usage.getByRole('tooltip');
+    await usage.getByRole('button', { name: 'Show model usage for openai' }).hover();
+    await providerTooltip.waitFor();
+    assert.match(await providerTooltip.innerText(), /gpt-4o/);
+    await page.mouse.move(0, 0);
     // The same rail usage snapshot must make approval actionable in the chat,
     // without mounting a second usage reader or a second polling flight.
     const inlineApproval = page.getByRole('region', { name: 'Spending authorization required' });
@@ -202,14 +223,22 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(resumes.length, 1, 'cancelling running work must not resume or start another provider attempt');
     assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalsBeforeCancel, 'active cancellation never approves');
     await active.waitFor({ state: 'detached' });
-    await card('attempt-reduce').getByRole('button', { name: 'Reduce cost' }).click();
+    const reduceCard=card('attempt-reduce');
+    await reduceCard.getByRole('button', { name: 'Reduce cost' }).click();
+    const choices=reduceCard.getByRole('region',{name:'Reduced-cost choices'});
+    await choices.getByText('Truncate tokens',{exact:true}).waitFor();
+    await choices.getByText('Switch to a different model',{exact:true}).waitFor();
+    assert.match(await choices.innerText(),/gpt-4o-mini/);
+    assert.equal(resumes.length,1,'previewing alternatives cannot dispatch');
+    assert.equal(decisions.filter(d=>d.action==='reduce_cost').length,0,'preview alone cannot prepare or authorize');
+    await choices.getByRole('button',{name:'Prepare this proposal'}).first().click();
     await usage.getByText('Reduction tradeoffs:', { exact: false }).waitFor();
     assert.equal(resumes.length, 1, 'cost reduction cannot dispatch');
     assert.match(await card('attempt-revised').innerText(), /configured output allowance 2,048/);
     assert.equal(await card('attempt-revised').getByRole('button', { name: 'Approve once' }).count(), 1);
     await card('attempt-cancel').getByRole('button', { name: 'Cancel', exact: true }).click();
     await usage.getByText('Attempt cancelled before dispatch.', { exact: true }).waitFor();
-    assert.deepEqual(decisions.map(body => body.action), ['approve_once', 'cancel', 'reduce_cost', 'cancel']);
+    assert.deepEqual(decisions.map(body => body.action), ['approve_once', 'cancel', 'preview_reductions', 'reduce_cost', 'cancel']);
     assert.equal(resumes.length, 1, 'cancel cannot dispatch');
     await page.setViewportSize({ width: 390, height: 844 });
     await card('attempt-revised').getByRole('button', { name: 'Approve once' }).scrollIntoViewIfNeeded();
@@ -274,7 +303,10 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(running[0].state, 'uncertain'); assert.equal(running[0].reservedMicrousd, '3584');
     assert.equal(resumes.length, 4);
     // Usage details are directly accessible in the rail.
-    assert.match(await usage.innerText(), /Uncertain \$0.003584/);
+    const dailySpendTiles = usage.getByLabel('Daily spending summary');
+    assert.match(await dailySpendTiles.innerText(), /Uncertain\s+\$0\.00/);
+    // The approval receipt remains exact even though the overview rounds to cents.
+    assert.match(await active.innerText(), /Uncertain exposure accepted · \$0\.003584 retained/);
     // Usage remains available in the rail.
     running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
     // Usage details are directly accessible in the rail.
@@ -292,13 +324,19 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     // Completed Qwen work retains an estimate, rather than fabricated actuals.
     fail = false; proposals=[]; running=[{...pending('qwen'),provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',category:'attachment-observation',state:'dispatched',reservedMicrousd:'20000',pollableRunpod:true}];
-    await usage.getByRole('button', {name:'Refresh',exact:true}).click();
-    await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).waitFor();
-    assert.equal(await active.getByRole('button',{name:'Accept exposure & continue',exact:true}).count(),0);
-    assert.match(await active.innerText(),/polls that existing job and will not submit another/);
     resumeMode='completed';
-    await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).click();
-    await usage.getByRole('status').filter({hasText:'Saved work completed.'}).waitFor();
+    await usage.getByRole('button', {name:'Refresh',exact:true}).click();
+    // Polling is automatic, never a second user approval or a second submission.
+    await usage.getByRole('status').filter({hasText:'Qwen recovery checked automatically'}).waitFor();
+    assert.equal(await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).count(),0);
+    assert.equal(await active.getByRole('button',{name:'Accept exposure & continue',exact:true}).count(),0);
+    await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
+    await usage.getByRole('button', { name: 'Show model usage for runpod' }).focus();
+    await providerTooltip.waitFor();
+    assert.match(await providerTooltip.innerText(), /Qwen\/Qwen3-VL-8B-Instruct/);
+    assert.doesNotMatch(await providerTooltip.innerText(), /gpt-4o/);
+    // Precise infrastructure estimates remain available on explicit disclosure.
+    await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
     assert.equal(resumes.length,6,'checking saved Qwen work resumes once; no new approval decision');
     const imageStages=rail.getByRole('list',{name:'Image analysis stages',exact:true});
@@ -306,9 +344,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.match(await imageStages.innerText(),/Using saved Qwen observation/);
     assert.equal(await active.count(),0,'estimated completion is not pending or uncertain active work');
     const infraText=await usage.innerText();
-    assert.match(infraText,/Today \$0.27 including infrastructure estimate/);assert.match(infraText,/RunPod estimated infrastructure cost \$0.02/);
+    assert.match(infraText,/Spent\s+\$0\.27/);
+    assert.match(infraText,/Includes estimated infrastructure cost; actual RunPod cost unconfirmed/);
+    assert.match(infraText,/RunPod estimated infrastructure cost \$0\.02/);
     assert.doesNotMatch(infraText,/RunPod actual cost \$0.02/);
     await page.reload({waitUntil:'domcontentloaded'});
+    await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
+    await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
     assert.equal(resumes.length,6,'estimated infrastructure reload cannot dispatch');
     // A deterministic unsupported blocker cannot offer another unchanged retry.
@@ -416,7 +458,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     const newScope=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage'&&new URL(request.url()).searchParams.get('scope')==='all');
     await usage.getByLabel('Scope').selectOption('all');await newScope;
     holdUsage=false;heldUsage.splice(0).forEach(resolve=>resolve());
-    await usage.getByText(/In 999/).first().waitFor();
+    await usage.getByRole('button',{name:'Show model usage for openai'}).getByText('999 / 45 + ?',{exact:true}).waitFor();
     assert.equal(await usage.getByLabel('Scope').inputValue(),'all');
     pagedApprovals=true;proposals=Array.from({length:100},(_,i)=>pending('page-'+i));running=[];
     workPage={next:{before:'2026-10-28T10:00:00Z',beforeId:'44444444-4444-4444-8444-444444444444'}};
@@ -424,6 +466,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('button',{name:'Older active work',exact:true}).click();
     await usage.getByText(/attempt-older-paused/).first().waitFor();
     assert.equal(await usage.getByRole('button',{name:'Newest work',exact:true}).count(),1,'all-paused pages retain navigation');
+    assert.equal(await page.getByText('Continue the original development task', { exact: true }).count(), 0, 'ordinary conversation has no unrelated lifecycle proposal');
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {

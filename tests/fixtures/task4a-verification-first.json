@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "kind": "native-unverified-wip",
+  "verification": "unverified",
+  "taskId": "d0e41ff5-149e-4319-9e65-dcc605fb75da",
+  "projectId": "6d1c29f1-b31e-47a5-aabb-cbcf1326f388",
+  "trialId": null,
+  "authorityKind": "ordinary-developer",
+  "approvalId": "ac443164-faf7-45be-96f1-cc93dfc85346",
+  "grantId": "939d9d7a-e101-4ec7-8af5-1561f1319b5f",
+  "executionEpoch": 3,
+  "approvedScopeHash": "debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685",
+  "runId": "42443455661",
+  "runAttempt": "1",
+  "originalBaselineSha": "49c8a5f791e66c351436bb97839193b53d7a1cd1",
+  "baseSha": "49c8a5f791e66c351436bb97839193b53d7a1cd1",
+  "approvedScope": {
+    "hash": "debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685",
+    "allowedPaths": [
+      "app/project-pilots/task4a-preview-probe/"
+    ],
+    "contractHash": "e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e"
+  },
+  "phase": "implementation",
+  "sourceTreeSha": "26869fb977fd29b4f96652b9de3d47e0f0e0ffeb",
+  "completedCheckpointSha": "49c8a5f791e66c351436bb97839193b53d7a1cd1",
+  "reviewFindings": "",
+  "lastCompleted": {
+    "checkpointSha": "49c8a5f791e66c351436bb97839193b53d7a1cd1",
+    "modelCall": {
+      "requestKey": "1ebf357e-4075-4b31-8d17-55891468b102",
+      "operationId": "6d51c3f4-a019-444b-ab87-9d424f1b25e2",
+      "actualTokens": 13046,
+      "settlement": "settled"
+    }
+  },
+  "savedAt": "2026-11-08T03:38:53.302Z",
+  "checkpointSha": "d2610d94289a0ba5aafcaa60598cae7c21507cfe",
+  "ref": "refs/tags/katie-wip/d0e41ff5-149e-4319-9e65-dcc605fb75da/42443455661-1/5"
+}

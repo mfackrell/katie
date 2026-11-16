@@ -3,8 +3,11 @@ import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/cont
 // Adapter compatibility tests explicitly model the existing trusted orchestration scope.
 const test = (name: string, fn: (context: TestContext) => Promise<void>) => nodeTest(name, t => runWithOrchestratorAccounting(() => fn(t)));
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { GrokProvider } from "../lib/providers/grok-provider";
 import type { ChatGenerateParams } from "../lib/providers/types";
+import { uniqueMessagesById } from "../lib/memory/history-dedup";
+import type { Message } from "../lib/types/chat";
 
 const params: ChatGenerateParams = {
   name: "Katie", persona: "Be helpful.", summary: "", history: [],
@@ -286,4 +289,60 @@ test("opt-in structured frame observations bound tokens and disable SDK inferenc
   });
   await assert.rejects(new GrokProvider("offline-key").generate({name:"Katie",persona:"Return structured observations",summary:"",history:[],user:"Observe f-local",modelId:"grok-4-configured",images:["data:image/jpeg;base64,aW1hZ2U="],boundedFrameObservations:true}),/no automatic retry/);
   assert.equal(inference,1,"HTTP 500 must not multiply paid media attempts");
+});
+
+
+test("actual Grok HTTP request and provider audit never duplicate overlapping STM messages",async t=>{
+  const make=(id:string,role:"user"|"assistant",minute:number):Message=>({
+    id,role,chatId:"chat",
+    createdAt:new Date(Date.UTC(2026,10,2,9,minute)).toISOString(),
+    content:"unique-source-["+id+"]",
+  });
+  const prior=[make("p-u","user",0),make("p-a","assistant",1)];
+  const stm=[
+    make("s-u1","user",2),make("s-a1","assistant",3),
+    make("s-u2","user",4),make("s-a2","assistant",5),
+  ];
+  const staleCopies=stm.map(m=>({...m,content:"STALE-RECOVERED-COPY-["+m.id+"]"}));
+  const sourceHistory=uniqueMessagesById([...prior,...staleCopies,...stm]);
+  assert.equal(sourceHistory.length,prior.length+stm.length);
+  assert.equal(new Set(sourceHistory.map(m=>m.id)).size,sourceHistory.length);
+  const toWire=sourceHistory.map(({role,createdAt,content})=>({
+    role,content:"[Message timestamp: "+createdAt+"]\n"+content,
+  }));
+  const captured:string[][]=[];
+  let submitted:Array<{role:string,content:string}>=[];
+  t.mock.method(globalThis,"fetch",async (url:RequestInfo|URL,init?:RequestInit)=>{
+    const endpoint=String(url);
+    if(endpoint.endsWith("/models"))return json({data:[{id:"grok-4.7"}]});
+    assert.ok(endpoint.endsWith("/chat/completions"),"Only text-chat provider calls");
+    submitted=JSON.parse(String(init?.body)).messages;
+    return json({choices:[{message:{content:"Done"}}]});
+  });
+  const result=await new GrokProvider("offline-only").generate({
+    name:"Katie",persona:"Synthetic system context",summary:"Concise ITM",
+    history:toWire,user:"Current question",modelId:"grok-4.7",
+    requestIntent:"general-text",
+    onProviderSystemPrepared:async capture=>{captured.push(capture.systemMessages);},
+  });
+  assert.equal(result.text,"Done");
+  const systemContents=submitted.filter(m=>m.role==="system").map(m=>m.content);
+  assert.deepEqual(captured[0],systemContents,
+    "The captured provider system messages must match the outgoing request");
+  const systemText=systemContents.join("\n");
+  for(const original of [...prior,...stm]){
+    const marker="unique-source-["+original.id+"]";
+    assert.equal(systemText.split(marker).length-1,1,
+      "The actual Grok wire request repeated persisted message "+original.id);
+  }
+  assert.doesNotMatch(systemText,/STALE-RECOVERED-COPY/);
+  assert.equal(submitted.at(-1)?.role,"user");
+});
+
+test("chat route applies last-chance ID dedup before creating provider history",async()=>{
+  const route=readFileSync("app/api/chat/route.ts","utf8");
+  const collapse=route.indexOf("history = uniqueMessagesById(history);");
+  const serialized=route.indexOf("const historyForProvider = history.map(");
+  assert.ok(collapse>0&&serialized>collapse,
+    "The last-chance dedup must precede serialization for all four providers");
 });

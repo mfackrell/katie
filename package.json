@@ -55,7 +55,12 @@
     "katex": "^0.16.22",
     "@sparticuz/chromium": "148.0.0",
     "playwright-core": "1.63.0",
-    "sharp": "0.33.5"
+    "sharp": "0.33.5",
+    "@fontsource/arimo": "5.3.0",
+    "docx": "9.15.1",
+    "docx-preview": "0.4.1",
+    "jszip": "3.10.1",
+    "pdfjs-dist": "5.4.624"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

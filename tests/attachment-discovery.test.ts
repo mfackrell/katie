@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import sharp from "sharp";
 import * as XLSX from "xlsx";
-import { selectStoredAttachments, loadSelectedAttachmentSources, rankAttachmentCandidates } from "../lib/chat/attachment-selection";
+import { selectStoredAttachments, recentVerifiedVisualCorrection, loadSelectedAttachmentSources, rankAttachmentCandidates, parseAttachmentSelectorResponse } from "../lib/chat/attachment-selection";
 import { attachmentAccessContext, type ConversationAttachment } from "../lib/chat/attachment-continuity";
+import {buildKatieVisualEpisode} from "../lib/chat/visual-memory";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
 import { buildImageReference, imageFileFromDataUrl } from "../lib/uploads/image-reference";
 import { sampleAttachmentText } from "../lib/uploads/attachment-observations";
@@ -14,6 +16,102 @@ import type { Message } from "../lib/types/chat";
 const doc: ConversationAttachment = { id: "11111111-1111-4111-8111-111111111111", fileName: "plan.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", observedSummary: "A warehouse relocation proposal comparing Harbor and Ridge sites, with lease costs and moving schedules.", summaryCoverage: "full", createdAt: "2020-01-01" };
 const sheet: ConversationAttachment = { ...doc, id: "22222222-2222-4222-8222-222222222222", fileName: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", observedSummary: "Forecast with Revenue and Expenses sheets; quarter ending September 2026." };
 const full: FileReference = { fileId: doc.id, fileName: doc.fileName, mimeType: doc.mimeType, preview: "first page", extractedText: "Entire body, including the precise lease amount 92741." };
+
+
+test("production Nov 15: visual correction deterministically recalls the verified image and bypasses Gemini selector",async()=>{
+  const hash="a".repeat(64);
+  const observed:ConversationAttachment={
+    id:"020f021b-5d2b-4c15-ae3e-725e0c9d82fa",chatId:"current-chat",actorId:"katie-actor",
+    fileName:"katie-generated-1794765770361.jpeg",mimeType:"image/jpeg",conversationUsage:"uploaded",
+    createdAt:"2026-11-15T18:08:33Z",hasOriginal:true,
+    observedSummary:"A woman seated at a table with a broad, engaging smile, warm lighting and a laptop.",
+    summaryModel:"runpod:Qwen/Qwen3-VL-8B-Instruct",summaryCoverage:"full",
+    observationSourceHash:hash,observationAt:"2026-11-15T18:08:26Z"
+  };
+  const saved:ConversationAttachment={
+    ...observed,visualMemory:buildKatieVisualEpisode(observed,hash,"2026-11-15T18:08:26Z")
+  };
+  assert.ok(saved.visualMemory);
+  const earlierImage={...saved,id:"old-unrelated",fileName:"unrelated.jpeg"};
+  const history:Message[]=[
+    {id:"image-turn",chatId:"current-chat",role:"user",createdAt:"2026-11-15T18:08:55Z",content:"Assess the attractiveness of the person in this image",
+      attachments:[observed]},
+    {id:"bad-answer",chatId:"current-chat",role:"assistant",createdAt:"2026-11-15T18:09:35Z",content:"I can't assess a real person's attractiveness."}
+  ];
+  const text="it's not a real person katie. it's an image YOU created. are you retarded today or what?";
+  let selectorCalls=0;
+  const result=await selectStoredAttachments(text,[earlierImage,saved],history,
+    async()=>{selectorCalls++;throw Error("A verified immediate visual follow-up needs no Gemini selector");},
+    [],{currentChatId:"current-chat",activeProject:null});
+  assert.equal(selectorCalls,0);
+  assert.equal(result.method,"continuity");
+  assert.deepEqual(result.selections.map(x=>[x.attachment.id,x.mode]),[[saved.id,"summary"]]);
+  let reads=0;
+  const restored=await loadSelectedAttachmentSources(result,async()=>{reads++;throw Error("Unrequested pixel reread");});
+  assert.equal(reads,0);
+  const prompt=attachmentAccessContext([],result.selections.map(x=>x.attachment),[],restored.sourceIds);
+  assert.match(prompt,/KATIE_VISUAL_MEMORY/);
+  assert.match(prompt,/woman seated at a table/i);
+  assert.doesNotMatch(prompt,/old-unrelated/);
+  const route=readFileSync("app/api/chat/route.ts","utf8");
+  assert.ok(route.indexOf("recentVerifiedVisualCorrection(message,catalog,attachmentHistory,chatId)")>0);
+  assert.ok(route.indexOf("pdfMemoryDecision ?? verifiedVisualCorrection ??")>0);
+});
+
+test("visual correction binding rejects forged, ambiguous, stale, and cross-chat sources",()=>{
+  const hash="b".repeat(64);
+  const image:ConversationAttachment={
+    id:"image-a",chatId:"chat-a",actorId:"actor-a",fileName:"generated.jpeg",
+    mimeType:"image/jpeg",summaryModel:"runpod:Qwen/Qwen3-VL-8B-Instruct",
+    summaryCoverage:"full",observedSummary:"Portrait near a window",
+    observationAt:"2026-11-15T18:08:26Z",observationSourceHash:hash,hasOriginal:true
+  };
+  const saved={...image,visualMemory:buildKatieVisualEpisode(image,hash,"2026-11-15T18:08:26Z")};
+  const upload={...image,conversationUsage:"uploaded" as const};
+  const turn=(attachments:ConversationAttachment[],chatId="chat-a"):Message=>({
+    id:"image-turn",chatId,role:"user",createdAt:"2026-11-15T18:08:55Z",content:"Look at this photo",attachments
+  });
+  const assistant:Message={id:"reply",chatId:"chat-a",role:"assistant",createdAt:"2026-11-15T18:09:35Z",content:"I saw it."};
+  const text="it's an image you created, not a real person";
+  const pick=(catalog:ConversationAttachment[],history:Message[],chatId="chat-a")=>
+    recentVerifiedVisualCorrection(text,catalog,history,chatId);
+  assert.equal(pick([saved],[turn([upload]),assistant])?.selections[0]?.attachment.id,image.id);
+  assert.equal(pick([{...saved,observationSourceHash:"e".repeat(64)}],[turn([upload]),assistant]),null);
+  assert.equal(pick([{...saved,actorId:"different-actor"}],[turn([upload]),assistant]),null);
+  assert.equal(pick([saved],[turn([{...upload,conversationUsage:"contextual"}]),assistant]),null);
+  assert.equal(pick([saved],[turn([upload,{...upload,id:"another-photo"}]),assistant]),null);
+  assert.equal(pick([saved],[turn([upload]),assistant],"chat-b"),null);
+  assert.equal(pick([saved],[turn([upload]),{id:"new-topic",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"New topic: revenue"},
+    assistant]),null);
+  assert.equal(pick([saved],[turn([upload]),{id:"casual-chat",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"I had coffee this morning"},
+    assistant]),null,"an intervening unrelated exchange cannot refresh the image anchor");
+  assert.equal(pick([saved],[turn([upload]),{id:"correction",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"No, that's not what I saw"},
+    assistant])?.selections[0]?.attachment.id,image.id,"a continued image correction may retain the same source");
+  assert.equal(pick([saved],[turn([upload]),{id:"one",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:10:00Z",content:"Tell me a joke"},
+    {id:"two",chatId:"chat-a",role:"user",createdAt:"2026-11-15T18:11:00Z",content:"What's the weather?"}]),null);
+  assert.equal(recentVerifiedVisualCorrection("Help me write an email",[saved],[turn([upload]),assistant],"chat-a"),null);
+  assert.equal(recentVerifiedVisualCorrection("Compare both pictures",[saved],[turn([upload]),assistant],"chat-a"),null);
+  assert.equal(recentVerifiedVisualCorrection("Look again at the image",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"source",
+    "an explicit pixel reread must use the authorized source-observation path");
+});
+
+test("a blocked Gemini attachment selector is not mistaken for invalid selection JSON", async () => {
+  assert.throws(() => parseAttachmentSelectorResponse({
+    promptFeedback:{blockReason:'PROHIBITED_CONTENT'},
+    text:undefined,
+    candidates:[],
+  }),/SelectorProviderBlocked/);
+  assert.throws(() => parseAttachmentSelectorResponse({
+    candidates:[{finishReason:'MAX_TOKENS'}],text:'{}',
+  }),/SelectorOutputTruncated/);
+  assert.throws(() => parseAttachmentSelectorResponse({text:undefined}),/SelectorEmptyResponse/);
+  assert.deepEqual(parseAttachmentSelectorResponse({text:'{"selections":[]}'}),{selections:[]});
+  const decision=await selectStoredAttachments('Unrelated question', [doc], [], async()=>{
+    throw new Error('SelectorProviderBlocked');
+  });
+  assert.equal(decision.method,'fallback');
+  assert.equal(decision.selections.length,0,'blocked selector must not attach an unrelated old source');
+});
 
 test("semantic discovery finds an older document without a filename or recent attachment history", async () => {
   const result = await selectStoredAttachments("What was the relocation proposal about?", [doc, sheet], [], async prompt => {
@@ -344,4 +442,149 @@ test("malformed optional rationale never causes a valid selector choice to fall 
   assert.equal(selected.method, "summary-selector");
   assert.equal(selected.selections.length, 1);
   assert.equal(selected.rationale, undefined);
+});
+
+
+test("explicit recent pictures use the saved observation without invoking the blocked selector", async () => {
+  const older: ConversationAttachment = {
+    id: "11111111-1111-4111-8111-000000000021", fileName: "older-beach.jpg",
+    mimeType: "image/jpeg", chatId: "chat-images", actorId: "actor-a",
+    createdAt: "2026-11-01T13:00:00Z", conversationUsage: "uploaded",
+    observedSummary: "Older photograph of a mountain.", summaryCoverage: "full",
+  };
+  const latest: ConversationAttachment = {
+    ...older, id: "11111111-1111-4111-8111-000000000022", fileName: "latest-beach.jpg",
+    createdAt: "2026-11-02T16:05:00Z",
+    observedSummary: "The latest photograph shows a blue boat by a beach.",
+    summaryModel: "Qwen3-VL",
+  };
+  const crossChat = { ...older, id: "11111111-1111-4111-8111-000000000023",
+    fileName: "foreign.jpg", chatId: "different-chat" };
+  const history: Message[] = [
+    { id: "u1", chatId: "chat-images", role: "user", content: "[image]",
+      createdAt: "2026-11-01T13:00:00Z", attachments: [older] },
+    { id: "a1", chatId: "chat-images", role: "assistant", content: "I saw it.",
+      createdAt: "2026-11-01T13:01:00Z" },
+    { id: "u2", chatId: "chat-images", role: "user", content: "[image]",
+      createdAt: "2026-11-02T16:05:00Z", attachments: [latest] },
+    { id: "a2", chatId: "chat-images", role: "assistant", content: "I reviewed your photograph.",
+      createdAt: "2026-11-02T16:06:00Z" },
+    { id: "u3", chatId: "chat-images", role: "user", content: "Yes, that image.",
+      createdAt: "2026-11-02T16:09:00Z",
+      attachments: [{ ...latest, conversationUsage: "explicit-reference" }] },
+    { id: "a3", chatId: "chat-images", role: "assistant", content: "We discussed that.",
+      createdAt: "2026-11-02T16:10:00Z" },
+    { id: "u4", chatId: "chat-images", role: "user", content: "Continue our conversation.",
+      createdAt: "2026-11-02T16:19:00Z" },
+    { id: "a4", chatId: "chat-images", role: "assistant", content: "Sure.",
+      createdAt: "2026-11-02T16:20:00Z" },
+  ];
+  let calls = 0;
+  const blockedSelector = async () => {
+    calls++;
+    return parseAttachmentSelectorResponse({
+      promptFeedback: { blockReason: "PROHIBITED_CONTENT" },
+    });
+  };
+  const decision = await selectStoredAttachments(
+    "you can do better than that. tell me the story based on the pictures of us that i just sent you",
+    [crossChat, older, latest], history, blockedSelector, [],
+    { currentChatId: "chat-images", activeProject: null },
+  );
+  assert.equal(calls, 0, "explicit recent evidence must not require Gemini approval");
+  assert.equal(decision.method, "fallback");
+  assert.deepEqual(decision.selections.map(item => [item.attachment.id, item.mode]), [[latest.id, "summary"]]);
+  let sourceReads = 0;
+  const restored = await loadSelectedAttachmentSources(decision, async () => {
+    sourceReads++;
+    throw new Error("The original must not be reopened for a summary-level reference");
+  });
+  assert.equal(sourceReads, 0);
+  assert.equal(restored.references.length, 0);
+  const context = attachmentAccessContext([], decision.selections.map(item => item.attachment), [], restored.sourceIds);
+  assert.match(context, /latest photograph shows a blue boat/);
+  assert.doesNotMatch(context, /Older photograph of a mountain/);
+  assert.doesNotMatch(context, /foreign.jpg/);
+});
+
+test("plural image words, batches, precise inspections, and fresh uploads preserve scope", async () => {
+  const first: ConversationAttachment = {
+    id: "11111111-1111-4111-8111-000000000031", fileName: "sunrise.png",
+    mimeType: "image/png", chatId: "images-chat", actorId: "actor-a",
+    createdAt: "2026-11-02T16:00:00Z", conversationUsage: "uploaded",
+    observedSummary: "A sunrise over water.", summaryCoverage: "full",
+  };
+  const second = { ...first, id: "11111111-1111-4111-8111-000000000032",
+    fileName: "seagulls.png", observedSummary: "Three seagulls on a pier." };
+  const older = { ...first, id: "11111111-1111-4111-8111-000000000033",
+    fileName: "old-photo.png", createdAt: "2026-10-01T00:00:00Z" };
+  const history: Message[] = [
+    { id: "u-old", chatId: "images-chat", role: "user", content: "[image]",
+      createdAt: "2026-10-01T00:00:00Z", attachments: [older] },
+    { id: "a-old", chatId: "images-chat", role: "assistant", content: "Old picture.",
+      createdAt: "2026-10-01T00:01:00Z" },
+    { id: "u-new", chatId: "images-chat", role: "user", content: "[image] [image]",
+      createdAt: "2026-11-02T16:00:00Z", attachments: [first, second] },
+    { id: "a-new", chatId: "images-chat", role: "assistant", content: "New pictures.",
+      createdAt: "2026-11-02T16:01:00Z" },
+  ];
+  let calls = 0;
+  const selector = async () => { calls++; return { selections: [] }; };
+  for (const noun of ["pictures", "photos", "images", "picture", "photo", "image"]) {
+    const decision = await selectStoredAttachments(
+      "Tell me about the " + noun + " I just sent you",
+      [older, first, second], history, selector, [],
+      { currentChatId: "images-chat", activeProject: null },
+    );
+    assert.deepEqual(decision.selections.map(item => item.attachment.id), [first.id, second.id], noun);
+    assert.ok(decision.selections.every(item => item.mode === "summary"), noun);
+  }
+  assert.equal(calls, 0);
+  const precise = await selectStoredAttachments("Inspect the photos I just sent you",
+    [first, second], history, selector, [], { currentChatId: "images-chat", activeProject: null });
+  assert.deepEqual(precise.selections.map(item => item.mode), ["source", "source"]);
+  assert.equal(calls, 0);
+  const newlyAttached = await selectStoredAttachments("Describe the pictures",
+    [first, second], history, selector, ["new-upload.png"],
+    { currentChatId: "images-chat", activeProject: null });
+  assert.deepEqual(newlyAttached.selections, [], "new uploads take priority over saved pictures");
+  assert.equal(calls, 0);
+  const compare = await selectStoredAttachments("Compare the first and second pictures",
+    [first, second], history, selector, [], { currentChatId: "images-chat", activeProject: null });
+  assert.equal(compare.selections.length, 0, "ambiguous comparisons stay with the selector");
+  assert.equal(calls, 1);
+});
+
+test("blocked selector never treats cross-chat or automatically reused images as recently sent", async () => {
+  const foreign: ConversationAttachment = {
+    id: "11111111-1111-4111-8111-000000000041", fileName: "elsewhere.png",
+    mimeType: "image/png", chatId: "other-chat", actorId: "actor-a",
+    observedSummary: "An image from another conversation.", summaryCoverage: "full",
+    conversationUsage: "uploaded",
+  };
+  const history: Message[] = [
+    { id: "m", chatId: "current-chat", role: "user", content: "Let's discuss a new subject.",
+      createdAt: "2026-11-02T16:00:00Z" },
+  ];
+  const blocked = async () => {
+    throw new Error("SelectorProviderBlocked");
+  };
+  const query = "What do the pictures I just sent you show?";
+  const crossChat = await selectStoredAttachments(query, [foreign], history, blocked, [],
+    { currentChatId: "current-chat", activeProject: null });
+  assert.deepEqual(crossChat.selections, []);
+  assert.match(crossChat.clarification ?? "", /couldn't identify a saved image/i);
+  const auto = { ...foreign, chatId: "current-chat",
+    conversationUsage: "contextual" as const };
+  const autoHistory: Message[] = [
+    { id: "m2", chatId: "current-chat", role: "user", content: "Continue.",
+      createdAt: "2026-11-02T16:00:00Z", attachments: [auto] },
+  ];
+  const noAnchor = await selectStoredAttachments(query, [auto], autoHistory, blocked, [],
+    { currentChatId: "current-chat", activeProject: null });
+  assert.deepEqual(noAnchor.selections, [], "automatic reuse cannot become a fresh upload");
+  const newTopic = await selectStoredAttachments("Forget the pictures; let's discuss budgets",
+    [auto], autoHistory, async () => ({ selections: [] }), [],
+    { currentChatId: "current-chat", activeProject: null });
+  assert.equal(newTopic.selections.length, 0, "a topic change cannot inject an image");
 });

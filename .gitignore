@@ -14,3 +14,4 @@ tsconfig.tsbuildinfo
 supabase/.temp/
 
 .provider-test-dist/
+/test-artifacts/documents/

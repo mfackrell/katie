@@ -1,3 +1,4 @@
+import {assertCapacityRenewal} from './assert-capacity-renewal.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -47,6 +48,7 @@ export async function assertAmendmentSuccessor(db,rival,{am,g,project,mission,ta
  await db.query('update benchmark_dollar_exposures set exposure_microusd=exposure_microusd+(9999999-(select sum(exposure_microusd) from benchmark_dollar_exposures where account_id=$1)) where call_id=(select call_id from benchmark_dollar_exposures where account_id=$1 limit 1)',[account]);
  await db.query('set role service_role');await assert.rejects(db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',1000]),/dollar ceiling/);await db.query('rollback');await db.query('set role service_role');
  assert.deepEqual(await snapshot(),before);
+ if(process.env.KATIE_TEST_CAPACITY_RENEWAL==='1'){await assertCapacityRenewal(db,rival,{am,ng,project,mission,task,trial,owner,account});return;}
  // The new grant still uses the same atomic dollar meter and uncertain holds.
  const id=(await db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',1000])).rows[0].id;
  assert.equal((await db.query('select count(*)::int n from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].n,1);

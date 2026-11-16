@@ -20,14 +20,15 @@ test('uncertainty obeys existing owner limits atomically without changing exposu
   run('pg_ctl',['-D',data,'-l',join(dir,'log'),'-o',"-h 127.0.0.1 -k '' -p 55509",'-w','start']);started=true;
   const admin=await connect();
   await admin.query(readFileSync(new URL('./sql/standalone-accounting-schema.sql',import.meta.url),'utf8'));
-  for(const file of ['20261028193000_standalone_provider_attempt_ledger.sql','20261029153000_standalone_deleted_scope_history.sql','20261029170000_standalone_pricing_and_enrollment.sql','20261029190000_standalone_actor_authority.sql','20261029200000_standalone_uncertain_exposure_continuation.sql','20261029210000_standalone_qwen_infrastructure.sql','20261029224959_standalone_uncertainty_owner_limits.sql'])await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['20261028193000_standalone_provider_attempt_ledger.sql','20261029153000_standalone_deleted_scope_history.sql','20261029170000_standalone_pricing_and_enrollment.sql','20261029190000_standalone_actor_authority.sql','20261029200000_standalone_uncertain_exposure_continuation.sql','20261029210000_standalone_qwen_infrastructure.sql','20261029224959_standalone_uncertainty_owner_limits.sql','20261031230000_standalone_chat_uncertainty_owner_binding.sql'])await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const one=await connect('service_role');
   const owner=randomUUID(),actor=randomUUID(),chat=randomUUID();
   await admin.query("insert into actors values($1,'standard','standard')",[actor]);
   await admin.query("insert into chats(id,actor_id,title) values($1,$2,'cost policy')",[chat,actor]);
-  await admin.query('insert into self_tool_owner_grants(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
+  // Adult Katie has a verified chat owner binding but no self-tool execution grant.
   await rpc(one,'bind_scope',{p_owner:owner,p_actor:actor,p_chat:chat});
   const config=await rpc(one,'configure',{p_owner:owner,p_timezone:'America/Chicago',p_call:'500000',p_request:'2000000'});
+  assert.equal((await admin.query('select count(*) from self_tool_owner_grants where owner_id=$1 and actor_id=$2',[owner,actor])).rows[0].count,'0','ordinary chat has no privileged self-tool grant');
   await rpc(one,'register_pricing',{p_version:'policy-fixture',p_metadata:{fixture:true}});
   const wf=request=>({p_owner:owner,p_actor:actor,p_chat:chat,p_request:request,p_hash:'a'.repeat(64),p_body:{message:'original request'}});
   const input=(request,key,cost)=>({p_owner:owner,p_actor:actor,p_chat:chat,p_request:request,p_key:key,p_hash:'b'.repeat(64),p_payload:{model:'fixture'},p_pricing:'policy-fixture',p_provider:'fixture',p_model:'fixture',p_reserved:String(cost),p_category:key,p_estimate:{status:'estimated',reservationMicrousd:String(cost),requestHash:'b'.repeat(64),pricingVersion:'policy-fixture',estimatorVersion:'fixture'},p_estimator:'fixture',p_reason:key});
@@ -47,6 +48,7 @@ test('uncertainty obeys existing owner limits atomically without changing exposu
    assert.equal(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:a.id}),null,'no retransmission');
    await mark(a);assert.equal(await accepted(a),auto,'repeat marking does not recreate authorization');
    const count=await admin.query('select count(*) from standalone_uncertain_exposure_authorizations where attempt_id=$1',[a.id]);assert.equal(count.rows[0].count,auto?'1':'0');
+   if(auto){const rows=await admin.query('select grant_chat_id,grant_created_at from standalone_uncertain_exposure_authorizations where attempt_id=$1',[a.id]);assert.equal(rows.rows[0].grant_chat_id,null,'owner binding is sufficient');assert.equal(rows.rows[0].grant_created_at,null);}
    await rpc(one,'finish_workflow',{p_owner:owner,p_request:request,p_lease:lease.lease_token,p_status:'paused'});
    const resume=await rpc(one,'claim_workflow',{...wf(request),p_resume:true});
    assert.equal(Boolean(resume.claimed),auto);
@@ -77,6 +79,20 @@ test('uncertainty obeys existing owner limits atomically without changing exposu
   // Normal cumulative admission remains unchanged, including pending reservations.
   await dispatch('normal-request','existing',1750000);
   assert.equal((await rpc(one,'admit',input('normal-request','extra',400000))).pause_reason,'request_threshold');
+  // Deny cross-owner acceptance and immediately invalidate owner-binding
+  // authorization on scope revocation, even after a successful auto-accept.
+  const checkedRequest='scope-security';
+  await rpc(one,'claim_workflow',wf(checkedRequest));
+  const scoped=await dispatch(checkedRequest,'scope-proof',6539);
+  await mark(scoped);
+  assert.equal(await accepted(scoped),true);
+  await assert.rejects(rpc(one,'accept_uncertain_exposure',{p_owner:randomUUID(),p_attempt:scoped.id,p_revision:config.budget_revision,p_reserved:'6539'}),/ACCEPTANCE_DENIED/);
+  const unchanged=await admin.query('select state,reserved_microusd from standalone_provider_attempts where id=$1',[scoped.id]);
+  assert.equal(unchanged.rows[0].state,'uncertain');
+  assert.equal(unchanged.rows[0].reserved_microusd,'6539');
+  await admin.query('update standalone_owner_bindings set revoked_at=now() where owner_id=$1 and actor_id=$2 and chat_id=$3',[owner,actor,chat]);
+  assert.equal(await accepted(scoped),false,'revoked owner binding invalidates prior authorization');
+  assert.equal(await total(checkedRequest),'6539','revocation does not free or duplicate exposure');
  }finally{
   await Promise.all(connections.map(c=>c.end().catch(()=>{})));
   if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);

@@ -56,6 +56,7 @@ const continuitySelection = unique(findNodes(node => ts.isBinaryExpression(node)
   ts.isIdentifier(node.left) && node.left.text === 'taskProgress' &&
   ts.isIdentifier(node.right) && node.right.text === 'pdfProgress'), 'frozen task selection');
 const selectionBlock = blockBetween(statement(continuitySelection), statement(declaration('requiredReviewForRequest')));
+const documentSelection = code(statement(declaration('documentProduction')));
 const collaborationGate = blockBetween(statement(declaration('websiteResearchRequired')), statement(declaration('collaborationEnabledForRequest')));
 const generationParams = code(unique(findNodes(node => ts.isFunctionDeclaration(node) &&
   node.name?.text === 'buildGenerationParams'), 'buildGenerationParams function'));
@@ -124,7 +125,7 @@ function fixture() {
     return Response.json(matches.slice(0, Number(url.searchParams.get('limit') ?? matches.length)));
   };
   const modules = new Map();
-  const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
+  const globals = { benchmarkIntake:false, benchmarkRelay:false,imageFollowup:null, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
     // These protocol fixtures exercise route decisions; durable accounting and
     // authenticated resume are covered by the standalone workflow tests.
     workflowTimestamp: () => '2026-10-28T00:00:00.000Z',
@@ -147,10 +148,11 @@ function fixture() {
     return exports;
   };
   const helpers = Object.assign({}, ...[
-    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
+    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/task-progress-prompt', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
     'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
+  Object.assign(helpers, load('lib/documents/intent'));
   const history = [
     { id: 'old-task', role: 'user', content: OLD_TASK },
     { id: 'old-question', role: 'assistant', content: oldQuestion },
@@ -162,11 +164,12 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
   return vm.runInNewContext(compile(`(async () => {
     ${contextResolutionBlock}
     let taskProgress = pdfProgress;
+    ${documentSelection}
     ${selectionBlock}
     ${collaborationGate}
     return { taskProgress, reviewTaskProgress, pendingReviewClarification, verifyingSavedDraft,
       savedDraftOriginalTask, taskProgressContext, resumptionContext, responsePolicy,
-      requiredReviewForRequest, collaborationEnabledForRequest };
+      requiredReviewForRequest, collaborationEnabledForRequest, documentProduction };
   })()`), {
     ...f.globals, ...f.helpers, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     message, taskProgressUserMessageId: messageId, priorTaskProgress, history,
@@ -177,6 +180,7 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
     selectControlPlaneDecisionModels: () => [],
     resolveProjectTransition: f.globals.resolveProjectTransition ?? (async () => undefined),
     projectRelationHint: projectRelation, responsePurposeHint: responsePurpose,
+    explicitProjectControl: false, explicitSavedProjectReference: false,
     resolvedRequestIntent: 'general-text', resolvedRoutingIntentForReroute: { complexity: 'low' },
     reviewMode, attachments: [], images: [], storedWebsite: { fresh: false },
     timelineActive: false, mediaMemory: null, overrideProvider: null, overrideModel: null, hasVideoInput: false,
@@ -228,6 +232,8 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
   const state = await vm.runInNewContext(compile(`(async () => {
     ${generationParams}
     const visualContinuity = null; // The fixture exercises non-image review routing.
+    const imageGenerationRequested = false; // Mirror the real route's resolved image intent in this non-image route slice.
+    const creativeTextNarrativeRequest = false; // Non-image review fixture has no fictional narrative; mirror the production intent gate.
     ${createParams}
     ${enqueueDelta}
     const execute = ${runAttempt};
@@ -237,14 +243,15 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     ${code(statement(declaration('imageAssets')))}
     const assistantText = result.text || streamedText;
     const assistantPresentation = null;
-    ${code(statement(contentCall))}
     const assistantMessageId = taskProgressAssistantMessageId;
+    ${code(statement(contentCall))}
     ${completionBlock}
     return { result, taskProgress, escalatedConversation, reviewCompleted };
   })()`), {
     ...f.globals, ...f.helpers, ...selection,
-    message, messageForGeneration: generationMessage, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
+    message, messageForGeneration: generationMessage, selectedDocumentSource: null, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     taskProgressAssistantMessageId: 'current-answer', provider, providers: [provider], modelId: 'fixture-haiku',
+    ownerCaptureTrace: undefined,
     cacheablePersona: 'Katie persona', name: 'Katie', personaForGeneration: 'Katie persona', summary: '', historyForProvider: history,
     attachments: [], images: [], storedWebsite: { fresh: false, context: '', previousWebsiteEvidence: undefined },
     mediaMemory: null, timelineContext: '', hasVideoInput: false, creativeNarrativeRequest: false,
@@ -412,11 +419,13 @@ test('actual route resolves identity before historical attachment retrieval and 
   const events = [];
   const result = await vm.runInNewContext(compile(`(async () => {
     ${contextResolutionBlock}
+    ${code(statement(declaration('verifiedVisualCorrection')))}
     ${code(statement(declaration('attachmentDecision')))}
     let taskProgress = pdfProgress;
     // Simulate a later capability router incorrectly treating the generic question
     // as a new project after it has inspected a historical attachment.
     let projectRelationHint = 'new_project';
+    ${documentSelection}
     ${selectionBlock}
     return {taskProgress, projectRelationHint, attachmentDecision};
   })()`), {
@@ -443,9 +452,12 @@ test('actual route resolves identity before historical attachment retrieval and 
       assert.equal(context.activeProject.text, DISTRIBUTION_POSTING);
       return {method:'summary-selector', selections:[]};
     },
-    pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
+    imageFollowup: null, pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
     mediaMemory: null, savedVideoFollowUp: null,
+    recentVerifiedVisualCorrection:()=>null,
     responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
+    explicitProjectControl: false, explicitSavedProjectReference: false,
+    resolvedRoutingIntentForReroute: { complexity: 'low' },
     reviewMode: 'always', attachments: [], images: [], storedWebsite: {fresh:false},
   });
   assert.deepEqual(events, ['resolve-identity', 'select-historical-evidence']);
@@ -478,11 +490,26 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   const definition=name=>unique(findNodes(node=>
     ts.isFunctionDeclaration(node)&&node.name?.text===name ||
     ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>ts.isIdentifier(declaration.name)&&declaration.name.text===name),ast),`image helper ${name}`).getText(ast).replace(/^export\s+/,'');
-  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','imageObservationAsText'].map(definition).join('\n');
+  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','explicitFreshImageInspection','approvedCorrectionForImage','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
+  // The route executes the real versioned visual-memory verifier; introducing
+  // a new image helper must not cause these isolated production-code tests to
+  // substitute a placeholder for Katie's first-person provenance contract.
+  const visualSource=readFileSync('lib/chat/visual-memory.ts','utf8');
+  const visualAst=ts.createSourceFile('visual-memory.ts',visualSource,ts.ScriptTarget.Latest,true);
+  const visualDefinition=name=>unique(findNodes(node=>
+    ts.isFunctionDeclaration(node)&&node.name?.text===name ||
+    ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>ts.isIdentifier(d.name)&&d.name.text===name),visualAst),
+    `visual memory helper ${name}`).getText(visualAst).replace(/^export\s+/,'');
+  const visualDefinitions=['KATIE_VISUAL_EPISODE_VERSION','SOURCE_HASH','buildKatieVisualEpisode'].map(visualDefinition).join('\n');
   const events=[];
   const image={fileId:'profile-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
   const context=identityFixture(f,progress,history,[image],async()=>{throw Error('Ordinary profile evidence must not become project intake');},async()=>{throw Error('Legacy Gemini/Grok observation must not run before Qwen');});
-  Object.assign(context,{
+  // Load the actual source reconciliation module into this isolated route VM,
+  // not a copied/relaxed implementation of the production quality guard.
+  const reconciliationExports={};
+  vm.runInNewContext(compile(readFileSync('lib/uploads/image-evidence-reconciliation.ts','utf8')),
+    {exports:reconciliationExports,module:{exports:reconciliationExports},console:quietConsole});
+  Object.assign(context,reconciliationExports,{
     createHash:nativeRequire('node:crypto').createHash,
     getAccountingScope:()=>({kind:'standalone'}),
     message:'Write a playful opener for this profile',
@@ -499,6 +526,7 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
     },
   });
   const result=await vm.runInNewContext(compile(`(async()=>{
+    ${visualDefinitions}
     ${definitions}
     ${contextResolutionBlock}
     ${code(statement(declaration('attachments')))}
@@ -508,7 +536,8 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   assert.equal(result.retained.length,1);assert.equal(result.retained[0].hasOriginal,true);
   assert.equal(result.attachments[0].mimeType,'text/plain');assert.equal(result.attachments[0].imageDataUrl,undefined);
   assert.match(result.attachments[0].extractedText,/gardener and homesteader/);
-  assert.match(result.attachments[0].extractedText,/not raw image pixels/);
+  assert.match(result.attachments[0].extractedText,/Katie's own visual recollection/);
+  assert.match(result.attachments[0].extractedText,/not performing a new inspection of raw pixels/);
 });
 
 test('explicit project intake inspects fresh image and PDF evidence before binding the new project', async () => {
@@ -580,6 +609,7 @@ test('actual route restores original drafts on resume and subsequent same-projec
     node.expression.getText(routeAst).includes('!currentHistory.some') &&
     node.expression.getText(routeAst).includes('pdfProgress.projectContext')),
     'project history restoration');
+  const restorationBlock = blockBetween(statement(declaration('activeProjectSnapshot')), resumeNode);
   const first = {id:'project-a',role:'user',content:'Original application A requirements'};
   const draft = {id:'draft-a',role:'assistant',content:'Unfinished draft A'};
   const other = {id:'project-b',role:'user',content:'Different application B requirements'};
@@ -588,11 +618,12 @@ test('actual route restores original drafts on resume and subsequent same-projec
     const reads=[];
     const output = await vm.runInNewContext(compile(`(async()=>{
       let history=currentHistory;
-      ${code(resumeNode)}
+      ${restorationBlock}
       return history;
     })()`), {
       Map, Set, currentAgentTask:()=>null, contextClassification:{projectTransition:transition},
-      taskProgressUserMessageId:currentUserId,
+      taskProgressUserMessageId:currentUserId, message:'Give three relevant examples.',
+      explicitSavedProjectReference:true, requestId:'test-project-recovery',
       actorId:ACTOR_ID, chatId:CHAT_ID, currentHistory:recentHistory,
       pdfProgress:{projectContext:{userMessageId:'project-a'},projects:[{projectContext:{userMessageId:'project-a'},sourceChatId:'original-chat'}]},
       contextProjects:[{id:'project-a'},{id:'project-b'}],
@@ -617,6 +648,108 @@ test('actual route restores original drafts on resume and subsequent same-projec
   await assert.rejects(run('different-actor'),/does not belong to this actor/);
 });
 
+
+test('missing saved-project sources cannot crash ordinary chat, but explicit recovery discloses retained evidence', async () => {
+  const recovery = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst).includes('!currentHistory.some') &&
+    node.expression.getText(routeAst).includes('pdfProgress.projectContext')), 'project history restoration');
+  const recoveryBlock = blockBetween(statement(declaration('activeProjectSnapshot')), recovery);
+  const notice = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst) === 'savedProjectSourceWarning' &&
+    node.getText(routeAst).includes('SAVED PROJECT SOURCE RECOVERY NOTICE')), 'source loss disclosure');
+  const currentHistory = [
+    {id:'resumption',role:'user',content:'Return to application A'},
+    {id:'reply',role:'assistant',content:'Ready to work on it.'},
+  ];
+  const snapshot = {
+    sourceChatId:'source-chat',
+    projectContext:{userMessageId:'missing-anchor',text:'Retained original project brief'},
+    objective:{userMessageId:'missing-anchor',text:'Prepare a project deliverable'},
+  };
+  const run=async(message,{explicit=false,sourceChatMissing=false,ownerId='actor-fixture',sourceHistory=[],historyOverride,sourceChatId='source-chat'}={})=>{
+    const reads=[],warnings=[];
+    const suppliedHistory=historyOverride ?? currentHistory;
+    const result=await vm.runInNewContext(compile(`(async()=>{
+      let history=currentHistory;
+      ${recoveryBlock}
+      return {history,savedProjectSourceWarning};
+    })()`),{
+      Map,Set, actorId:'actor-fixture',chatId:'current-chat',requestId:'source-recovery-test',
+      message,currentHistory:suppliedHistory,taskProgressUserMessageId:'new-message',
+      explicitSavedProjectReference:explicit,contextClassification:null,
+      pdfProgress:{projectContext:snapshot.projectContext,objective:snapshot.objective,projects:[{...snapshot,sourceChatId}]},
+      classifyUserTurn:fixture().helpers.classifyUserTurn,
+      contextProjects:[{id:'missing-anchor'}],currentAgentTask:()=>null,
+      getChatById:async id=>{reads.push(['chat',id]);return sourceChatMissing?null:{actorId:ownerId};},
+      getMessages:async id=>{reads.push(['messages',id]);return sourceHistory;},
+      console:{warn:(...args)=>warnings.push(args)},
+    });
+    return {...plain(result),reads,warnings};
+  };
+  const casual=await run('Legs feel awesome');
+  assert.deepEqual(casual.reads,[],'Unrelated conversational text must not load a saved project');
+  assert.deepEqual(casual.history,currentHistory);
+  assert.equal(casual.savedProjectSourceWarning,null);
+  assert.deepEqual(casual.warnings,[]);
+  const recovered=await run('Give three relevant examples.',{
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(recovered.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.equal(recovered.history[0].id,'missing-anchor');
+  assert.equal(recovered.savedProjectSourceWarning,null);
+  // The project source must still restore even after the explicit resume turn
+  // has scrolled out of recent history; no four-turn time-to-live.
+  const longHistory=Array.from({length:7},(_,index)=>({id:'followup-'+index,role:'user',content:'Project conversation turn '+index}));
+  const longRunning=await run('List the requirements we agreed on',{
+    historyOverride:longHistory,
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(longRunning.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.equal(longRunning.history[0].id,'missing-anchor');
+  const sameChat=await run('Give three relevant examples.',{
+    historyOverride:longHistory,sourceChatId:'current-chat',
+    sourceHistory:[{id:'missing-anchor',role:'user',content:snapshot.projectContext.text}],
+  });
+  assert.deepEqual(sameChat.reads,[['chat','current-chat'],['messages','current-chat']]);
+  assert.equal(sameChat.history[0].id,'missing-anchor',
+    'A valid active project from the current chat must keep its older source');
+  const unrelated=await run('Write me a poem',{historyOverride:longHistory});
+  assert.deepEqual(unrelated.reads,[],
+    'A new unrelated deliverable must not restore a stale saved project');
+  const ordinaryAfterMany=await run('Legs feel awesome',{historyOverride:longHistory});
+  assert.deepEqual(ordinaryAfterMany.reads,[]);
+  assert.deepEqual(ordinaryAfterMany.history,longHistory);
+  const missing=await run('Resume the saved project',{explicit:true});
+  assert.deepEqual(missing.reads,[['chat','source-chat'],['messages','source-chat']]);
+  assert.deepEqual(missing.history,currentHistory,'Current conversation remains unchanged');
+  assert.equal(missing.savedProjectSourceWarning.sourceMessageId,'missing-anchor');
+  assert.equal(missing.savedProjectSourceWarning.retainedContext,snapshot.projectContext.text);
+  assert.equal(missing.savedProjectSourceWarning.retainedObjective,snapshot.objective.text);
+  assert.equal(missing.warnings.length,1);
+  assert.match(missing.warnings[0][0],/Saved project source unavailable/);
+  const repoAssignment=unique(findNodes(node=>ts.isBinaryExpression(node) &&
+    ts.isIdentifier(node.left) && node.left.text === 'personaForGeneration' &&
+    node.right.getText(routeAst).includes('repoGenerationContextLine')),
+    'repository context assignment');
+  assert.ok(notice.pos > repoAssignment.pos,'Source-loss disclosure must follow repository context assignment');
+  const disclosed=await vm.runInNewContext(compile(`(async()=>{
+    let personaForGeneration='Katie';
+    const personaWithRepoContext='Katie plus selected repository';
+    const repoGenerationContextLine='Repository metadata';
+    ${code(statement(repoAssignment))}
+    ${code(notice)}
+    return personaForGeneration;
+  })()`),{savedProjectSourceWarning:missing.savedProjectSourceWarning});
+  assert.match(disclosed,/Repository metadata/);
+  assert.match(disclosed,/original message missing-anchor/);
+  assert.match(disclosed,/may be incomplete/);
+  assert.match(disclosed,/Retained original project brief/);
+  const missingChat=await run('Resume the saved project',{explicit:true,sourceChatMissing:true});
+  assert.deepEqual(missingChat.reads,[['chat','source-chat']]);
+  assert.equal(missingChat.savedProjectSourceWarning.sourceChatId,'source-chat');
+  await assert.rejects(run('Resume the saved project',{explicit:true,ownerId:'other-actor'}),
+    /does not belong to this actor/,'Ownership mismatch must remain a hard failure');
+});
 
 test('actual route resumes a named saved project after ambiguity and carries the current examples request', async () => {
   const f = fixture();
@@ -710,4 +843,28 @@ test('actual POST delegates a minimal resume to the saved server workflow before
   const ordinary = await exports.POST(makeRequest({ actorId, chatId }));
   assert.equal(ordinary.status, 400, 'Ordinary requests still require their message schema');
   assert.deepEqual(calls, ['saved-workflow', 'ordinary-schema']);
+});
+
+test('actual route response-policy inputs ignore legacy companion pending obligations', async () => {
+  const f = fixture();
+  const legacy = {
+    ...f.helpers.emptyTaskProgress(),
+    projectContext: { userMessageId: 'casual-origin', text: 'a little pissy there eh katie' },
+    objective: { userMessageId: 'casual-origin', text: 'a little pissy there eh katie' },
+    pending: [{ id: 'casual-question:1', assistantMessageId: 'casual-question', index: 1,
+      text: 'What is bothering you?' }],
+    lastUserIntent: 'answer',
+  };
+  const selected = await select(f, {
+    message: 'yeah a little', messageId: 'casual-reply',
+    priorTaskProgress: legacy, history: [],
+    projectRelation: undefined, responsePurpose: 'conversation',
+  });
+  assert.equal(selected.taskProgress.projectContext, null);
+  assert.equal(selected.taskProgress.objective, null);
+  assert.deepEqual(plain(selected.taskProgress.pending), []);
+  assert.equal(selected.responsePolicy.purpose, 'conversation');
+  assert.equal(selected.responsePolicy.requiresSubstantiveProcessing, false);
+  assert.equal(selected.taskProgressContext, '');
+  assert.equal(selected.requiredReviewForRequest, false);
 });

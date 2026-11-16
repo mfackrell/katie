@@ -21,7 +21,7 @@ test('amendment dispatcher requires explicit approved row and verified counted r
 });
 test('amended dispatch acceptance uncertainty never resubmits',async()=>{const h=harness({dispatchError:true});await assert.rejects(h.run(),/Lost dispatch response/);assert.equal(await h.run(),false);assert.equal(h.calls.filter(x=>x==='workflow_dispatch').length,1);});
 test('exact deployed main source must contain counted provider, gateway and host capability',async()=>{
- const start=source.indexOf('export async function qualifiedDevelopmentAmendmentRelease('),end=source.indexOf('// Owner consent binds',start);
+ const start=source.indexOf('export async function qualifiedDevelopmentAmendmentRelease('),end=source.indexOf('export async function qualifiedCapacityRenewalRelease',start);
  const code=stripTypeScriptTypes(source.slice(start,end).replace('export async','async'));
  for(const wrong of ['none','main','provider','gateway','host']){
   const release='a'.repeat(40),texts=["export const NATIVE_INPUT_COUNT_VERSION='provider-input-count-v1'; export const NATIVE_MONETARY_CONTROL_VERSION='atomic-exposure-v1'",'countInputTokens','NATIVE_INPUT_COUNT_VERSION resourceAmendmentId'];
@@ -43,7 +43,7 @@ test('reconcile waits before amended dispatch and excludes every preserved prede
 test('owner API GET is read-only and amendment POST requires its explicit authorization and current plan',async()=>{
  const raw=readFileSync('app/api/benchmark/715/continuation/route.ts','utf8').replace(/^import .*;\n/gm,'').replace(/export /g,'');const code=stripTypeScriptTypes(raw);
  const calls=[],env={NEXT_PUBLIC_SUPABASE_URL:'https://production.test',NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic',VERCEL_ENV:'production',KATIE_OWNER_AUTH_USER_ID:'owner'};
- const context={process:{env},AbortSignal,NextResponse:{json:(body,opts)=>({body,status:opts.status})},config:{productionDatabaseUrl:env.NEXT_PUBLIC_SUPABASE_URL,productionUrl:'https://katie.test'},fetch:async()=>({ok:true,json:async()=>({id:'owner'})}),qualifiedAmendmentSuccessorRelease:async()=>null,qualifiedDevelopmentAmendmentRelease:async()=> 'a'.repeat(40),getSupabaseAdminClient:()=>({rpc:async(name,args)=>{calls.push({name,args});return args.p_approve&&args.p_plan_hash!=='c'.repeat(64)?{error:{message:'stale'}}:{data:{approved:Boolean(args.p_approve)}};}})};
+ const context={process:{env},AbortSignal,NextResponse:{json:(body,opts)=>({body,status:opts.status})},config:{productionDatabaseUrl:env.NEXT_PUBLIC_SUPABASE_URL,productionUrl:'https://katie.test'},fetch:async()=>({ok:true,json:async()=>({id:'owner'})}),qualifiedCapacityRenewalRelease:async()=>null,qualifiedAmendmentSuccessorRelease:async()=>null,qualifiedDevelopmentAmendmentRelease:async()=> 'a'.repeat(40),getSupabaseAdminClient:()=>({rpc:async(name,args)=>{calls.push({name,args});return args.p_approve&&args.p_plan_hash!=='c'.repeat(64)?{error:{message:'stale'}}:{data:{approved:Boolean(args.p_approve)}};}})};
  const api=vm.runInNewContext(code+';({GET,POST})',context),request=body=>({headers:{get:k=>k==='authorization'?'Bearer synthetic-owner':k==='origin'?'https://katie.test':null},json:async()=>body});
  assert.equal((await api.GET(request())).status,200);assert.equal(calls[0].name,'benchmark_dashboard_development_amendment');assert.equal(calls[0].args.p_approve,undefined);
  const body={approve:true,authorization:'full-development-resource-amendment-550000tokens-10usd-4hours',projectId:'11111111-1111-4111-8111-111111111111',planHash:'c'.repeat(64)};

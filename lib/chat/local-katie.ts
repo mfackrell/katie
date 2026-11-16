@@ -19,7 +19,8 @@ export type LocalKatieResponse = {
 
 const SYSTEM_PROMPT_REQUEST_PATTERNS = [
   // A stored system message and a system prompt are synonyms for this command.
-  /\b(?:exact|current|actual|full|show|give|display|print|reveal|what(?:'s| is))\b[^\n]{0,75}\bsystem\s+(?:prompt|message|instructions?)\b/i,
+  /\b(?:exact|current|actual|full|show|give|display|print|reveal)\b[^\n]{0,75}\bsystem\s+(?:prompt|message|instructions?)\b/i,
+  /\bwhat(?:'s| is)\s+(?:your|the|katie(?:'s)?)\s+(?:current\s+|actual\s+)?system\s+(?:prompt|message|instructions?)\s*\??\s*$/i,
   /\bsystem\s+(?:prompt|message|instructions?)\b[^\n]{0,60}\b(?:this|current|latest|previous|last)\s+(?:message|chat|actor|request|turn)\b/i,
   /\bwhat\s+(?:prompt|instructions|system\s+(?:prompt|message))\s+(?:are you|is katie)\s+(?:using|running|following|sending)\b/i,
   /\b(?:show|display|print|give|list|reveal|what(?:'s| is| are))\b[^\n]{0,80}\b(?:sent|sending|send|provided|passing)\b[^\n]{0,60}\b(?:the\s+)?(?:system\s+)?(?:message|prompt|instructions?|llm|model|provider|grok|gemini|claude|gpt)\b/i,
@@ -114,6 +115,12 @@ function editDistanceAtMostTwo(a: string, b: string): boolean {
 }
 
 export function isSystemPromptRequest(message: string): boolean {
+  // Diagnostic questions about prompt behavior are not disclosure requests.
+  // Check before broad inspection patterns; an explicit display instruction
+  // remains eligible through the existing matcher and typo fallback.
+  if (/^\s*(?:what(?:'s| is)\s+(?:wrong|incorrect|broken|causing|the problem)\b|why\s+(?:did|do|does|would|are|were)\b|(?:please\s+)?(?:review|analyze|analyse|diagnose|evaluate|assess|critique)\b)/i.test(message) &&
+      /\b(?:system\s+(?:prompt|message|instructions?)|your\s+instructions?|prompt\s+(?:behavior|design))\b/i.test(message) &&
+      !/\b(?:show|display|print|reveal|dump)\s+(?:me\s+)?(?:your|the|actual|exact|full)\s+(?:system\s+|provider\s+)?(?:prompt|messages?|instructions?)\b/i.test(message)) return false;
   if (SYSTEM_PROMPT_REQUEST_PATTERNS.some(pattern => pattern.test(message))) return true;
   // A bounded typo fallback only for explicit inspection commands. Never
   // reinterpret quoted examples, negations, or general discussion as commands.
@@ -138,6 +145,22 @@ export function isExplicitMemoryCorrection(message: string): boolean {
   if (/^\s*(?:please\s+)?(?:review|inspect|audit|evaluate|critique|assess)\b/i.test(message) &&
       /\b(?:website|site|landing page)\b|https?:\/\//i.test(message) &&
       !/\b(?:memory|remember(?:ed)?)\b/i.test(message)) return false;
+  // Only explicit instructions about Katie's stored memories may write LTM.
+  // A reflective question such as "would that be a failure of memory or a
+  // genuine change in identity?" must never become an authoritative correction
+  // merely because a generic change verb and "memory" appear nearby.
+  const namedMemoryTarget =
+    /\b(?:(?:your|katie(?:'s)?)\s+(?:(?:long[- ]term|short[- ]term|intermediate|saved|stored)\s+)*(?:memory|memories|recollections?)|(?:facts?|details?|statements?|information|entries?|records?)\s+you\s+(?:(?:have|had)\s+)?remember(?:ed)?|what\s+you\s+(?:(?:have|had)\s+)?(?:remember(?:ed)?|stored|saved)|(?:saved|stored)\s+(?:memory|memories|facts?|entries?|records?|details?))\b/i;
+  // Excluded targets do not authorize a write. Example: "fix the memory
+  // classifier bug, not Katie's stored memories" is a software request.
+  const affirmativeText = message.replace(
+    /\b(?:not|without|rather than|instead of)\s+(?:your|katie(?:'s)?)\s+(?:(?:long[- ]term|short[- ]term|intermediate|saved|stored|whole|entire)\s+)*(?:memory|memories)\b/gi,
+    "",
+  );
+  if (!namedMemoryTarget.test(affirmativeText)) return false;
+  const explicitInstruction =
+    /^\s*(?:(?:hey|hi)\s+)?(?:katie[,!:] ?\s*)?(?:(?:please|kindly)\s+)?(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|^\s*(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|\b(?:i\s+(?:want|need)\s+(?:you\s+)?to|we\s+(?:need|have)\s+to|you\s+(?:need|have|must|should)\s+to|please)\s+(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|[.!]\s*(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|clarify|amend|refine|adjust|reframe)\b|^\s*(?:your|katie(?:'s)?)\s+(?:long[- ]term\s+|short[- ]term\s+|intermediate\s+)?memor(?:y|ies)\s+is\s+(?:wrong|incorrect|inaccurate|outdated)\b/i;
+  if (!explicitInstruction.test(message)) return false;
   // Ordinary correction verbs require a nearby memory reference. Clarification
   // verbs require an OWNED memory reference, so a question such as "clarify
   // what you mean by memory architecture" is not treated as a write.

@@ -76,45 +76,24 @@ export async function selectRecoverableQwenJobs(
   return selected;
 }
 
+/** A service-only SECURITY DEFINER RPC returns at most 12 previously accepted,
+ * paused jobs. The accounting tables intentionally deny direct service_role
+ * SELECT, so direct PostgREST reads cannot recover or inspect these jobs. */
 async function listPendingQwenJobs():Promise<SavedQwenJob[]>{
-  const db=getSupabaseAdminClient();
-  const key=(job:Pick<SavedQwenJob,'owner_id'|'actor_id'|'chat_id'|'request_id'>)=>
-    [job.owner_id,job.actor_id,job.chat_id,job.request_id].join(':');
-  return selectRecoverableQwenJobs(
-    async(offset,size)=>{
-      const {data,error}=await db.from('standalone_provider_attempts')
-        .select('owner_id,actor_id,chat_id,request_id,provider_request_id,state')
-        .eq('provider','runpod').eq('model',QWEN_STILL_POLICY.model)
-        .eq('pricing_version',QWEN_STILL_POLICY.version).eq('state','dispatched')
-        .is('response_checkpoint',null)
-        .order('created_at',{ascending:false}).range(offset,offset+size-1)
-        .returns<SavedQwenJob>();
-      if(error)throw new Error('Saved RunPod attempt lookup failed.');
-      return data??[];
-    },
-    async(page)=>{
-      const requestIds=[...new Set(page.map(job=>job.request_id))];
-      if(!requestIds.length)return [];
-      const {data,error}=await db.from('standalone_workflows')
-        .select('owner_id,actor_id,chat_id,request_id,status,error')
-        .eq('status','paused').in('request_id',requestIds)
-        .returns<{owner_id:string;actor_id:string;chat_id:string;request_id:string;status:string;error:string|null}>();
-      if(error)throw new Error('Saved RunPod workflow lookup failed.');
-      const allowed=new Set((data??[])
-        .filter(row=>row.error?.includes('standalone_runpod_in_progress'))
-        .map(row=>key(row)));
-      return page.filter(job=>allowed.has(key(job)));
-    },
-  );
+  const {data,error}=await getSupabaseAdminClient().rpc<SavedQwenJob[]>('standalone_recoverable_qwen_jobs',{});
+  if(error)throw new Error('Bounded saved RunPod job lookup failed.');
+  return data??[];
 }
 
 async function eligibleSavedWorkflow(job:SavedQwenJob):Promise<boolean>{
-  const {data,error}=await getSupabaseAdminClient().from('standalone_workflows')
-    .select('status,error').eq('owner_id',job.owner_id).eq('actor_id',job.actor_id)
-    .eq('chat_id',job.chat_id).eq('request_id',job.request_id)
-    .maybeSingle<{status:string;error:string|null}>();
-  if(error)throw new Error('Saved RunPod workflow lookup failed.');
-  return data?.status==='paused'&&Boolean(data.error?.includes('standalone_runpod_in_progress'));
+  // Recheck the exact owner/actor/chat/request binding immediately before
+  // polling or resuming; a revoked owner scope must never authorize work.
+  const {data,error}=await getSupabaseAdminClient().rpc<string|null>(
+    'standalone_verified_cron_qwen_owner',
+    {p_actor:job.actor_id,p_chat:job.chat_id,p_request:job.request_id},
+  );
+  if(error)throw new Error('Saved RunPod workflow eligibility lookup failed.');
+  return data===job.owner_id;
 }
 
 async function inspectRunpodStatus(job:SavedQwenJob):Promise<QwenJobStatus>{

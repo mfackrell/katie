@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {runScenarios} from '../../scripts/project-browser-engine.mjs';
 import {modules} from './load-project-modules.mjs';
+import {installHistoricalProviderModeSchema} from './assert-project-organization-compatibility.mjs';
 
 // Only the Supabase wire transport is replaced. All lifecycle, assignment,
 // approval, claim, settlement and checkpoint RPCs execute installed PostgreSQL.
@@ -37,12 +38,14 @@ export async function verifyProjectLifecyclePostgres(db){
  await new Promise(done=>server.listen(0,'127.0.0.1',done));
  const origin='http://127.0.0.1:'+server.address().port;
  const old=Object.fromEntries(envKeys.map(k=>[k,process.env[k]]));
- delete process.env.PROJECT_PREVIEW_BYPASS_SECRET;
+ // Isolated synthetic edge authentication; never use a live bypass secret.
+ process.env.PROJECT_PREVIEW_BYPASS_SECRET='offline-fixture-edge-secret';
  Object.assign(process.env,{GITHUB_TOKEN:'offline-fixture',PROJECT_PREVIEW_REPOSITORIES:'owner/repo',PROJECT_PREVIEW_HOST_PATTERN:'^fixture-([a-z0-9]{9})\\.vercel\\.app$'});
  try{
   await db.query("update work_projects set status='paused' where status='running';update agent_missions set status='blocked' where status='running'");
   await db.query('reset role');
   // Metadata queried by current runtime; no authorization or lifecycle stubs.
+  await installHistoricalProviderModeSchema(db);
   await db.query("create table if not exists model_registry(provider_name text,model_id text,pricing_status text,pricing_input_per_1m numeric,pricing_output_per_1m numeric,pricing_verified_at timestamptz,is_active boolean)");
   await db.query('alter table benchmark_full_project_bindings add column trial_id uuid, add column benchmark_contract_hash text, add column baseline_sha text, add column model text');
   await db.query('set role service_role');
@@ -59,6 +62,26 @@ export async function verifyProjectLifecyclePostgres(db){
   let fault=null,assessmentRejected=false,latestHead='a'.repeat(40),browserCalls=0,parallelObserved=false;
   const api=transport(db,async(when,name,args)=>{
    events.push({when,name,args});
+   if(when==='before'&&name==='finish_work_project'&&args.p_action==='complete'&&!fired.has('assessment-binding-negatives')){
+    const current=await state();
+    for(const [path,value] of [
+     ['approvedScopeHash','f'.repeat(64)],
+     ['finalIntegratedEvidence,head','e'.repeat(40)],
+     ['finalIntegratedEvidence,taskId',randomUUID()],
+     ['finalIntegratedEvidence,verification,testedHeadSha','e'.repeat(40)],
+     ['finalIntegratedEvidence,verification,reviewedHeadSha','e'.repeat(40)],
+     ['preview,browserAcceptance,headSha','e'.repeat(40)],
+     ['approvedFinalContract',null]
+    ]){
+     await db.query('savepoint assessment_negative');
+     await db.query('update agent_missions set project_evidence=jsonb_set(project_evidence,$2::text[],$3::jsonb) where id=$1',[current.active_mission_id,path.split(','),JSON.stringify(value)]);
+     await assert.rejects(db.query('select finish_work_project($1,$2,$3,$4)',[args.p_id,args.p_lease,args.p_action,args.p_data]),/Final assessment is not bound/);
+     await db.query('rollback to savepoint assessment_negative');await db.query('release savepoint assessment_negative');
+     assert.notEqual((await state()).status,'completed');
+    }
+    fired.add('assessment-binding-negatives');
+   }
+
    if(when==='after'&&name==='save_project_development_dispatch'&&args.p_status==='ready'&&!fired.has('specialist-receipt')){fired.add('specialist-receipt');throw Error('503 controlled interruption after specialist receipt persisted');}
    if(when==='after'&&name==='commit_mission_work'&&args.p_status==='completed'){
     const row=(await db.query('select role from mission_assignments where id=$1',[args.p_id])).rows[0];
@@ -91,8 +114,17 @@ export async function verifyProjectLifecyclePostgres(db){
     browserCalls++;
     // Real preview verifier and real Chromium contract execution. Only provider
     // transport maps the signed fixture URL to an isolated local fixture server.
-    return previewModule.verifyDeployedPreview(preview,c,id,async()=>new Response('fixture'),
-      async contract=>runScenarios(contract,origin,{timeout:15000}));
+    return previewModule.verifyDeployedPreview(preview,c,id,async (url,options)=>{
+      assert.equal(new URL(url).origin,'https://fixture-abc123def.vercel.app');
+      assert.equal(options.redirect,'manual','Synthetic edge cannot follow redirects');
+      if(options.headers?.['x-vercel-protection-bypass']){
+       assert.equal(options.headers['x-vercel-protection-bypass'],'offline-fixture-edge-secret');
+       return new Response(null,{status:302,headers:{'set-cookie':'_vercel_jwt=offline-fixture-host-cookie; Path=/; Secure; HttpOnly; Max-Age=300',location:'/'}});
+      }
+      assert.equal(options.headers?.cookie,'_vercel_jwt=offline-fixture-host-cookie','Only host cookie may reach the app');
+      assert.equal(options.headers?.['x-vercel-protection-bypass'],undefined);
+      return new Response('Isolated synthetic application',{status:200});
+     },async contract=>runScenarios(contract,origin,{timeout:15000}));
    }},
   };
   // Fresh module instances below model process restarts; state lives only in PG.

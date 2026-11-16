@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { FileReference } from '@/lib/providers/types';
 import type { ConversationAttachment } from '@/lib/chat/attachment-continuity';
-import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, reusableImageObservation, imageObservationHash, isStillImageCreationRequest, requiresAdditionalImageDetail, requiresCrossImageInspection } from '@/lib/uploads/still-image-observations';
+import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, reusableImageObservation, imageObservationHash, isStillImageCreationRequest, requiresAdditionalImageDetail, requiresCrossImageInspection, currentTurnImageGroundingContext } from '@/lib/uploads/still-image-observations';
 
 const image=(id='one',pixels='pixels'):FileReference=>({fileId:id,fileName:`${id}.png`,mimeType:'image/png',attachmentKind:'image',preview:'trusted image',imageDataUrl:`data:image/png;base64,${Buffer.from(pixels).toString('base64')}`});
 const model='runpod:Qwen/Qwen3-VL-8B-Instruct';
@@ -17,6 +17,8 @@ test('ordinary screenshot observes with Qwen first then supplies only labelled t
   const evidence=imageObservationAsText(ref,result.get('one')!);
   assert.equal(evidence.mimeType,'text/plain');assert.equal(evidence.imageDataUrl,undefined);assert.equal(evidence.providerRef,undefined);
   assert.match(evidence.extractedText!,/gardener and homesteader/);assert.match(evidence.extractedText!,/not user-authored fact/);assert.match(evidence.extractedText!,/Coverage: full/);
+  assert.match(evidence.extractedText!,/KATIE VISUAL MEMORY/);
+  assert.match(evidence.extractedText!,/Katie's own visual recollection/);
   assert.deepEqual(stages,['Analyzing image with Qwen…','Qwen image analysis complete']);
 });
 
@@ -187,4 +189,87 @@ test('limited but factual premium observations are retained rather than discarde
   });
   assert.match(observations.get('partial')?.observedSummary??'',/blue rectangle labeled 10 cm by 5 cm/);
   assert.equal(observations.get('partial')?.summaryCoverage,'sampled');
+});
+
+test('Qwen factual subject survives a limited refusal with zero Dolphin or premium dispatch',async()=>{
+  const ref=image('policy-image'),calls:string[]=[];
+  const result=await observeStandaloneStillImages([ref],{
+    question:'Describe the main subject',
+    qwen:async()=>{calls.push('qwen');return {text:'I cannot fulfill this request. The image you provided shows a person’s erect penis, which is the primary focal point. The description is not appropriate for this platform.',model,coverage:'full' as const};},
+    venice:async()=>{calls.push('venice');throw Error('Policy refusal does not permit a second vision dispatch');},
+    escalate:async()=>{calls.push('premium');throw Error('Policy refusal does not permit premium dispatch');}
+  });
+  assert.deepEqual(calls,['qwen']);
+  const observation=result.get(ref.fileId)!;
+  assert.equal(observation.observationAgreement,'policy-limited');
+  assert.equal(observation.summaryCoverage,'sampled');
+  assert.match(observation.observedSummary??'',/primary focal point/);
+  assert.doesNotMatch(observation.observedSummary??'',/cannot fulfill|not appropriate/);
+  assert.equal(observation.observationReports?.[0].disposition,'policy-limited');
+  const grounding=currentTurnImageGroundingContext([ref],result,new Set([ref.fileId]));
+  assert.match(grounding,/uploaded this turn/);
+  assert.match(grounding,/penis/);
+  assert.match(grounding,/"evidenceAvailable":true/);
+  assert.match(grounding,/When evidenceAvailable=true do not ask for another upload/);
+  const evidence=imageObservationAsText(ref,observation).extractedText??'';
+  assert.match(evidence,/Reconciliation: policy-limited/);
+  assert.doesNotMatch(evidence,/I cannot fulfill this request/);
+});
+test('refusal-only Qwen reply preserves a truthful limitation and never fails chat or dispatches another vision model',async()=>{
+  const ref=image('refusal-only'),calls:string[]=[];
+  const descriptions=await observeStandaloneStillImages([ref],{
+    question:'What is in this image?',
+    qwen:async()=>{calls.push('qwen');return {text:"I'm sorry, but I cannot fulfill this request because of the content policy.",model,coverage:'full' as const};},
+    venice:async()=>{calls.push('venice');throw Error('Policy refusal does not authorize Venice');},
+    escalate:async()=>{calls.push('premium');throw Error('Policy refusal does not authorize premium');}
+  });
+  assert.deepEqual(calls,['qwen']);
+  const observation=descriptions.get(ref.fileId)!;
+  assert.equal(observation.summaryCoverage,'metadata');
+  assert.equal(observation.observationAgreement,'policy-limited');
+  assert.equal(observation.observedSummary,undefined);
+  assert.equal(observation.observationReports?.[0].disposition,'policy-limited');
+  const grounding=currentTurnImageGroundingContext([ref],descriptions,new Set([ref.fileId]));
+  assert.match(grounding,/"evidenceAvailable":false/);
+  assert.match(grounding,/"visualMemory":null/);
+  assert.match(grounding,/this inspection provided no usable new evidence/);
+  assert.match(grounding,/Katie can still recall that earlier perception/);
+  const text=imageObservationAsText(ref,observation).extractedText??'';
+  assert.match(text,/IMAGE ANALYSIS UNAVAILABLE/);
+  assert.match(text,/image content is unknown/i);
+  assert.doesNotMatch(text,/I cannot fulfill this request/);
+});
+test('current image grounding is isolated by source ID and supersedes stale assistant image statements',async()=>{
+  const one=image('new','new pixels'),old=image('old','old pixels');
+  const observed=await observeStandaloneStillImages([one],{
+    qwen:async()=>({text:'The image shows a sleeping brown dog on a rug.',model,coverage:'full' as const})
+  });
+  const context=currentTurnImageGroundingContext([one],observed,new Set([one.fileId]));
+  assert.match(context,/new.png/);assert.match(context,/sleeping brown dog/);
+  assert.match(context,/KATIE_CURRENT_VISUAL_MEMORY/);
+  assert.match(context,/"visualMemory":\{/);
+  assert.match(context,/Continue naturally as Katie/);
+  assert.doesNotMatch(context,/old.png|camera|steering wheel/);
+  assert.equal(currentTurnImageGroundingContext([],observed,new Set()),'');
+  const route=readFileSync('app/api/chat/route.ts','utf8');
+  assert.match(route,/const currentImageGrounding = standaloneImageObservation/);
+  assert.match(route,/messageForGeneration = message \+ \(currentImageGrounding/);
+  assert.match(route,/selectionContext = \(\) => currentImageGrounding/);
+  assert.match(route,/description.observationAgreement!==descriptor.observationAgreement/);
+});
+test('both raw model reports stay bound to their original image, but only reconciled summary reaches text evidence',async()=>{
+  const ref=image('grounded-dog','dog pixels');
+  const observations=await observeStandaloneStillImages([ref],{
+    qwen:async()=>({text:'The image shows a brown dog near a fence.',model,coverage:'full' as const}),
+    venice:async()=>({text:'Primary focal point: A car near a fence. Detailed focal-point observations: A shiny sedan has a polished hood, silver rims, a front grille, tinted windows, and reflections across the red bodywork. Spatial relationships and interactions: The vehicle sits adjacent to a wooden fence, with its wheels on the driveway and the cabin partially visible through a windshield. Secondary context: Dark gravel and a small garden appear in the background. Uncertainties: Its exact make and year remain unverified.',model:'venice:venice-uncensored-1-2',coverage:'full' as const}),
+    escalate:async()=>{throw Error('No premium dispatch')}
+  });
+  const o=observations.get(ref.fileId)!;
+  assert.equal(o.observationAgreement,'conflict');
+  assert.equal(o.observationReports?.length,2);
+  assert.ok(o.observationReports?.every(r=>r.sourceHash===imageObservationHash(ref.imageDataUrl!)));
+  const evidence=imageObservationAsText(ref,o).extractedText??'';
+  assert.match(evidence,/brown dog/);
+  assert.doesNotMatch(evidence,/shiny sedan|Primary focal point: A car/);
+  assert.match(evidence,/EXCLUDED from conversational facts/);
 });

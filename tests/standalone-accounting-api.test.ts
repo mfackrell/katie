@@ -32,6 +32,7 @@ beforeEach(() => {
     },
     async rpc(name: string, args: Record<string, unknown>) {
       calls.push({ name, args });
+      if(name==='standalone_owner_cache_authorization_recovery')return{data:null,error:null};
       if(name==='standalone_load_workflow')return{data:{status:parentStatus,error:parentError},error:null};
       if (name === 'standalone_uncertain_exposure_accepted') return {data:exposureAccepted,error:null};
       if (name === 'standalone_accept_uncertain_exposure') return {data:{accepted_at:'2026-10-29T20:00:00Z'},error:null};
@@ -97,6 +98,48 @@ test('reduce cost freezes a genuinely smaller revision and requires review witho
   assert.notEqual(revision.args.p_hash, prepared.hash);
   assert.match(revision.args.p_tradeoffs as string, /smaller output allowance/i);
   assert.ok(!calls.some(call => /approve|dispatch/.test(call.name)));
+});
+
+test('owner previews independently priced reduction options without creating authorization or paid work',async()=>{
+  const payload={...decision('reduce_cost'),action:'preview_reductions'};
+  const response=await decide(request('attempts',payload));
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.equal(body.attemptId,attemptId);assert.equal(body.preparedHash,prepared.hash);
+  assert.deepEqual(body.options.map((option:{strategy:string})=>option.strategy),['truncate_tokens','switch_model']);
+  const trim=body.options[0],model=body.options[1];
+  assert.equal(trim.available,true);assert.equal(trim.model,'gpt-4o');
+  assert.ok(BigInt(trim.estimateMicrousd)<BigInt(row.reserved_microusd));
+  assert.equal(trim.outputAllowance,2048);
+  assert.equal(model.available,true);assert.equal(model.model,'gpt-4o-mini');
+  assert.ok(BigInt(model.estimateMicrousd)<BigInt(row.reserved_microusd));
+  assert.ok(!JSON.stringify(body).includes('private saved prompt'));
+  assert.ok(!calls.some(call=>/standalone_(revise|approve|dispatch|register_pricing)/.test(call.name)));
+  assert.equal(row.state,'paused');assert.equal(row.prepared_hash,prepared.hash);
+  assert.equal((await decide(request('attempts',{...payload,preparedHash:'a'.repeat(64)}))).status,409);
+  allowed=false;
+  assert.equal((await decide(request('attempts',payload))).status,403);
+});
+
+test('explicit reduction selection freezes only the chosen strategy and preserves approval boundaries',async()=>{
+  const model=await decide(request('attempts',{...decision('reduce_cost'),strategy:'switch_model'}));
+  assert.equal(model.status,200);
+  let revision=calls.find(call=>call.name==='standalone_revise')!;
+  assert.ok(revision);assert.equal((revision.args.p_payload as Record<string,unknown>).model,'gpt-4o-mini');
+  const modelPayload=(revision.args.p_payload as Record<string,unknown>).payload as Record<string,unknown>;
+  assert.equal(modelPayload.model,'gpt-4o-mini');assert.equal(modelPayload.input,prepared.payload.input);
+  assert.equal(modelPayload.max_output_tokens,8192);
+  assert.ok(!calls.some(call=>/standalone_(approve|claim_dispatch)/.test(call.name)));
+  calls=[];
+  const truncate=await decide(request('attempts',{...decision('reduce_cost'),strategy:'truncate_tokens'}));
+  assert.equal(truncate.status,200);
+  revision=calls.find(call=>call.name==='standalone_revise')!;
+  assert.ok(revision);
+  const trimPayload=(revision.args.p_payload as Record<string,unknown>).payload as Record<string,unknown>;
+  assert.equal((revision.args.p_payload as Record<string,unknown>).model,'gpt-4o');
+  assert.equal(trimPayload.max_output_tokens,2048);
+  assert.equal(trimPayload.input,prepared.payload.input);
+  assert.ok(!calls.some(call=>/standalone_(approve|claim_dispatch)/.test(call.name)));
 });
 
 test('configuration requires explicit valid timezone and thresholds rather than invented defaults', async () => {
@@ -243,7 +286,7 @@ test('configuration reads one row and history requires an explicit keyset cursor
 test('usage uses a bounded server summary and does not enumerate workflows or authorizations with extra RPCs',async()=>{
  row.state='uncertain';
  const response=await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`));assert.equal(response.status,200);
- assert.deepEqual(calls.map(call=>call.name),['standalone_authorize_scope','standalone_usage_snapshot']);
+ assert.deepEqual(calls.map(call=>call.name),['standalone_authorize_scope','standalone_usage_snapshot','standalone_owner_cache_authorization_recovery']);
  assert.ok(!JSON.stringify(await response.json()).includes('prepared_payload'));
 });
 

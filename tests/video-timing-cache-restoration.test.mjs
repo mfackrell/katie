@@ -22,9 +22,13 @@ function harness(record) {
     const exports={};modules.set(path,exports);
     const require=name=>{
       if(name==='@/lib/media-memory/evidence')return {indexEvidence:async()=>{throw Error('unexpected indexing');},indexReference:async()=>{throw Error('unexpected indexing');}};
+      // Video timing fixtures do not inspect still images; the new visual
+      // memory helper must never be invoked for these cache-only paths.
+      if(name==='@/lib/chat/visual-memory')return {buildKatieVisualEpisode:()=>undefined};
       if(name==='@/lib/chat/video-evidence')return load('lib/chat/video-evidence.ts');
       if(name==='@/lib/uploads/video-timing')return load('lib/uploads/video-timing.ts');
-      if(name==='./pdf-evidence')return {inspectPdf:async()=>{throw Error('unexpected PDF inspection');}};
+      if(name==='./generated-image-store')return {createGeneratedImageStore:()=>({})};
+       if(name==='./pdf-evidence')return {inspectPdf:async()=>{throw Error('unexpected PDF inspection');}};
       if(name==='./video-timing')return load('lib/uploads/video-timing.ts');
       if(name==='./video-fallback-frames')return load('lib/uploads/video-fallback-frames.ts');
       if(name==='./server-video-frame-recovery')return {extractFramesFromPrivateVideo:async()=>{throw Error('unexpected decode');}};

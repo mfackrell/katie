@@ -1,24 +1,41 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
+import test from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 
-const source = fs.readFileSync('lib/memory/summarizer.ts','utf8');
-async function run(finishReason, content) {
-  const writes=[];
-  const messages=Array.from({length:65},(_,i)=>({id:`m${i}`,role:i%2?'assistant':'user',content:`source ${i}`}));
-  const module={exports:{}};
-  const client=class {async post(){return {stop_reason:finishReason,content:[{type:'text',text:content}]};}};
-  const admin={rpc:async(name,args)=>{assert.equal(name,'commit_intermediate_memory_checkpoint');writes.push(args);return {data:true,error:null};}};
-  const store={getChatById:async()=>({actorId:'a'}),getIntermediateMemory:async()=>({version:2,summary:'saved',summarizedThroughMessageId:'m0',sourceMessageCount:1}),getRecentMessages:async()=>messages,setIntermediateMemory:async(...args)=>writes.push(args)};
-  vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,
-    {module,exports:module.exports,process:{env:{CLAUDE_API_KEY:'test-only'}},console:{error:()=>{},warn:()=>{}},require:name=>name.includes('standalone-accounting/activity')?{createActivityAccountingFetch:()=>()=>{throw Error('Unexpected HTTP in memory protocol fixture')}}:name.includes('standalone-accounting/context')?{isStandaloneAccountingError:()=>false}:name==='openai'?client:name.includes('persistence-store')?store:name.includes('memory-contract')?{SHORT_TERM_MESSAGE_LIMIT:60}:name.includes('supabase/admin')?{getSupabaseAdminClient:()=>admin}:{filterConversationalMessages:x=>x}});
-  await module.exports.maybeUpdateSummary('c');
-  return writes;
-}
-test('truncated intermediate summary never advances source cursor',async()=>assert.equal((await run('max_tokens','partial')).length,0));
-test('empty intermediate summary never advances source cursor',async()=>assert.equal((await run('end_turn','')).length,0));
-test('complete intermediate summary advances only through summarized messages',async()=>{
-  const writes=await run('end_turn','complete');assert.equal(writes.length,1);assert.equal(writes[0].p_expected_cursor,'m0');assert.equal(writes[0].p_content.summarizedThroughMessageId,'m4');assert.equal(writes[0].p_content.summary,'complete');
+const code=readFileSync("lib/memory/summarizer.ts","utf8");
+test("ITM source cursor advances only after source-cited Grok factual episodes and retention",()=>{
+  assert.ok(code.indexOf("summarizeNewBatch(batch,provider,client,") < code.indexOf("reconcileEpisodePlan(episodes,newSummary,provider,client,"));
+  assert.ok(code.indexOf("parseGroundedEpisodes") < code.indexOf('rpc<boolean>("commit_intermediate_memory_checkpoint"'));
+  assert.match(code,/parseGroundedEpisodes\(raw,messages\)/);
+  assert.match(code,/response\.status !== "completed"/);
+  assert.match(code,/client\.post\("\/responses"/);
+  assert.match(code,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
+  assert.match(code,/getMessages\(chatId\)/);
+  assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);
+  assert.match(code,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
+  assert.match(code,/if \(existing\?\.summarizedThroughMessageId\)/);
+});
+test("failed source batches preserve the checkpoint and only a later request may use the next provider",()=>{
+  assert.match(code,/if \(remaining < SUMMARY_BATCH_MESSAGES\)/);
+  assert.match(code,/if \(claim\.data === "blocked"\)/);
+  assert.match(code,/Provider attempt already blocked; checking next safe provider/);
+  assert.match(code,/SUMMARY_TIMEOUT_MS = 90_000/);
+  assert.match(code,/timeoutMs:\(\)=>Math\.max\(1,deadline-Date\.now\(\)\)/);
+  assert.match(code,/timeoutCode:"memory_timeout"/);
+  assert.doesNotMatch(code,/withinSummaryDeadline/);
+  assert.match(code,/processorVersion\(candidate\)/);
+  assert.match(code,/return nextProvider \? "deferred" : "blocked"/);
+  // SDK-level "Connection error" may wrap a more specific accounting
+  // denial. The nested cause must govern whether a fallback is permissible.
+  assert.match(code,/const accountingCause=standaloneAccountingCause\(error\)/);
+  assert.ok(code.includes('const terminalDenial=(Boolean(accountingCause) || isRequestAbort(error)) && !shouldUseNextProvider(error);'));
+  assert.ok(code.includes('if (terminalDenial) {'));
+  // A prior v12 terminal *accounting* flag must not block v13 memory
+  // infrastructure. Exact dispatch exposure and in-flight claims remain fenced.
+  assert.doesNotMatch(code,/if \(inspection\.data\.terminal\) \{/);
+  assert.match(code,/if \(inspection\.data\.in_flight\) \{/);
+  assert.match(code,/inspection\.data\.anthropic_sent/);
+  assert.match(code,/inspection\.data\.grok_sent/);
+  assert.match(code,/p_state: "blocked"/);
+  assert.ok(code.includes('p_reason: (terminalDenial ? "ITM_TERMINAL:" + diagnostic : diagnostic).slice(0,160)'));
 });

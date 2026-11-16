@@ -1,0 +1,361 @@
+import {requireTask4aVerifierRestoration} from './task4a-verifier-recovery.mjs';
+// Trusted host only. Recovery reads historical evidence; it never grants authority,
+// reconciles charges, replays a request, or treats WIP as reviewed source.
+import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {mkdtempSync,rmSync,openSync,closeSync,mkdirSync,lstatSync,fstatSync,ftruncateSync,fchmodSync,writeSync,unlinkSync,rmdirSync,constants} from 'node:fs';
+import {join} from 'node:path';
+import {inflateRawSync} from 'node:zlib';
+import {isDeepStrictEqual} from 'node:util';
+import {protectedGitConfig} from './native-trust-boundary.mjs';
+
+const fail=reason=>{throw Error('NATIVE_WIP_RECOVERY_DENIED: '+reason);};
+// Process-local evidence, issued only by the trusted host after record validation
+// and source restoration. This is not an execution grant or a review attestation.
+const verificationFirstCapabilities=new WeakMap();
+const task4aCheckpoint='d2610d94289a0ba5aafcaa60598cae7c21507cfe';
+const task4aRecoveryBinding=Object.freeze({
+ version:1,kind:'native-unverified-wip',verification:'unverified',phase:'implementation',authorityKind:'ordinary-developer',
+ taskId:'d0e41ff5-149e-4319-9e65-dcc605fb75da',projectId:'6d1c29f1-b31e-47a5-aabb-cbcf1326f388',trialId:null,
+ checkpointSha:task4aCheckpoint,sourceTreeSha:'26869fb977fd29b4f96652b9de3d47e0f0e0ffeb',
+ originalBaselineSha:'49c8a5f791e66c351436bb97839193b53d7a1cd1',baseSha:'49c8a5f791e66c351436bb97839193b53d7a1cd1',
+ completedCheckpointSha:'49c8a5f791e66c351436bb97839193b53d7a1cd1',
+ approvalId:'ac443164-faf7-45be-96f1-cc93dfc85346',grantId:'939d9d7a-e101-4ec7-8af5-1561f1319b5f',executionEpoch:3,
+ runId:'42443455661',runAttempt:'1',ref:'refs/tags/katie-wip/d0e41ff5-149e-4319-9e65-dcc605fb75da/42443455661-1/5',
+ approvedScopeHash:'debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685',
+ approvedScope:{hash:'debdfd441a9bb6b1106d2e09c56b6e7a2c494ce81f23890e104a625c8633c685',allowedPaths:['app/project-pilots/task4a-preview-probe/'],contractHash:'e8b08da72779ae0d7e864ed57c5ecc76b03d1fce6ddc9e14815e9c4c3dff332e'}
+});
+export function createTask4aVerificationFirstCapability(record,recovery){
+ if(record?.checkpointSha!==task4aCheckpoint)return null;
+ for(const [key,value] of Object.entries(task4aRecoveryBinding))same(record[key],value,'verification-first '+key+' mismatch');
+ same(record.reviewFindings,'','verification-first unexpected findings');
+ same(record.lastCompleted,{checkpointSha:record.completedCheckpointSha,modelCall:{requestKey:'1ebf357e-4075-4b31-8d17-55891468b102',operationId:'6d51c3f4-a019-444b-ab87-9d424f1b25e2',actualTokens:13046,settlement:'settled'}},'verification-first completed evidence mismatch');
+ same(recovery,{verification:'unverified',phase:record.phase,checkpointSha:record.checkpointSha,completedCheckpointSha:record.completedCheckpointSha,reviewFindings:record.reviewFindings,checkpointEvidence:record.lastCompleted,lastCompleted:record.lastCompleted},'verification-first restored evidence mismatch');
+ const capability=Object.freeze({});
+ verificationFirstCapabilities.set(capability,{recovery,snapshot:structuredClone(recovery),sourceTreeSha:record.sourceTreeSha});
+ return capability;
+}
+export function createTask4aFailedVerifierCapability(record,recovery){
+ requireTask4aVerifierRestoration(record,recovery);
+ const capability=Object.freeze({});
+ verificationFirstCapabilities.set(capability,{recovery,snapshot:structuredClone(recovery),sourceTreeSha:record.sourceTreeSha});
+ return capability;
+}
+export function task4aVerificationFirstTree(recovery,capability){
+ if(!capability&&recovery?.checkpointSha!==task4aCheckpoint)return null;
+ const evidence=capability&&verificationFirstCapabilities.get(capability);
+ if(!evidence||evidence.recovery!==recovery||!isDeepStrictEqual(evidence.snapshot,recovery))fail('verification-first trusted restoration capability missing or changed');
+ return evidence.sourceTreeSha;
+}
+const sha=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
+const same=(actual,expected,reason)=>{if(!isDeepStrictEqual(actual,expected))fail(reason);};
+const gitAt=workspace=>(...args)=>execFileSync('git',[...protectedGitConfig,...args],{
+ cwd:workspace,encoding:'utf8',timeout:20000,maxBuffer:8*1024*1024,stdio:['pipe','pipe','pipe']}).trim();
+
+function materialize(workspace,{path,content,mode,directoryOnly=false}){
+ const descriptors=[];
+ try{
+  let fd=openSync(workspace,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);descriptors.push(fd);
+  const parts=path.split('/'),leaf=parts.pop();
+  for(const part of parts){
+   const next=`/proc/self/fd/${fd}/${part}`;
+   try{mkdirSync(next);}catch(error){if(error.code!=='EEXIST')throw error;}
+   fd=openSync(next,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);descriptors.push(fd);
+  }
+  const target=`/proc/self/fd/${fd}/${leaf}`;
+  let existing;try{existing=lstatSync(target);}catch(error){if(error.code!=='ENOENT')throw error;}
+  if(directoryOnly){
+   if(!existing)return;
+   if(!existing.isDirectory()||existing.isSymbolicLink())fail('unsafe recovery directory');
+   // Never recursively delete: ignored/untracked or concurrently arrived work
+   // makes the directory nonempty and must survive the failed restoration.
+   try{rmdirSync(target);}catch(error){if(error.code!=='ENOTEMPTY'&&error.code!=='EEXIST')throw error;}
+   return;
+  }
+  if(existing&&(!existing.isFile()||existing.nlink!==1))fail('unsafe existing recovery path');
+  if(content===null){if(existing)unlinkSync(target);return;}
+  fd=openSync(target,constants.O_WRONLY|constants.O_CREAT|constants.O_NOFOLLOW|constants.O_NONBLOCK,0o600);descriptors.push(fd);
+  const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1)fail('unsafe recovery destination');
+  ftruncateSync(fd,0);let offset=0;while(offset<content.length)offset+=writeSync(fd,content,offset,content.length-offset);
+  fchmodSync(fd,mode==='100755'?0o755:0o644);
+ }finally{for(const fd of descriptors.reverse())closeSync(fd);}
+}
+
+// No filesystem extraction, arbitrary artifact path, or unbounded decompression.
+export function readRecoveryArtifact(zip){
+ if(!Buffer.isBuffer(zip)||zip.length>8*1024*1024)fail('diagnostic archive exceeds bounds');
+ const name='native-metered-review.json.diagnostics.json';let found;
+ for(let p=Math.max(0,zip.length-65557);p<=zip.length-22;p++){
+  if(zip.readUInt32LE(p)!==0x06054b50||p+22+zip.readUInt16LE(p+20)!==zip.length)continue;
+  let offset=zip.readUInt32LE(p+16);const count=zip.readUInt16LE(p+10);
+  if(count!==1)fail('ambiguous diagnostic archive');
+  if(offset+46>zip.length||zip.readUInt32LE(offset)!==0x02014b50)fail('invalid diagnostic archive');
+  const method=zip.readUInt16LE(offset+10),size=zip.readUInt32LE(offset+20),unpacked=zip.readUInt32LE(offset+24);
+  const length=zip.readUInt16LE(offset+28),local=zip.readUInt32LE(offset+42);
+  if(zip.subarray(offset+46,offset+46+length).toString()!==name||size>8*1024*1024||unpacked>8*1024*1024||local+30>zip.length||zip.readUInt32LE(local)!==0x04034b50)fail('invalid diagnostic entry');
+  const start=local+30+zip.readUInt16LE(local+26)+zip.readUInt16LE(local+28);
+  if(start+size>zip.length)fail('truncated diagnostic archive');
+  const compressed=zip.subarray(start,start+size);
+  const bytes=method===0?compressed:method===8?inflateRawSync(compressed,{maxOutputLength:8*1024*1024}):null;
+  if(!bytes||bytes.length!==unpacked||found)fail('invalid diagnostic compression');
+  found=JSON.parse(bytes.toString('utf8'));
+ }
+ if(!found)fail('diagnostics unavailable; retain checkpoint and recover trusted run evidence');
+ return found;
+}
+
+export function githubRecoveryReader(repository){
+ if(repository!=='mfackrell/katie')fail('repository mismatch');
+ return (path,binary=false)=>{
+  if(!path.startsWith(`/repos/${repository}/actions/`))fail('invalid evidence endpoint');
+  const bytes=execFileSync('gh',['api',path],{timeout:30000,maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
+  return binary?bytes:JSON.parse(bytes.toString('utf8'));
+ };
+}
+
+// The saved service-owned receipt selects a completed, trusted workflow run.
+// Unsigned Git tags alone are never an authenticity anchor.
+export async function loadRecoveryDiagnostics({task,repository,github,emptyBaselineSha=null}){
+ const receipt=task.external?.receipt,runId=String(receipt?.run_id??'');
+ if(!/^[1-9][0-9]*$/.test(runId)||receipt.repository!==repository||receipt.outcome!=='BLOCKED'||
+    !Number.isSafeInteger(receipt.issue_number)||receipt.issue_number!==Number(task.external.issueNumber))fail('failed same-task run receipt required');
+ const run=await github(`/repos/${repository}/actions/runs/${runId}`);
+ if(String(run.id)!==runId||run.status!=='completed'||!['failure','cancelled','timed_out'].includes(run.conclusion)||
+    !['workflow_dispatch','issues'].includes(run.event)||run.path!=='.github/workflows/autonomous-development.yml'||run.head_branch!=='main'||
+    run.repository?.full_name!==repository||run.head_repository?.full_name!==repository||!sha(run.head_sha)||!Number.isSafeInteger(run.run_attempt)||run.run_attempt<1)fail('untrusted recovery workflow run');
+ const list=await github(`/repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`);
+ if(!Array.isArray(list.artifacts)||list.total_count>100)fail('ambiguous recovery artifacts');
+ const matches=list.artifacts.filter(a=>a.name==='native-execution-diagnostics');
+ if(matches.length!==1||matches[0].expired||!Number.isSafeInteger(matches[0].id)||matches[0].size_in_bytes>8*1024*1024||
+    String(matches[0].workflow_run?.id)!==runId||matches[0].workflow_run?.head_sha!==run.head_sha)fail('missing, expired or ambiguous trusted diagnostics');
+ const diagnostics=readRecoveryArtifact(await github(`/repos/${repository}/actions/artifacts/${matches[0].id}/zip`,true));
+ if(diagnostics.taskId!==task.id||String(diagnostics.runId)!==runId||diagnostics.completed!==false)fail('diagnostics do not identify unfinished same-task WIP');
+ if(!diagnostics.wipCheckpoint){
+  // A failed attempt can legitimately have produced no work. Only authenticated
+  // evidence of a clean original baseline establishes that; missing refs alone
+  // never authorize restarting implementation. The caller must also see no refs.
+  const final=diagnostics.snapshots?.filter(snapshot=>snapshot.label==='final')??[];
+  if(sha(emptyBaselineSha)&&!diagnostics.wipFailure&&Array.isArray(diagnostics.phases)&&final.length===1&&
+     final[0].head===emptyBaselineSha&&!final[0].unavailable&&Array.isArray(final[0].status)&&
+     final[0].status.every(path=>path==='?? AGENT_REQUEST.md')&&
+     !diagnostics.phases?.some(p=>['review','repair','final-review'].includes(p.phase))&&
+     !diagnostics.verification?.length)return {record:null,diagnostics};
+  fail('diagnostics do not identify unfinished same-task WIP');
+ }
+ const record=diagnostics.wipCheckpoint;
+ if(record.runId!==runId||record.runAttempt!==String(run.run_attempt))fail('checkpoint run attempt mismatch');
+ const final=diagnostics.snapshots?.filter(snapshot=>snapshot.label==='final')??[];
+ if(final.length!==1||!sha(final[0].head)||final[0].unavailable||final[0].head!==record.completedCheckpointSha)
+  fail('unfinished WIP is unproven or superseded by a completed checkpoint; do not repeat completed engineering');
+ return {record,diagnostics};
+}
+
+export function recoveryCompletedEvidence(record,diagnostics){
+ const last=structuredClone(record.lastCompleted);
+ if(last?.adaptiveRepair?.version===2){
+  const full=diagnostics?.lifecycleEvidence;
+  const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  for(const key of ['verification','review','initialReview']){
+   const saved=last[key];if(!saved)continue;
+   const value=full?.[key],field=key==='verification'?'detail':'findings',hashKey=field+'Digest';
+   // A pending checkpoint predates the verifier's failure output. Authenticate
+   // its own saved detail; later diagnostics must still describe the same
+   // unpassed candidate. Neither observation is completed verification evidence.
+   const pending=key==='verification'&&last.adaptiveRepair.nextAction==='verification'&&saved.pending===true&&saved.passed===false;
+   if(pending&&(saved.head!==record.completedCheckpointSha||typeof saved.detail!=='string'||saved.detail.length>12000||
+      digest(saved.detail)!==saved.detailDigest))fail('pending verification checkpoint missing or altered');
+   if(!value||typeof (value[field]??'')!=='string'||(value[field]??'').length>12000||
+      (!pending&&digest(value[field]??'')!==saved[hashKey]))fail('full lifecycle evidence missing or altered');
+   const omit=o=>Object.fromEntries(Object.entries(o).filter(([k])=>k!==field&&k!==hashKey));
+   same(omit(value),omit(saved),'full lifecycle candidate or verdict mismatch');
+   if(!pending)last[key]={...saved,[field]:value[field]??''};
+  }
+  return last;
+ }
+ if(record.phase!=='repair'||last?.review&&last?.verification)return last;
+ // Original PR #902 checkpoints retain this evidence in diagnostics rather than
+ // lastCompleted. Authenticate that artifact first; never rewrite Git metadata.
+ const reviews=diagnostics?.phases?.filter(p=>p.phase==='review'&&p.outcome?.code===0&&p.outcome.signal===null&&p.terminalEvent==='turn.completed')??[];
+ const verifications=diagnostics?.verification?.filter(v=>v.head===record.completedCheckpointSha)??[];
+ if(last?.phase!=='review'||reviews.length!==1||verifications.length!==1||
+    !/^(PASS|CHANGES_REQUESTED)(?:\s|$)/.test(reviews[0].finalMessage??'')||
+    !record.reviewFindings?.startsWith(reviews[0].finalMessage)||
+    !diagnostics.phases.slice(diagnostics.phases.indexOf(reviews[0])+1).some(p=>p.phase==='repair'))fail('legacy completed review evidence unavailable or ambiguous');
+ const delimiter=' Trusted deterministic verification: ',at=record.reviewFindings.indexOf(delimiter);
+ if(at<1)fail('legacy full reviewer findings unavailable');
+ return {...last,review:{phase:'review',verdict:/^PASS(?:\s|$)/.test(reviews[0].finalMessage)?'pass':'changes_requested',findings:record.reviewFindings.slice(0,at)},verification:verifications[0]};
+}
+
+export async function validateRecoveryRecords({record,task,context,project,trialId,authorityKind,accountId,readOne,completedEvidence=record.lastCompleted}){
+ if(![1,2].includes(record.version)||record.kind!=='native-unverified-wip'||record.verification!=='unverified'||
+    !(record.version===2?['implementation','review','repair','final-review','do_completion']:['implementation','repair']).includes(record.phase)||!sha(record.checkpointSha)||!sha(record.completedCheckpointSha)||!sha(record.sourceTreeSha))fail('invalid WIP identity');
+ for(const [value,expected,label] of [[record.taskId,task.id,'task'],[record.projectId,project.id,'project'],
+  [record.trialId,trialId,'trial'],[record.originalBaselineSha,context.baselineSha,'baseline'],[record.baseSha,context.baseSha,'base'],
+  [record.approvedScopeHash,project.approved_hash,'scope hash'],[record.approvedScope,{hash:project.approved_hash,allowedPaths:context.allowedPaths,contractHash:context.contractHash},'scope and contract']])same(value,expected,label+' mismatch');
+ const assignment=await readOne('mission_assignments','id',task.id);
+ const run=await readOne('project_runs','mission_id',assignment.mission_id);
+ const binding=run.binding;
+ if(!binding||project.approved_hash!==project.approval_hash||project.active_mission_id!==assignment.mission_id||run.project_id!==project.id)fail('authoritative project binding unavailable');
+ for(const key of ['projectId','baselineSha','baseSha','allowedPaths','cumulativePaths','contractHash'])same(context[key],binding[key],'authoritative '+key+' mismatch');
+ same(binding.scopeHash,project.approved_hash,'authoritative scope hash mismatch');
+ const approval=await readOne('benchmark_native_spending_approvals','id',record.approvalId);
+ const grant=await readOne('benchmark_execution_grants','id',record.grantId);
+ if(approval.task_id!==task.id||approval.project_id!==project.id||approval.trial_id!==trialId||approval.account_id!==accountId||!approval.consumed_at||
+    grant.mission_assignment_id!==task.id||grant.project_id!==project.id||grant.trial_id!==trialId||grant.account_id!==accountId||
+    grant.execution_epoch!==record.executionEpoch||grant.owner_actor_id!==approval.actor_id||grant.repository!==task.repository_full_name||
+    grant.protocol_digest!==approval.protocol_digest||grant.model!==approval.model)fail('historical grant binding mismatch');
+ if(authorityKind==='ordinary-developer'){
+  if(record.authorityKind!==authorityKind||trialId!==null||approval.developer_authority?.version!=='ordinary-developer-v1'||grant.developer_approval_id!==approval.id)fail('ordinary recovery authority mismatch');
+ }else if(record.authorityKind||approval.developer_authority||grant.developer_approval_id)fail('benchmark recovery authority mismatch');
+ const last=completedEvidence;
+ if(!last||last.checkpointSha!==record.completedCheckpointSha)fail('completed checkpoint evidence missing');
+ if(last.modelCall){
+  const call=await readOne('benchmark_budget_calls','id',last.modelCall.operationId);
+  const missionCall=await readOne('mission_calls','id',last.modelCall.requestKey);
+  // A new host can be interrupted before its first paid admission. In that case
+  // the last completed request still belongs to a prior, unchanged grant.
+  const callGrant=missionCall.lease===grant.id?grant:await readOne('benchmark_execution_grants','id',missionCall.lease);
+  if(call.account_id!==accountId||call.request_key!==last.modelCall.requestKey||call.legacy_mission_call_id!==missionCall.id||
+     call.actual_tokens!==last.modelCall.actualTokens||call.state!==last.modelCall.settlement||!['settled','overrun'].includes(call.state)||
+     missionCall.job_id!==task.id||callGrant.mission_assignment_id!==task.id||callGrant.project_id!==project.id||
+     callGrant.account_id!==accountId||callGrant.trial_id!==trialId||callGrant.owner_actor_id!==grant.owner_actor_id||
+     callGrant.repository!==grant.repository||callGrant.model!==grant.model||!Number.isSafeInteger(callGrant.execution_epoch)||
+     callGrant.execution_epoch>grant.execution_epoch)fail('historical model-call evidence mismatch');
+  if(authorityKind==='ordinary-developer'){
+   const callApproval=callGrant.id===grant.id?approval:await readOne('benchmark_native_spending_approvals','id',callGrant.developer_approval_id);
+   if(!callGrant.developer_approval_id||callApproval.developer_authority?.version!=='ordinary-developer-v1'||callApproval.account_id!==accountId||callApproval.task_id!==task.id||callApproval.project_id!==project.id||callApproval.owner_id!==approval.owner_id)fail('ordinary historical call authority mismatch');
+  }
+ }else if(record.phase==='repair')fail('repair call evidence missing');
+ const adaptive=last.adaptiveRepair;
+ if(adaptive?.version===2){
+  const action=adaptive.nextAction;
+  if(!['implementation','verification','review','final-review','repair','complete'].includes(action)||
+     adaptive.candidateHead!==record.completedCheckpointSha||!Number.isSafeInteger(adaptive.iteration)||adaptive.iteration<0||
+     !Number.isSafeInteger(adaptive.stagnant)||adaptive.stagnant<0||!Array.isArray(adaptive.seen)||adaptive.seen.length>16||
+     adaptive.seen.some(value=>typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value)))fail('invalid adaptive continuation state');
+  if(!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('adaptive verification binding missing');
+  const pending=adaptive.pendingRepair;
+  if(pending&&(!Number.isSafeInteger(pending.iteration)||![adaptive.iteration,adaptive.iteration+1].includes(pending.iteration)||
+     !sha(pending.source)||!sha(pending.before?.head)||typeof pending.before?.passed!=='boolean'||
+     !Array.isArray(pending.priorFindings)||pending.priorFindings.length>32||pending.priorFindings.some(f=>typeof f!=='string'||f.length>240)||
+     pending.iteration===adaptive.iteration+1&&(action!=='repair'||pending.before.head!==record.completedCheckpointSha)))fail('invalid pending repair evidence');
+  if(action==='verification'&&last.verification.pending!==true)fail('pending verification evidence missing');
+  if(['review','final-review','repair','complete'].includes(action)&&last.verification.pending)fail('unfinished verification cannot be accepted');
+  if(['repair','complete'].includes(action)&&(!last.review||last.review.reviewedHeadSha!==record.completedCheckpointSha||
+     !['review','final-review'].includes(last.review.phase)||!['pass','changes_requested'].includes(last.review.verdict)||
+     typeof last.review.findings!=='string'||!last.review.findings.trim()))fail('completed adaptive review binding missing');
+  if(action==='complete'&&(last.review.phase!=='final-review'||last.review.verdict!=='pass'||!last.verification.passed))fail('adaptive completion evidence missing');
+  if(action==='repair'&&last.review.verdict==='pass'&&last.verification.passed)fail('adaptive repair evidence inconsistent');
+ }
+ if(record.version===2&&['review','final-review','do_completion'].includes(record.phase)){
+  if(!last.modelCall||!last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean')fail('completed boundary verification evidence missing');
+  if(record.phase!=='review'&&(!last.review||!['pass','changes_requested'].includes(last.review.verdict)))fail('completed boundary review evidence missing');
+  if(record.phase==='do_completion'&&(!last.lifecycle||last.lifecycle.candidateHead!==record.completedCheckpointSha||last.lifecycle.finalReview?.verdict!=='pass'||!last.verification.passed))fail('completed final review evidence missing');
+ }
+ if(record.phase==='repair'){
+  if(last.adaptiveRepair&&last.review?.reviewedHeadSha!==record.completedCheckpointSha)fail('repair reviewer candidate binding mismatch');
+  if(last.phase!=='review'||!last.review||!['review','final-review'].includes(last.review.phase)||!['pass','changes_requested'].includes(last.review.verdict)||
+     typeof last.review.findings!=='string'||!last.review.findings.trim()||typeof record.reviewFindings!=='string'||!record.reviewFindings.trim()||
+     !last.verification||last.verification.head!==record.completedCheckpointSha||typeof last.verification.passed!=='boolean'||
+     (last.review.verdict==='pass'&&last.verification.passed))fail('completed review and verification evidence required for repair');
+ }
+ return record;
+}
+
+export function recoveryRefs(workspace,taskId){
+ if(!/^[a-f0-9-]{36}$/.test(taskId))fail('invalid task identity');
+ const output=gitAt(workspace)('ls-remote','--refs','origin',`refs/tags/katie-wip/${taskId}/*`);
+ const refs=output?output.split('\n').map(line=>{const [checkpointSha,ref]=line.split(/\s+/);return {checkpointSha,ref};}):[];
+ if(refs.length>1000)fail('checkpoint selection exceeds bounds');
+ return refs;
+}
+
+// Validate both complete trees in a private index before changing HEAD or files.
+// Read-only history/ref fetching is harmless on rejection. Only a fresh runner
+// with no source edits is eligible; never overwrite another recovery attempt.
+export function prepareRecovery({workspace,tempRoot,toolsRoot,requestFile,context,record,refs,completedEvidence=record.lastCompleted}){
+ record=structuredClone(record);completedEvidence=structuredClone(completedEvidence);
+ const git=gitAt(workspace),prefix=`refs/tags/katie-wip/${record.taskId}/`;
+ const entries=refs.map(entry=>{
+  const match=entry.ref.startsWith(prefix)&&entry.ref.slice(prefix.length).match(/^([1-9][0-9]*)-([1-9][0-9]*)\/([1-9][0-9]*)$/);
+  if(!match||!sha(entry.checkpointSha))fail('invalid checkpoint ref');
+  return {...entry,run:BigInt(match[1]),attempt:BigInt(match[2]),sequence:BigInt(match[3])};
+ });
+ entries.sort((a,b)=>a.run!==b.run?(a.run>b.run?-1:1):a.attempt!==b.attempt?(a.attempt>b.attempt?-1:1):a.sequence>b.sequence?-1:1);
+ if(!entries.length||entries[0].ref!==record.ref||entries[0].checkpointSha!==record.checkpointSha)fail('latest remote checkpoint lacks matching trusted evidence');
+ if(git('rev-parse','HEAD')!==context.baseSha||git('diff','--name-only')||git('diff','--cached','--name-only')||
+    git('ls-files','--others','--exclude-standard','-z').split('\0').filter(p=>p&&p!=='AGENT_REQUEST.md').length)fail('recovery requires a clean original runner baseline');
+ git('fetch','--no-tags','origin',record.ref);
+ if(git('rev-parse','FETCH_HEAD')!==record.checkpointSha)fail('remote checkpoint changed during recovery');
+ const raw=git('show','-s','--format=%B',record.checkpointSha);
+ if(Buffer.byteLength(raw)>24000)fail('checkpoint metadata exceeds bounds');
+ const {checkpointSha:_,ref:__,...metadata}=record;
+ same(JSON.parse(raw),metadata,'checkpoint metadata was forged or altered');
+ same(git('rev-parse',record.checkpointSha+'^{tree}'),record.sourceTreeSha,'checkpoint tree mismatch');
+ if(completedEvidence.adaptiveRepair?.version===2&&['verification','review','final-review','complete'].includes(completedEvidence.adaptiveRepair.nextAction)&&
+    record.sourceTreeSha!==git('rev-parse',record.completedCheckpointSha+'^{tree}'))fail('completed candidate contains unverified source modifications');
+ const pendingRepair=completedEvidence.adaptiveRepair?.pendingRepair;
+ if(pendingRepair){
+  same(git('rev-parse',pendingRepair.before.head+'^{tree}'),pendingRepair.source,'pending repair source mismatch');
+  git('merge-base','--is-ancestor',pendingRepair.before.head,record.completedCheckpointSha);
+ }
+ const parents=git('show','-s','--format=%P',record.checkpointSha).split(' ');
+ if(parents.length>2||parents[0]!==record.completedCheckpointSha)fail('completed checkpoint ancestry mismatch');
+ git('merge-base','--is-ancestor',context.baseSha,record.completedCheckpointSha);
+ git('merge-base','--is-ancestor',context.baselineSha,record.completedCheckpointSha);
+ const scratch=mkdtempSync(join(tempRoot,'recovery-index-'));
+ try{
+  const env={...process.env,GIT_INDEX_FILE:join(scratch,'index')};
+  for(const commit of [...new Set([record.completedCheckpointSha,record.checkpointSha])]){
+   execFileSync('git',[...protectedGitConfig,'read-tree',commit],{cwd:workspace,env,timeout:20000,stdio:'pipe'});
+   // An interrupted initial implementation may have no completed source yet.
+   if(record.phase==='implementation'&&(commit===context.baseSha||record.version===2&&record.completedCheckpointSha===context.baseSha&&record.sourceTreeSha===git('rev-parse',context.baseSha+'^{tree}')))continue;
+   for(const tool of ['project-scope.mjs','recovery-scope.mjs'])execFileSync(process.execPath,[join(toolsRoot,tool),requestFile],{cwd:workspace,env,timeout:20000,stdio:'pipe'});
+  }
+ }catch{fail('checkpoint fails unchanged cumulative scope gates');}
+ finally{rmSync(scratch,{recursive:true,force:true});}
+ // Materialize raw Git blobs, never checkout/smudge/process filters or working
+ // tree encodings selected by unreviewed attributes. This also restores files
+ // in the completed implementation that the interrupted repair did not touch.
+ const paths=git('diff','--no-ext-diff','--no-renames','--name-only','-z',context.baseSha,record.checkpointSha).split('\0').filter(Boolean);
+ if(paths.length>200)fail('recovery source count exceeds bounds');
+ let bytes=0;
+ const files=paths.map(path=>{
+  if(/[\x00-\x1f\x7f\\]/.test(path)||path.split('/').some(p=>!p||p==='.'||p==='..')||
+     !context.allowedPaths.some(p=>path===p||p.endsWith('/')&&path.startsWith(p)))fail('unsafe recovery source path');
+  const entry=git('ls-tree','-z',record.checkpointSha,'--',path).split('\t')[0];
+  if(!entry)return {path,content:null};
+  const [mode,type,blob]=entry.split(' ');
+  // A baseline file replaced by a directory must be removed before its new
+  // descendant blobs are written. Git does not otherwise track directories.
+  if(mode==='040000'&&type==='tree'&&sha(blob))return {path,content:null};
+  if(!['100644','100755'].includes(mode)||type!=='blob'||!sha(blob))fail('unsafe recovery source type');
+  const content=execFileSync('git',[...protectedGitConfig,'cat-file','blob',blob],{cwd:workspace,timeout:20000,maxBuffer:4*1024*1024,stdio:['ignore','pipe','pipe']});
+  bytes+=content.length;if(bytes>4*1024*1024)fail('recovery source bytes exceed bounds');
+  return {path,content,mode};
+ });
+ return Object.freeze({record:structuredClone(record),restore(){
+  // No provider session or Git commit is created. The trusted completed commit
+  // remains HEAD; unfinished source stays unstaged and explicitly unverified.
+  if(git('rev-parse','HEAD')!==context.baseSha||git('diff','--name-only')||git('diff','--cached','--name-only')||
+     git('ls-files','--others','--exclude-standard','-z').split('\0').filter(p=>p&&p!=='AGENT_REQUEST.md').length)fail('runner changed after recovery validation');
+  const deleted=files.filter(file=>file.content===null).sort((a,b)=>b.path.length-a.path.length);
+  for(const file of deleted)materialize(workspace,file);
+  const directories=new Set();
+  for(const {path} of deleted){
+   const parts=path.split('/');parts.pop();
+   while(parts.length){const parent=parts.join('/');
+    if(context.allowedPaths.some(p=>p.endsWith('/')&&(parent+'/'===p||parent.startsWith(p))))directories.add(parent);
+    parts.pop();
+   }
+  }
+  for(const path of [...directories].sort((a,b)=>b.length-a.length))materialize(workspace,{path,directoryOnly:true});
+  for(const file of files.filter(file=>file.content!==null))materialize(workspace,file);
+  // Index-only read-tree and compare-and-swap HEAD preserve candidate ancestry
+  // without executing any checkout helpers. WIP is never promoted to HEAD.
+  git('read-tree',record.completedCheckpointSha);
+  git('update-ref','HEAD',record.completedCheckpointSha,context.baseSha);
+  return {verification:'unverified',phase:record.phase,checkpointSha:record.checkpointSha,completedCheckpointSha:record.completedCheckpointSha,
+   reviewFindings:record.reviewFindings,checkpointEvidence:structuredClone(record.lastCompleted),lastCompleted:structuredClone(completedEvidence)};
+ }});
+}

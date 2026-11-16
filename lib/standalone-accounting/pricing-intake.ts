@@ -69,9 +69,14 @@ export function normalizePricingCatalog(raw: unknown): { snapshot: PricingSnapsh
       if(rejected[id])continue;accepted.set(id,price);
     } catch(error){const id=provider+':'+model;accepted.delete(id);rejected[id]=String(error instanceof Error?error.message:error);}
   }
+  if(!accepted.size)throw Error('Catalog contains no validated first-party text prices');
+  // Non-text prices are reviewed from the provider, never inherited from
+  // LiteLLM text-only fields or model discovery heuristics.
+  for(const reviewed of PRICING_SNAPSHOT.models.filter(model=>model.imageOutputNanoUsd&&model.imageOutputTokensPerImage))
+    accepted.set(reviewed.provider+':'+reviewed.model,reviewed);
   const models=[...accepted.values()].sort((a,b)=>(a.provider+':'+a.model).localeCompare(b.provider+':'+b.model));
   if(!models.length)throw Error('Catalog contains no validated first-party text prices');
-  const data={currency:'USD',unit:'microUSD',rateUnit:'nanoUSD/token',scope:'first-party-global-standard',sources:[PRICING_SOURCE],models};
+  const data={currency:'USD',unit:'microUSD',rateUnit:'nanoUSD/token',scope:'first-party-global-standard',sources:[PRICING_SOURCE,...new Set(models.filter(m=>m.imageOutputNanoUsd).map(m=>m.source))],models};
   const version='standalone-catalog-v1-'+createHash('sha256').update(canonicalJson(data)).digest('hex');
   return {snapshot:deepFreeze({...data,version}),rejected};
 }
@@ -83,12 +88,35 @@ export async function refreshStandalonePricing(ledger:ReturnType<typeof createSt
   await ledger.publishPricing(snapshot.version,snapshot,createHash('sha256').update(bytes).digest('hex'),rejected);
   return snapshot;
 }
+/** Upgrade the saved text-only catalog without altering historical snapshots.
+ * The resulting catalog is persisted before any image dispatch can use it. */
+export function withReviewedImagePrices(snapshot:PricingSnapshot):PricingSnapshot {
+  // Only upgrade snapshots published by our reviewed catalog ingestion. Fixtures
+  // and historical/manual price versions must retain their original identity.
+  if(!snapshot.version.startsWith('standalone-catalog-v1-'))return snapshot;
+  const reviewed=PRICING_SNAPSHOT.models.filter(m=>m.imageOutputNanoUsd&&m.imageOutputTokensPerImage);
+  const missing=reviewed.some(row=>!snapshot.models.some(existing=>existing.provider===row.provider&&existing.model===row.model&&canonicalJson(existing)===canonicalJson(row)));
+  if(!missing)return snapshot;
+  const replaced=snapshot.models.filter(row=>!reviewed.some(verified=>verified.provider===row.provider&&verified.model===row.model));
+  const models=[...replaced,...reviewed].sort((a,b)=>(a.provider+':'+a.model).localeCompare(b.provider+':'+b.model));
+  const data={currency:snapshot.currency,unit:snapshot.unit,rateUnit:snapshot.rateUnit,scope:snapshot.scope,
+    sources:[...new Set([...snapshot.sources,...reviewed.map(row=>row.source)])],models};
+  const version='standalone-catalog-v1-'+createHash('sha256').update(canonicalJson(data)).digest('hex');
+  return deepFreeze({...data,version});
+}
 async function loadPricing(ledger:ReturnType<typeof createStandaloneLedger>,version?:string):Promise<PricingSnapshot>{
   if(version===PRICING_SNAPSHOT.version)return PRICING_SNAPSHOT;
   const saved=await ledger.loadPricing(version??null);
   if(saved){
     if(version&&saved.snapshot.version!==version)throw Object.assign(new Error('Historical pricing version mismatch'),{code:'standalone_pricing_changed'});
-    if(version||Date.now()-Date.parse(saved.retrievedAt)<=MAX_PRICE_AGE_MS)return deepFreeze(saved.snapshot);
+    if(version)return deepFreeze(saved.snapshot);
+    if(Date.now()-Date.parse(saved.retrievedAt)<=MAX_PRICE_AGE_MS){
+      const updated=withReviewedImagePrices(saved.snapshot);
+      if(updated.version!==saved.snapshot.version){
+        await ledger.publishPricing(updated.version,updated,createHash('sha256').update(canonicalJson(updated)).digest('hex'),{});
+      }
+      return updated;
+    }
   }
   if(version)throw Error('Historical pricing version unavailable');
   // First use and stale-cache recovery are free catalog retrieval, not provider inference.

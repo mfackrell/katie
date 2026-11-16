@@ -16,7 +16,7 @@ type ModelClient = { chat: { completions: { create: (args: {
 }}};
 
 const MIN_ENTRIES = 2;
-const CLEANUP_EVERY_MESSAGES = 30;
+const COMPREHENSIVE_REVIEW_EVERY_USER_MESSAGES = 100;
 
 // Automatic consolidation requires a separate source-completeness reviewer and
 // revision-checked archival commit. Keep unique memories unchanged.
@@ -118,17 +118,16 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
 }
 
 /**
- * Count actual persisted conversational messages actor-wide. This runs only after
- * the assistant response is saved, independent of whether an LTM candidate was
- * recognized or a memory write succeeded.
+ * Full LTM review is distinct from everyday learning. Count persisted USER
+ * turns actor-wide, not assistant responses, and review only every 100 turns.
  */
-export async function maybeRunThirtyMessageCleanup(actorId: string): Promise<void> {
+export async function maybeRunHundredUserMessageReview(actorId: string): Promise<void> {
   try {
     const admin = getSupabaseAdminClient();
-    const { data, error } = await admin.rpc("count_actor_conversational_messages", { p_actor_id: actorId });
+    const { data, error } = await admin.rpc("count_actor_user_messages", { p_actor_id: actorId });
     if (error) throw error;
     const count = Number(data);
-    if (!Number.isSafeInteger(count) || count <= 0 || count % CLEANUP_EVERY_MESSAGES !== 0) return;
+    if (!Number.isSafeInteger(count) || count <= 0 || count % COMPREHENSIVE_REVIEW_EVERY_USER_MESSAGES !== 0) return;
     if (!process.env.OPENAI_API_KEY) {
       console.warn("[LTM Maintenance] Scheduled check skipped: OpenAI not configured", { actorId, count });
       return;

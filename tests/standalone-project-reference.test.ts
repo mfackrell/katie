@@ -35,7 +35,7 @@ test("project command implementation is owned by Developer, not standalone conve
 });
 
 test("standalone chat relays explicit Developer controls without hijacking unrelated requests", () => {
- const match = /const savedDeveloperCommand = \/(.*)\/i\.test\(message\.trim\(\)\);/s.exec(route);
+ const match = /const savedDeveloperCommand = \/([^\r\n]*)\/i\.test\(message\.trim\(\)\);/.exec(route);
  assert.ok(match, "The chat route must use a source-visible explicit Developer command gate");
  const command = new RegExp(match[1], "i");
  for (const message of ["Project status", "Resume the project", "Approve project abc123", "Add undo button to the game"])

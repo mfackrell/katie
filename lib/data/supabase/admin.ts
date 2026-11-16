@@ -2,7 +2,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
 
-type Filter = { type: "eq" | "in" | "lt" | "is" | "or"; field: string; value: unknown };
+type Filter = { type: "eq" | "in" | "lt" | "gt" | "is" | "or"; field: string; value: unknown };
 type Sort = { field: string; ascending: boolean };
 
 // A timed-out write/RPC can have committed on the server. Never replay it here.
@@ -67,6 +67,11 @@ class PostgrestQuery {
 
   lt(field: string, value: unknown) {
     this.filters.push({ type: "lt", field, value });
+    return this;
+  }
+
+  gt(field: string, value: unknown) {
+    this.filters.push({ type: "gt", field, value });
     return this;
   }
 
@@ -180,10 +185,13 @@ class PostgrestQuery {
     for (const filter of this.filters) {
       if (filter.type === "or") {
         url.searchParams.set("or", `(${String(filter.value)})`);
-      } else if (filter.type === "eq" || filter.type === "lt" || filter.type === "is") {
-        // URLSearchParams encodes once; pre-encoding leaves escaped timestamps
-        // and other literal values in the filter received by PostgREST.
-        url.searchParams.set(filter.field, `${filter.type}.${String(filter.value)}`);
+      } else if (filter.type === "eq" || filter.type === "lt" || filter.type === "gt" || filter.type === "is") {
+        // Repeated column filters are AND constraints in PostgREST. Using
+        // URLSearchParams.set() silently removed the earlier constraint
+        // (e.g. created_at.lt overwritten by created_at.gt), causing
+        // already-in-STM messages to be fetched a second time.
+        // URLSearchParams encodes each value exactly once.
+        url.searchParams.append(filter.field, `${filter.type}.${String(filter.value)}`);
       } else {
         const encodedValues = (filter.value as unknown[]).map((value) => `"${String(value)}"`).join(",");
         url.searchParams.set(filter.field, `in.(${encodedValues})`);

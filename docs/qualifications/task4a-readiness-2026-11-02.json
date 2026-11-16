@@ -1,0 +1,243 @@
+{
+  "schemaVersion": 1,
+  "task": "4A",
+  "title": "Secure Preview Deployment Qualification",
+  "observedAt": "2026-11-02T15:21:24.692Z",
+  "repository": "mfackrell/katie",
+  "mainSha": "5d151fd9ac59b24a35ad4b3b0fb8bd949f8c11e1",
+  "task4aBranch": "feat/task-4a-secure-preview-qualification",
+  "task4aPr": 936,
+  "verdict": "BLOCKED",
+  "evidenceClassification": [
+    "actual-github",
+    "actual-vercel",
+    "actual-supabase-read-only",
+    "production-code",
+    "deterministic-fixture",
+    "unverified"
+  ],
+  "liveCandidate": {
+    "repository": "mfackrell/katie",
+    "projectId": "a03df077-9cf9-4e26-a819-fd40535b57e3",
+    "taskId": "80470e38-69ea-4686-bc46-f074376c8e8c",
+    "approvedScopeHash": "2394bbb305f636353509551d8694913daf610a0afcb7fa902a2910a660498426",
+    "finalDevelopmentContractHash": "aeab06b8efe878b63f325f989929d68452b6dd9878592b47bb7cc29a95b75d9f",
+    "verifiedSourceSha": "0720c514a14500535cbf50ee956066e237ab4e67",
+    "prNumber": 545,
+    "prState": "closed",
+    "prIsDraft": true,
+    "prMerged": false,
+    "githubDeploymentId": 7172964050,
+    "githubStatusId": 20024562540,
+    "githubDeploymentIdEvidence": "actual-supabase-read-only; saved authoritative project.preview record, not a fresh GitHub deployment API read",
+    "githubStatusIdEvidence": "actual-supabase-read-only; saved authoritative project.preview record, not a fresh GitHub status API read",
+    "githubCommitStatusEvidence": {
+      "context": "Vercel",
+      "state": "success",
+      "targetUrl": "https://vercel.com/mark-fackrells-projects/katie/FC4Srko8TTLrQVDniM2FSz1UVVQA",
+      "source": "actual-github"
+    },
+    "vercelDeploymentId": "dpl_FC4Srko8TTLrQVDniM2FSz1UVVQA",
+    "vercelProjectId": "prj_HuonAMnD6OhPAZ8tYVlyqQ5OjcEL",
+    "vercelState": "READY",
+    "vercelEnvironment": "preview (target null; branch Git metadata and deployment resource indicate non-production)",
+    "immutableOrigin": "https://katie-jibvlpe0p-mark-fackrells-projects.vercel.app",
+    "immutableHostnamePatternResult": {
+      "matched": true,
+      "nineCharacterCapture": true,
+      "secretValueLogged": false
+    },
+    "protection": {
+      "ssoEnabled": true,
+      "deploymentType": "all",
+      "source": "actual-vercel-project"
+    },
+    "authorizedHttpAccess": "UNVERIFIABLE",
+    "freshOpenSameHeadPr": "MISSING",
+    "acceptedForTask4a": false
+  },
+  "readiness": [
+    {
+      "id": "source_repository",
+      "status": "VERIFIED",
+      "evidence": "GitHub repository metadata and Supabase work_projects.project_id; code lib/projects/worker.ts baseline"
+    },
+    {
+      "id": "approved_source_project",
+      "status": "VERIFIED",
+      "evidence": "Supabase public.work_projects a03df077-9cf9-4e26-a819-fd40535b57e3 approved_hash=approval_hash; historical not active"
+    },
+    {
+      "id": "configured_preview_repo",
+      "status": "VERIFIED",
+      "evidence": "Vercel katie production PROJECT_PREVIEW_REPOSITORIES plaintext metadata evaluated in memory: mfackrell/katie included; actual string not logged"
+    },
+    {
+      "id": "vercel_git_connection",
+      "status": "VERIFIED",
+      "evidence": "Vercel get_git_deployment_context: project prj_HuonAMnD6OhPAZ8tYVlyqQ5OjcEL linked to mfackrell/katie"
+    },
+    {
+      "id": "preview_deployment_available",
+      "status": "VERIFIED",
+      "evidence": "Actual Vercel get_deployment dpl_FC4Srko8TTLrQVDniM2FSz1UVVQA state READY for original SHA"
+    },
+    {
+      "id": "git_status_linkage",
+      "status": "VERIFIED",
+      "evidence": "Actual GitHub combined commit status Vercel success targets Vercel deployment FC4Srko8TTLrQVDniM2FSz1UVVQA"
+    },
+    {
+      "id": "github_deployment_and_status_fresh_read",
+      "status": "UNVERIFIABLE",
+      "evidence": "Historical IDs in actual Supabase project.preview, current GitHub deployment/status endpoint not accessible through current read connector"
+    },
+    {
+      "id": "original_draft_pr_open",
+      "status": "MISSING",
+      "evidence": "GitHub PR #545 state closed; cannot revalidate current draft PR for that project"
+    },
+    {
+      "id": "matching_source_sha",
+      "status": "VERIFIED",
+      "evidence": "GitHub original PR head 0720c514..., actual Vercel deployment metadata and Supabase verified_sha all match; historical PR is closed"
+    },
+    {
+      "id": "same_head_race_recheck",
+      "status": "VERIFIED",
+      "evidence": "Production code lib/agents/development.ts lines 925-946 re-reads PR after status; focused fixture tests pending CI"
+    },
+    {
+      "id": "immutable_host_pattern",
+      "status": "VERIFIED",
+      "evidence": "Vercel production PROJECT_PREVIEW_HOST_PATTERN evaluated in memory against actual deployment: match and nine-character capture; code lib/agents/development.ts"
+    },
+    {
+      "id": "deployment_protection",
+      "status": "VERIFIED",
+      "evidence": "Actual Vercel get_project katie: ssoProtection enabled true, deploymentType all"
+    },
+    {
+      "id": "production_preview_access_connection_present",
+      "status": "VERIFIED",
+      "evidence": "Vercel production PROJECT_PREVIEW_BYPASS_SECRET exists; sensitive value not retrieved or revealed"
+    },
+    {
+      "id": "authorized_cookie_and_reachability",
+      "status": "UNVERIFIABLE",
+      "evidence": "No authenticated HTTP tool session available for exact preview host; no successful edge-authenticated reachability check"
+    },
+    {
+      "id": "application_secrets_are_not_passed_in_browser",
+      "status": "VERIFIED",
+      "evidence": "Production code lib/projects/preview.ts constructs host-only _vercel_jwt and never sends bypass secret to browser; CI pending for changed checks"
+    },
+    {
+      "id": "preview_env_stripped_of_production_secrets",
+      "status": "UNVERIFIABLE",
+      "evidence": "No generic preview GITHUB_TOKEN, provider secret or production database secret in enumerated Vercel envs; however branch-specific OPENAI_API_KEY exists on feat/full-katie-staging-integration and branch-specific Supabase variables are present; values/credential isolation not inspected"
+    },
+    {
+      "id": "automatic_system_env_exposure_disabled",
+      "status": "UNVERIFIABLE",
+      "evidence": "Documented in docs/chat-projects.md; current Vercel get_project response did not expose this flag"
+    },
+    {
+      "id": "source_bound_verification_receipt_persisted",
+      "status": "MISSING",
+      "evidence": "No Task4A source-bound delivery receipt written; forbidden to mark PASS for closed PR or unverified auth"
+    },
+    {
+      "id": "independent_exact_head_security_review",
+      "status": "MISSING",
+      "evidence": "PR #936 draft; existing external review action requires paid provider and was not invoked; actual no-cost independent review unavailable"
+    },
+    {
+      "id": "exact_head_ci",
+      "status": "UNVERIFIABLE",
+      "evidence": "GitHub CI queued or running as of audit; report does not infer final result"
+    },
+    {
+      "id": "project_worker_transition",
+      "status": "VERIFIED",
+      "evidence": "Production lib/projects/worker.ts delivery -> preview -> browser_check, project-runtime tests use deterministic fixture; live Task4A transition not demonstrated"
+    },
+    {
+      "id": "qualified_live_end_to_end",
+      "status": "MISSING",
+      "evidence": "No current approved project with open same-head draft PR and authenticated reachable protected Preview"
+    }
+  ],
+  "deterministicMatrix": {
+    "actualProductionValidators": [
+      "lib/agents/development.ts developmentPreview and immutablePreviewUrl",
+      "lib/projects/preview.ts previewCookies and verifyDeployedPreview"
+    ],
+    "testFile": "tests/task4a-preview-security.test.mjs",
+    "evidenceType": "deterministic-fixture; NOT live proof",
+    "negativeCases": [
+      "wrong repo",
+      "mismatched project id or receipt",
+      "stale tested or reviewed SHA",
+      "PR head changed on second read",
+      "older deployed SHA",
+      "production environment",
+      "non-Preview environment",
+      "forged deployment creator",
+      "pending/failed/missing status",
+      "forged status creator",
+      "missing deployment",
+      "mutable alias",
+      "invalid nonce",
+      "different Vercel host",
+      "path or query in supposed immutable origin",
+      "missing bypass credential",
+      "expired cookie",
+      "cross-host cookie",
+      "insecure cookie",
+      "off-origin authentication redirect",
+      "off-origin application redirect"
+    ],
+    "additionalWorkerFixtureEvidence": "tests/projects-runtime.test.mjs checks waiting delivery, idempotent completion, new-status reacceptance and budget controls",
+    "expectedQualification": "PENDING_CI"
+  },
+  "constraints": {
+    "paidProviderInferenceCalls": 0,
+    "productionCredentialChanges": 0,
+    "productionDeploymentChanges": 0,
+    "ownerApprovalChanges": 0,
+    "productionDatabaseMutations": 0,
+    "merged": false,
+    "task4aComplete": false
+  },
+  "blockers": [
+    {
+      "id": "active_target",
+      "minimumOwnerAction": "Authorize an already-connected disposable target/original project with current open draft PR and tested/reviewed candidate; do not reuse closed PR #545 or create paid services"
+    },
+    {
+      "id": "authenticated_http",
+      "minimumOwnerAction": "Make the existing, already-authorized protected-preview acceptance connection available to the qualifying runtime without exposing its secret; do not disable protection"
+    },
+    {
+      "id": "independent_review",
+      "minimumOwnerAction": "Provide an independent no-paid-inference source/security reviewer or separately authorize a costed reviewer; no spending is authorized by this task"
+    }
+  ],
+  "deferred": [
+    "Task 4B: full deployed functional Chromium suite",
+    "Task 4C: autonomous repair loop",
+    "Task 4D: whole project delivery qualification",
+    "Tasks 5 and 6"
+  ],
+  "sources": {
+    "githubMain": "https://github.com/mfackrell/katie/commit/5d151fd9ac59b24a35ad4b3b0fb8bd949f8c11e1",
+    "githubHistoricalPr": "https://github.com/mfackrell/katie/pull/545",
+    "githubHistoricalCommit": "https://github.com/mfackrell/katie/commit/0720c514a14500535cbf50ee956066e237ab4e67",
+    "vercelHistoricalDeployment": "https://vercel.com/mark-fackrells-projects/katie/FC4Srko8TTLrQVDniM2FSz1UVVQA",
+    "runtimeDiscoveryCode": "https://github.com/mfackrell/katie/blob/main/lib/agents/development.ts",
+    "runtimeProtectedAccessCode": "https://github.com/mfackrell/katie/blob/main/lib/projects/preview.ts",
+    "runtimeProjectWorker": "https://github.com/mfackrell/katie/blob/main/lib/projects/worker.ts",
+    "qualificationPr": "https://github.com/mfackrell/katie/pull/936"
+  }
+}

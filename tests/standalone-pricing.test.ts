@@ -80,7 +80,7 @@ describe("immutable standalone pricing",()=>{
     // Neither lowering detail nor proposing a cheaper model may launder a mutable URL.
     expect(reducePreparedRequest(remote).available).toBe(false);expect(reducePreparedRequest(claude).available).toBe(false);
     const inline=(width:number)=>chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:png(width,1024),detail:"low"}}]}]});
-    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v6"});
+    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v8"});
     expect(inline(1024).hash).not.toBe(inline(1025).hash);
     expect(estimatePreparedRequest(inline(1024)).reservationMicrousd).toBe(estimatePreparedRequest(inline(1025)).reservationMicrousd);
   });
@@ -112,7 +112,7 @@ describe("frozen no-fee OpenAI cache metadata",()=>{
     expect(cached.payload.prompt_cache_key).toBe(key);expect(cached.payload.prompt_cache_retention).toBe("24h");expect(cached.hash).not.toBe(plain.hash);
     expect(prepare({prompt_cache_key:"different-key",prompt_cache_retention:"24h"}).hash).not.toBe(cached.hash);
     expect(prepare({prompt_cache_key:key,prompt_cache_retention:"in_memory"}).hash).not.toBe(cached.hash);
-    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v6");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
+    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v8");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
     expect(quote.assumptions.join(" ")).toContain("reserves full uncached input");
     expect(actualCostFromUsage(cached,{inputTokens:1000,outputTokens:100,cachedInputTokens:500}).actualMicrousd).toBe("2875");
     const restored=JSON.parse(JSON.stringify(cached));restored.payload.prompt_cache_retention="in_memory";expect(estimatePreparedRequest(restored).status).toBe("unsupported");
@@ -202,17 +202,17 @@ describe("verified Claude five-minute cache writes",()=>{
     for(const [model,write,expected] of [["claude-sonnet-4-5","3750","4065"],["claude-haiku-4-5","1250","1355"],["claude-sonnet-4-6","3750","4065"],["claude-opus-4-6","6250","6775"],["claude-sonnet-5-5","2500","2680"],["claude-opus-5-5","5000","5360"]]) {
       const price=getModelPrice("anthropic",model)!;expect(price.cacheWrite5mNanoUsd).toBe(write);expect(priceTokenUsage(price,1000,100,300,500)).toBe(expected);expect(estimatePreparedRequest(prepare(model)).status).toBe("estimated");
     }
-    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-10-28-v3");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
+    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-11-05-v4");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
   });
   it("reserves the full-input write allowance plus output without assuming a hit",()=>{
     const request=prepare(),quote=estimatePreparedRequest(request);const body=JSON.parse(JSON.stringify(request.payload));delete body.system[0].cache_control;const uncached=freezePreparedRequest(request.provider,request.model,request.endpoint,body),baseline=estimatePreparedRequest(uncached);
-    expect(quote).toMatchObject({status:"estimated",estimatorVersion:"standalone-estimator-v6",cacheWriteTtl:"5m"});expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.cacheWriteInputAllowance).toBe(quote.inputTokens);
+    expect(quote).toMatchObject({status:"estimated",estimatorVersion:"standalone-estimator-v8",cacheWriteTtl:"5m"});expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.cacheWriteInputAllowance).toBe(quote.inputTokens);
     expect(quote.reservationMicrousd).toBe(priceTokenUsage(getModelPrice("anthropic",request.model)!,quote.inputTokens,quote.outputAllowance,0,quote.inputTokens));
     expect(BigInt(quote.reservationMicrousd!)).toBeGreaterThan(BigInt(baseline.reservationMicrousd!));expect(quote.assumptions.join(" ")).toContain("deliberately conservative full-input allowance");expect(request.hash).not.toBe(uncached.hash);
     const changed=JSON.parse(JSON.stringify(request.payload));changed.system[0].text+="Changed exact cache prefix";expect(freezePreparedRequest(request.provider,request.model,request.endpoint,changed).hash).not.toBe(request.hash);
   });
   it("settles disjoint uncached/read/write counts once using verified TTL evidence",()=>{
-    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-10-28-v3"});
+    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-11-05-v4"});
     expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
     expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cacheReadInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
     expect(priceTokenUsage(getModelPrice("anthropic","claude-haiku-4-5")!,2,0,1,1)).toBe("2");
@@ -238,6 +238,66 @@ describe("verified Claude five-minute cache writes",()=>{
     const original=prepare("claude-opus-5-5"),candidate=reducePreparedRequest(original,{maxOutputTokens:4096});expect(candidate.available).toBe(true);expect(candidate.revised.model).toBe("claude-sonnet-5-5");expect(candidate.revised.payload.system).toEqual(original.payload.system);expect(candidate.estimate.cacheWriteInputAllowance).toBe(candidate.estimate.inputTokens);expect(candidate.estimate.reservationMicrousd).toBe(priceTokenUsage(getModelPrice("anthropic","claude-sonnet-5-5")!,candidate.estimate.inputTokens,4096,0,candidate.estimate.inputTokens));expect(original.model).toBe("claude-opus-5-5");
   });
 });
+describe("owner-selected reduction alternatives",()=>{
+  it("offers separate context/output trimming and a reviewed cheaper model without mutating the original",()=>{
+    const snapshot={...PRICING_SNAPSHOT,models:[...PRICING_SNAPSHOT.models,{
+      provider:"openai" as const,model:"gpt-5.4-mini",inputNanoUsd:"750",outputNanoUsd:"4500",
+      maxContextTokens:272000,maxOutputTokens:128000,source:"fixture reviewed gpt-5.4-mini price",
+    }]};
+    const original=prepareStandaloneRequest("openai","gpt-5.4-mini","/v1/responses",{
+      model:"gpt-5.4-mini",stream:false,max_output_tokens:4096,
+      input:[
+        {role:"system",content:"Required instructions remain fixed"},
+        {role:"user",content:"Old context ".repeat(2000)},
+        {role:"assistant",content:"Earlier answer ".repeat(1000)},
+        {role:"user",content:"Current user request must be kept"},
+      ],
+    });
+    const trim=reducePreparedRequest(original,{strategy:"truncate_tokens"},snapshot);
+    const alternate=reducePreparedRequest(original,{strategy:"switch_model"},snapshot);
+    expect(trim.available).toBe(true);expect(trim.revised.model).toBe(original.model);
+    expect(trim.revised.payload.max_output_tokens).toBe(2048);
+    expect((trim.revised.payload.input as unknown[]).length).toBe(3);
+    expect((trim.revised.payload.input as unknown[])[0]).toEqual((original.payload.input as unknown[])[0]);
+    expect((trim.revised.payload.input as unknown[]).at(-1)).toEqual((original.payload.input as unknown[]).at(-1));
+    expect(trim.changes.some(change=>change.kind==="model")).toBe(false);
+    expect(alternate.available).toBe(true);expect(alternate.revised.model).toBe("gpt-5-mini");
+    expect(alternate.revised.endpoint).toBe(original.endpoint);
+    expect(alternate.revised.payload.input).toEqual(original.payload.input);
+    expect(alternate.revised.payload.max_output_tokens).toBe(4096);
+    expect(alternate.changes).toEqual([{kind:"model",path:"model",before:"gpt-5.4-mini",after:"gpt-5-mini"}]);
+    expect(alternate.revised.payload.model).toBe("gpt-5-mini");
+    expect(original.payload.model).toBe("gpt-5.4-mini");
+    expect(trim.revised.hash).not.toBe(alternate.revised.hash);
+    expect(trim.revised.hash).not.toBe(original.hash);
+    expect(alternate.revised.hash).not.toBe(original.hash);
+    for(const candidate of [trim,alternate]) {
+      expect(candidate.estimate.status).toBe("estimated");
+      expect(BigInt(candidate.estimate.reservationMicrousd!)).toBeLessThan(BigInt(estimatePreparedRequest(original,snapshot).reservationMicrousd!));
+    }
+  });
+  it("allows explicitly requested output token truncation but not an implicit output-only reduction",()=>{
+    const original=chat({messages:[{role:"user",content:"short"}],max_tokens:4096},"gpt-4o-mini");
+    const before=reducePreparedRequest(original);expect(before.available).toBe(false);
+    const trim=reducePreparedRequest(original,{strategy:"truncate_tokens"});
+    expect(trim.available).toBe(true);expect(trim.revised.model).toBe(original.model);
+    expect(trim.revised.payload.max_tokens).toBe(2048);
+    expect(trim.changes.some(change=>change.kind==="model")).toBe(false);
+    expect(trim.tradeoffs.join(" ")).toContain("shorten answers");
+  });
+  it("refuses unsupported model switches and model-bound reasoning continuations",()=>{
+    const alreadyCheap=chat({max_tokens:4096},"gpt-4o-mini");
+    const unavailable=reducePreparedRequest(alreadyCheap,{strategy:"switch_model"});
+    expect(unavailable.available).toBe(false);expect(unavailable.revised.hash).toBe(alreadyCheap.hash);
+    const opaque=chat({messages:[
+      {role:"assistant",content:null,tool_calls:[{id:"x",type:"function",function:{name:"lookup",arguments:"{}"}}]},
+      {role:"user",content:"Finish this tool workflow"},
+    ],max_tokens:4096});
+    const blocked=reducePreparedRequest(opaque,{strategy:"switch_model"});
+    expect(blocked.available).toBe(false);expect(blocked.revised.hash).toBe(opaque.hash);
+  });
+});
+
 describe("deterministic reduce cost candidate",()=>{
   it("uses a reviewed cheaper model for short text instead of output-only savings",()=>{
     const original=chat({messages:[{role:"user",content:"Explain this briefly"}],max_tokens:4096});

@@ -1,8 +1,10 @@
+import {createTask4aVerificationFirstCapability} from '../scripts/benchmark/native-wip-recovery.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
+import {classifyTask4aRecoveryHistory} from '../scripts/benchmark/ordinary-native-authority.mjs';
 const source=readFileSync('lib/agents/development.ts','utf8');
 const start=source.indexOf('async function recoverOwnerRenewalPregrant('),end=source.indexOf('// Capability proof',start);
 const code=stripTypeScriptTypes(source.slice(start,end));
@@ -28,10 +30,15 @@ test('uncertain accepted dispatch is not automatically submitted twice',async()=
 test('host recovery checks record/release and uses only recovery grant endpoint',async()=>{
  const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
  const start=host.indexOf('if(proof.pregrantRecoveryId){'),end=host.indexOf('const clientToken=',start);
- const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied',host.slice(start,end)+'return {grantId,executionEpoch};');
+ // The extracted block depends on the continuation read earlier by the real host.
+ // This legacy pre-grant fixture has no capacity-renewal continuation.
+ // These authority fixtures represent tasks with no saved WIP. The full host
+ // preflight tests separately exercise restoration rejection before grants.
+ const recoveryFixture="const providerExecution=false;const project={organization_version:0};const requestFile='/trusted/request',boundary={root:'/fixture'};const execFileSync=()=> '{}',join=(...parts)=>parts.join('/'),recoveryRefs=()=>[];";
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','approval','createTask4aVerificationFirstCapability','classifyTask4aRecoveryHistory','continuation','const ordinary=false;'+recoveryFixture+host.slice(start,end)+'return {grantId,executionEpoch};');
  const proof={pregrantRecoveryId:'recovery',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task'};
  for(const wrong of [false,true]){
-  const calls=[];const promise=run(proof,{},async()=>({id:'recovery',renewal_id:'renewal',release_sha:wrong?'old':'new'}),{external:{pregrantRecoveryId:'recovery'}},{env:{GITHUB_SHA:'new'}},{rpc:async(name,args)=>{calls.push(name);assert.equal(args.p_approval,'approval');return {data:{grantId:'grant',executionEpoch:4}};}},()=>({toString:()=> 'token'}),()=> 'digest',message=>{throw Error(message);});
+  const calls=[];const promise=run(proof,{},async()=>({id:'recovery',renewal_id:'renewal',release_sha:wrong?'old':'new'}),{external:{pregrantRecoveryId:'recovery'}},{env:{GITHUB_SHA:'new'}},{rpc:async(name,args)=>{calls.push(name);assert.equal(args.p_approval,'approval');return {data:{grantId:'grant',executionEpoch:4}};}},()=>({toString:()=> 'token'}),()=> 'digest',message=>{throw Error(message);},{id:proof.approvalId},createTask4aVerificationFirstCapability,classifyTask4aRecoveryHistory);
   if(wrong){await assert.rejects(promise,/release mismatch/);assert.deepEqual(calls,[]);}else{assert.equal((await promise).executionEpoch,4);assert.deepEqual(calls,['benchmark_issue_development_pregrant_recovery_grant']);}
  }
 });
@@ -48,3 +55,5 @@ test('reconciliation waits before recovery dispatch and cannot reuse predecessor
  const runs=[{id:'old-failure',created_at:'2026-10-29T20:30:00Z',head_sha:'old',event:'workflow_dispatch'},{id:'new-attempt',created_at:'2026-10-29T21:01:00Z',head_sha:'new',event:'workflow_dispatch'},{id:'wrong-event',created_at:'2026-10-29T21:01:00Z',head_sha:'new',event:'issues'}];
  assert.deepEqual(filter(task,runs),['new-attempt']);
 });
+
+

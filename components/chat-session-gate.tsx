@@ -39,11 +39,14 @@ function VerifiedWorkspaceSession({children}:{children:React.ReactNode}){
     const refresh=()=>{if(active)void bootstrap();};
     // Proactively rotate the short-lived HttpOnly access cookie so ordinary
     // long conversations do not suddenly fail after thirty minutes.
-    const interval=window.setInterval(refresh,10*60*1000);
+    const interval=window.setInterval(refresh,2*60*1000);
+    const onVisible=()=>{if(document.visibilityState==='visible')void bootstrap();};
+    document.addEventListener('visibilitychange',onVisible);
     window.addEventListener('focus',refresh);
     window.addEventListener('katie-owner-session-changed',onChanged);
     return ()=>{
       active=false;window.clearInterval(interval);
+      document.removeEventListener('visibilitychange',onVisible);
       window.removeEventListener('focus',refresh);
       window.removeEventListener('katie-owner-session-changed',onChanged);
     };
