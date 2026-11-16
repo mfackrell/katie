@@ -1289,7 +1289,7 @@ export function guardExplicitWrittenObjective(
   if (!textDirective) return { classification, overridden: false, reason: null };
   // Putting lettering onto pixels is an image edit, not drafting text for a
   // separate written deliverable. Preserve the classifier's image capability.
-  const letteringOntoImage = /\\b(?:write|add|put|place|overlay|insert|print)\\b.{0,100}\\b(?:text|words|caption|lettering|title|label)\\b.{0,100}\\b(?:on|onto|over|across|inside|in|to)\\b.{0,65}\\b(?:image|photo|picture|portrait|illustration|canvas|screenshot|graphic)\\b/i.test(prompt);
+  const letteringOntoImage = /\b(?:write|add|put|place|overlay|insert|print)\b.{0,100}\b(?:text|words|caption|lettering|title|label)\b.{0,100}\b(?:on|onto|over|across|inside|in|to)\b.{0,65}\b(?:image|photo|picture|portrait|illustration|canvas|screenshot|graphic)\b/i.test(prompt);
   if (letteringOntoImage) {
     return { classification, overridden: false, reason: null };
   }
