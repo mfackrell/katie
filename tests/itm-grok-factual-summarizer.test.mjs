@@ -638,9 +638,25 @@ test("completed captured stages replay without provider work after a commit fail
   allowCommit=true;
   assert.equal(await h.run(),"committed");
   assert.equal(h.calls.length,2,"offline receipt recovery has no provider call");
+  assert.equal(h.events.some(e=>e.name==="claim_itm_stage2_one_shot"),false,
+    "initial batch with no prior cursor must not claim the historical Claude exception");
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
   assert.equal(h.events.some(e=>e.name==="finish_intermediate_memory_batch"&&e.args.p_state==="completed"&&
     e.args.p_processor_version.endsWith(":offline-recovery")),true);
+});
+
+
+test("immutable same-provider receipts survive two failed CAS attempts without another inference",async()=>{
+  let commits=0;
+  const h=harness({commitResult:()=>++commits>=3});
+  assert.equal(await h.run(),"deferred","original paid attempt fails checkpoint");
+  assert.equal(await h.run(),"deferred","first offline CAS fails but its receipts survive");
+  assert.equal(await h.run(),"committed","blocked offline claim permits receipt-only CAS replay");
+  assert.equal(h.calls.length,2,"only the initial two provider stages were transmitted");
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+  assert.equal(h.events.filter(e=>e.name==="claim_itm_stage2_one_shot").length,0,
+    "the unrelated one-shot Claude grant must not be consumed");
+  assert.equal(h.events.filter(e=>e.name==="commit_intermediate_memory_checkpoint").length,3);
 });
 
 test("specific non-sensitive validation code identifies bad episode summary bounds",async()=>{

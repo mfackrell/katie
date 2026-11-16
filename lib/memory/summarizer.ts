@@ -576,7 +576,11 @@ async function recoverCapturedItmStages(input:{
         p_processor_version:claimVersion,
       });
       if(claim.error)throw new Error("ITM_RECEIPT_RECOVERY_CLAIM_UNAVAILABLE");
-      if(claim.data!=="claimed")return claim.data==="blocked"?"blocked":"deferred";
+      // Only source-validated immutable receipts reach this path. A prior
+      // BLOCKED offline attempt may retry the database CAS, never inference.
+      // A concurrent PROCESSING attempt remains deferred.
+      if(claim.data!=="claimed"&&claim.data!=="blocked")return "deferred";
+      const newlyClaimed=claim.data==="claimed";
       const payload={
         version:2,purpose:"Reconciled context older than the last 30 completed conversational exchanges.",
         summary,summarizedThroughMessageId:input.batchEndMessageId,
@@ -588,17 +592,21 @@ async function recoverCapturedItmStages(input:{
         p_expected_cursor:input.expectedCursor,p_content:payload,
       });
       const committed=commit.data===true&&!commit.error;
-      const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch",{
-        p_actor_id:input.actorId,p_chat_id:input.chatId,
-        p_batch_end_message_id:input.batchEndMessageId,
-        p_processor_version:claimVersion,
-        p_state:committed?"completed":"blocked",
-        p_reason:committed?null:"Recovery CAS did not advance checkpoint",
-      });
-      if(finished.error||finished.data!==true)
-        console.error("[Summarizer] Recorded recovery completion status unavailable",{
-          chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+      // Do not rewrite a historical terminal claim. If a blocked attempt
+      // finally commits on an offline replay, the CAS checkpoint is proof.
+      if(newlyClaimed){
+        const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch",{
+          p_actor_id:input.actorId,p_chat_id:input.chatId,
+          p_batch_end_message_id:input.batchEndMessageId,
+          p_processor_version:claimVersion,
+          p_state:committed?"completed":"blocked",
+          p_reason:committed?null:"Recovery CAS did not advance checkpoint",
         });
+        if(finished.error||finished.data!==true)
+          console.error("[Summarizer] Recorded recovery completion status unavailable",{
+            chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+          });
+      }
       if(!committed)return "deferred";
       console.info("[Summarizer] ITM checkpoint recovered from captured provider stages without spending",{
         chatId:input.chatId,sourceEnd:input.batchEndMessageId,
@@ -630,6 +638,10 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
   actorId:string;chatId:string;batchEndMessageId:string;expectedCursor:string|null;
   sourceSha256:string;summary:string;batch:Message[];sourceMessageCount:number;
 }):Promise<IntermediateUpdateResult|null>{
+  // The owner-granted mixed-provider exception is anchored to an existing
+  // checkpoint. Initial batches (null cursor) must instead reach ordinary
+  // same-provider immutable-receipt recovery; no Stage 2 grant is claimed.
+  if(input.expectedCursor===null)return null;
   const admin=getSupabaseAdminClient();
   const episodeKey=itmReceiptKey({...input,provider:"grok",stage:"episodes"});
   const savedEpisodes=await readItmStageReceipt(episodeKey);
@@ -647,7 +659,6 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
   const stage2Key=itmReceiptKey({...input,provider:"anthropic",stage:"retention",excerpts});
   let retention=await readItmStageReceipt(stage2Key);
   if(!retention){
-    if(!input.expectedCursor)return "blocked";
     const permission=await admin.rpc<boolean>("claim_itm_stage2_one_shot",{
       p_actor_id:input.actorId,p_chat_id:input.chatId,
       p_batch_end_message_id:input.batchEndMessageId,
