@@ -6,12 +6,16 @@ on:
       - .github/workflows/generated-image-engineering.yml
       - scripts/generated-image-engineering-patch.mjs
 permissions:
-  contents: read
+  contents: write
 jobs:
   source:
     if: github.repository == 'mfackrell/katie' && github.ref == 'refs/heads/fix/generated-image-perception-20261116'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: offline-anon
+      SUPABASE_SERVICE_ROLE_KEY: offline-service
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -21,17 +25,60 @@ jobs:
           node-version: '22'
       - name: Install frozen dependencies without lifecycle hooks
         run: npm ci --ignore-scripts
-      - name: Export source and dependency cache, never environment files
+      - name: Apply verified source patch without inference
+        run: node scripts/generated-image-engineering-patch.mjs
+      - name: Typecheck and compile tests
         run: |
-          git archive --format=tar.gz --output=/tmp/katie-source.tar.gz HEAD
-          git rev-parse HEAD > /tmp/source-sha.txt
-          tar -czf /tmp/katie-dependencies.tar.gz node_modules
+          npm run typecheck
+          npx tsc -p tsconfig.tests.json
+          mkdir -p .test-dist/node_modules
+          ln -s .. .test-dist/node_modules/@
+      - name: Qualify generated images and affected regression paths offline
+        run: |
+          set -o pipefail
+          node --test --test-concurrency=1 \
+            .test-dist/tests/generated-image-perception.test.js \
+            .test-dist/tests/direct-upload.test.js \
+            .test-dist/tests/still-image-observations.test.js \
+            .test-dist/tests/visual-memory.test.js \
+            .test-dist/tests/attachment-discovery.test.js \
+            .test-dist/tests/attachment-continuity.test.js \
+            tests/chat-clarification-routing.test.mjs \
+            tests/media-memory-route.test.mjs \
+            tests/pdf-saved-comparison.test.mjs \
+            tests/pdf-source-scope.test.mjs \
+            tests/video-timeline-review.test.mjs | tee /tmp/generated-image-regressions.log
+      - name: Lint changed application and test source
+        run: |
+          npx eslint app/api/chat/route.ts components/chat-panel.tsx \
+            lib/chat/attachment-continuity.ts lib/chat/image-source-followup.ts \
+            lib/images/generated-source.ts lib/types/chat.ts \
+            lib/uploads/generated-image-observation.ts lib/uploads/generated-image-service.ts \
+            lib/uploads/generated-image-store.ts lib/uploads/stored-uploads.ts \
+            tests/generated-image-perception.test.ts
+      - name: Commit qualified implementation only to isolated branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = refs/heads/fix/generated-image-perception-20261116
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          while IFS= read -r path; do git add -- "$path"; done < /tmp/generated-image-paths.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat(images): integrate qualified generated-image perception and source recall'
+            askpass=$(mktemp)
+            printf '%s\n' '#!/bin/sh' 'case "$1" in *Username*) printf "%s\n" "x-access-token";; *) printf "%s\n" "$GH_TOKEN";; esac' > "$askpass"
+            chmod 700 "$askpass"
+            trap 'rm -f "$askpass"' EXIT
+            GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push https://github.com/mfackrell/katie.git HEAD:refs/heads/fix/generated-image-perception-20261116
+          fi
+          git rev-parse HEAD > /tmp/generated-image-candidate.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: generated-image-engineering-offline
+          name: generated-image-engineering-evidence
           path: |
-            /tmp/katie-source.tar.gz
-            /tmp/source-sha.txt
-            /tmp/katie-dependencies.tar.gz
-          compression-level: 0
-          retention-days: 1
+            /tmp/generated-image-regressions.log
+            /tmp/generated-image-candidate.txt
+          retention-days: 3
