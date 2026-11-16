@@ -60,5 +60,5 @@ test("actual chat route persists uploaded source with the local receipt, before 
   assert.match(route, /fileOnlyPdfReceipt \? \{reason: "upload-receipt" as const,text:fileOnlyPdfReceipt\}/);
   assert.match(route, /await completeChatRequest\(requestId, \{/);
   assert.match(route, /if \(localKatieResponse\) \{/);
-  assert.match(route, /const localUserMessageId = pdfProgress\.projectClarification \|\| fileOnlyPdfReceipt \? taskProgressUserMessageId/);
+  assert.match(route, /const localUserMessageId = imageFollowup \|\| pdfProgress\.projectClarification \|\| fileOnlyPdfReceipt \? taskProgressUserMessageId/);
 });
