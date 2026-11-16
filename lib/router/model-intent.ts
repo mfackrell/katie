@@ -1283,9 +1283,9 @@ export function guardExplicitWrittenObjective(
   if (classification.intent !== "image-generation") {
     return { classification, overridden: false, reason: null };
   }
-  const textDirective = /\\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\\s+(?:(?:me|us)\\s+)?(?:.{0,90}?)\\b(?:bio|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\\b/i.exec(prompt);
+  const textDirective = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.exec(prompt);
   if (!textDirective) return { classification, overridden: false, reason: null };
-  const imageDirective = /\\b(?:generate|create|draw|render|design|make)\\s+(?:(?:me|us)\\s+)?(?:.{0,80}?)\\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\\b/i.exec(prompt);
+  const imageDirective = /\b(?:generate|create|draw|render|design|make)\s+(?:(?:me|us)\s+)?(?:.{0,80}?)\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\b/i.exec(prompt);
   if (imageDirective && imageDirective.index < textDirective.index) {
     return { classification, overridden: false, reason: null };
   }
