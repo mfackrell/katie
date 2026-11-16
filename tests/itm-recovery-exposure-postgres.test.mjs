@@ -26,7 +26,7 @@ test("native ITM recovery inspection is actor-bound and preserves prior paid pro
     server=true;
     client=new pg.Client({host:root,port:55492,user:"postgres",database:"postgres",connectionTimeoutMillis:5000});
     await client.connect();
-    await client.query("create role service_role nologin; create role anon nologin; create role authenticated nologin");
+    await client.query("create role service_role nologin bypassrls; create role anon nologin; create role authenticated nologin");
     await client.query(`
       create table public.chats(id uuid primary key,actor_id uuid not null);
       create table public.standalone_provider_attempts(
@@ -117,7 +117,7 @@ test("v14 ITM stage-receipt migration enforces source binding, immutability and 
     server=true;
     client=new pg.Client({host:root,port:55494,user:"postgres",database:"postgres",connectionTimeoutMillis:5000});
     await client.connect();
-    await client.query("create role service_role nologin; create role anon nologin; create role authenticated nologin");
+    await client.query("create role service_role nologin bypassrls; create role anon nologin; create role authenticated nologin");
     await client.query(`
       create table public.chats(id uuid primary key,actor_id uuid not null);
       create table public.standalone_provider_attempts(
