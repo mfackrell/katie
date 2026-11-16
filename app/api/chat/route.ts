@@ -8,6 +8,10 @@ import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/aut
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting, runWithDurablePostAnswerAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
 import { imageGenerationCapableModel, containsGeneratedImage } from "@/lib/chat/image-generation-contract";
+import { generatedImageService } from "@/lib/uploads/generated-image-service";
+import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
+import { resolveImageFollowup } from "@/lib/chat/image-source-followup";
+import { observeGeneratedImage } from "@/lib/uploads/generated-image-observation";
 import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
@@ -187,6 +191,7 @@ const requestSchema = z.object({
   chatId: z.string().min(1),
   message: z.string().min(1),
   documentSourceMessageId: z.string().uuid().optional(),
+  imageSource: z.object({messageId:z.string().uuid(),assetIndex:z.number().int().min(0).max(4)}).strict().optional(),
   images: z.array(z.string()).optional(),
   fileReferences: z.array(fileReferenceSchema).optional(),
   attachmentManifest: attachmentManifestSchema.optional(),
@@ -863,6 +868,25 @@ async function executeChat(request: NextRequest) {
       }
       return files;
     }));
+    const imageFollowup = benchmarkRelay || currentAgentTask() ? null : await cachedWorkflowValue("image-source-followup", async () => {
+      let imageHistory = attachmentHistory;
+      if (payload.imageSource && !imageHistory.some(turn=>turn.id===payload.imageSource!.messageId)) {
+        const selected = await getMessageById(chatId,payload.imageSource.messageId);
+        if (selected) imageHistory = [...imageHistory,selected];
+      }
+      return resolveImageFollowup({message,history:imageHistory,catalog,actorId,chatId,
+        freshCount:newAttachments.length,pin:payload.imageSource}, {
+        registerLegacy:(source,index)=>generatedImageService().registerLegacy(actorId,chatId,source,index),
+        read:async source=>source.generatedSource
+          ? (await readGeneratedImage(actorId,chatId,source.id)).descriptor : source,
+      });
+    });
+    // Catalog snapshots may predate on-demand legacy registration. Add only
+    // exact server-verified current-chat sources, not provider URLs or guesses.
+    for (const selected of imageFollowup?.selections ?? []) {
+      const at=catalog.findIndex(file=>file.id===selected.attachment.id && file.chatId===chatId);
+      if (at<0) catalog.push(selected.attachment); else catalog[at]=selected.attachment;
+    }
     const temporalIntent = timelineIntent(message);
     const freshVideoReferences = newAttachments.filter(file => file.mimeType.startsWith("video/"));
     const timelineSelection = temporalIntent
@@ -897,13 +921,30 @@ async function executeChat(request: NextRequest) {
     const identitySourceAllowed = (file: (typeof newAttachments)[number]) => file.mimeType !== "application/pdf" ||
       Boolean(taskIdentityPdfSelection?.fileIds.has(file.fileId));
     const freshTaskDescriptions = new Map<string, Awaited<ReturnType<typeof describeAttachmentEvidence>>>();
-    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && !isStillImageCreationRequest(message);
+    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && imageFollowup?.operation !== 'edit' && !isStillImageCreationRequest(message);
     const imageObservationStages:string[]=[];
     const observeImages = async (files:typeof newAttachments,final=false) => {
       const images=files.filter(file=>file.mimeType.startsWith('image/'));
       if(!standaloneImageObservation || !images.length)return;
-      const descriptions=await observeStandaloneStillImages(images,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
-      for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+      const ordinary:typeof images=[];
+      for (const reference of images) {
+        const saved=catalog.find(file=>file.id===reference.fileId && file.generatedSource && file.actorId===actorId && file.chatId===chatId);
+        if (!saved) {ordinary.push(reference);continue;}
+        if (freshTaskDescriptions.has(reference.fileId)) continue;
+        // Observation runs during preparation, before the later chat receipt is
+        // claimed. Use the already leased workflow ID, never an uninitialized
+        // downstream requestId or a newly generated request identifier.
+        const observationRequestId=verifiedWorkflow?.workflow.request_id;
+        if (!observationRequestId) throw new Error('Generated-image inspection requires its durable request identity.');
+        const inspected=await observeGeneratedImage({actorId,chatId,requestId:observationRequestId,attachment:saved,reference,question:message,
+          onStatus:stage=>imageObservationStages.push(stage)});
+        freshTaskDescriptions.set(reference.fileId,inspected.observation);
+        const at=catalog.findIndex(file=>file.id===saved.id);catalog[at]=inspected.descriptor;
+      }
+      if (ordinary.length) {
+        const descriptions=await observeStandaloneStillImages(ordinary,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
+        for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+      }
     };
     await observeImages(newAttachments);
     const retainedImageDescriptors=standaloneImageObservation
@@ -957,7 +998,7 @@ async function executeChat(request: NextRequest) {
       projectRelation: contextClassification?.projectRelation,
       projectTransition: contextClassification?.projectTransition,
     });
-    const pdfReviewContinuation = await getPendingReviewClarification(actorId, chatId, {
+    const pdfReviewContinuation = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: pdfProgress, history: attachmentHistory,
     });
     const pdfTaskContext = pdfReviewContinuation &&
@@ -1033,7 +1074,7 @@ async function executeChat(request: NextRequest) {
         context: mediaMemory.context + "\n" + recalledEpisodes,
       };
     }
-    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
+    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : imageFollowup ?? (pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
       : pdfMemoryDecision ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
@@ -1044,7 +1085,7 @@ async function executeChat(request: NextRequest) {
           newAttachments.map(file => file.fileName),
           { currentChatId: chatId, activeProject: pdfProgress.projectContext
             ? { id: pdfProgress.projectContext.userMessageId, text: pdfProgress.projectContext.text } : null },
-        ));
+        )));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
     // The selector is advisory. An unrelated current request must NEVER
@@ -1107,6 +1148,11 @@ async function executeChat(request: NextRequest) {
       if(standaloneImageObservation)for(const file of restored.references.filter(file=>file.mimeType.startsWith('image/'))){
         const original=savedVideoSourceByFileId.get(file.fileId);
         const descriptor=original?(updatedSavedImageDescriptors.get(original.id)??original):undefined;
+        if (descriptor?.generatedSource) {
+          const latest=catalog.find(saved=>saved.id===descriptor.id && saved.chatId===descriptor.chatId);
+          if (latest) updatedSavedImageDescriptors.set(descriptor.id,latest);
+          continue; // The source-claimed generated-image observer already committed this evidence.
+        }
         const description=freshTaskDescriptions.get(file.fileId);
         if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage||
           description.observationAgreement!==descriptor.observationAgreement||
@@ -1380,7 +1426,9 @@ async function executeChat(request: NextRequest) {
       !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
       ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
       : null;
-    const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = imageFollowup?.clarification
+      ? {reason:"image-source" as const,text:imageFollowup.clarification}
+      : !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
@@ -1398,8 +1446,8 @@ async function executeChat(request: NextRequest) {
         chatId,
       });
 
-      const localUserMessageId = pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();
-      const localAssistantMessageId = pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();
+      const localUserMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();
+      const localAssistantMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();
       const clarificationAttachments: ConversationAttachment[] = [];
       if (pdfProgress.projectClarification || fileOnlyPdfReceipt) {
         for (const [index, attachment] of newAttachments.entries()) {
@@ -1568,7 +1616,7 @@ async function executeChat(request: NextRequest) {
     }
     // Current uploads are authoritative. Historical website pixels must never
     // replace them or inflate an ordinary photo request into a screenshot batch.
-    if(!newAttachments.length)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
+    if(!newAttachments.length && !imageFollowup)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
     if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
     const activeRepoContext = effectiveRepoId ? await loadActiveRepoContext(effectiveRepoId) : null;
     const sessionContext: ChatSessionContext = {
@@ -1707,7 +1755,7 @@ async function executeChat(request: NextRequest) {
           requestId
         }
       );
-      const overrideIntent = overrideClassification.intent;
+      const overrideIntent = imageFollowup?.operation === "edit" ? "image-generation" as const : overrideClassification.intent;
       responsePurposeHint = overrideClassification.responsePurpose;
       projectRelationHint = overrideClassification.projectRelation;
       const { decision: validatedOverride, recoveredIntent } = validateManualOverrideWithRecovery({
@@ -1721,6 +1769,7 @@ async function executeChat(request: NextRequest) {
       if (validatedOverride.changed) {
         return await rejectTracked(`Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`);
       }
+      if (imageFollowup?.operation === "edit") resolvedRequestIntent = "image-generation";
       if (recoveredIntent) {
         // Recovery only: the request contains no visual input, so retrying its
         // incompatible vision classification as text is safe and non-fatal.
@@ -1801,6 +1850,7 @@ async function executeChat(request: NextRequest) {
         `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=none intentSource=router-fallback`
       );
       const routingDecision = await chooseProvider(message, routingContext, providers, {
+        ...(imageFollowup?.operation==='edit' && imageFollowup.selections.length ? {requestIntent:'image-generation' as const} : {}),
         hasImages: hasVisualInput,
         hasVideoInput,
         actorId,
@@ -1864,7 +1914,7 @@ async function executeChat(request: NextRequest) {
     // Routing selects execution capabilities, not a different parent task.
     taskProgress = pdfProgress;
     projectRelationHint = contextClassification?.projectRelation;
-    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId, {
+    const pendingReviewClarification = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: taskProgress, history, projectRelation: projectRelationHint,
     });
     const verifyingSavedDraft = Boolean(pendingReviewClarification &&
@@ -1937,7 +1987,7 @@ async function executeChat(request: NextRequest) {
       pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
       projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
     });
-    const taskProgressContext = taskProgressPrompt.text;
+    const taskProgressContext = imageFollowup ? "" : taskProgressPrompt.text;
     console.info("[TaskProgress] Prompt scope", {
       requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
       historyTurnCount: history.length,
@@ -3783,7 +3833,7 @@ ${chunkWorkflowSummary}`;
               streamedText = result.text;
             }
 
-            const imageAssets =
+            let imageAssets:import("@/lib/images/generated-source").ImageAsset[] =
               result.content
                 ?.map((part) => {
                   const partType = typeof part.type === "string" ? part.type.toLowerCase() : "";
@@ -3833,12 +3883,29 @@ ${chunkWorkflowSummary}`;
             progress("save", "Response generated; saving the final answer.");
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
+            const generatedImages = imageAssets.length && imageGenerationRequested
+              ? await cachedWorkflowValue(`generated-images:${assistantMessageId}`,()=>generatedImageService().retainResult({
+                  actorId,chatId,messageId:assistantMessageId,requestId,createdAt:workflowTimestamp(),
+                  provider:result!.provider,model:result!.model,assets:imageAssets,
+                  parents:imageFollowup?.operation==='edit' ? savedAttachments.filter(file=>attachmentSourceIds.has(file.id)).map(file=>({
+                    attachmentId:file.id,sourceChatId:file.chatId??chatId,
+                    ...(file.generatedSource?.sourceHash?{sourceHash:file.generatedSource.sourceHash}:{}),
+                  })) : [],
+                })) : null;
+            if (generatedImages) {
+              // A checkpoint proves prior persistence, not that an original
+              // remains present now. Do not republish a stale retention claim.
+              for (const source of generatedImages.attachments)
+                await readGeneratedImage(actorId,chatId,source.id);
+              imageAssets = generatedImages.assets;
+            }
             if (!currentStandaloneWorkflow()?.resumed || !await getMessageById(chatId, assistantMessageId)) await saveMessage(chatId, {
               id: assistantMessageId,
               role: "assistant",
               model: result.model,
               content: assistantText,
               assets: imageAssets,
+              ...(generatedImages ? {attachments:generatedImages.attachments} : {}),
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
             emitChunk({
