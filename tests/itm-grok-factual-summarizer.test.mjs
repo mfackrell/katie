@@ -89,8 +89,12 @@ function harness({
     async rpc(name, args) {
       events.push({ name, args: copy(args) });
       if (name === "inspect_itm_batch_provider_exposure") {
+        const matching=[...claims.entries()].filter(([key])=>key.endsWith(":"+args.p_batch_end_message_id));
+        const active=matching.some(([,state])=>state==="processing");
         return exposureInspectionError ? {data:null,error:{message:"Inspection unavailable"}} :
-          {data:{...copy(priorExposure),terminal:Boolean(priorExposure.terminal)||terminalBatches.has(args.p_batch_end_message_id)},error:null};
+          {data:{...copy(priorExposure),
+            in_flight:priorExposure.in_flight || active,
+            terminal:Boolean(priorExposure.terminal)||terminalBatches.has(args.p_batch_end_message_id)},error:null};
       }
       if (name === "claim_intermediate_memory_batch") {
         if (args.p_expected_cursor !== (memory.summarizedThroughMessageId ?? null))
@@ -166,8 +170,8 @@ function harness({
         events.push({name:"stage_receipt_saved",provider:key.provider,stage:key.stage});
         return saved;
       },
-      inspectPriorItmClaims: async()=>{
-        const versions=[...claims.keys()];
+      inspectPriorItmClaims: async(actorId,chatId,sourceEnd)=>{
+        const versions=[...claims.keys()].filter(key=>key.endsWith(":"+sourceEnd));
         return {grok:versions.some(k=>k.includes(":grok:")),
           anthropic:versions.some(k=>k.includes(":anthropic:"))};
       },
@@ -429,7 +433,8 @@ test("atomic cursor prevents stale writes and preserves previous memory", async 
   assert.deepEqual(h.memory(), prior);
   assert.equal(h.writes.length, 0);
   assert.equal(h.events.find(e=>e.name==="finish_intermediate_memory_batch").args.p_state,"blocked");
-  assert.equal(await h.run(),"blocked","stale paid claim cannot retransmit");
+  assert.equal(await h.run(),"deferred","cached stage receipts may retry checkpoint CAS without another provider call");
+  assert.equal(h.calls.length,2,"no additional paid provider dispatch");
 });
 
 test("model prompts require factual narratives and prohibit interpretive memory", async () => {
