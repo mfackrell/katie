@@ -279,3 +279,25 @@ test('image reply control sends exact message/index identity rather than a user-
   assert.match(panel,/Use this image in my next message/);
   assert.match(panel,/aria-pressed=\{replyTo\?\.id === message.id/);
 });
+
+
+test('actual route restoration revalidates generated original bytes even when source selection was checkpointed',async()=>{
+  const fake=storage(),saved=await generate(fake,{url:await image()}),d=saved.attachments[0];
+  const route=readFileSync('app/api/chat/route.ts','utf8');
+  const start=route.indexOf('    const restored = await loadSelectedAttachmentSources(');
+  const end=route.indexOf('    // Index the exact selected source',start);
+  assert.ok(start>0&&end>start);
+  const code=ts.transpileModule(`(async()=>{${route.slice(start,end)}return restored;})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  let genericReads=0;
+  const run=()=>vm.runInNewContext(code,{
+    actorId,chatId,attachmentDecision:{method:'continuity',selections:[{attachment:d,mode:'source'}]},
+    getChatById:async()=>({actorId,id:chatId}),
+    loadSelectedAttachmentSources:async(_decision:unknown,restore:(source:ConversationAttachment)=>Promise<unknown>)=>restore(d),
+    readGeneratedImage:(...args:Parameters<ReturnType<typeof fake.factory>['readGenerated']>)=>fake.factory().readGenerated(...args),
+    restoreConversationAttachment:async()=>{genericReads++;throw Error('Cannot trust generic cached renderer without the original');},
+  });
+  assert.equal((await run()).fileId,d.id);
+  fake.files.delete(`chats/${chatId}/${d.id}.source`);
+  await assert.rejects(run(),/unavailable/);
+  assert.equal(genericReads,0);
+});
