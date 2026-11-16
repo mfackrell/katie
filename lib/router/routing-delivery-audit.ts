@@ -20,7 +20,7 @@ export function auditRoutingDelivery(input: {
   imageCount: number;
 }): RoutingDeliveryAudit {
   const message = input.userMessage;
-  const writeCommand = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.test(message);
+  const writeCommand = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio(?:graphy)?|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.test(message);
   const imageCommand = /\b(?:generate|create|draw|render|design|make)\s+(?:(?:me|us)\s+)?(?:.{0,80}?)\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\b/i.test(message);
   // A request to place words onto pixels is an image edit, not a separate
   // biography/caption draft. Do not mis-audit it as missing written prose.
