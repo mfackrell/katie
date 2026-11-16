@@ -10,6 +10,7 @@ on:
       - "components/director-recovery-control.tsx"
       - "tests/helpers/assert-blocked-owner-recovery.mjs"
       - "tests/helpers/assert-blocked-owner-browser.mjs"
+      - "tests/blocked-owner-committed-concurrency.test.mjs"
       - "tests/helpers/assert-paused-window-renewal.mjs"
       - ".github/workflows/blocked-owner-recovery-qualification.yml"
 
@@ -53,3 +54,5 @@ jobs:
           test -x /usr/lib/postgresql/16/bin/initdb
       - name: Run original consumed-receipt fixture and guarded owner transition
         run: node --test tests/benchmark-renewal-postgres.test.mjs
+      - name: Prove real competing owner RPCs in committed disposable PostgreSQL
+        run: node --test tests/blocked-owner-committed-concurrency.test.mjs
