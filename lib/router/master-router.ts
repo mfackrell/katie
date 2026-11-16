@@ -54,6 +54,7 @@ export type ResolvedRoutingIntent = {
   responsePurpose?: ResponsePurpose;
   projectRelation?: ProjectRelation;
   projectTransition?: ProjectTransition;
+  objectiveGuardReason?: string;
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -800,7 +801,9 @@ export async function chooseProvider(
       classificationSource = classified.source;
       if (classificationSource === "router-fallback") {
         intentAuthority = "heuristic";
-        intentResolutionReason = "control-plane-unavailable-used-local-classifier";
+        intentResolutionReason = requestClassification?.objectiveGuardReason
+          ? "deterministic-objective-precedence"
+          : "control-plane-unavailable-used-local-classifier";
       }
     } catch (error) {
       console.warn(`[Route Intent] classifier_failed requestId=${traceRequestId}`, error);
@@ -829,7 +832,16 @@ export async function chooseProvider(
           // LLM decision. Keep the same minimal contract as upstream intents.
           intent: requestClassification.intent,
           preferredProvider: requestClassification.preferredProvider ?? null,
-          intentSource: "router-fallback"
+          intentSource: "router-fallback",
+          ...(requestClassification.objectiveGuardReason ? {
+            objectiveGuardReason: requestClassification.objectiveGuardReason,
+            secondaryIntents: requestClassification.secondaryIntents ?? [],
+            complexity: requestClassification.complexity ?? null,
+            providerRefusalRisk: requestClassification.providerRefusalRisk ?? null,
+            ...(requestClassification.responsePurpose ? { responsePurpose: requestClassification.responsePurpose } : {}),
+            ...(requestClassification.projectRelation ? { projectRelation: requestClassification.projectRelation } : {}),
+            ...(requestClassification.projectTransition ? { projectTransition: requestClassification.projectTransition } : {})
+          } : {})
         }
     : bestHint?.hintIntent
       ? {
