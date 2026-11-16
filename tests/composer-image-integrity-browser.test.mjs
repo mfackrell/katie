@@ -69,7 +69,7 @@ test('composer images preserve selection identity through picker, paste, restore
   if(url.pathname==='/api/upload/chunk'){
    const headers=req.headers(),token=headers['x-katie-upload-token'],stored=uploads.get(token);
    assert.ok(stored,'Image chunk must carry a valid prepared upload token');
-   assert.match(headers['content-type']??'',/^application\/octet-stream/);
+   assert.ok((headers['content-type']??'').startsWith('application/octet-stream'),'Image chunks must be binary');
    const index=Number(headers['x-katie-chunk-index']),total=Math.ceil(stored.size/(512*1024));
    assert.ok(Number.isSafeInteger(index)&&index>=0&&index<total,'Signed chunk index must be in range');
    const bytes=req.postDataBuffer(),expected=Math.min(512*1024,stored.size-index*512*1024);
@@ -83,7 +83,7 @@ test('composer images preserve selection identity through picker, paste, restore
    if(!stored)return reply({error:'Unknown upload ticket'},403);
    const chunkCount=Math.ceil(stored.size/(512*1024));
    return reply({uploadId:stored.uploadId,chunkCount,chunkBytes:512*1024,transport:'json-base64-v3',uploadedIndexes:[...stored.chunks.keys()].sort((a,b)=>a-b),uploadedSubIndexes:[],complete:stored.chunks.size===chunkCount});
-  }}
+  }
   if(url.pathname.startsWith('/fixture-storage/')){events.push('storage');return reply({error:'Image bypassed the required same-origin chunk relay'},409);}
   if(url.pathname==='/api/upload/complete'){
    const file=uploads.get(body?.uploadToken);
