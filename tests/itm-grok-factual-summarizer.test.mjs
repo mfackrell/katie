@@ -415,18 +415,25 @@ test("model prompts require factual narratives and prohibit interpretive memory"
   assert.match(prompts[1], /No inferred motivations/);
 });
 
-test("SDK Connection error cannot disguise an owner cancellation or authorize Claude fallback", async () => {
+test("legacy cancelled chat lease cannot permanently veto metered ITM fallback", async () => {
   const terminal=Object.assign(new Error("Owner-request cancellation"), {
     code: "standalone_cancelled", terminal: true,
   });
   const wrapped=Object.assign(new Error("Connection error."), {cause:terminal});
-  const h=harness({fallbackConfigured:true,responses:()=>{throw wrapped;}});
+  const h=harness({fallbackConfigured:true,responses:(n,body,provider)=>{
+    if(provider==="grok")throw wrapped;
+    return n===2?selected():retained();
+  }});
   await assert.rejects(h.run(),error=>error===wrapped);
   assert.deepEqual(h.calls.map(call=>call.__provider),["grok"]);
   assert.equal(h.writes.length,0);
   assert.ok(h.logs.some(log=>log.args[0]?.includes("Non-retryable") &&
     String(log.args[1]?.diagnostic??"").includes("standalone_cancelled")));
-  assert.equal(await h.run(),"blocked","failed source claim remains blocked without retransmission");
+  // Memory is independent infrastructure, so an old chat-lease denial cannot
+  // permanently disable this batch. Its failed Grok claim must not replay.
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(call=>call.__provider),["grok","anthropic","anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
 });
 
 test("nested SDK timeout is recognized and permits Claude only on a later request", async () => {
@@ -469,7 +476,7 @@ test("previous metered Grok batch routes to native Claude without another Grok t
   assert.equal(h.memory().sourceMessageCount,30);
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
   assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,1);
-  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v12.*:anthropic$/);
+  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v13.*:anthropic$/);
 });
 
 test("previously sent Claude source batch never reverses fallback to Grok",async()=>{
@@ -483,9 +490,20 @@ test("previously sent Claude source batch never reverses fallback to Grok",async
   assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,0);
 });
 
+test("v12 accounting-lease terminal marker cannot block fresh v13 infrastructure recovery",async()=>{
+  const h=harness({
+    fallbackConfigured:true,
+    priorExposure:{grok_sent:true,anthropic_sent:false,paused:false,in_flight:false,terminal:true},
+    responses:n=>n===1?selected():retained(),
+  });
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(x=>x.__provider),["anthropic","anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+});
+
 test("historical exposure inspection blocks duplicate paid work and preserves cursor",async()=>{
   for(const opts of [
-    {priorExposure:{grok_sent:false,anthropic_sent:false,paused:true,in_flight:false}},
+
     {priorExposure:{grok_sent:false,anthropic_sent:false,paused:false,in_flight:true}},
     {priorExposure:{grok_sent:true,anthropic_sent:true,paused:false,in_flight:false}},
     {exposureInspectionError:true},
@@ -522,19 +540,25 @@ test("native Claude enforces API-compatible schema but retains source validators
   assert.equal(malformed.writes.length,0);
 });
 
-test("nonretryable billing error finalizes claim as blocked and never opens a fallback",async()=>{
+test("obsolete accounting billing failure is audited but cannot permanently gate memory",async()=>{
   const reason=Object.assign(Error("Unsupported endpoint or billing region"),{
     code:"standalone_unsupported_billing",terminal:true,
   });
   const wrapped=Object.assign(Error("Connection error."),{cause:reason});
-  const h=harness({fallbackConfigured:true,responses:()=>{throw wrapped;}});
+  const h=harness({fallbackConfigured:true,responses:(n,body,provider)=>{
+    if(provider==="grok")throw wrapped;
+    return n===2?selected():retained();
+  }});
   await assert.rejects(h.run(),e=>e===wrapped);
   assert.equal(h.writes.length,0);
   const finish=h.events.find(x=>x.name==="finish_intermediate_memory_batch");
   assert.equal(finish.args.p_state,"blocked");
   assert.match(finish.args.p_reason,/standalone_unsupported_billing/);
-  assert.equal(await h.run(),"blocked");
-  assert.deepEqual(h.calls.map(c=>c.__provider),["grok"]);
+  // Old provider claim remains immutable; v13's infrastructure fallback can
+  // continue with Claude without crossing back into the request budget.
+  assert.equal(await h.run(),"committed");
+  assert.deepEqual(h.calls.map(c=>c.__provider),["grok","anthropic","anthropic"]);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
 });
 
 test("native Claude truncation blocks with unchanged checkpoint",async()=>{

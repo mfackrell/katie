@@ -5,12 +5,12 @@ import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
-import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting, runWithDurablePostAnswerAccounting } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
 import { imageGenerationCapableModel, containsGeneratedImage } from "@/lib/chat/image-generation-contract";
 import { generatedImageService } from "@/lib/uploads/generated-image-service";
 import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
-import { resolveImageFollowup } from "@/lib/chat/image-source-followup";
+import { resolveImageFollowup, imageEditSourceUnavailable } from "@/lib/chat/image-source-followup";
 import { observeGeneratedImage } from "@/lib/uploads/generated-image-observation";
 import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
@@ -1131,6 +1131,8 @@ async function executeChat(request: NextRequest) {
       if (saved.generatedSource) return (await readGeneratedImage(actorId,owner.id,saved.id)).reference;
       return restoreConversationAttachment(owner.id, saved, actorId);
     });
+    // Fail closed if a previously checkpointed edit cannot restore its pixels.
+    const imageEditUnavailable = imageEditSourceUnavailable(imageFollowup, restored.sourceIds);
     // Index the exact selected source by trusted fileId, never filename. Source
     // selection already checked that the owning chat belongs to this actor.
     const selectedSourceDescriptors = attachmentDecision.selections
@@ -1437,7 +1439,9 @@ async function executeChat(request: NextRequest) {
       !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
       ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
       : null;
-    const localKatieResponse = imageFollowup?.clarification
+    const localKatieResponse = imageEditUnavailable
+      ? {reason:"image-source" as const,text:"The selected image original cannot be reopened. I cannot edit missing pixels or substitute another image."}
+      : imageFollowup?.clarification
       ? {reason:"image-source" as const,text:imageFollowup.clarification}
       : !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
@@ -3986,24 +3990,26 @@ ${chunkWorkflowSummary}`;
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            // Each standalone job checkpoints independently; a spending pause
-            // remains resumable even when the answer is already saved.
+            // Memory maintenance is separate infrastructure and must never depend
+            // on the completed chat workflow's spending lease.
             const persistAccountedMemory = async () => {
               console.log("[Chat API] Post-answer memory persistence start", { actorId, chatId, requestId });
               try {
-                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateRelevantLongTermMemory(actorId, chatId, message));
+                // Post-answer memory is independently metered infrastructure. Never
+                // bind it to a completed chat workflow lease or spending approval.
+                const retention = maybeUpdateRelevantLongTermMemory(actorId, chatId, message);
                 const cleanup = retention.then(
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
+                  () => maybeRunHundredUserMessageReview(actorId),
+                  () => maybeRunHundredUserMessageReview(actorId),
                 );
                 const memoryResults = await Promise.allSettled([
                   retention,
-                  cachedWorkflowValue("memory-summary", () => runWithDurablePostAnswerAccounting(() => maybeUpdateSummary(chatId))),
+                  maybeUpdateSummary(chatId),
                   cleanup,
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
-                    if (isStandaloneAccountingError(memoryResult.reason)) throw memoryResult.reason;
+                    // Memory task errors are logged, never escalated into a chat spending pause.
                     console.error(
                       index === 0
                         ? "[Chat API] Long-Term Memory Update Error:"
@@ -4022,7 +4028,7 @@ ${chunkWorkflowSummary}`;
                   intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
                 });
               } catch (error) {
-                if (isStandaloneAccountingError(error)) throw error;
+
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)

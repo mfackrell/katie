@@ -9,6 +9,9 @@ const edit=/\b(?:change|edit|modify|retouch|crop|recolou?r|replace|remove|add|fi
 export function imageFollowupIntent(text:string):'inspect'|'edit'|null {
   const s=text.trim();
   if (!s || s.length>900 || /\b(?:new topic|unrelated|switch topics?|ignore (?:the|this|that) image)\b/i.test(s)) return null;
+  // Requests for critique or hypothetical changes require inspection, not generation.
+  const advisory=/^(?:(?:what|how|why|which|whether|would you|should i)\b|(?:please\s+)?(?:describe|explain|tell me|suggest|recommend)\b.{0,120}\b(?:how|what|whether|why)\b)/i;
+  if (advisory.test(s) && /\b(?:change|edit|modify|retouch|crop|replace|remove|add|fix|background|shirt|clothing|image|picture|photo)\b/i.test(s)) return 'inspect';
   if (edit.test(s)) return 'edit';
   if (/\b(?:image|picture|photo|portrait|render|version)\b/.test(s.toLowerCase()) &&
     /\b(?:you (?:just )?(?:made|created|generated)|describe|inspect|look|use|same|first|second|third|fourth|fifth|original|previous|earlier|that|this|these|those)\b/i.test(s)) return 'inspect';
@@ -109,4 +112,13 @@ export async function resolveImageFollowup(input:Parameters<typeof chooseImageFo
   }
   return {method:'continuity',selections:selected.map(attachment=>({attachment,mode:'source'})),operation:choice.operation,
     rationale:'Exact image source message and asset index in the authorized conversation'};
+}
+
+/** A saved selection alone cannot authorize edits if original bytes are missing. */
+export function imageEditSourceUnavailable(
+  followup:(AttachmentDecision & {operation:'inspect'|'edit'})|null,
+  sourceIds:ReadonlySet<string>,
+):boolean {
+  return Boolean(followup?.operation==='edit' && followup.selections.some(
+    selected=>selected.mode==='source' && !sourceIds.has(selected.attachment.id)));
 }

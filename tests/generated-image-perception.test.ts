@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import { createStoredUploadService } from '../lib/uploads/stored-uploads';
 import { createGeneratedImageService, generatedImageBytes } from '../lib/uploads/generated-image-service';
 import { createGeneratedImageObserver } from '../lib/uploads/generated-image-observation';
-import { chooseImageFollowup, resolveImageFollowup } from '../lib/chat/image-source-followup';
+import { chooseImageFollowup, resolveImageFollowup, imageFollowupIntent, imageEditSourceUnavailable } from '../lib/chat/image-source-followup';
 import { generatedImageId, originalImageHash } from '../lib/images/generated-source';
 import { observeStandaloneStillImages, imageObservationAsText } from '../lib/uploads/still-image-observations';
 import { verifiedKatieVisualEpisode, katieVisualMemoryContext } from '../lib/chat/visual-memory';
@@ -300,4 +300,20 @@ test('actual route restoration revalidates generated original bytes even when so
   fake.files.delete(`chats/${chatId}/${d.id}.source`);
   await assert.rejects(run(),/unavailable/);
   assert.equal(genericReads,0);
+});
+
+test('image advice stays inspection; unresolvable edit source blocks generation',async()=>{
+  const fake=storage(),saved=await generate(fake,{url:await image()}),original=saved.attachments[0];
+  const history=[message(saved.assets,saved.attachments)];
+  assert.equal(imageFollowupIntent('What would you change about this image?'),'inspect');
+  assert.equal(imageFollowupIntent('Describe how you would change the background'),'inspect');
+  assert.equal(choose(history,[original],'What would you change about this image?')?.operation,'inspect');
+  assert.equal(choose(history,[original],'Describe how you would change the background')?.operation,'inspect');
+  assert.equal(imageFollowupIntent('Change the background'),'edit');
+  assert.equal(imageFollowupIntent('Could you change her shirt to navy?'),'edit');
+  const selection={method:'continuity' as const,operation:'edit' as const,
+    selections:[{attachment:original,mode:'source' as const}]};
+  assert.equal(imageEditSourceUnavailable(selection,new Set<string>()),true);
+  assert.equal(imageEditSourceUnavailable(selection,new Set([original.id])),false);
+  assert.equal(imageEditSourceUnavailable({...selection,operation:'inspect'},new Set<string>()),false);
 });
