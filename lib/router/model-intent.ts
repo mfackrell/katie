@@ -1285,7 +1285,7 @@ export function guardExplicitWrittenObjective(
   if (classification.intent !== "image-generation") {
     return { classification, overridden: false, reason: null };
   }
-  const textDirective = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.exec(prompt);
+  const textDirective = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio(?:graphy)?|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.exec(prompt);
   if (!textDirective) return { classification, overridden: false, reason: null };
   // Putting lettering onto pixels is an image edit, not drafting text for a
   // separate written deliverable. Preserve the classifier's image capability.
@@ -1294,26 +1294,35 @@ export function guardExplicitWrittenObjective(
     return { classification, overridden: false, reason: null };
   }
   const imageDirective = /\b(?:generate|create|draw|render|design|make)\s+(?:(?:me|us)\s+)?(?:.{0,80}?)\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\b/i.exec(prompt);
-  if (imageDirective && imageDirective.index < textDirective.index) {
-    return { classification, overridden: false, reason: null };
+  if (imageDirective) {
+    // The existing route has one execution modality. Never turn an actual
+    // image request into text-only routing: preserve the image capability and
+    // retain the writing objective for explicit downstream failure reporting.
+    return {
+      classification: {
+        ...classification,
+        secondary_intents: Array.from(new Set([
+          ...(classification.secondary_intents ?? []).filter(value => value !== "image-generation"),
+          "rewrite" as RequestIntent
+        ]))
+      },
+      overridden: false,
+      reason: null
+    };
   }
-  const explicitCompound = Boolean(imageDirective);
   return {
     overridden: true,
-    reason: explicitCompound ? "written_objective_precedes_explicit_image_objective" : "explicit_written_objective_with_image_reference",
+    reason: "explicit_written_objective_with_image_reference",
     classification: {
       ...classification,
       intent: "rewrite",
-      secondary_intents: Array.from(new Set([
-        ...(classification.secondary_intents ?? []).filter(value => value !== "rewrite" && value !== "image-generation"),
-        ...(explicitCompound ? ["image-generation" as RequestIntent] : [])
-      ])),
+      secondary_intents: (classification.secondary_intents ?? [])
+        .filter(value => value !== "rewrite" && value !== "image-generation"),
       decision_evidence: {
         ...classification.decision_evidence,
-        objective_guard_reason: explicitCompound ? "written_objective_precedes_explicit_image_objective" : "explicit_written_objective_with_image_reference",
-        selection_justification: explicitCompound
-          ? "Deterministic objective precedence: explicit writing instruction precedes explicit image creation."
-          : "Deterministic objective precedence: explicit writing instruction; image reference alone is not an image-generation request."
+        objective_guard_reason: "explicit_written_objective_with_image_reference",
+        selection_justification:
+          "Deterministic objective precedence: explicit writing instruction; image reference alone is not an image-generation request."
       }
     }
   };
