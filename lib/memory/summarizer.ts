@@ -1,6 +1,6 @@
 import { standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
-import {itmReceiptHash,recordItmStageReceipt,readItmStageReceipt,readLegacyItmEpisodeOutput,inspectPriorItmClaims,type ItmReceiptKey} from "@/lib/memory/itm-stage-receipts";
+import {itmReceiptHash,recordItmStageReceipt,readItmStageReceipt,readLegacyItmEpisodeOutput,inspectPriorItmClaims,recordItmOneShotOutcome,type ItmReceiptKey} from "@/lib/memory/itm-stage-receipts";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
@@ -668,11 +668,21 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
       const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
       const client=providerClient("anthropic",deadline);
       await reconcileEpisodePlan(legacyEpisodes(input.summary),excerpts,"anthropic",client,
-        (raw,complete)=>recordItmStageReceipt(
-          stage2Key,raw,ITM_PROCESSOR_VERSION+":owner-approved-grok-to-claude-stage2"+(complete?"":":incomplete"),
-        ).then(()=>undefined),
+        async (raw,complete,providerResponse)=>{
+          // Preserve full API response prior to any completion/JSON checks.
+          if(providerResponse!==undefined)
+            await recordItmOneShotOutcome(stage2Key,{status:"response",response:providerResponse});
+          if(raw.length>0&&raw.length<=16000)
+            await recordItmStageReceipt(
+              stage2Key,raw,ITM_PROCESSOR_VERSION+":owner-approved-grok-to-claude-stage2"+(complete?"":":incomplete"),
+            );
+        },
       );
     }catch(error){
+      // A consumed grant is irreversible. Preserve uncertainty if no
+      // complete response was saved; never replace a captured result.
+      try{await recordItmOneShotOutcome(stage2Key,{status:"uncertain"});}
+      catch{console.error("[Summarizer] ITM one-shot outcome storage unavailable; grant consumed",{chatId:input.chatId});}
       console.error("[Summarizer] One-shot Stage 2 outcome or validation failed; grant consumed and no retry allowed",{
         chatId:input.chatId,sourceEnd:input.batchEndMessageId,
         reason:standaloneFailureDetails(error),

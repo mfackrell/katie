@@ -46,7 +46,7 @@ test("one-shot Stage 2 SQL grant prevents replay even for uncertain outcomes",{
 },async()=>{
   const bin=process.env.KATIE_TEST_PG_BIN;
   const root=mkdtempSync(join(tmpdir(),"katie-itm-stage2-")),data=join(root,"data");
-  let server=false,client;
+  let server=false,client,peer;
   const run=(name,args)=>{
     const r=spawnSync(join(bin,name),args,{encoding:"utf8",timeout:30000});
     assert.equal(r.status,0,r.stderr||r.error?.message);
@@ -92,7 +92,16 @@ test("one-shot Stage 2 SQL grant prevents replay even for uncertain outcomes",{
     assert.equal(await call(actor,hash),false,"wrong prior-summary context must not claim");
     assert.equal(await call(actor,context,hash),false,"wrong Stage 1 receipt hash must not claim");
     assert.equal(await call(actor,context,stage1,randomUUID()),false,"wrong cursor must not claim");
-    assert.equal(await call(),true,"correct first dispatch claim");
+    peer=new pg.Client({host:root,port:55495,user:"postgres",database:"postgres",connectionTimeoutMillis:5000});
+    await peer.connect();
+    await peer.query("set role service_role");
+    // Concurrent connections must serialize through PostgreSQL's row lock.
+    const competing=await Promise.all([
+      call(),
+      peer.query("select public.claim_itm_stage2_one_shot($1,$2,$3,$4,$5,$6,$7) claimed",
+        [actor,chat,end,cursor,hash,context,stage1]).then(r=>r.rows[0].claimed),
+    ]);
+    assert.equal(competing.filter(Boolean).length,1,"only one paid dispatch claim under concurrency");
     assert.equal(await call(),false,"no retries after first possible network contact");
     await assert.rejects(client.query("update itm_stage2_one_shot_grants set dispatched_at=null"),
       /permission denied/);
@@ -118,6 +127,7 @@ test("one-shot Stage 2 SQL grant prevents replay even for uncertain outcomes",{
     assert.deepEqual(access,{anon_read:false,auth_read:false,service_update:false,
       anon_rpc:false,service_rpc:true});
   }finally{
+    if(peer)await peer.end().catch(()=>undefined);
     if(client)await client.end().catch(()=>undefined);
     if(server)run("pg_ctl",["-D",data,"-m","immediate","-w","stop"]);
     rmSync(root,{recursive:true,force:true});

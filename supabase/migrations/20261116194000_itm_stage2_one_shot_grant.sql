@@ -104,3 +104,39 @@ drop trigger if exists itm_stage2_grant_immutable on public.itm_stage2_one_shot_
 create trigger itm_stage2_grant_immutable
 before update or delete on public.itm_stage2_one_shot_grants
 for each row execute function public.reject_itm_stage2_grant_mutation();
+
+-- Full immutable Anthropic SDK response, distinct from validated retention text.
+create table if not exists public.itm_stage2_dispatch_outcomes (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid not null,
+  chat_id uuid not null,
+  batch_end_message_id text not null,
+  expected_cursor text not null,
+  source_sha256 text not null check (source_sha256 ~ '^[0-9a-f]{64}$'),
+  context_sha256 text not null check (context_sha256 ~ '^[0-9a-f]{64}$'),
+  provider text not null default 'anthropic' check (provider = 'anthropic'),
+  status text not null check (status in ('response','uncertain')),
+  raw_response_text text,
+  raw_response_sha256 text,
+  captured_at timestamptz not null default clock_timestamp(),
+  check (
+    (status = 'response' and raw_response_text is not null
+      and raw_response_sha256 ~ '^[0-9a-f]{64}$')
+    or (status = 'uncertain' and raw_response_text is null and raw_response_sha256 is null)
+  ),
+  unique(actor_id,chat_id,batch_end_message_id)
+);
+alter table public.itm_stage2_dispatch_outcomes enable row level security;
+revoke all on public.itm_stage2_dispatch_outcomes from public,anon,authenticated,service_role;
+grant select,insert on public.itm_stage2_dispatch_outcomes to service_role;
+create or replace function public.reject_itm_stage2_outcome_mutation()
+returns trigger language plpgsql set search_path=public,pg_temp as $$
+begin
+  raise exception 'ITM_STAGE2_OUTCOME_IMMUTABLE';
+end $$;
+revoke all on function public.reject_itm_stage2_outcome_mutation() from public,anon,authenticated;
+drop trigger if exists itm_stage2_outcome_immutable on public.itm_stage2_dispatch_outcomes;
+create trigger itm_stage2_outcome_immutable
+before update or delete on public.itm_stage2_dispatch_outcomes
+for each row execute function public.reject_itm_stage2_outcome_mutation();
+
