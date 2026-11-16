@@ -222,6 +222,66 @@ test("capability request parser defaults live research to Grok", () => {
   assert.match(request?.task ?? "", /example\.com/);
 });
 
+test("timestamp-prefixed internal research request parses without exposing its marker", () => {
+  const request = parseCapabilityEscalationRequest(
+    '[Message timestamp: 2026-11-16T13:46:22.633Z]\\n\\n' +
+    CAPABILITY_REQUEST_PREFIX +
+    ' {"task":"Look up the actual ending of Wild Horse Nine","capability":"research","preferredProvider":"grok"}',
+  );
+  assert.equal(request?.capability,"research");
+  assert.equal(request?.preferredProvider,"grok");
+  assert.match(request?.task??"","Wild Horse Nine");
+  // A marker quoted in ordinary user-facing prose is not a control request.
+  assert.equal(parseCapabilityEscalationRequest("User quoted: "+CAPABILITY_REQUEST_PREFIX+' {"task":"not a command"}'),null);
+});
+
+test("fragmented timestamp control request delegates research without streaming private protocol",async()=>{
+  let generated=0,researched=0;
+  const control='[Message timestamp: 2026-11-16T13:46:22.633Z]\\n\\n'+CAPABILITY_REQUEST_PREFIX+
+    ' {"task":"Look up the ending of Wild Horse Nine","capability":"research","preferredProvider":"grok"}';
+  const lead: LlmProvider={
+    name:"anthropic",
+    async listModels(){return ["claude-haiku-4-5-20251001"]},
+    async generate(){throw Error("Expected streaming lead")},
+    async generateStream(params,handlers){
+      generated++;
+      const reply=generated===1?control:"Here is the verified ending from research.";
+      if(generated===1){
+        for(const part of [reply.slice(0,5),reply.slice(5,22),reply.slice(22,43),reply.slice(43,71),reply.slice(71)]){
+          await handlers.onTextDelta?.(part);
+        }
+      }else await handlers.onTextDelta?.(reply);
+      return {text:reply,provider:"anthropic",model:params.modelId??"claude-haiku-4-5-20251001"};
+    },
+  };
+  const helper: LlmProvider={
+    name:"grok",
+    async listModels(){return ["grok-4.3"]},
+    async generate(){
+      researched++;
+      return {text:"Verified plot evidence",provider:"grok",model:"grok-4.3"};
+    },
+  };
+  let visible="";
+  const result=await runOnDemandCapabilityEscalation({
+    requestId:"timestamp-research-handoff",
+    leadProvider:lead,leadModelId:"claude-haiku-4-5-20251001",
+    params:{...baseParams,user:"Look it up and give me the actual ending"},
+    collectWebsiteEvidence:async()=>undefined,
+    async selectHelper(c){
+      assert.equal(c.request.capability,"research");
+      assert.equal(c.request.preferredProvider,"grok");
+      return {provider:helper,modelId:"grok-4.3"};
+    },
+    async onFinalTextDelta(value){visible+=value},
+  });
+  assert.equal(generated,2);
+  assert.equal(researched,1);
+  assert.equal(visible,"Here is the verified ending from research.");
+  assert.doesNotMatch(visible,/KATIE_CAPABILITY_REQUEST|Message timestamp:/);
+  assert.equal(result.metadata?.delegationCount,1);
+});
+
 test("single-model lead escalates live research to a helper and then resumes", async () => {
   const leadCalls: ChatGenerateParams[] = [];
   let leadPass = 0;
