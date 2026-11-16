@@ -414,11 +414,18 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
   if (provider === "grok") {
     const response = await grokStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, "itm_retention", RETENTION_RESPONSE_SCHEMA);
     raw = completedResponsesText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
+    if(capture)await capture(raw);
   } else {
     const response = await claudeStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, RETENTION_RESPONSE_SCHEMA);
+    // Preserve a paid raw Claude result even when stop_reason is incomplete.
+    // The strict completion and JSON checks happen only AFTER this capture.
+    const rawFromResponse=(response.content??[])
+      .filter(item=>item.type==="text" && typeof item.text==="string")
+      .map(item=>item.text).join("").trim();
+    if(capture && rawFromResponse.length>0 && rawFromResponse.length<=16000)
+      await capture(rawFromResponse);
     raw = completedClaudeText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
-  if(capture)await capture(raw);
   const keep = parseRetentionPlan(raw, prior.length);
   if (keep.some(id => prior[id].length > ITM_EPISODE_MAX_CHARACTERS))
     throw new Error("Oversized old ITM episode requires a separate verified rebuild");
@@ -608,6 +615,132 @@ async function recoverCapturedItmStages(input:{
   return anyReceipt?"blocked":null;
 }
 
+
+/**
+ * Single owner-granted exception for the historical batch with already-paid,
+ * source-verified Grok episodes but no Stage 2 retention receipt.
+ *
+ * Claim permission atomically BEFORE any inference. A consumed grant cannot
+ * be retried after an uncertain response; a captured result can only be
+ * replayed offline through the standard strict validators and cursor CAS.
+ * The production operator seeds the actor/chat/source/summary-bound grant
+ * separately: deployment never creates or expands authorization.
+ */
+async function recoverOwnerApprovedCrossProviderStages(input:{
+  actorId:string;chatId:string;batchEndMessageId:string;expectedCursor:string|null;
+  sourceSha256:string;summary:string;batch:Message[];sourceMessageCount:number;
+}):Promise<IntermediateUpdateResult|null>{
+  const admin=getSupabaseAdminClient();
+  const episodeKey=itmReceiptKey({...input,provider:"grok",stage:"episodes"});
+  const savedEpisodes=await readItmStageReceipt(episodeKey);
+  if(!savedEpisodes)return null;
+  let excerpts:string[];
+  try{
+    excerpts=parseGroundedEpisodes(savedEpisodes.responseText,input.batch);
+  }catch(error){
+    console.error("[Summarizer] Rejected one-shot recovery: Grok Stage 1 evidence invalid",{
+      chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+      reason:error instanceof Error?error.message:"ITM_STAGE1_INVALID",
+    });
+    return "blocked";
+  }
+  const stage2Key=itmReceiptKey({...input,provider:"anthropic",stage:"retention",excerpts});
+  let retention=await readItmStageReceipt(stage2Key);
+  if(!retention){
+    if(!input.expectedCursor)return "blocked";
+    const permission=await admin.rpc<boolean>("claim_itm_stage2_one_shot",{
+      p_actor_id:input.actorId,p_chat_id:input.chatId,
+      p_batch_end_message_id:input.batchEndMessageId,
+      p_expected_cursor:input.expectedCursor,
+      p_source_sha256:input.sourceSha256,
+      p_context_sha256:itmReceiptHash(input.summary),
+      p_stage1_response_sha256:savedEpisodes.responseSha256,
+    });
+    if(permission.error){
+      console.error("[Summarizer] Stage 2 one-shot grant check unavailable; no dispatch",{
+        chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+      });
+      return "blocked";
+    }
+    if(permission.data!==true)return null; // No grant or already consumed: no provider work.
+    // From here the grant is irreversibly used, even on unknown outcomes.
+    try{
+      const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
+      const client=providerClient("anthropic",deadline);
+      await reconcileEpisodePlan(legacyEpisodes(input.summary),excerpts,"anthropic",client,
+        raw=>recordItmStageReceipt(
+          stage2Key,raw,ITM_PROCESSOR_VERSION+":owner-approved-grok-to-claude-stage2",
+        ).then(()=>undefined),
+      );
+    }catch(error){
+      console.error("[Summarizer] One-shot Stage 2 outcome or validation failed; grant consumed and no retry allowed",{
+        chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+        reason:standaloneFailureDetails(error),
+      });
+      return "blocked";
+    }
+    retention=await readItmStageReceipt(stage2Key);
+    if(!retention)return "blocked";
+  }
+  // Strict offline validation is required even after a successful provider response.
+  let keep:number[],revisedSummary:string;
+  try{
+    const previous=legacyEpisodes(input.summary);
+    keep=parseRetentionPlan(retention.responseText,previous.length);
+    if(keep.some(id=>previous[id].length>ITM_EPISODE_MAX_CHARACTERS))
+      throw new Error("ITM_VALIDATION_OVERSIZED_OLD_EPISODE");
+    revisedSummary=assembleEpisodePlan(previous,keep,excerpts);
+  }catch(error){
+    console.error("[Summarizer] Captured cross-provider Stage 2 failed strict validation",{
+      chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+      reason:error instanceof Error?error.message:"ITM_STAGE2_INVALID",
+    });
+    return "blocked";
+  }
+  const claimVersion=ITM_PROCESSOR_VERSION+":grok-episodes-anthropic-retention-offline";
+  const claimed=await admin.rpc<string>("claim_intermediate_memory_batch",{
+    p_actor_id:input.actorId,p_chat_id:input.chatId,
+    p_expected_cursor:input.expectedCursor,
+    p_batch_end_message_id:input.batchEndMessageId,
+    p_processor_version:claimVersion,
+  });
+  if(claimed.error)throw new Error("ITM_CROSS_STAGE_RECOVERY_CLAIM_UNAVAILABLE");
+  if(claimed.data!=="claimed")return claimed.data==="blocked"?"blocked":"deferred";
+  let committed=false;
+  try{
+    const payload={
+      version:2,purpose:"Reconciled context older than the last 30 completed conversational exchanges.",
+      summary:revisedSummary,summarizedThroughMessageId:input.batchEndMessageId,
+      summarizedThroughCreatedAt:input.batch[input.batch.length-1].createdAt??null,
+      sourceMessageCount:input.sourceMessageCount,
+    };
+    const result=await admin.rpc<boolean>("commit_intermediate_memory_checkpoint",{
+      p_actor_id:input.actorId,p_chat_id:input.chatId,
+      p_expected_cursor:input.expectedCursor,p_content:payload,
+    });
+    committed=result.data===true&&!result.error;
+  }finally{
+    const finished=await admin.rpc<boolean>("finish_intermediate_memory_batch",{
+      p_actor_id:input.actorId,p_chat_id:input.chatId,
+      p_batch_end_message_id:input.batchEndMessageId,
+      p_processor_version:claimVersion,p_state:committed?"completed":"blocked",
+      p_reason:committed?null:"One-shot cross-provider recovery checkpoint CAS unavailable",
+    });
+    if(finished.error||finished.data!==true)
+      console.error("[Summarizer] Cross-provider recovery claim completion could not be recorded",{
+        chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+      });
+  }
+  if(committed){
+    console.info("[Summarizer] Owner-granted Grok Stage 1 / Claude Stage 2 ITM checkpoint committed",{
+      chatId:input.chatId,sourceEnd:input.batchEndMessageId,
+      sourceMessageCount:input.sourceMessageCount,
+    });
+    return "committed";
+  }
+  return "deferred";
+}
+
 export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUpdateResult> {
   const providers=configuredProviders();
   if (!providers.length) return "skipped";
@@ -660,6 +793,13 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
   // First attempt a strictly local replay of complete source-bound stage
   // receipts; this cannot incur provider costs and still uses the checkpoint CAS.
   const sourceSha256=itmReceiptHash(formatTranscript(batch));
+  // A pre-authorized mixed-provider receipt is checked first: the generic
+  // same-provider receipt replay below cannot combine Grok and Claude stages.
+  const recoveredCrossProvider=await recoverOwnerApprovedCrossProviderStages({
+    actorId:chat.actorId,chatId,batchEndMessageId:checkpoint.id,
+    expectedCursor,sourceSha256,summary,batch,sourceMessageCount:after+SUMMARY_BATCH_MESSAGES,
+  });
+  if(recoveredCrossProvider)return recoveredCrossProvider;
   const recovered=await recoverCapturedItmStages({
     actorId:chat.actorId,chatId,batchEndMessageId:checkpoint.id,
     expectedCursor,sourceSha256,summary,batch,sourceMessageCount:after+SUMMARY_BATCH_MESSAGES,
