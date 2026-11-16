@@ -279,7 +279,7 @@ begin
  -- original organization decision_needed flags are false. Prepare exactly
  -- the existing Game Delivery Functional Director for one normal management
  -- decision. Neither owner click creates a mission, assignment or worker.
- select count(*)::int,min(n.id) into eligible_count,management_node
+ select count(*)::int,min(n.id::text)::uuid into eligible_count,management_node
  from project_organization_nodes n
  join project_organization_nodes root on root.id=n.parent_id
   and root.project_id=n.project_id and root.kind='project_director'
