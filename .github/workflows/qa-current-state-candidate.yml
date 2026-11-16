@@ -31,7 +31,8 @@ jobs:
       KATIE_TEST_PROJECT_ORGANIZATION: '1'
       KATIE_TEST_DIRECTOR_ONE_SHOT: '1'
       KATIE_TEST_ORG_AMENDMENTS: '1'
-      KATIE_TEST_BLOCKED_OWNER_RECOVERY: '1'\n      KATIE_TEST_BLOCKED_OWNER_BROWSER: '1'
+      KATIE_TEST_BLOCKED_OWNER_RECOVERY: '1'
+      KATIE_TEST_BLOCKED_OWNER_BROWSER: '1'
       CI: '1'
     steps:
       - name: Checkout independent QA probes
@@ -43,7 +44,7 @@ jobs:
       - name: Checkout exact RRE candidate separately
         uses: actions/checkout@v4
         with:
-          ref: f3cd92ac650504c5396d7b729f5521d7895ccb81
+          ref: 5afeba68523ceca5f550cc65429101938dada432
           fetch-depth: 0
           path: candidate
           persist-credentials: false
@@ -51,11 +52,11 @@ jobs:
         working-directory: candidate
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = f3cd92ac650504c5396d7b729f5521d7895ccb81
-          test "$(git rev-parse 'HEAD^{tree}')" = 638a574364eff5ba146b3324a7a5d2474c4e3219
+          test "$(git rev-parse HEAD)" = 5afeba68523ceca5f550cc65429101938dada432
+          test "$(git rev-parse 'HEAD^{tree}')" = f8dee7a77236aba867e6570e3d4602bf7eba3624
           test -z "$(git status --porcelain)"
-          echo 'INDEPENDENT_QA_REVIEWED_SHA=f3cd92ac650504c5396d7b729f5521d7895ccb81'
-          echo 'INDEPENDENT_QA_REVIEWED_TREE=638a574364eff5ba146b3324a7a5d2474c4e3219'
+          echo 'INDEPENDENT_QA_REVIEWED_SHA=5afeba68523ceca5f550cc65429101938dada432'
+          echo 'INDEPENDENT_QA_REVIEWED_TREE=f8dee7a77236aba867e6570e3d4602bf7eba3624'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -78,8 +79,8 @@ jobs:
           python3 ../qa/tests/qa-native-injector.py
           test "$(git diff --name-only)" = tests/helpers/assert-blocked-owner-recovery.mjs
           test -z "$(git diff --name-only -- app lib supabase .github)"
-          test "$(git rev-parse HEAD)" = f3cd92ac650504c5396d7b729f5521d7895ccb81
-          test "$(git rev-parse 'HEAD^{tree}')" = 638a574364eff5ba146b3324a7a5d2474c4e3219
+          test "$(git rev-parse HEAD)" = 5afeba68523ceca5f550cc65429101938dada432
+          test "$(git rev-parse 'HEAD^{tree}')" = f8dee7a77236aba867e6570e3d4602bf7eba3624
           echo 'INDEPENDENT_QA_ONLY_TEST_EDITS_PASS'
       - name: Independent first-party owner API negative and two-click tests
         working-directory: candidate
