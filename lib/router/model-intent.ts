@@ -986,7 +986,7 @@ async function classifyIntentWithLLMProviders(
     { user: "Use Grok-style bluntness: what is wrong with this plan?", intent: "architecture-review", preferred_provider: null },
     { user: "Gemini please summarize this article.", intent: "rewrite", preferred_provider: "google" },
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
-    { context: "The conversation recently discussed several AI-generated portraits.", user: "Write me a revised dating profile that will land, and get me someone like the woman in that picture 😂", intent: "rewrite", secondary_intents: [], response_purpose: "deliverable" },
+    { context: "The conversation previously discussed several AI-generated travel posters.", user: "Write me a revised vacation announcement with the same joyful energy as that picture 😂", intent: "rewrite", secondary_intents: [], response_purpose: "deliverable" },
     { context: "The conversation recently discussed several AI-generated portraits.", user: "Generate another portrait of the woman we just discussed.", intent: "image-generation", response_purpose: "deliverable" },
     { user: "Write a short bio and generate an accompanying portrait.", intent: "rewrite", secondary_intents: ["image-generation"], response_purpose: "deliverable" },
     { user: "What do you think about your last answer?", intent: "assistant-reflection" },
