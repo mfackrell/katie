@@ -1,0 +1,108 @@
+[
+  {
+    "path": "app/api/chat/route.ts",
+    "before": "5e60aaa2171af205c5a6969a638109fd4781ce98de6094744c0b52e9f79cd90a",
+    "after": "a0b837b00b668382a1d33c46525a6adb32ba47ea1fb786815cc0d27e6546a589",
+    "changes": [
+      {"line":10,"remove":0,"text":"import { generatedImageService } from \"@/lib/uploads/generated-image-service\";\nimport { readGeneratedImage } from \"@/lib/uploads/stored-uploads\";\nimport { resolveImageFollowup } from \"@/lib/chat/image-source-followup\";\nimport { observeGeneratedImage } from \"@/lib/uploads/generated-image-observation\";\n"},
+      {"line":189,"remove":0,"text":"  imageSource: z.object({messageId:z.string().uuid(),assetIndex:z.number().int().min(0).max(4)}).strict().optional(),\n"},
+      {"line":865,"remove":0,"text":"    const imageFollowup = benchmarkRelay || currentAgentTask() ? null : await cachedWorkflowValue(\"image-source-followup\", async () => {\n      let imageHistory = attachmentHistory;\n      if (payload.imageSource && !imageHistory.some(turn=>turn.id===payload.imageSource!.messageId)) {\n        const selected = await getMessageById(chatId,payload.imageSource.messageId);\n        if (selected) imageHistory = [...imageHistory,selected];\n      }\n      return resolveImageFollowup({message,history:imageHistory,catalog,actorId,chatId,\n        freshCount:newAttachments.length,pin:payload.imageSource}, {\n        registerLegacy:(source,index)=>generatedImageService().registerLegacy(actorId,chatId,source,index),\n        read:async source=>source.generatedSource\n          ? (await readGeneratedImage(actorId,chatId,source.id)).descriptor : source,\n      });\n    });\n    // Catalog snapshots may predate on-demand legacy registration. Add only\n    // exact server-verified current-chat sources, not provider URLs or guesses.\n    for (const selected of imageFollowup?.selections ?? []) {\n      const at=catalog.findIndex(file=>file.id===selected.attachment.id && file.chatId===chatId);\n      if (at<0) catalog.push(selected.attachment); else catalog[at]=selected.attachment;\n    }\n"},
+      {"line":899,"remove":1,"text":"    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && imageFollowup?.operation !== 'edit' && !isStillImageCreationRequest(message);\n"},
+      {"line":904,"remove":2,"text":"      const ordinary:typeof images=[];\n      for (const reference of images) {\n        const saved=catalog.find(file=>file.id===reference.fileId && file.generatedSource && file.actorId===actorId && file.chatId===chatId);\n        if (!saved) {ordinary.push(reference);continue;}\n        if (freshTaskDescriptions.has(reference.fileId)) continue;\n        // Observation runs during preparation, before the later chat receipt is\n        // claimed. Use the already leased workflow ID, never an uninitialized\n        // downstream requestId or a newly generated request identifier.\n        const observationRequestId=verifiedWorkflow?.workflow.request_id;\n        if (!observationRequestId) throw new Error('Generated-image inspection requires its durable request identity.');\n        const inspected=await observeGeneratedImage({actorId,chatId,requestId:observationRequestId,attachment:saved,reference,question:message,\n          onStatus:stage=>imageObservationStages.push(stage)});\n        freshTaskDescriptions.set(reference.fileId,inspected.observation);\n        const at=catalog.findIndex(file=>file.id===saved.id);catalog[at]=inspected.descriptor;\n      }\n      if (ordinary.length) {\n        const descriptions=await observeStandaloneStillImages(ordinary,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});\n        for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);\n      }\n"},
+      {"line":959,"remove":1,"text":"    const pdfReviewContinuation = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {\n"},
+      {"line":1035,"remove":1,"text":"    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: \"none\", selections: []} : imageFollowup ?? (pdfProgress.projectClarification\n"},
+      {"line":1046,"remove":1,"text":"        )));\n"},
+      {"line":1109,"remove":0,"text":"        if (descriptor?.generatedSource) {\n          const latest=catalog.find(saved=>saved.id===descriptor.id && saved.chatId===descriptor.chatId);\n          if (latest) updatedSavedImageDescriptors.set(descriptor.id,latest);\n          continue; // The source-claimed generated-image observer already committed this evidence.\n        }\n"},
+      {"line":1382,"remove":1,"text":"    const localKatieResponse = imageFollowup?.clarification\n      ? {reason:\"image-source\" as const,text:imageFollowup.clarification}\n      : !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: \"project\" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: \"project\" as const, text: savedDraftReply } : executiveReply ? {reason: \"executive\" as const,text:executiveReply}\n"},
+      {"line":1400,"remove":2,"text":"      const localUserMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();\n      const localAssistantMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();\n"},
+      {"line":1570,"remove":1,"text":"    if(!newAttachments.length && !imageFollowup)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));\n"},
+      {"line":1709,"remove":1,"text":"      const overrideIntent = imageFollowup?.operation === \"edit\" ? \"image-generation\" as const : overrideClassification.intent;\n"},
+      {"line":1723,"remove":0,"text":"      if (imageFollowup?.operation === \"edit\") resolvedRequestIntent = \"image-generation\";\n"},
+      {"line":1803,"remove":0,"text":"        ...(imageFollowup?.operation==='edit' && imageFollowup.selections.length ? {requestIntent:'image-generation' as const} : {}),\n"},
+      {"line":1866,"remove":1,"text":"    const pendingReviewClarification = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {\n"},
+      {"line":1939,"remove":1,"text":"    const taskProgressContext = imageFollowup ? \"\" : taskProgressPrompt.text;\n"},
+      {"line":3785,"remove":1,"text":"            let imageAssets:import(\"@/lib/images/generated-source\").ImageAsset[] =\n"},
+      {"line":3835,"remove":0,"text":"            const generatedImages = imageAssets.length && imageGenerationRequested\n              ? await cachedWorkflowValue(`generated-images:${assistantMessageId}`,()=>generatedImageService().retainResult({\n                  actorId,chatId,messageId:assistantMessageId,requestId,createdAt:workflowTimestamp(),\n                  provider:result!.provider,model:result!.model,assets:imageAssets,\n                  parents:imageFollowup?.operation==='edit' ? savedAttachments.filter(file=>attachmentSourceIds.has(file.id)).map(file=>({\n                    attachmentId:file.id,sourceChatId:file.chatId??chatId,\n                    ...(file.generatedSource?.sourceHash?{sourceHash:file.generatedSource.sourceHash}:{}),\n                  })) : [],\n                })) : null;\n            if (generatedImages) {\n              // A checkpoint proves prior persistence, not that an original\n              // remains present now. Do not republish a stale retention claim.\n              for (const source of generatedImages.attachments)\n                await readGeneratedImage(actorId,chatId,source.id);\n              imageAssets = generatedImages.assets;\n            }\n"},
+      {"line":3841,"remove":0,"text":"              ...(generatedImages ? {attachments:generatedImages.attachments} : {}),\n"}
+    ]
+  },
+  {
+    "path":"components/chat-panel.tsx",
+    "before":"58969c160525214992f2b5fd9f427a70a654fce821edf02667c6d91e6e03f04c",
+    "after":"3dcc4943981581a56467ec9ab50b1fa8f8d87c2a11f87eda3fe7e0b63537f45d",
+    "changes":[
+      {"line":827,"remove":1,"text":"  const [replyTo, setReplyTo] = useState<(Pick<Message, \"id\" | \"role\" | \"content\"> & { imageIndex?: number }) | null>(null);\n"},
+      {"line":1678,"remove":1,"text":"    const imageSource = replySnapshot?.role === \"assistant\" && replySnapshot.imageIndex !== undefined\n      ? { messageId: replySnapshot.id, assetIndex: replySnapshot.imageIndex } : undefined;\n    const content = reactionContent ?? ((documentSourceMessageId || imageSource) ? latestComposerText : replySnapshot\n"},
+      {"line":1807,"remove":0,"text":"          ...(imageSource ? { imageSource } : {}),\n"},
+      {"line":3297,"remove":0,"text":"                    <button\n                      type=\"button\"\n                      aria-label={`Use generated image ${(message.assets?.indexOf(asset) ?? 0) + 1} from this message`}\n                      aria-pressed={replyTo?.id === message.id && replyTo.imageIndex === message.assets?.indexOf(asset)}\n                      onClick={() => setReplyTo({id:message.id,role:message.role,content:message.content,\n                        imageIndex:message.assets?.indexOf(asset) ?? 0})}\n                      className=\"mt-2 rounded-lg border border-white/20 px-3 py-1.5 text-xs hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500\"\n                    >Use this image in my next message</button>\n                  ) : null}\n                  {message.role === \"assistant\" ? (\n"},
+      {"line":3395,"remove":1,"text":"          <div className=\"min-w-0\"><span className=\"font-semibold text-sky-200\">Replying to {replyTo.role === \"assistant\" ? activeActorName : \"your message\"}{replyTo.imageIndex !== undefined ? ` — image ${replyTo.imageIndex + 1}` : \"\"}</span><p className=\"mt-1 line-clamp-2 break-words\">{replyTo.content.slice(0,260)}</p></div>\n"}
+    ]
+  },
+  {
+    "path":"lib/chat/attachment-continuity.ts",
+    "before":"f8d6e5dedb9e82165b52a227acf2f32eaf7238c8e915ea9ede734dee987a0ad0",
+    "after":"154f537b470bc1302893421ac8a75574e61956c55b3f10b2ef210bf616735ac2",
+    "changes":[
+      {"line":5,"remove":0,"text":"  /** Trusted generation identity, never a claim that pixels have been observed. */\n  generatedSource?: import(\"@/lib/images/generated-source\").GeneratedImageProvenance;\n"},
+      {"line":30,"remove":1,"text":"  conversationUsage?: \"uploaded\" | \"generated\" | \"explicit-reference\" | \"contextual\";\n"},
+      {"line":97,"remove":0,"text":"    generatedSource: file.generatedSource ?? null,\n"}
+    ]
+  },
+  {
+    "path":"lib/types/chat.ts",
+    "before":"edd4797052e6509e8c2b2485172eb9b4e608b2038a58b086bc74a2fa87a6deaa",
+    "after":"b63b560e7b7967f55de17ad14f72a7e3e5cf3f41de4867bb312de0b2fbf52919",
+    "changes":[{"line":68,"remove":1,"text":"  assets?: import(\"@/lib/images/generated-source\").ImageAsset[];\n"}]
+  },
+  {
+    "path":"lib/uploads/stored-uploads.ts",
+    "before":"30000018b729532bb7c48522c225a4b90343c44b127acafed34e0792267f7527",
+    "after":"78136fc553f801e5e20dbdf3e9d47cb23335f617fbfc61086fb84ecfecb8c006",
+    "changes":[
+      {"line":0,"remove":0,"text":"import { createGeneratedImageStore } from './generated-image-store';\n"},
+      {"line":142,"remove":0,"text":"  const generatedImages = createGeneratedImageStore({objects,ensureBucket,path:conversationPath,writeCatalogEntry});\n"},
+      {"line":143,"remove":0,"text":"    ...generatedImages,\n"},
+      {"line":1146,"remove":0,"text":"\nexport const persistGeneratedImage = (...args:Parameters<ReturnType<typeof createStoredUploadService>[\"persistGenerated\"]>) => getUploadService().persistGenerated(...args);\nexport const readGeneratedImage = (...args:Parameters<ReturnType<typeof createStoredUploadService>[\"readGenerated\"]>) => getUploadService().readGenerated(...args);\nexport const withGeneratedImageObservation = <T>(input:Parameters<ReturnType<typeof createStoredUploadService>[\"withGeneratedObservation\"]>[0],inspect:()=>Promise<T>) => getUploadService().withGeneratedObservation(input,inspect);\n"}
+    ]
+  },
+  {
+    "path":"tests/chat-clarification-routing.test.mjs",
+    "before":"61588421e3d12a5eac30c1f97b7b158f69b349b96cee2cda95266e12b4df9277",
+    "after":"6d9b57cd1654f2a6266c7f6fc6d756ca409c12893738978986f5e01401ce6f07",
+    "changes":[
+      {"line":127,"remove":1,"text":"  const globals = { benchmarkIntake:false, benchmarkRelay:false,imageFollowup:null, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === \"Stop the coding project\", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,\n"},
+      {"line":452,"remove":1,"text":"    imageFollowup: null, pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},\n"}
+    ]
+  },
+  {
+    "path":"tests/media-memory-route.test.mjs",
+    "before":"57c314973bcc3c77fa27fe933e998894be3453d8539f3a7e80f07d7e926f47ee",
+    "after":"80c17eb630eb9398d448e324c0e069caaee952d110475491cb46db2c52aaecaa",
+    "changes":[
+      {"line":21,"remove":1,"text":"   benchmarkRelay:false,imageFollowup:null,selectFreshPdfSources:load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts')}).selectFreshPdfSources,selectPdfEvidenceSource:load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts'),'@/lib/media-memory/evidence':load('lib/media-memory/evidence.ts',{'@/lib/data/supabase/admin':{}})}).selectPdfEvidenceSource,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},...memory,timelineActive:false,timelineSelection:{},getChatById:async()=>({actorId:'actor'}),savedOriginalExists:async()=>false,message,actorId:'actor',chatId:'current',newAttachments:[],attachmentHistory:[],catalog:[],recalledKatieVisualMemoryContext:()=>'',\n"},
+      {"line":51,"remove":1,"text":"   benchmarkRelay:false,imageFollowup:null,selectFreshPdfSources:load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts')}).selectFreshPdfSources,selectPdfEvidenceSource:load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts'),'@/lib/media-memory/evidence':load('lib/media-memory/evidence.ts',{'@/lib/data/supabase/admin':{}})}).selectPdfEvidenceSource,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},...memory,timelineActive:false,timelineSelection:{}, message, actorId:'actor',chatId:'current',newAttachments:[],attachmentHistory:history,catalog:[],recalledKatieVisualMemoryContext:()=>'',\n"},
+      {"line":81,"remove":1,"text":"   benchmarkRelay:false,imageFollowup:null,selectFreshPdfSources:load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts')}).selectFreshPdfSources,selectPdfEvidenceSource:load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts'),'@/lib/media-memory/evidence':load('lib/media-memory/evidence.ts',{'@/lib/data/supabase/admin':{}})}).selectPdfEvidenceSource,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},...memory,timelineActive:false,timelineSelection:{},message,actorId:'actor',chatId:'chat',newAttachments:[],attachmentHistory:[],catalog:[],recalledKatieVisualMemoryContext:()=>'',\n"}
+    ]
+  },
+  {
+    "path":"tests/pdf-saved-comparison.test.mjs",
+    "before":"7bd5fe0c5bc626cbee822ed0cdef30a6d02a82dd50e03c11f22bc498bd9173ad",
+    "after":"78bb761c5308beeceb7dc231275fa110aa945bac2da261f7beb7cdd0b891031f",
+    "changes":[{"line":21,"remove":1,"text":" const decision=await vm.runInNewContext(code(`(async()=>{${selection}return {attachmentDecision,freshPdfSelection};})()`),{benchmarkRelay:false,imageFollowup:null,\n"}]
+  },
+  {
+    "path":"tests/pdf-source-scope.test.mjs",
+    "before":"0b2bee349b8236f4912934cb2395a0810398627874e9a8ed2462a5be800c9f24",
+    "after":"d77890014275201fc8f38d7fd1731fbaddf52d9650e58c7c727c350c03ab698f",
+    "changes":[
+      {"line":36,"remove":1,"text":" const fixture={...load('lib/providers/openai-cache.ts'),workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,imageFollowup:null,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,\n"},
+      {"line":351,"remove":1,"text":"   benchmarkRelay:false,imageFollowup:null,benchmarkIntake:false,...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,\n"}
+    ]
+  },
+  {
+    "path":"tests/video-timeline-review.test.mjs",
+    "before":"6be99a8842438cb4a3c878bed8d8446e3b9495de875ef8d565a5e04c2f996f22",
+    "after":"e3906cbda998e1c79314b3d4821a5fcd7e39ba1c49b9b67c8eee26a28ee5ad0f",
+    "changes":[{"line":52,"remove":1,"text":"  const context={benchmarkRelay:false,imageFollowup:null,...intent,...fixture,chatId:\"current\",exports:{},console};vm.createContext(context);\n"}]
+  }
+]
