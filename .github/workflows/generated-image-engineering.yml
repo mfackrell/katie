@@ -1,0 +1,29 @@
+name: Generated image isolated engineering
+on:
+  push:
+    branches: [fix/generated-image-perception-20261116]
+    paths:
+      - .github/workflows/generated-image-engineering.yml
+      - scripts/generated-image-engineering-patch.mjs
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.repository == 'mfackrell/katie' && github.ref == 'refs/heads/fix/generated-image-perception-20261116'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Export source only, no secrets or inference
+        run: |
+          git archive --format=tar.gz --output=/tmp/katie-source.tar.gz HEAD
+          git rev-parse HEAD > /tmp/source-sha.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: generated-image-engineering-source
+          path: |
+            /tmp/katie-source.tar.gz
+            /tmp/source-sha.txt
+          retention-days: 1
