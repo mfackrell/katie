@@ -65,7 +65,7 @@ jobs:
           done
           git apply --check "$patch"
           git apply "$patch"
-          diff -u <(printf '%s\n' tests/helpers/assert-commissioning-exception-recovery.mjs tests/helpers/assert-management-loop-recovery.mjs tests/helpers/assert-project-organization-compatibility.mjs) <(git diff --name-only)
+          test "$(git diff --name-only)" = tests/helpers/assert-commissioning-exception-recovery.mjs
           test "$(git rev-parse HEAD)" = f2f1c2085d77fa74e9a6f9d9c2001b4d4bf30814
           test "$(git rev-parse 'HEAD^{tree}')" = 965f96c35c28b9b32a227863cb87754c8fda67c5
           git diff --exit-code -- supabase lib app
