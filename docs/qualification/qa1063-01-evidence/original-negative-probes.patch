@@ -1,0 +1,96 @@
+diff --git a/tests/helpers/assert-commissioning-exception-recovery.mjs b/tests/helpers/assert-commissioning-exception-recovery.mjs
+index cd69725e..08150201 100644
+--- a/tests/helpers/assert-commissioning-exception-recovery.mjs
++++ b/tests/helpers/assert-commissioning-exception-recovery.mjs
+@@ -66,6 +66,40 @@ export async function assertCommissioningExceptionRecovery(db,{project,s,decide}
+    assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,before.missions.length,scenario);
+    await db.query('rollback to savepoint recovery_negative');await db.query('release savepoint recovery_negative');
+   }
++
++  // Independent QA: additional coherent saved-ready exclusions.
++  for(const scenario of ['actually-paused','expired-lease','null-lease-until','wrong-phase','inactive-node','expired-node','missing-decision','mixed-decision','foreign-exception-owner','mission-not-completed','newer-failed-assignment','invalid-release-membership','invalid-window-membership']){
++   await db.query('savepoint qa_recovery_negative');await db.query('reset role');
++   await db.query("set local session_replication_role='replica'");
++   if(scenario==='actually-paused')await db.query("update work_projects set status='paused' where id=$1",[project]);
++   if(scenario==='expired-lease')await db.query("update work_projects set lease_until=now()-interval '1 second' where id=$1",[project]);
++   if(scenario==='null-lease-until')await db.query('update work_projects set lease_until=null where id=$1',[project]);
++   if(scenario==='wrong-phase')await db.query("update work_projects set phase='research' where id=$1",[project]);
++   if(scenario==='inactive-node')await db.query("update project_organization_nodes set status='accepted' where id=$1",[s.node]);
++   if(scenario==='expired-node')await db.query("update project_organization_nodes set deadline=now()-interval '1 second' where id=$1",[s.node]);
++   if(scenario==='missing-decision')await db.query('delete from project_organization_decisions where assignment_id=$1',[s.job]);
++   if(scenario==='mixed-decision')await db.query("update project_organization_decisions set decision='[{\"action\":\"ready\"},{\"action\":\"plan\"}]' where assignment_id=$1",[s.job]);
++   if(scenario==='foreign-exception-owner')await db.query("update project_organization_exceptions set owner_id=(select parent_id from project_organization_nodes where id=$2) where project_id=$1 and owner_id=$2",[project,s.node]);
++   if(scenario==='mission-not-completed')await db.query("update agent_missions set status='blocked' where id=$1",[s.mission]);
++   if(scenario==='invalid-release-membership')await db.query("update project_provider_execution set continuation_release_sha=repeat('f',40) where project_id=$1",[project]);
++   if(scenario==='invalid-window-membership')await db.query('update project_provider_execution set window_id=$2 where project_id=$1',[project,randomUUID()]);
++   if(scenario==='newer-failed-assignment'){
++    const mid=randomUUID(),jid=randomUUID();
++    await db.query("insert into agent_missions select (jsonb_populate_record(null::agent_missions,to_jsonb(m)||jsonb_build_object('id',$2::uuid,'status','blocked','created_at',now()+interval '1 second'))).* from agent_missions m where id=$1",[s.mission,mid]);
++    await db.query("insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,to_jsonb(j)||jsonb_build_object('id',$2::uuid,'mission_id',$3::uuid,'status','failed','lease',null,'lease_until',null,'created_at',now()+interval '1 second'))).* from mission_assignments j where id=$1",[s.job,jid,mid]);
++    await db.query("insert into project_organization_assignments select $2,node_id,contract_hash,now()+interval '1 second' from project_organization_assignments where assignment_id=$1",[s.job,jid]);
++   }
++   await db.query("set local session_replication_role='origin'");await db.query('set role service_role');
++   const count=(await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n;
++   await db.query('savepoint qa_call');let outcome;
++   try{outcome=(await db.query('select project_org_schedule($1,$2) r',[project,lease])).rows[0].r;}
++   catch(e){await db.query('rollback to savepoint qa_call');assert.match(e.message,/lease|required|authority|window|phase|expired/i,scenario);}
++   await db.query('release savepoint qa_call');
++   assert.equal(outcome?.missionId,undefined,scenario+': no recovery mission');
++   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,count,scenario);
++   await db.query('rollback to savepoint qa_recovery_negative');await db.query('release savepoint qa_recovery_negative');
++   console.log('INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: '+scenario);
++  }
+   for(const role of ['anon','authenticated']){
+    await db.query('reset role');await db.query('set role '+role);
+    await reject(()=>db.query('select project_org_schedule($1,$2)',[project,lease]),/permission denied/);
+diff --git a/tests/helpers/assert-management-loop-recovery.mjs b/tests/helpers/assert-management-loop-recovery.mjs
+index 153f2c1d..22dd0502 100644
+--- a/tests/helpers/assert-management-loop-recovery.mjs
++++ b/tests/helpers/assert-management-loop-recovery.mjs
+@@ -180,6 +180,14 @@ export async function assertManagementLoopRecovery(db,x){
+      const retained=(await db.query('select status,result from mission_assignments where id=$1',[s.job])).rows[0];
+      assert.equal(retained.status,'failed');assert.deepEqual(retained.result.managementCommandRejection.smartFields,Array.from(failure.smartFields));
+      assert.match(retained.result.managementCommandRejection.proposalHash,/^[a-f0-9]{64}$/);
++     await assert.rejects(()=>mocked(s,[],ctx=>{
++      const serialized=JSON.stringify(ctx);
++      assert.ok(serialized.includes(failure.proposalHash),'Normal management context carries retained proposal hash');
++      assert.ok(serialized.includes('tasks.development.'+field),'Normal management context carries exact rejected path');
++      throw Error('INDEPENDENT_QA_CONTEXT_CAPTURED');
++     }),/INDEPENDENT_QA_CONTEXT_CAPTURED/);
++     console.log('INDEPENDENT_QA_CONTEXT_PASS: '+field);
++
+      throw error;
+     }
+    },e=>e.evidence?.smartFields?.includes('tasks.development.'+field));
+diff --git a/tests/helpers/assert-project-organization-compatibility.mjs b/tests/helpers/assert-project-organization-compatibility.mjs
+index d24d05d0..2723f040 100644
+--- a/tests/helpers/assert-project-organization-compatibility.mjs
++++ b/tests/helpers/assert-project-organization-compatibility.mjs
+@@ -84,8 +84,27 @@ export async function assertProjectOrganizationCompatibility(db,rival){
+  assert.deepEqual(await installedRecovery(),beforeOwnerControls,'Reviewed recovery definitions, ACLs and security settings are unchanged');
+  console.log('OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: '+JSON.stringify(beforeOwnerControls));
+  assert.deepEqual(await snapshot(),before,'Owner activation controls never mutate historical records during installation');
++
++ const qaSnapshot=async()=>{
++  const out={};
++  for(const {tablename} of (await db.query("select tablename from pg_tables where schemaname='public' order by tablename")).rows){
++   out[tablename]=(await db.query('select to_jsonb(t) r from public."'+tablename.replaceAll('"','""')+'" t order by to_jsonb(t)::text')).rows;
++  }
++  return out;
++ };
++ const qaBefore=await qaSnapshot();
++ const qaAuthorityNames=['project_smart_contract','project_org_renew_paused_window','project_org_resume_management','project_org_management_activation_offer','project_org_resume_management_confirmed'];
++ const qaDefinitions=async()=>(await db.query("select proname,prosrc,proacl::text,proconfig,prosecdef from pg_proc where pronamespace='public'::regnamespace and proname=any($1) order by proname",[qaAuthorityNames])).rows;
++ const qaDefsBefore=await qaDefinitions();assert.equal(qaDefsBefore.length,5);
+  const beforeCommissioning=(await db.query("select proname,md5(prosrc) hash from pg_proc where oid in ('project_org_schedule(uuid,uuid)'::regprocedure,'project_org_decide(uuid,uuid,jsonb)'::regprocedure) order by proname")).rows;
+  await db.query(readFileSync('supabase/migrations/20261116172712_commissioning_exception_recovery.sql','utf8'));
++
++ assert.deepEqual(await qaSnapshot(),qaBefore,'Every public table remains byte-for-byte equivalent after migration installation');
++ assert.deepEqual(await qaDefinitions(),qaDefsBefore,'SMART and both owner-control adapters/writers preserve bodies and security settings');
++ const qaAcl=(await db.query("select proname,prosecdef,proconfig,has_function_privilege('anon',oid,'EXECUTE') anon,has_function_privilege('authenticated',oid,'EXECUTE') authenticated,has_function_privilege('service_role',oid,'EXECUTE') service from pg_proc where pronamespace='public'::regnamespace and proname in ('project_org_schedule','project_org_decide','project_org_schedule_before_exception_recovery','project_org_decide_before_exception_recovery') order by proname")).rows;
++ assert.equal(qaAcl.length,4);
++ for(const f of qaAcl){assert.equal(f.prosecdef,true);assert.ok(f.proconfig.some(x=>x==='search_path=public, pg_temp'||x==='search_path=public'));assert.equal(f.anon,false);assert.equal(f.authenticated,false);assert.equal(f.service,!f.proname.endsWith('_before_exception_recovery'));}
++ console.log('INDEPENDENT_QA_INSTALLATION_PASS: '+Object.keys(qaBefore).length+' public tables unchanged; SMART/owner writers and adapters unchanged; four function ACLs verified');
+  const afterCommissioning=(await db.query("select replace(proname,'_before_exception_recovery','') proname,md5(prosrc) hash from pg_proc where oid in ('project_org_schedule_before_exception_recovery(uuid,uuid)'::regprocedure,'project_org_decide_before_exception_recovery(uuid,uuid,jsonb)'::regprocedure) order by proname")).rows;
+  assert.deepEqual(afterCommissioning,beforeCommissioning,'Original scheduling and command authority bodies remain byte-identical under guarded wrappers');
+  assert.deepEqual(await snapshot(),before,'Commissioning recovery installation never mutates historical records');

@@ -22,10 +22,15 @@ create function public.project_org_schedule(p_project uuid,p_lease uuid) returns
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare r jsonb; recovered uuid;
 begin
- -- Original scheduler validates lease, window, phase, dependencies, mission cap
- -- and existing one-shot restrictions before considering the stranded state.
+ -- Preserve the original scheduler's lease, phase, dependency, mission-cap and
+ -- one-shot behavior before considering the stranded state.
  r:=project_org_schedule_before_exception_recovery(p_project,p_lease);
  if r->>'detail' is distinct from 'Functional Director must commission the next approved coding package.' then return r;end if;
+ -- A wait can come from the ordinary fallback even when provider continuation
+ -- membership is invalid. Require the existing authority predicate before our
+ -- new mutation; projects without provider-controlled authority remain ordinary.
+ if exists(select 1 from project_provider_execution where project_id=p_project)
+  and not project_provider_continued(p_project) then return r;end if;
  select n.id into recovered from project_organization_nodes n
  join work_projects p on p.id=n.project_id
  join lateral (

@@ -84,8 +84,27 @@ export async function assertProjectOrganizationCompatibility(db,rival){
  assert.deepEqual(await installedRecovery(),beforeOwnerControls,'Reviewed recovery definitions, ACLs and security settings are unchanged');
  console.log('OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: '+JSON.stringify(beforeOwnerControls));
  assert.deepEqual(await snapshot(),before,'Owner activation controls never mutate historical records during installation');
+
+ const qaSnapshot=async()=>{
+  const out={};
+  for(const {tablename} of (await db.query("select tablename from pg_tables where schemaname='public' order by tablename")).rows){
+   out[tablename]=(await db.query('select to_jsonb(t) r from public."'+tablename.replaceAll('"','""')+'" t order by to_jsonb(t)::text')).rows;
+  }
+  return out;
+ };
+ const qaBefore=await qaSnapshot();
+ const qaAuthorityNames=['project_smart_contract','project_org_renew_paused_window','project_org_resume_management','project_org_management_activation_offer','project_org_resume_management_confirmed'];
+ const qaDefinitions=async()=>(await db.query("select proname,prosrc,proacl::text,proconfig,prosecdef from pg_proc where pronamespace='public'::regnamespace and proname=any($1) order by proname",[qaAuthorityNames])).rows;
+ const qaDefsBefore=await qaDefinitions();assert.equal(qaDefsBefore.length,5);
  const beforeCommissioning=(await db.query("select proname,md5(prosrc) hash from pg_proc where oid in ('project_org_schedule(uuid,uuid)'::regprocedure,'project_org_decide(uuid,uuid,jsonb)'::regprocedure) order by proname")).rows;
  await db.query(readFileSync('supabase/migrations/20261116172712_commissioning_exception_recovery.sql','utf8'));
+
+ assert.deepEqual(await qaSnapshot(),qaBefore,'Every public table remains byte-for-byte equivalent after migration installation');
+ assert.deepEqual(await qaDefinitions(),qaDefsBefore,'SMART and both owner-control adapters/writers preserve bodies and security settings');
+ const qaAcl=(await db.query("select proname,prosecdef,proconfig,has_function_privilege('anon',oid,'EXECUTE') anon,has_function_privilege('authenticated',oid,'EXECUTE') authenticated,has_function_privilege('service_role',oid,'EXECUTE') service from pg_proc where pronamespace='public'::regnamespace and proname in ('project_org_schedule','project_org_decide','project_org_schedule_before_exception_recovery','project_org_decide_before_exception_recovery') order by proname")).rows;
+ assert.equal(qaAcl.length,4);
+ for(const f of qaAcl){assert.equal(f.prosecdef,true);assert.ok(f.proconfig.some(x=>x==='search_path=public, pg_temp'||x==='search_path=public'));assert.equal(f.anon,false);assert.equal(f.authenticated,false);assert.equal(f.service,!f.proname.endsWith('_before_exception_recovery'));}
+ console.log('INDEPENDENT_QA_INSTALLATION_PASS: '+Object.keys(qaBefore).length+' public tables unchanged; SMART/owner writers and adapters unchanged; four function ACLs verified');
  const afterCommissioning=(await db.query("select replace(proname,'_before_exception_recovery','') proname,md5(prosrc) hash from pg_proc where oid in ('project_org_schedule_before_exception_recovery(uuid,uuid)'::regprocedure,'project_org_decide_before_exception_recovery(uuid,uuid,jsonb)'::regprocedure) order by proname")).rows;
  assert.deepEqual(afterCommissioning,beforeCommissioning,'Original scheduling and command authority bodies remain byte-identical under guarded wrappers');
  assert.deepEqual(await snapshot(),before,'Commissioning recovery installation never mutates historical records');

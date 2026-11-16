@@ -180,6 +180,14 @@ export async function assertManagementLoopRecovery(db,x){
      const retained=(await db.query('select status,result from mission_assignments where id=$1',[s.job])).rows[0];
      assert.equal(retained.status,'failed');assert.deepEqual(retained.result.managementCommandRejection.smartFields,Array.from(failure.smartFields));
      assert.match(retained.result.managementCommandRejection.proposalHash,/^[a-f0-9]{64}$/);
+     await assert.rejects(()=>mocked(s,[],ctx=>{
+      const serialized=JSON.stringify(ctx);
+      assert.ok(serialized.includes(failure.proposalHash),'Normal management context carries retained proposal hash');
+      assert.ok(serialized.includes('tasks.development.'+field),'Normal management context carries exact rejected path');
+      throw Error('INDEPENDENT_QA_CONTEXT_CAPTURED');
+     }),/INDEPENDENT_QA_CONTEXT_CAPTURED/);
+     console.log('INDEPENDENT_QA_CONTEXT_PASS: '+field);
+
      throw error;
     }
    },e=>e.evidence?.smartFields?.includes('tasks.development.'+field));
