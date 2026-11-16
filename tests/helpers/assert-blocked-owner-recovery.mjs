@@ -34,7 +34,7 @@ export async function assertBlockedOwnerRecovery(db,x){
   // Shift the previously executed (real) #1057 authorization records into the
   // exact expired/consumed state rather than inventing fresh receipts.
   await db.query('update project_execution_windows set cutoff=$2,prior_cutoff=$3 where id=$1',[ORIGINAL_WINDOW,EXPIRED,PRIOR]);
-  await db.query('update project_execution_windows set cutoff=$2 where id=$1',[originalWindow,PRIOR]);
+  await db.query("update project_execution_windows set prior_cutoff=$2::timestamptz-interval '24 hours',cutoff=$2 where id=$1",[originalWindow,PRIOR]);
   await db.query('update project_paused_window_renewals set cutoff=$2,prior_cutoff=$3 where project_id=$1',[ORIGINAL,EXPIRED,PRIOR]);
   await db.query('update project_management_resume_receipts set cutoff=$2 where project_id=$1',[ORIGINAL,EXPIRED]);
   await db.query('update project_organization_contract_changes set deadline=$2,prior_deadline=$3 where window_id=$1',[ORIGINAL_WINDOW,EXPIRED,PRIOR]);
