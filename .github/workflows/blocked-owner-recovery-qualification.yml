@@ -1,0 +1,53 @@
+name: blocked-owner-recovery-qualification
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/*blocked_owner_window_resume.sql"
+      - "lib/projects/blocked-owner-recovery.ts"
+      - "app/api/projects/organization/route.ts"
+      - "app/api/projects/route.ts"
+      - "components/director-recovery-control.tsx"
+      - "tests/helpers/assert-blocked-owner-recovery.mjs"
+      - "tests/helpers/assert-paused-window-renewal.mjs"
+      - ".github/workflows/blocked-owner-recovery-qualification.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  current-state-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      KATIE_TEST_PG_TCP: "1"
+      KATIE_TEST_COMPLETION_CONTROLS: "1"
+      KATIE_TEST_AMENDMENT_SUCCESSOR: "1"
+      KATIE_TEST_CAPACITY_RENEWAL: "1"
+      KATIE_TEST_LIFECYCLE_AUTHORIZATION: "1"
+      KATIE_TEST_ORDINARY_AUTHORITY: "1"
+      KATIE_TEST_PROJECT_ORGANIZATION: "1"
+      KATIE_TEST_DIRECTOR_ONE_SHOT: "1"
+      KATIE_TEST_ORG_AMENDMENTS: "1"
+      KATIE_TEST_BLOCKED_OWNER_RECOVERY: "1"
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install disposable PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Run original consumed-receipt fixture and guarded owner transition
+        run: node --test tests/benchmark-renewal-postgres.test.mjs
