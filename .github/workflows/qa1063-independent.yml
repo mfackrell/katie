@@ -70,6 +70,18 @@ jobs:
           test "$(git rev-parse 'HEAD^{tree}')" = 965f96c35c28b9b32a227863cb87754c8fda67c5
           git diff --exit-code -- supabase lib app
           echo 'QA_ORIGINAL_PATCH_UNCHANGED_PASS'
+      - name: Give unrelated fixture browser a realistic hosted-runner launch allowance
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/helpers/assert-project-native-delegation.mjs')
+          data=p.read_text()
+          assert data.count('{timeout:4000}')==1
+          p.write_text(data.replace('{timeout:4000}','{timeout:20000}'))
+          PY
+          git diff --exit-code -- supabase lib app scripts
+          echo 'QA_ONLY_BROWSER_FIXTURE_TIMEOUT=20000; no test assertions changed'
       - name: Independently execute original strict negative probes and affected regressions
         run: |
           set -euo pipefail
@@ -78,11 +90,22 @@ jobs:
       - name: Restore exact corrected regression sources
         run: |
           set -euo pipefail
-          git restore -- tests/helpers/assert-commissioning-exception-recovery.mjs tests/helpers/assert-management-loop-recovery.mjs tests/helpers/assert-project-organization-compatibility.mjs
+          git restore -- tests/helpers/assert-commissioning-exception-recovery.mjs tests/helpers/assert-management-loop-recovery.mjs tests/helpers/assert-project-organization-compatibility.mjs tests/helpers/assert-project-native-delegation.mjs
           test -z "$(git diff --name-only)"
           test "$(git rev-parse HEAD)" = f2f1c2085d77fa74e9a6f9d9c2001b4d4bf30814
           test "$(git rev-parse 'HEAD^{tree}')" = 965f96c35c28b9b32a227863cb87754c8fda67c5
           echo 'QA_CORRECTED_SOURCE_RESTORED_PASS'
+      - name: Apply same QA-only fixture browser timing allowance
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/helpers/assert-project-native-delegation.mjs')
+          data=p.read_text()
+          assert data.count('{timeout:4000}')==1
+          p.write_text(data.replace('{timeout:4000}','{timeout:20000}'))
+          PY
+          git diff --exit-code -- supabase lib app scripts
       - name: Independently run strengthened zero-mutation and ordinary-project assertions
         run: |
           set -euo pipefail
