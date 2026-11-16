@@ -98,7 +98,9 @@ export async function assertBlockedOwnerRecovery(db,x){
    await reject(()=>authorize(),/permission denied/);
    await db.query('set role service_role');
   }
-  for(const [i,value] of [[0,randomUUID()],[1,randomUUID()],[2,'f'.repeat(40)],[3,randomUUID()],
+  // SQL cannot know VERCEL_GIT_COMMIT_SHA; the authenticated production API
+  // enforces the exact deployment SHA. SQL checks a fresh, immutable receipt.
+  for(const [i,value] of [[0,randomUUID()],[1,randomUUID()],[3,randomUUID()],
    [4,PRIOR],[5,EXPIRED],[5,new Date(Date.now()+120000).toISOString()],
    [5,new Date(Date.now()+90000000).toISOString()],[6,ORIGINAL_WINDOW],[7,'f'.repeat(64)]]){
    await reject(()=>authorize(authorizeArgs.map((v,k)=>k===i?value:v)),/owner|cutoff|state|window|authority|authorization/i);
