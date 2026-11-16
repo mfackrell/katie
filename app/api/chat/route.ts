@@ -3908,24 +3908,26 @@ ${chunkWorkflowSummary}`;
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            // Each standalone job checkpoints independently; a spending pause
-            // remains resumable even when the answer is already saved.
+            // Memory maintenance is separate infrastructure and must never depend
+            // on the completed chat workflow's spending lease.
             const persistAccountedMemory = async () => {
               console.log("[Chat API] Post-answer memory persistence start", { actorId, chatId, requestId });
               try {
-                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateRelevantLongTermMemory(actorId, chatId, message));
+                // Post-answer memory is independently metered infrastructure. Never
+                // bind it to a completed chat workflow lease or spending approval.
+                const retention = maybeUpdateRelevantLongTermMemory(actorId, chatId, message);
                 const cleanup = retention.then(
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
+                  () => maybeRunHundredUserMessageReview(actorId),
+                  () => maybeRunHundredUserMessageReview(actorId),
                 );
                 const memoryResults = await Promise.allSettled([
                   retention,
-                  cachedWorkflowValue("memory-summary", () => runWithDurablePostAnswerAccounting(() => maybeUpdateSummary(chatId))),
+                  maybeUpdateSummary(chatId),
                   cleanup,
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
-                    if (isStandaloneAccountingError(memoryResult.reason)) throw memoryResult.reason;
+                    // Memory task errors are logged, never escalated into a chat spending pause.
                     console.error(
                       index === 0
                         ? "[Chat API] Long-Term Memory Update Error:"
@@ -3944,7 +3946,6 @@ ${chunkWorkflowSummary}`;
                   intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
                 });
               } catch (error) {
-                if (isStandaloneAccountingError(error)) throw error;
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)
