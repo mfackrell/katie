@@ -80,6 +80,17 @@ test("provider stage evidence saves exact bytes and verifies integrity without i
   assert.equal((await h.api.recordItmStageReceipt(key,raw,"v14")).responseSha256,digest(raw));
 });
 
+test("an incomplete Claude response stays immutable but cannot be replayed as a valid plan",async()=>{
+  const h=fixture();
+  const stage={...key,stage:"retention"};
+  const raw='{"keep":[0]}';
+  const saved=await h.api.recordItmStageReceipt(stage,raw,"v15-owner-stage2:incomplete");
+  assert.equal(saved.responseSha256,digest(raw));
+  assert.equal(h.rows.length,1);
+  assert.equal(h.rows[0].processor_version,"v15-owner-stage2:incomplete");
+  assert.equal(await h.api.readItmStageReceipt(stage),null);
+});
+
 test("stage evidence rejects different output for the same immutable source",async()=>{
   const h=fixture();
   await h.api.recordItmStageReceipt(key,'{"episodes":[]}',"v14");

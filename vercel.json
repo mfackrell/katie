@@ -37,6 +37,10 @@
     {
       "path": "/api/internal/runpod-still/reconcile",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/itm-stage2-recovery",
+      "schedule": "* * * * *"
     }
   ],
   "git": {

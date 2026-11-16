@@ -15,14 +15,17 @@ export const itmReceiptHash=(value:string):string=>
 export async function readItmStageReceipt(key:ItmReceiptKey):Promise<ItmStoredReceipt|null>{
   const admin=getSupabaseAdminClient();
   const {data,error}=await admin.from("itm_stage_receipts")
-    .select("response_text,response_sha256,expected_cursor")
+    .select("response_text,response_sha256,expected_cursor,processor_version")
     .eq("actor_id",key.actorId).eq("chat_id",key.chatId)
     .eq("batch_end_message_id",key.batchEndMessageId)
     .eq("provider",key.provider).eq("stage",key.stage)
     .eq("source_sha256",key.sourceSha256).eq("context_sha256",key.contextSha256)
-    .maybeSingle<{response_text:string;response_sha256:string;expected_cursor:string|null}>();
+    .maybeSingle<{response_text:string;response_sha256:string;expected_cursor:string|null;processor_version:string}>();
   if(error)throw new Error("ITM_RECEIPT_READ_UNAVAILABLE");
   if(!data)return null;
+  // Captured partial transport is paid evidence, but never valid retention.
+  // A one-use dispatch grant cannot be renewed just because this was incomplete.
+  if(data.processor_version.endsWith(":incomplete"))return null;
   if(data.expected_cursor!==key.expectedCursor)
     throw new Error("ITM_RECEIPT_CURSOR_MISMATCH");
   if(typeof data.response_text!=="string"||data.response_text.length<1||data.response_text.length>16000||
@@ -103,3 +106,39 @@ export async function readLegacyItmEpisodeOutput(
     throw new Error("ITM_LEGACY_RECEIPT_MALFORMED");
   return {responseText:data.response_text,ledgerAttemptId:data.ledger_attempt_id};
 }
+
+/** Save the complete Claude SDK response for the single authorized retention
+ * request. Even an empty or oversized completion is immutable paid evidence.
+ */
+export async function recordItmOneShotOutcome(
+  key:ItmReceiptKey,
+  outcome:{status:"response";response:unknown}|{status:"uncertain"},
+):Promise<void>{
+  if(key.provider!=="anthropic"||key.stage!=="retention")
+    throw new Error("ITM_ONE_SHOT_OUTCOME_PROVENANCE_INVALID");
+  const raw=outcome.status==="response"?JSON.stringify(outcome.response):null;
+  if(outcome.status==="response"&&typeof raw!=="string")
+    throw new Error("ITM_ONE_SHOT_OUTCOME_UNSERIALIZABLE");
+  const hash=raw===null?null:itmReceiptHash(raw);
+  const admin=getSupabaseAdminClient();
+  const {error}=await admin.from("itm_stage2_dispatch_outcomes").insert({
+    actor_id:key.actorId,chat_id:key.chatId,
+    batch_end_message_id:key.batchEndMessageId,expected_cursor:key.expectedCursor,
+    source_sha256:key.sourceSha256,context_sha256:key.contextSha256,
+    provider:"anthropic",status:outcome.status,
+    raw_response_text:raw,raw_response_sha256:hash,
+  });
+  if(!error)return;
+  const {data:saved,error:readError}=await admin.from("itm_stage2_dispatch_outcomes")
+    .select("status,raw_response_sha256")
+    .eq("actor_id",key.actorId).eq("chat_id",key.chatId)
+    .eq("batch_end_message_id",key.batchEndMessageId)
+    .eq("expected_cursor",key.expectedCursor)
+    .eq("source_sha256",key.sourceSha256).eq("context_sha256",key.contextSha256)
+    .maybeSingle<{status:string;raw_response_sha256:string|null}>();
+  if(readError||!saved)throw new Error("ITM_ONE_SHOT_OUTCOME_WRITE_UNAVAILABLE");
+  if(outcome.status==="uncertain"&&saved.status==="response")return;
+  if(saved.status!==outcome.status||saved.raw_response_sha256!==hash)
+    throw new Error("ITM_ONE_SHOT_OUTCOME_IMMUTABLE_CONFLICT");
+}
+
