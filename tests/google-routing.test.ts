@@ -2108,7 +2108,7 @@ test("classifier repairs production-style false image intent before capability r
   assert.match(classification.classification.decisionEvidence?.selection_justification ?? "", /Deterministic objective precedence/);
 });
 
-test("master router preserves compound deliverable after deterministic objective correction", async () => {
+test("master router corrects false image classification for a written biography without losing routing evidence", async () => {
   const decisionProvider = provider("openai", ["gpt-5.6-sol"], async ({ user, modelId }) => {
     if (user.includes("Intent Classifier")) {
       return {
@@ -2134,15 +2134,15 @@ test("master router preserves compound deliverable after deterministic objective
     };
   }).provider;
   const decision = await chooseProvider(
-    "Write a short biography and generate an accompanying portrait.",
+    "Write a short biography inspired by the portrait that we generated earlier.",
     "Previous discussion included several generated portraits.",
     [decisionProvider],
     { routingRequestId: "test-compound-objective-precedence" }
   );
   assert.equal(decision.resolvedIntent.intent, "rewrite");
-  assert.deepEqual(decision.resolvedIntent.secondaryIntents, ["image-generation"]);
+  assert.deepEqual(decision.resolvedIntent.secondaryIntents, []);
   assert.equal(decision.resolvedIntent.responsePurpose, "deliverable");
-  assert.equal(decision.resolvedIntent.objectiveGuardReason, "written_objective_precedes_explicit_image_objective");
+  assert.equal(decision.resolvedIntent.objectiveGuardReason, "explicit_written_objective_with_image_reference");
   assert.equal(decision.intentResolutionReason, "deterministic-objective-precedence");
   assert.equal(decision.explainer?.selection_justification, "A capable writing model can produce the requested text.");
 });
