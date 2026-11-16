@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import {modules} from './helpers/load-project-modules.mjs';
 
 test('paused renewal: authenticated original owner, exact project/cutoff and active production release only',async t=>{
+ const savedNow=Date.now;Date.now=()=>Date.parse('2026-11-16T13:00:00Z');t.after(()=>{Date.now=savedNow;});
  const saved={...process.env};t.after(()=>{for(const k of ['VERCEL_ENV','VERCEL_GIT_COMMIT_SHA','KATIE_OWNER_AUTH_USER_ID']){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}});
  const release='d'.repeat(40),owner='11111111-1111-4111-8111-111111111111';
  Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,KATIE_OWNER_AUTH_USER_ID:owner});
  let authenticated=true,calls=[],fail=false;
+ const readOffer={projectId:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',stage:'renew',releaseSha:release,scopeHash:'4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6',sourceMissionId:'62cd8da3-1bcc-41ae-9470-574c6b05e420',maxMissions:96,tokenAllowance:600000,nodeCount:13,historicalMissions:73,stateHash:'a'.repeat(64),cutoff:'2026-11-16T18:00:00Z'};
  const {POST}=modules({
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>authenticated},
-  '@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});if(fail)throw Error('stale evidence');return {status:'paused'};}},
+  '@/lib/missions/store':{rpc:async(name,args)=>{if(name==='project_org_management_activation_offer')return readOffer;calls.push({name,args});if(fail)throw Error('stale evidence');return {status:'paused'};}},
   '@/lib/data/persistence-store':{getMessages:async()=>{throw Error('must not publish');}},
  })('@/app/api/projects/organization/route');
  const request={projectId:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',trialAction:'renew_paused_window',releaseSha:release,
