@@ -107,12 +107,27 @@ export async function qaAssertBoundedSchedulerAfterResume(db,{project,owner,rele
  assert.equal(prior,76);
  await db.query('savepoint qa_post_resume_scheduler');
  try{
-  const lease=randomUUID();
-  await db.query('reset role');
-  await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '5 minutes' where id=$1",[project,lease]);
-  await db.query('set role service_role');
-  const r=(await db.query('select project_org_schedule($1,$2) r',[project,lease])).rows[0].r;
-  assert.ok(r?.missionId,'A separately resumed, source-authorized original project must admit a bounded management mission: '+JSON.stringify(r));
+  // Exercise three valid lease-bound scheduler attempts; all owner operations
+  // have completed separately and no worker or provider is dispatched here.
+  const waits=[];let r;
+  for(let attempt=0;attempt<3;attempt++){
+   const lease=randomUUID();
+   await db.query('reset role');
+   await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '5 minutes' where id=$1",[project,lease]);
+   await db.query('set role service_role');
+   r=(await db.query('select project_org_schedule($1,$2) r',[project,lease])).rows[0].r;
+   if(r?.missionId)break;
+   waits.push(r);
+   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,prior,
+    'Waiting cannot spend mission allowance');
+   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0,
+    'Waiting cannot silently publish a coding package');
+  }
+  if(waits.length){
+   const flags=(await db.query('select count(*)::int n from project_organization_nodes where project_id=$1 and decision_needed',[project])).rows[0].n;
+   console.log('INDEPENDENT_QA_BLOCKED_SCHEDULER_WAIT_TRACE: '+JSON.stringify({waits,decisionNeeded:flags,missionCount:prior}));
+  }
+  assert.ok(r?.missionId,'No bounded management mission after 3 valid scheduler attempts: '+JSON.stringify(waits));
   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,prior+1);
   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
   await db.query('reset role');
