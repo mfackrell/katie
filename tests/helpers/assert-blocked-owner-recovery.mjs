@@ -149,8 +149,13 @@ export async function assertBlockedOwnerRecovery(db,x){
   assert.equal(simulated.existing,false);
   assert.equal((await db.query('select status from work_projects where id=$1',[ORIGINAL])).rows[0].status,'running');
   assert.equal((await db.query('select project_provider_continued($1) ok',[ORIGINAL])).rows[0].ok,true);
-  assert.equal((await db.query('select project_org_window_authorized($1,$2,$3,$4,$5) ok',[ORIGINAL,owner,NEW_RELEASE,
-   (await db.query('select continuation_decision_id d from project_provider_execution where project_id=$1',[ORIGINAL])).rows[0].d,future])).rows[0].ok,true);
+  // Original membership predicate is intentionally private to postgres.
+  // Inspect it as isolated fixture administrator; keep service_role denied.
+  await db.query('reset role');
+  try{
+   assert.equal((await db.query('select project_org_window_authorized($1,$2,$3,$4,$5) ok',[ORIGINAL,owner,NEW_RELEASE,
+    (await db.query('select continuation_decision_id d from project_provider_execution where project_id=$1',[ORIGINAL])).rows[0].d,future])).rows[0].ok,true);
+  }finally{await db.query('set role service_role');}
   assert.equal((await get()).rows[0].r.stage,'resumed');
   await db.query('rollback to savepoint resume_rollback');await db.query('release savepoint resume_rollback');
   assert.equal((await get()).rows[0].r.stage,'resume');
