@@ -82,6 +82,7 @@ import { getAvailableProviders } from "@/lib/providers";
 import { selectVideoReplyTarget, generateContextualVideoReply, buildContextualVideoReplyPrompt } from "@/lib/chat/video-response";
 import { validateManualOverrideWithRecovery } from "@/lib/chat/manual-override-recovery";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
+import { auditRoutingDelivery } from "@/lib/router/routing-delivery-audit";
 import {
   detectWebSearchSignals,
   inferRequestClassification,
@@ -1923,6 +1924,37 @@ async function executeChat(request: NextRequest) {
           }
         }else console.warn("[Image Routing] No available model with reviewed image-output pricing",{requestId});
       }
+    }
+
+    // Persist the accepted execution choice before any provider execution.
+    // This complements private classifier/reranker response checkpoints and
+    // remains available even when generation fails before saving an answer.
+    try {
+      await cachedWorkflowValue("routing-execution-decision:v1", async () => ({
+        version: "routing-execution-v1",
+        requestId,
+        classifiedIntent: resolvedRequestIntent,
+        intentAuthority,
+        intentResolutionReason,
+        objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+        chosenProvider: provider.name,
+        chosenModel: modelId,
+        routerChosenProvider: selectionExplainer?.selected_provider ?? null,
+        routerChosenModel: selectionExplainer?.selected_model ?? null,
+        selectedSource: selectionExplainer?.selected_source ?? null,
+        justification: selectionExplainer?.selection_justification ?? null,
+        candidateScore: selectionExplainer?.top_candidate_score ?? null,
+        topFactors: selectionExplainer?.top_factors ?? [],
+        topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+        deterministicOverride: selectionExplainer?.override ?? null,
+        fallbackUsed: selectionExplainer?.fallback_used ?? false,
+        fallbackReason: selectionExplainer?.fallback_reason ?? null,
+        productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+      }));
+    } catch (error) {
+      console.warn("[Routing Execution Audit] checkpoint_unavailable", {
+        requestId, cause: error instanceof Error ? error.name : "unknown"
+      });
     }
 
     // Output modality wins over text-narrative styling. An earlier fictional scene
@@ -3935,6 +3967,53 @@ ${chunkWorkflowSummary}`;
               ...(generatedImages ? {attachments:generatedImages.attachments} : {}),
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
+            // Objective fulfillment is audited independently of the model's
+            // claim to have succeeded. Never block a valid response because
+            // diagnostics storage is unavailable, and never trigger a retry.
+            try {
+              const deliveryAudit = await cachedWorkflowValue("routing-delivery-audit:v1", async () => ({
+                ...auditRoutingDelivery({
+                  userMessage: message,
+                  selectedIntent: resolvedRequestIntent,
+                  answer: assistantText,
+                  imageCount: imageAssets.length
+                }),
+                requestId,
+                classifiedIntent: resolvedRequestIntent,
+                objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+                provider: result!.provider,
+                model: result!.model,
+                routingSelection: {
+                  initialProvider: selectionExplainer?.selected_provider ?? null,
+                  initialModel: selectionExplainer?.selected_model ?? null,
+                  finalProvider: result!.provider,
+                  finalModel: result!.model,
+                  selectedSource: selectionExplainer?.selected_source ?? null,
+                  selectionJustification: selectionExplainer?.selection_justification ?? null,
+                  score: selectionExplainer?.top_candidate_score ?? null,
+                  topFactors: selectionExplainer?.top_factors ?? [],
+                  topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+                  deterministicOverride: selectionExplainer?.override ?? null,
+                  fallbackUsed: selectionExplainer?.fallback_used ?? false,
+                  fallbackReason: selectionExplainer?.fallback_reason ?? null
+                },
+                productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+              }));
+              if (deliveryAudit.status === "fail") {
+                console.warn("[Routing Delivery Audit] primary_objective_not_fulfilled", {
+                  requestId,
+                  status: deliveryAudit.status,
+                  reason: deliveryAudit.reason,
+                  classifiedIntent: resolvedRequestIntent,
+                  auditVersion: deliveryAudit.version
+                });
+              }
+            } catch (error) {
+              console.warn("[Routing Delivery Audit] checkpoint_unavailable", {
+                requestId,
+                cause: error instanceof Error ? error.name : "unknown"
+              });
+            }
             emitChunk({
               type: "content",
               messageId: assistantMessageId,

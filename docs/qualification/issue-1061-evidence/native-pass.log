@@ -1,0 +1,48 @@
+(node:5) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+TAP version 13
+# (node:12) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# \# OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: [{"proname":"project_org_hierarchy_recovery_state","prosrc_md5":"05a347c978ea882956e201256432da48","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_renew_paused_window","prosrc_md5":"fa27c7d176a2fbd07fb1ba8ec7b0bc5e","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"},{"proname":"project_org_renewed_management_source","prosrc_md5":"dc929acd8a9d6fee1e5ca30f37f0836b","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_resume_management","prosrc_md5":"9b8261fa82efac70ee8fa44af0c0bf80","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"}]
+# \# COMMISSIONING_STRANDED_BEFORE: predecessor leaves saved ready/open-exception state waiting with no mission
+# \# COMMISSIONING_EXCEPTION_RECOVERY_PASS: one normal management mission; replay, stale lease, paused, expired, resolved, later exception, latest failure, mission cap and public ACL protections; history preserved; no worker dispatch
+# \# PAUSED_WINDOW_RENEWAL_POSTGRES_PASS: 73/96 missions, 600000 tokens, 13 nodes; exact owner/state/release, append-only history, full-write rollback, competing RPC lock, replay, stale claims, terminal-source immutability; no provider calls
+# \# MANAGEMENT_INVALID_COMMAND_BOUND_PASS: 7 additional missions; no replacement or failure-count reset
+# \# MANAGEMENT_READY_BOUND_PASS: 7 additional missions; no replacement or failure-count reset
+# \# SMART_FIELD_SQL_PARITY_PASS: exact parent, estimate, inventory, and assignment-limit diagnostics; SQL unchanged
+# \# MANAGEMENT_LOOP_RECOVERY_POSTGRES_PASS: real context/client/SQL chain; replacement loop denied; negative commands fail closed; owner resume preserves history and limits; one bounded worker package, no dispatch
+# \# SMART_MANAGEMENT_PASS: explicit Manager/Supervisor hierarchy; broad/context/capability negatives; cumulative contracts; authentic prepare/checkpoint RPCs; phase jobs locally commissioned; restart and immutable admissions
+# Subtest: owner execution windows and parent delegation amendments preserve the live organization in PostgreSQL
+ok 1 - owner execution windows and parent delegation amendments preserve the live organization in PostgreSQL
+  ---
+  duration_ms: 45441.22968
+  type: 'test'
+  ...
+# (node:698) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# \# \\\# OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: [{"proname":"project_org_hierarchy_recovery_state","prosrc_md5":"05a347c978ea882956e201256432da48","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_renew_paused_window","prosrc_md5":"fa27c7d176a2fbd07fb1ba8ec7b0bc5e","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"},{"proname":"project_org_renewed_management_source","prosrc_md5":"dc929acd8a9d6fee1e5ca30f37f0836b","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_resume_management","prosrc_md5":"9b8261fa82efac70ee8fa44af0c0bf80","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"}]
+# \# \\\# OWNER_MANAGEMENT_BROWSER_POSTGRES_PASS: real mobile control → HTTP route → verified owner auth → native PostgreSQL; separate renewal/resume, 13 contracts, wrong owner/origin/state/release/cutoff, double clicks, reload, receipt retry, lost response and final-write rollback; unchanged 73/96, 600000 tokens, no inference or dispatch
+# \# \\\# PAUSED_WINDOW_RENEWAL_POSTGRES_PASS: 73/96 missions, 600000 tokens, 13 nodes; exact owner/state/release, append-only history, full-write rollback, competing RPC lock, replay, stale claims, terminal-source immutability; no provider calls
+# Subtest: mobile owner recovery uses the actual API and native PostgreSQL without live activation
+ok 2 - mobile owner recovery uses the actual API and native PostgreSQL without live activation
+  ---
+  duration_ms: 50937.094366
+  type: 'test'
+  ...
+# (node:1450) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: organization migration composes with installed ordinary authority and native financial controls
+ok 3 - organization migration composes with installed ordinary authority and native financial controls
+  ---
+  duration_ms: 61380.534445
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 158022.059405

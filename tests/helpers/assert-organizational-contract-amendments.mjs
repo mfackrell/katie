@@ -194,7 +194,10 @@ export async function assertOrganizationalContractAmendments(db,rival,{project,o
  assert.deepEqual((await db.query('select prior_submission from project_organization_contract_changes where node_id=$1 and decision_id is not null order by changed_at desc limit 1',[game.id])).rows[0].prior_submission,{fixture:'pending'});assert.ok(final.find(n=>n.id===game.id).tools.includes('development'));assert.ok(!final.find(n=>n.id===qa.id).tools.includes('development'));
  turn=await session(game);
  await assert.rejects(db.query('select project_org_assert_execution($1)',[game.agent_id]),/Management agents/);
- await decide(turn,[{action:'ready'}]);
+ // The earlier reject left an owned commissioning exception. Newly delegated
+ // authority must produce a substantive correction, not another ready-only stall.
+ await assert.rejects(decide(turn,[{action:'ready'}]),/Ready-only response cannot abandon/);
+ await decide(turn,[amendment(worker,{tools:['analysis','development']}),{action:'ready'}]);
  const after=await history();
  for(const key of ['missions','assignments','decisions']){const ids=new Set(original[key].map(x=>x.id));assert.deepEqual(after[key].filter(x=>ids.has(x.id)),original[key]);}
  assert.deepEqual(after.requests,original.requests);assert.deepEqual(after.recovery,original.recovery);

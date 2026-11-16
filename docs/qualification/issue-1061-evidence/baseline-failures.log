@@ -1,0 +1,74 @@
+(node:7) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+TAP version 13
+# (node:14) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: malformed SMART response records exact field paths before SQL without saving model prose
+not ok 1 - malformed SMART response records exact field paths before SQL without saving model prose
+  ---
+  duration_ms: 384.048249
+  type: 'test'
+  location: '/tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:25:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async TestContext.<anonymous> (file:///tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:27:2)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: ready-only decision cannot abandon an owned open exception; corrective batches still reach SQL
+not ok 2 - ready-only decision cannot abandon an owned open exception; corrective batches still reach SQL
+  ---
+  duration_ms: 179.639561
+  type: 'test'
+  location: '/tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:37:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async TestContext.<anonymous> (file:///tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:39:2)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: definitive SQL SMART rejection retains bounded diagnostic and proposal hash; no replay
+not ok 3 - definitive SQL SMART rejection retains bounded diagnostic and proposal hash; no replay
+  ---
+  duration_ms: 109.357863
+  type: 'test'
+  location: '/tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:46:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'smart_contract_capacity'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'smart_contract_capacity'
+  operator: 'strictEqual'
+  stack: |-
+    Object.<anonymous> (file:///tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:49:10)
+    expectedException (node:assert:576:17)
+    expectsError (node:assert:701:21)
+    Function.rejects (node:assert:767:3)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async TestContext.<anonymous> (file:///tmp/rre1061-baseline/tests/management-commissioning-diagnostics.test.mjs:48:2)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 0
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1337.465534

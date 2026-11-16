@@ -1,0 +1,62 @@
+(node:7) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+TAP version 13
+# (node:14) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# PAUSED_RENEWAL_INSTALLED_BASELINE_PASS: six installed authority function bodies match production
+# OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: [{"proname":"project_org_hierarchy_recovery_state","prosrc_md5":"05a347c978ea882956e201256432da48","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_renew_paused_window","prosrc_md5":"fa27c7d176a2fbd07fb1ba8ec7b0bc5e","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"},{"proname":"project_org_renewed_management_source","prosrc_md5":"dc929acd8a9d6fee1e5ca30f37f0836b","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_resume_management","prosrc_md5":"9b8261fa82efac70ee8fa44af0c0bf80","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"}]
+# INDEPENDENT_QA_INSTALLATION_PASS: 89 public tables unchanged; SMART/owner writers and adapters unchanged; four function ACLs verified
+# PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS: owner, atomic rollback, full hierarchy, replay, history
+# SCOPED_ROOT_RETRY_RELEASE_CLAIM_DELEGATION_PASS
+# (node:14) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+# COMMISSIONING_STRANDED_BEFORE: predecessor leaves saved ready/open-exception state waiting with no mission
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: actually-paused
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: expired-lease
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: null-lease-until
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: wrong-phase
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: inactive-node
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: expired-node
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: missing-decision
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: mixed-decision
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: foreign-exception-owner
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: mission-not-completed
+# INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: newer-failed-assignment
+# Subtest: Append-only renewal retains expired authority, hydrates without spending, and fences exact stages
+not ok 1 - Append-only renewal retains expired authority, hydrates without spending, and fences exact stages
+  ---
+  duration_ms: 16160.746784
+  type: 'test'
+  location: '/workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/benchmark-renewal-postgres.test.mjs:15:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    invalid-release-membership: no recovery mission
+    + actual - expected
+    
+    + 'a8e9ea45-3bba-4a7e-a2fe-e135b0fe3a17'
+    - undefined
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual: 'a8e9ea45-3bba-4a7e-a2fe-e135b0fe3a17'
+  operator: 'strictEqual'
+  stack: |-
+    Module.assertCommissioningExceptionRecovery (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-commissioning-exception-recovery.mjs:98:11)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Module.assertManagementLoopRecovery (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-management-loop-recovery.mjs:70:3)
+    async Module.assertProjectScopeRatification (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-project-scope-ratification.mjs:590:5)
+    async Module.assertProjectOrganizationCompatibility (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-project-organization-compatibility.mjs:114:2)
+    async Module.assertOrdinaryAuthority (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-ordinary-authority.mjs:226:55)
+    async Module.assertLifecycleAuthorization (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-lifecycle-authorization.mjs:105:53)
+    async assertCapacityRenewal (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-capacity-renewal.mjs:73:3)
+    async assertAmendmentSuccessor (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-amendment-successor.mjs:51:52)
+    async assertCompletionBudgetControls (file:///workspace/scratch/5e4c626344df/rre1063-qa-reproduction/tests/helpers/assert-completion-budget-controls.mjs:67:55)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 16866.351329

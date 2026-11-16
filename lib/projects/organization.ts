@@ -5,6 +5,7 @@ import type {Claim} from '@/lib/missions/types';
 import type {ModelResult} from '@/lib/missions/model';
 import type {OrchestrationChoice} from '@/lib/orchestration/routing';
 import {missionInputLimit} from '@/lib/missions/request-budget';
+import {smartContractFields,smartSqlRejection} from './smart-diagnostics';
 import {managementScope,selectManagementEvidenceIds,buildManagementDecisionContext,type ManagementNode,type ManagementRow,type AssignmentBinding,type AssignmentStatus} from './management-context';
 
 export type ExecutiveModel = {
@@ -29,6 +30,7 @@ export async function executiveChoices(choices:OrchestrationChoice[]):Promise<Or
  return result;
 }
 export const MANAGEMENT_INSTRUCTION=`You are a management-only agent in a persistent software organization. Return ONLY a JSON array of management commands. Never write code, perform research, run tests, or substitute your own technical output for execution workers. Managers manage; workers execute.
+Use saved rejection field paths to correct the next contract against the supplied schema and exact parent objective; never repeat an unchanged rejected proposal. An owned open exception requires a substantive corrective decision, authenticated resolution or escalation. A ready-only response cannot dispose of it.
 Interpret the original owner objective. Define functional areas, goals, architecture responsibilities and measurable acceptance. The Project Director commissions only Functional Directors (kind manager), never execution workers, and never assigns worker tasks. Functional Directors commission subordinate directors, managers or workers. Managers organize workstreams and commission managers, supervisors or workers. Supervisors commission only individual workers. All these leadership levels are management-only; workers cannot delegate. Appoint only needed organizations; The Project Director determines how many directorates the requirements justify; there is no predetermined count or depth. Establish purpose and direction before commissioning leadership. Independent QA must remain separate from development. Functional directors may appoint managers and workers recursively. Use the supplied existing execution team where appropriate through reuseAgentId. Reuse does not change worker permissions.
 Before assigning any worker, decompose the objective until it is suitable for one agent. SMART admission requires one objective, one deliverable, explicit file inventory (no directory or wildcard coding scope), measurable acceptance with verification evidence, the exact parentObjective, current capabilities, deadline, token cap and bounded assignment attempts. Sizing is an uncertain management estimate, not proof that the worker will succeed. Record workload/context inventory, estimation rationale and uncertainty. Oversized work must be decomposed; never inflate estimates or invent evidence. Auto-generated planning/revision assignments without a separately authorized contract fail closed.
 SingleWorkerContract: {objective,deliverable,instruction,parentObjective:"exact immediate manager objective",capability:"analysis"|"research"|"writing"|"repository_review",acceptance:[{criterion,evidence}],inventory:[{item,contextChars:nonnegativeInteger}],estimate:{basis:"declared_inventory",rationale,uncertainty,tokens:positiveInteger,seconds:positiveInteger},paths:["exact/file.ext"],tokens:positiveInteger,maxAssignments:positiveInteger,deadline:ISO8601}. Coding role requires development authority; composition/review require analysis. Each package role has its own contract and budget; their combined allocation must fit the package, all contracts must fit the worker allocation. Contract instructions are the actual dispatched instructions. Shared writing/review workers retain cumulative allocations across packages. Revisions need a new immediate-manager authorization, never worker-created scope.
@@ -210,6 +212,22 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
  assertManagementCommands(node,topology,commands,Boolean(recovery));
+ const batch=commands as ManagementRow[];
+ const proposalHash=createHash('sha256').update(JSON.stringify(commands)).digest('hex');
+ if(batch.every(c=>c.action==='ready')&&exceptions.some(e=>e.owner_id===principalId&&e.status==='open')){
+  const rejected=new ManagementCommandRejection('Ready-only response cannot abandon an owned open exception; correct, resolve with verified evidence, or escalate','unresolved_management_exception',1,'ready');
+  rejected.evidence.proposalHash=proposalHash;throw rejected;
+ }
+ for(const [index,c] of batch.entries()){
+  const contracts=c.action==='commission_package'
+   ?['development','compose','review'].map(role=>({contract:(c.tasks as ManagementRow|undefined)?.[role],path:'tasks.'+role,role,worker:focused.find(n=>n.id===c[role==='development'?'workerId':role==='compose'?'writerId':'reviewerId'])}))
+   :['assign','authorize_assignment'].includes(String(c.action))?[{contract:c.smart,path:'smart',role:c.action==='assign'?'work':undefined,worker:focused.find(n=>n.id===c.nodeId)}]:[];
+  const fields=contracts.flatMap(({contract,path,role,worker})=>smartContractFields(contract,focused.find(n=>n.id===principalId)?.objective,project.objective,role,worker).map(field=>path+'.'+field)).slice(0,32);
+  if(fields.length){
+   const rejected=new ManagementCommandRejection('Correct SMART fields against the contract schema: '+fields.join(', '),'smart_contract_fields',index+1,c.action);
+   rejected.evidence.smartFields=fields;rejected.evidence.proposalHash=proposalHash;throw rejected;
+  }
+ }
  // A valid resolution may cite an older/deeper completed assignment omitted
  // from the bounded prompt. Read the proposed IDs; never infer their existence.
  const resolutionIds=(commands as ManagementRow[]).filter(c=>c.action==='resolve').map(c=>c.assignmentId)
@@ -219,7 +237,14 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   managementRowsByIds<ManagementRow>(resolutionIds,ids=>db.from('mission_assignments').select('id,status,result').in('id',ids),'id'),
  ]);
  assertManagementEvidenceCommands(node,topology,commands as ManagementRow[],{exceptions,bindings:resolutionBindings,evidence:resolutionEvidence});
- await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});
+ try{await rpc('project_org_decide',{p_job:claim.job.id,p_lease:claim.job.lease,p_commands:commands});}
+ catch(error){
+  const diagnostic=smartSqlRejection(error);if(!diagnostic)throw error;
+  const candidates=batch.map((c,index)=>({c,index})).filter(({c})=>['assign','authorize_assignment','commission_package'].includes(String(c.action)));
+  const single=candidates.length===1?candidates[0]:null;
+  const rejected=new ManagementCommandRejection(diagnostic.reason,diagnostic.code,single?single.index+1:null,single?.c.action);
+  rejected.evidence.proposalHash=proposalHash;throw rejected;
+ }
 }
 
 const managementActions=new Set(['plan','appoint','amend_delegation','grant_scope','authorize_assignment','assign','commission_package','evaluate_package','repair_package','dependency','exception','resolve','escalate','submit_component','certify','reject','replace_leader','reorganize','ready','close']);
@@ -227,7 +252,7 @@ type ReportingNode={id:string;parent_id?:string|null};
 type ReportingTarget={field:string;status:'missing'|'malformed'|'unknown'|'direct_report'|'not_direct_report';id?:string;idHash?:string};
 
 export class ManagementCommandRejection extends Error {
- readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number};
+ readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number;smartFields?:string[];proposalHash?:string};
  constructor(message:string,code:string,position:number|null=null,action:unknown=null,targets:ReportingTarget[]=[],priorAppointments=0){
   super(message);
   this.name='ManagementCommandRejection';
