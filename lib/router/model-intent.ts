@@ -109,6 +109,7 @@ export type RoutingDecisionEvidence = {
   alternative_intents?: RequestIntent[];
   selection_justification?: string;
   secondary_objectives?: string[];
+  objective_guard_reason?: string;
 };
 export type RequestClassification = {
   decision_evidence?: RoutingDecisionEvidence;
@@ -1260,6 +1261,7 @@ type InferredRequestClassification = {
   projectRelation?: ProjectRelation;
   projectTransition?: ProjectTransition;
   decisionEvidence?: RoutingDecisionEvidence;
+  objectiveGuardReason?: string;
 };
 
 export type ClassifiedIntentWithSource = {
@@ -1302,6 +1304,7 @@ export function guardExplicitWrittenObjective(
       ])),
       decision_evidence: {
         ...classification.decision_evidence,
+        objective_guard_reason: explicitCompound ? "written_objective_precedes_explicit_image_objective" : "explicit_written_objective_with_image_reference",
         selection_justification: explicitCompound
           ? "Deterministic objective precedence: explicit writing instruction precedes explicit image creation."
           : "Deterministic objective precedence: explicit writing instruction; image reference alone is not an image-generation request."
@@ -1418,7 +1421,8 @@ export async function inferRequestClassificationWithSource(
       ...(effectiveClassification.response_purpose ? { responsePurpose: effectiveClassification.response_purpose } : {}),
       ...(effectiveClassification.project_relation ? { projectRelation: effectiveClassification.project_relation } : {}),
       ...(effectiveClassification.project_transition ? { projectTransition: effectiveClassification.project_transition } : {}),
-      ...(effectiveClassification.decision_evidence ? { decisionEvidence: effectiveClassification.decision_evidence } : {})
+      ...(effectiveClassification.decision_evidence ? { decisionEvidence: effectiveClassification.decision_evidence } : {}),
+      ...(objectiveGuard.overridden && objectiveGuard.reason ? { objectiveGuardReason: objectiveGuard.reason } : {})
     }, objectiveGuard.overridden ? "router-fallback" : "llm");
   }
 
