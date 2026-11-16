@@ -169,12 +169,44 @@ export async function assertBlockedOwnerRecovery(db,x){
   const fresh=(await get()).rows[0].r;
   assert.equal((await resume(resumeArgs.map((v,i)=>i===5?fresh.stateHash:v))).rows[0].r.existing,true);
   await reject(()=>resume(),/state|receipt/);
-  assert.deepEqual(await scopedSnapshot(),before,'Actual resume preserves previous missions, assignments, decisions, contracts, limits and immutable receipts');
+  const expected=structuredClone(before);
+  const gameDirectors=expected.nodes.filter(x=>x.r.area==='game_delivery'
+   && x.r.management_level==='functional_director' && x.r.kind==='manager');
+  assert.equal(gameDirectors.length,1,'Exactly one approved existing Game Delivery Functional Director');
+  gameDirectors[0].r.decision_needed=true;
+  assert.deepEqual(await scopedSnapshot(),expected,
+   'Only the existing Game Delivery Functional Director is woken; historical rows and all contracts remain unchanged');
+  assert.equal((await db.query('select count(*)::int n from project_organization_nodes where project_id=$1 and decision_needed',[ORIGINAL])).rows[0].n,1);
   assert.equal((await db.query('select project_provider_continued_assignment($1) ok',[source.job])).rows[0].ok,false);
   assert.equal((await db.query('select count(*)::int n from project_organization_nodes where project_id=$1 and deadline=$2',[ORIGINAL,future])).rows[0].n,13);
   for(const table of ['project_blocked_owner_windows','project_blocked_owner_resumes']){
    await db.query('reset role');await reject(()=>db.query('delete from '+table),/append-only/);await db.query('set role service_role');
   }
+  // QA1068-01: owner clicks create no mission. The next lawful scheduler
+  // call under a real project lease must admit exactly one management mission.
+  await db.query('savepoint bounded_management_scheduler');
+  try{
+   const schedulingLease=randomUUID();
+   await db.query('reset role');
+   await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '5 minutes' where id=$1",[ORIGINAL,schedulingLease]);
+   await db.query('set role service_role');
+   const scheduled=(await db.query('select project_org_schedule($1,$2) r',[ORIGINAL,schedulingLease])).rows[0].r;
+   assert.ok(scheduled?.missionId,'Normal scheduler must admit bounded management after separate owner resume: '+JSON.stringify(scheduled));
+   assert.equal(scheduled.nodeId,gameDirectors[0].r.id,'Existing Game Delivery director must receive the management turn');
+   const newMission=(await db.query('select id,project_kind,status,project_evidence from agent_missions where id=$1',[scheduled.missionId])).rows[0];
+   assert.equal(newMission.project_kind,'management');
+   assert.equal(newMission.status,'running');
+   assert.equal(newMission.project_evidence.providerContinuationRelease,NEW_RELEASE);
+   assert.equal(newMission.project_evidence.providerContinuationWindow,authorizeArgs[6]);
+   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[ORIGINAL])).rows[0].n,77);
+   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[ORIGINAL])).rows[0].n,0);
+   console.log('BLOCKED_OWNER_NEXT_SCHEDULER_PASS: one normal source-bound manager mission, 77/96, zero coding packages, no paid inference');
+  }finally{
+   await db.query('rollback to savepoint bounded_management_scheduler');
+   await db.query('release savepoint bounded_management_scheduler');
+   await db.query('set role service_role');
+  }
+  assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[ORIGINAL])).rows[0].n,76,'Scheduler fixture rolls back');
   console.log('BLOCKED_OWNER_CURRENT_STATE_POSTGRES_PASS: 76/96 missions, all 13 contracts, consumed original receipts, expired original cutoff, no active mission, owner-authorized bounded window then separate resume; rollback, replay, stale authority, original history, QA and release guards preserved; zero provider calls/dispatches');
  }finally{
   await db.query('rollback to savepoint blocked_owner_fixture');
