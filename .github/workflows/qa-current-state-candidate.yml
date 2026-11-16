@@ -44,7 +44,7 @@ jobs:
       - name: Checkout exact RRE candidate separately
         uses: actions/checkout@v4
         with:
-          ref: 8271a1e7d64a5af602a1fe1917305667b2bef0f7
+          ref: 7f0d2ff15fdf6733f0cec745eba7ec545ab07996
           fetch-depth: 0
           path: candidate
           persist-credentials: false
@@ -52,11 +52,11 @@ jobs:
         working-directory: candidate
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 8271a1e7d64a5af602a1fe1917305667b2bef0f7
-          test "$(git rev-parse 'HEAD^{tree}')" = c928e4d84ba2b64250a201cbb56e7f33936f2f10
+          test "$(git rev-parse HEAD)" = 7f0d2ff15fdf6733f0cec745eba7ec545ab07996
+          test "$(git rev-parse 'HEAD^{tree}')" = 7f5943cc3086c39b3f499395bbaee3d8d478f5f8
           test -z "$(git status --porcelain)"
-          echo 'INDEPENDENT_QA_REVIEWED_SHA=8271a1e7d64a5af602a1fe1917305667b2bef0f7'
-          echo 'INDEPENDENT_QA_REVIEWED_TREE=c928e4d84ba2b64250a201cbb56e7f33936f2f10'
+          echo 'INDEPENDENT_QA_REVIEWED_SHA=7f0d2ff15fdf6733f0cec745eba7ec545ab07996'
+          echo 'INDEPENDENT_QA_REVIEWED_TREE=7f5943cc3086c39b3f499395bbaee3d8d478f5f8'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -81,8 +81,8 @@ jobs:
           python3 ../qa/tests/qa-native-injector.py
           test "$(git diff --name-only)" = tests/helpers/assert-blocked-owner-recovery.mjs
           test -z "$(git diff --name-only -- app lib supabase .github)"
-          test "$(git rev-parse HEAD)" = 8271a1e7d64a5af602a1fe1917305667b2bef0f7
-          test "$(git rev-parse 'HEAD^{tree}')" = c928e4d84ba2b64250a201cbb56e7f33936f2f10
+          test "$(git rev-parse HEAD)" = 7f0d2ff15fdf6733f0cec745eba7ec545ab07996
+          test "$(git rev-parse 'HEAD^{tree}')" = 7f5943cc3086c39b3f499395bbaee3d8d478f5f8
           echo 'INDEPENDENT_QA_ONLY_TEST_EDITS_PASS'
       - name: Independent first-party owner API negative and two-click tests
         working-directory: candidate
