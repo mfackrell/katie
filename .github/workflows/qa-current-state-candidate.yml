@@ -44,7 +44,7 @@ jobs:
       - name: Checkout exact RRE candidate separately
         uses: actions/checkout@v4
         with:
-          ref: 32f71bd9a0846b52537dc9c8a2e8d47e235a6b8c
+          ref: eff4baa5af03bf3097cd451fb9a206e506f4412e
           fetch-depth: 0
           path: candidate
           persist-credentials: false
@@ -52,11 +52,11 @@ jobs:
         working-directory: candidate
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 32f71bd9a0846b52537dc9c8a2e8d47e235a6b8c
-          test "$(git rev-parse 'HEAD^{tree}')" = a4ab693bf13f19afa8837d72436e9d0099f8d48e
+          test "$(git rev-parse HEAD)" = eff4baa5af03bf3097cd451fb9a206e506f4412e
+          test "$(git rev-parse 'HEAD^{tree}')" = 27591fca71703bd86bd09fdaf38dc272faadb52e
           test -z "$(git status --porcelain)"
-          echo 'INDEPENDENT_QA_REVIEWED_SHA=32f71bd9a0846b52537dc9c8a2e8d47e235a6b8c'
-          echo 'INDEPENDENT_QA_REVIEWED_TREE=a4ab693bf13f19afa8837d72436e9d0099f8d48e'
+          echo 'INDEPENDENT_QA_REVIEWED_SHA=eff4baa5af03bf3097cd451fb9a206e506f4412e'
+          echo 'INDEPENDENT_QA_REVIEWED_TREE=27591fca71703bd86bd09fdaf38dc272faadb52e'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -75,12 +75,14 @@ jobs:
         run: |
           set -euo pipefail
           cp ../qa/tests/helpers/qa-blocked-current-state-independent.mjs tests/helpers/
+          cp ../qa/tests/helpers/qa-blocked-committed-rpc-race.mjs tests/helpers/
           cp ../qa/tests/qa-owner-current-state-candidate-api.test.mjs tests/
+          cp ../qa/tests/qa-owner-current-state-committed-race.test.mjs tests/
           python3 ../qa/tests/qa-native-injector.py
           test "$(git diff --name-only)" = tests/helpers/assert-blocked-owner-recovery.mjs
           test -z "$(git diff --name-only -- app lib supabase .github)"
-          test "$(git rev-parse HEAD)" = 32f71bd9a0846b52537dc9c8a2e8d47e235a6b8c
-          test "$(git rev-parse 'HEAD^{tree}')" = a4ab693bf13f19afa8837d72436e9d0099f8d48e
+          test "$(git rev-parse HEAD)" = eff4baa5af03bf3097cd451fb9a206e506f4412e
+          test "$(git rev-parse 'HEAD^{tree}')" = 27591fca71703bd86bd09fdaf38dc272faadb52e
           echo 'INDEPENDENT_QA_ONLY_TEST_EDITS_PASS'
       - name: Independent first-party owner API negative and two-click tests
         working-directory: candidate
@@ -94,6 +96,12 @@ jobs:
           set -euo pipefail
           mkdir -p qa-independent-evidence
           node --test tests/benchmark-renewal-postgres.test.mjs 2>&1 | tee qa-independent-evidence/native.log
+      - name: Independently race ACTUAL competing owner RPCs on committed disposable schema
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          mkdir -p qa-independent-evidence
+          node --test tests/qa-owner-current-state-committed-race.test.mjs 2>&1 | tee qa-independent-evidence/committed-rpc-race.log
       - name: Retain independent exact-source evidence
         if: always()
         uses: actions/upload-artifact@v4
