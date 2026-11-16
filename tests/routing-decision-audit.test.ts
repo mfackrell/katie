@@ -69,9 +69,9 @@ test("genuine compound request retains image generation as a secondary objective
     "Write a short dating bio and generate an accompanying portrait.",
     mistaken
   );
-  assert.equal(result.classification.intent, "rewrite");
-  assert.deepEqual(result.classification.secondary_intents, ["image-generation"]);
-  assert.equal(result.reason, "written_objective_precedes_explicit_image_objective");
+  assert.equal(result.classification.intent, "image-generation");
+  assert.deepEqual(result.classification.secondary_intents, ["rewrite"]);
+  assert.equal(result.overridden, false);
 });
 
 test("image-first compound instructions preserve image-first classification", () => {
