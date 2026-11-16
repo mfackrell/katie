@@ -15,14 +15,17 @@ export const itmReceiptHash=(value:string):string=>
 export async function readItmStageReceipt(key:ItmReceiptKey):Promise<ItmStoredReceipt|null>{
   const admin=getSupabaseAdminClient();
   const {data,error}=await admin.from("itm_stage_receipts")
-    .select("response_text,response_sha256,expected_cursor")
+    .select("response_text,response_sha256,expected_cursor,processor_version")
     .eq("actor_id",key.actorId).eq("chat_id",key.chatId)
     .eq("batch_end_message_id",key.batchEndMessageId)
     .eq("provider",key.provider).eq("stage",key.stage)
     .eq("source_sha256",key.sourceSha256).eq("context_sha256",key.contextSha256)
-    .maybeSingle<{response_text:string;response_sha256:string;expected_cursor:string|null}>();
+    .maybeSingle<{response_text:string;response_sha256:string;expected_cursor:string|null;processor_version:string}>();
   if(error)throw new Error("ITM_RECEIPT_READ_UNAVAILABLE");
   if(!data)return null;
+  // Captured partial transport is paid evidence, but never valid retention.
+  // A one-use dispatch grant cannot be renewed just because this was incomplete.
+  if(data.processor_version.endsWith(":incomplete"))return null;
   if(data.expected_cursor!==key.expectedCursor)
     throw new Error("ITM_RECEIPT_CURSOR_MISMATCH");
   if(typeof data.response_text!=="string"||data.response_text.length<1||data.response_text.length>16000||
