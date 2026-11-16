@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { createStoredUploadService } from '../lib/uploads/stored-uploads';
 import { createGeneratedImageService, generatedImageBytes } from '../lib/uploads/generated-image-service';
 import { createGeneratedImageObserver } from '../lib/uploads/generated-image-observation';
+import { loadSelectedAttachmentSources } from '../lib/chat/attachment-selection';
 import { chooseImageFollowup, resolveImageFollowup, imageFollowupIntent, imageEditSourceUnavailable } from '../lib/chat/image-source-followup';
 import { generatedImageId, originalImageHash } from '../lib/images/generated-source';
 import { observeStandaloneStillImages, imageObservationAsText } from '../lib/uploads/still-image-observations';
@@ -287,18 +288,28 @@ test('actual route restoration revalidates generated original bytes even when so
   const start=route.indexOf('    const restored = await loadSelectedAttachmentSources(');
   const end=route.indexOf('    // Index the exact selected source',start);
   assert.ok(start>0&&end>start);
-  const code=ts.transpileModule(`(async()=>{${route.slice(start,end)}return restored;})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const code=ts.transpileModule(`(async()=>{${route.slice(start,end)}return {restored,imageEditUnavailable};})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   let genericReads=0;
+  const selection={method:'continuity',operation:'edit',selections:[{attachment:d,mode:'source'}]};
   const run=()=>vm.runInNewContext(code,{
-    actorId,chatId,attachmentDecision:{method:'continuity',selections:[{attachment:d,mode:'source'}]},
+    actorId,chatId,imageFollowup:selection,attachmentDecision:selection,
     getChatById:async()=>({actorId,id:chatId}),
-    loadSelectedAttachmentSources:async(_decision:unknown,restore:(source:ConversationAttachment)=>Promise<unknown>)=>restore(d),
+    loadSelectedAttachmentSources,
+    imageEditSourceUnavailable,
     readGeneratedImage:(...args:Parameters<ReturnType<typeof fake.factory>['readGenerated']>)=>fake.factory().readGenerated(...args),
     restoreConversationAttachment:async()=>{genericReads++;throw Error('Cannot trust generic cached renderer without the original');},
   });
-  assert.equal((await run()).fileId,d.id);
+  const intact=await run();
+  assert.equal(intact.restored.references.length,1);
+  assert.equal(intact.restored.references[0].fileId,d.id);
+  assert.equal(intact.restored.sourceIds.has(d.id),true);
+  assert.equal(intact.imageEditUnavailable,false);
   fake.files.delete(`chats/${chatId}/${d.id}.source`);
-  await assert.rejects(run(),/unavailable/);
+  const missing=await run();
+  assert.equal(missing.restored.references.length,0);
+  assert.equal(missing.restored.sourceIds.has(d.id),false);
+  assert.equal(missing.restored.unavailable[0],d.fileName);
+  assert.equal(missing.imageEditUnavailable,true);
   assert.equal(genericReads,0);
 });
 
