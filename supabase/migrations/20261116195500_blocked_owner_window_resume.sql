@@ -247,6 +247,7 @@ create function public.project_org_resume_blocked_owner_confirmed(
  p_owner uuid,p_project uuid,p_release text,p_authorization uuid,p_cutoff timestamptz,p_state_hash text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare offer jsonb;p work_projects;a project_provider_execution;
+ management_node uuid; eligible_count integer; changed_count integer;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into p from work_projects where id=p_project for update;
@@ -274,6 +275,26 @@ begin
  update work_projects set status='running',updated_at=clock_timestamp(),
  detail='Owner resumed original blocked organization under a separately approved window; all history and limits retained.'
  where id=p.id;
+ -- QA1068-01: a status flip does not wake the lawful scheduler when all
+ -- original organization decision_needed flags are false. Prepare exactly
+ -- the existing Game Delivery Functional Director for one normal management
+ -- decision. Neither owner click creates a mission, assignment or worker.
+ select count(*)::int,min(n.id) into eligible_count,management_node
+ from project_organization_nodes n
+ join project_organization_nodes root on root.id=n.parent_id
+  and root.project_id=n.project_id and root.kind='project_director'
+  and root.parent_id is null and root.status='active'
+ where n.project_id=p.id and n.kind='manager'
+  and n.management_level='functional_director' and n.area='game_delivery'
+  and n.status='active' and n.deadline=p_cutoff and not n.decision_needed
+  and 'development'=any(n.tools) and project_org_dependencies_ready(n.id)
+  and (select count(*) from project_organization_nodes q where q.project_id=p.id and q.decision_needed)=0;
+ if eligible_count<>1 or management_node is null
+ then raise exception 'Approved Game Delivery Functional Director not eligible for bounded recovery';end if;
+ update project_organization_nodes set decision_needed=true where id=management_node
+  and project_id=p.id and not decision_needed;
+ get diagnostics changed_count=row_count;
+ if changed_count<>1 then raise exception 'Bounded management scheduler wake-up changed';end if;
  insert into project_events(project_id,event,data) values(p.id,'blocked_owner_management_resumed',
  jsonb_build_object('ownerId',p_owner,'authorizationId',p_authorization,'releaseSha',p_release,
   'cutoff',p_cutoff,'historicalMissions',76,'maxMissions',96,'tokenAllowance',600000));
