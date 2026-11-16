@@ -236,7 +236,11 @@ function explicitFreshImageInspection(
         // backslash before a Unicode quote must not hide a nested opener:
         // otherwise an inner closer can prematurely terminate the outer
         // quotation and authorize paid inspection from quoted data.
-        if(source[j]==='\\'&&/[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]/.test(source[j+1]??'')){
+        const next=source.charCodeAt(j+1);
+        if(source[j]==='\\'&&(
+          next>=33&&next<=47||next>=58&&next<=64||
+          next>=91&&next<=96||next>=123&&next<=126
+        )){
           j++;continue;
         }
         if(isWordApostrophe(j))continue;
