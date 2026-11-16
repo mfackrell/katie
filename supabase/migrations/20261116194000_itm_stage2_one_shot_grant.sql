@@ -88,11 +88,11 @@ returns trigger language plpgsql set search_path=public,pg_temp as $$
 begin
   if tg_op = 'DELETE' then raise exception 'ITM_STAGE2_GRANT_IMMUTABLE'; end if;
   if old.dispatched_at is not null or new.dispatched_at is null
-     or row(old.actor_id,old.chat_id,old.batch_end_message_id,old.expected_cursor,
+     or row(old.id,old.actor_id,old.chat_id,old.batch_end_message_id,old.expected_cursor,
             old.source_sha256,old.context_sha256,old.stage1_response_sha256,
             old.provider,old.model,old.owner_approval_reference,old.approved_at)
        is distinct from
-       row(new.actor_id,new.chat_id,new.batch_end_message_id,new.expected_cursor,
+       row(new.id,new.actor_id,new.chat_id,new.batch_end_message_id,new.expected_cursor,
            new.source_sha256,new.context_sha256,new.stage1_response_sha256,
            new.provider,new.model,new.owner_approval_reference,new.approved_at)
   then raise exception 'ITM_STAGE2_GRANT_IMMUTABLE'; end if;
