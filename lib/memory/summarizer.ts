@@ -390,7 +390,7 @@ function parseRetentionPlan(raw: string, priorCount: number): number[] {
   return obj.keep as number[];
 }
 
-async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI, capture?: (raw:string)=>Promise<void>): Promise<number[]> {
+async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], provider:SummaryProvider, client:OpenAI, capture?: (raw:string,complete:boolean)=>Promise<void>): Promise<number[]> {
   const indexed = prior.map((text, id) => ({
     id, content: text.length > ITM_EPISODE_MAX_CHARACTERS
       ? text.slice(0, ITM_EPISODE_MAX_CHARACTERS - 1) + "…" : text,
@@ -414,7 +414,7 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
   if (provider === "grok") {
     const response = await grokStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, "itm_retention", RETENTION_RESPONSE_SCHEMA);
     raw = completedResponsesText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
-    if(capture)await capture(raw);
+    if(capture)await capture(raw,true);
   } else {
     const response = await claudeStructuredResponse(client, prompt, RECONCILE_MAX_TOKENS, RETENTION_RESPONSE_SCHEMA);
     // Preserve a paid raw Claude result even when stop_reason is incomplete.
@@ -423,7 +423,7 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
       .filter(item=>item.type==="text" && typeof item.text==="string")
       .map(item=>item.text).join("").trim();
     if(capture && rawFromResponse.length>0 && rawFromResponse.length<=16000)
-      await capture(rawFromResponse);
+      await capture(rawFromResponse,response.stop_reason==="end_turn");
     raw = completedClaudeText(response, "retention plan", RECONCILE_RESPONSE_MAX_CHARACTERS);
   }
   const keep = parseRetentionPlan(raw, prior.length);
@@ -668,8 +668,8 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
       const deadline=Date.now()+SUMMARY_TIMEOUT_MS;
       const client=providerClient("anthropic",deadline);
       await reconcileEpisodePlan(legacyEpisodes(input.summary),excerpts,"anthropic",client,
-        raw=>recordItmStageReceipt(
-          stage2Key,raw,ITM_PROCESSOR_VERSION+":owner-approved-grok-to-claude-stage2",
+        (raw,complete)=>recordItmStageReceipt(
+          stage2Key,raw,ITM_PROCESSOR_VERSION+":owner-approved-grok-to-claude-stage2"+(complete?"":":incomplete"),
         ).then(()=>undefined),
       );
     }catch(error){
@@ -899,8 +899,9 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     );
     const episodes = legacyEpisodes(summary);
     const keep = await reconcileEpisodePlan(episodes,newSummary,provider,client,
-      raw=>recordItmStageReceipt(
-        itmReceiptKey({...receiptBase,stage:"retention",excerpts:newSummary}),raw,processorVersion(provider),
+      (raw,complete)=>recordItmStageReceipt(
+        itmReceiptKey({...receiptBase,stage:"retention",excerpts:newSummary}),raw,
+        processorVersion(provider)+(complete?"":":incomplete"),
       ).then(()=>undefined),
     );
     const revisedSummary = assembleEpisodePlan(episodes, keep, newSummary);
