@@ -57,6 +57,10 @@ export async function assertBlockedOwnerRecovery(db,x){
    .replace(/^begin;\s*/,'').replace(/\s*commit;\s*$/,'');
   await db.query(migration);
   const offer=(await get()).rows[0].r;
+  if(process.env.KATIE_TEST_BLOCKED_OWNER_BROWSER==='1')
+   await (await import('./assert-blocked-owner-browser.mjs')).assertBlockedOwnerBrowser(db,{
+    project:ORIGINAL,owner,release:NEW_RELEASE,
+   });
   assert.equal(offer.stage,'authorize');assert.equal(offer.historicalMissions,76);
   assert.equal(offer.nodeCount,13);assert.equal(offer.status,'blocked');
   assert.equal(offer.priorCutoff,EXPIRED.replace('Z','+00:00'));
