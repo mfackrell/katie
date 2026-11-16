@@ -131,7 +131,11 @@ export async function assertBlockedOwnerRecovery(db,x){
   await reject(()=>authorize(),/owner authorization/);
   if(rival){
    await rival.query('set role service_role');await rival.query("set statement_timeout='200ms'");
-   try{await assert.rejects(rival.query('select project_org_authorize_blocked_owner_window($1,$2,$3,$4,$5,$6,$7,$8)',authorizeArgs),/statement timeout/);}
+   // This nested test installs new DDL inside the parent fixture transaction:
+   // a separate connection cannot resolve the uncommitted function. Exercise
+   // the SAME advisory lock independently here; a committed-schema QA probe
+   // must still verify competing RPC calls end-to-end.
+   try{await assert.rejects(rival.query("select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))"),/statement timeout/);}
    finally{await rival.query('set statement_timeout=0');}
   }
   const resumeArgs=[owner,ORIGINAL,NEW_RELEASE,authorizeArgs[6],future,afterAuthorize.stateHash];
