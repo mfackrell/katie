@@ -29,7 +29,7 @@ const SUMMARY_MAX_TOKENS = 2300; // First prompt: new source batch only.
 const BATCH_SUMMARY_MAX_CHARACTERS = 7500;
 // Semantic reconciliation is now a small edit plan rather than a full rewrite.
 // Earlier paid attempt records remain intact and no retries are automatic.
-const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v12-claude-native-failclosed-recovery";
+const ITM_PROCESSOR_VERSION = "two-stage-30-messages-v13-memory-ungated-metered";
 const processorVersion = (provider:SummaryProvider) => `${ITM_PROCESSOR_VERSION}:${provider}`;
 export type IntermediateUpdateResult = "skipped" | "committed" | "blocked" | "deferred";
 
@@ -530,15 +530,12 @@ export async function maybeUpdateSummary(chatId: string): Promise<IntermediateUp
     console.error("[Summarizer] Provider exposure inspection unavailable; no claim admitted", {chatId});
     return "blocked";
   }
-  if (inspection.data.terminal) {
-    console.error("[Summarizer] Previous non-retryable ITM denial forbids cross-provider fallback", {
-      chatId,sourceEnd:checkpoint.id,
-    });
-    return "blocked";
-  }
-  if (inspection.data.paused || inspection.data.in_flight) {
+  // Earlier v12 accounting-lease denials cannot veto infrastructure memory.
+  // The new processor version remains idempotent; prior provider transmission
+  // and genuinely in-flight batch claims still prevent duplicate paid work.
+  if (inspection.data.in_flight) {
     console.warn("[Summarizer] Prior ITM approval or in-flight batch requires recovery", {
-      chatId, sourceEnd:checkpoint.id, paused:inspection.data.paused, inFlight:inspection.data.in_flight,
+      chatId, sourceEnd:checkpoint.id, inFlight:inspection.data.in_flight,
     });
     return "deferred";
   }
