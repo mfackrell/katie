@@ -1,6 +1,6 @@
 import { standaloneAccountingCause, standaloneFailureDetails } from "@/lib/standalone-accounting/context";
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
-import {itmReceiptHash,recordItmStageReceipt,readItmStageReceipt,inspectPriorItmClaims,type ItmReceiptKey} from "@/lib/memory/itm-stage-receipts";
+import {itmReceiptHash,recordItmStageReceipt,readItmStageReceipt,readLegacyItmEpisodeOutput,inspectPriorItmClaims,type ItmReceiptKey} from "@/lib/memory/itm-stage-receipts";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
@@ -515,7 +515,34 @@ async function recoverCapturedItmStages(input:{
   for(const provider of ["grok","anthropic"] as const){
     const base={...input,provider};
     const episodeKey=itmReceiptKey({...base,stage:"episodes"});
-    const episode=await readItmStageReceipt(episodeKey);
+    let episode=await readItmStageReceipt(episodeKey);
+    if(!episode) {
+      // Older paid responses may already contain complete source-cited
+      // episodes, even if the old request lifecycle abandoned the batch.
+      // Verify every quote against this exact immutable source window first.
+      const historical=await readLegacyItmEpisodeOutput(
+        input.actorId,input.chatId,input.batchEndMessageId,provider,
+      );
+      if(historical){
+        try{
+          if(historical.responseText.length>BATCH_SUMMARY_MAX_CHARACTERS)
+            throw new Error("ITM_VALIDATION_EPISODES_RAW_LENGTH");
+          parseGroundedEpisodes(historical.responseText,input.batch);
+          episode=await recordItmStageReceipt(
+            episodeKey,historical.responseText,
+            "legacy-settled-attempt:"+historical.ledgerAttemptId,
+          );
+          console.info("[Summarizer] Verified prior paid ITM episode evidence imported without inference",{
+            chatId:input.chatId,sourceEnd:input.batchEndMessageId,provider,
+          });
+        }catch(error){
+          console.warn("[Summarizer] Prior paid ITM episode evidence failed strict source validation",{
+            chatId:input.chatId,sourceEnd:input.batchEndMessageId,provider,
+            reason:error instanceof Error?error.message:"ITM_LEGACY_RECEIPT_INVALID",
+          });
+        }
+      }
+    }
     if(!episode)continue;
     anyReceipt=true;
     try{
