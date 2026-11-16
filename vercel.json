@@ -46,6 +46,7 @@
   "git": {
     "deploymentEnabled": {
       "fix/owner-renewal-resume-controls-20261116": false,
+      "fix/commissioning-diagnostics-1061": false,
       "codex/visual-review-integration": false,
       "fix/scoped-root-delegation-retry-20261114": false,
       "fix/management-loop-1048": false,

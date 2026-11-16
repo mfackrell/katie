@@ -22,6 +22,7 @@ export type LlmRoutingResult =
       ranking: LlmRoutingChoice[];
       decisionProviderName: ProviderName;
       decisionModelId: string;
+    selectionJustification?: string;
     }
   | { accepted: false; reason: string };
 export type ModelSpecializationTag =
@@ -101,7 +102,17 @@ export type RoutingRerouteContext = {
   reason: "provider-refusal" | "provider-error";
   failed_candidates: Array<{ provider: ProviderName; model: string }>;
 };
+export type RoutingDecisionEvidence = {
+  primary_objective?: string;
+  objective_evidence?: string[];
+  context_influence?: string;
+  alternative_intents?: RequestIntent[];
+  selection_justification?: string;
+  secondary_objectives?: string[];
+  objective_guard_reason?: string;
+};
 export type RequestClassification = {
+  decision_evidence?: RoutingDecisionEvidence;
   intent: RequestIntent | null;
   preferred_provider: ProviderName | null;
   secondary_intents?: RequestIntent[];
@@ -510,6 +521,7 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
   let responsePurpose: ResponsePurpose | undefined;
   let projectRelation: ProjectRelation | undefined;
   let projectTransition: ProjectTransition | undefined;
+  let decisionEvidence: RoutingDecisionEvidence | undefined;
 
   try {
     let classifierOutput: Record<string, unknown> | null = null;
@@ -524,6 +536,22 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
       classifierOutput = JSON.parse(jsonPayload) as Record<string, unknown>;
     }
 
+    const concise = (value: unknown): string | undefined => typeof value === "string" && value.trim()
+      ? value.trim().slice(0, 500) : undefined;
+    const conciseList = (value: unknown): string[] | undefined => Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+        .slice(0, 5).map(item => item.trim().slice(0, 350)) : undefined;
+    const alternatives = Array.isArray(classifierOutput.alternative_intents)
+      ? classifierOutput.alternative_intents.filter((item): item is RequestIntent =>
+          typeof item === "string" && intents.includes(item as RequestIntent)).slice(0, 5) : undefined;
+    decisionEvidence = {
+      ...(concise(classifierOutput.primary_objective) ? { primary_objective: concise(classifierOutput.primary_objective) } : {}),
+      ...(conciseList(classifierOutput.objective_evidence) ? { objective_evidence: conciseList(classifierOutput.objective_evidence) } : {}),
+      ...(concise(classifierOutput.context_influence) ? { context_influence: concise(classifierOutput.context_influence) } : {}),
+      ...(alternatives ? { alternative_intents: alternatives } : {}),
+      ...(concise(classifierOutput.selection_justification) ? { selection_justification: concise(classifierOutput.selection_justification) } : {}),
+      ...(conciseList(classifierOutput.secondary_objectives) ? { secondary_objectives: conciseList(classifierOutput.secondary_objectives) } : {})
+    };
     const intentValue = typeof classifierOutput.intent === "string" ? classifierOutput.intent : "";
     const preferredProviderValue =
       typeof classifierOutput.preferred_provider === "string" ? classifierOutput.preferred_provider : "";
@@ -590,7 +618,8 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
     ...(providerRefusalRisk ? { provider_refusal_risk: providerRefusalRisk } : {}),
     ...(responsePurpose ? { response_purpose: responsePurpose } : {}),
     ...(projectRelation ? { project_relation: projectRelation } : {}),
-    ...(projectTransition ? { project_transition: projectTransition } : {})
+    ...(projectTransition ? { project_transition: projectTransition } : {}),
+    ...(decisionEvidence && Object.keys(decisionEvidence).length ? { decision_evidence: decisionEvidence } : {})
   };
 
   if (intents.includes(classifiedIntent as RequestIntent)) {
@@ -695,12 +724,16 @@ export function buildIntentClassifierSystemPrompt(
 You are the Intent Classifier for Katie.
 ## Output Format
 Return ONLY valid JSON. No markdown, no explanation.
-Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","provider_refusal_risk":"low|medium|high","preferred_provider":"<provider>"|null,"response_purpose":"conversation|deliverable","project_relation":"new_project|same_project"|null,"project_transition":{"action":"new|resume|ambiguous","projectId":"saved ID for resume","sourceQuote":"exact CURRENT user wording authorizing new/resume","clarification":"targeted question if ambiguous"}|null}
+Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","provider_refusal_risk":"low|medium|high","preferred_provider":"<provider>"|null,"response_purpose":"conversation|deliverable","project_relation":"new_project|same_project"|null,"project_transition":null|{"action":"new|resume|ambiguous","projectId":"saved ID for resume","sourceQuote":"exact CURRENT user wording authorizing new/resume","clarification":"targeted question if ambiguous"},"primary_objective":"concise requested outcome","objective_evidence":["verbatim current-user phrases"],"context_influence":"concise relevance of preceding context","alternative_intents":["<intent>"],"selection_justification":"brief decision justification, not chain of thought","secondary_objectives":["other explicitly requested outcomes"]}
 Use {"intent":"null","secondary_intents":[],"complexity":"low","provider_refusal_risk":"low","preferred_provider":null,"response_purpose":"deliverable","project_relation":null} when genuinely unsure.
 Intent and secondary_intents must use only: ${intents.join("|")}
 
 ## Core Rules
 - Classify by what the user is ASKING YOU TO DO, not by what tokens appear in the prompt.
+- Explicit CURRENT instructions outrank historical image discussions, jokes, metaphors, flirtation, and descriptions of images. Naming or admiring a generated image is not a request to generate one.
+- Identify the concrete deliverable in primary_objective FIRST. Cite exact CURRENT-user wording in objective_evidence. Distinguish an explicit creative-image command from a conversational reference to an existing image.
+- If the user explicitly asks for both writing and an image, retain both tasks in primary/secondary intent and secondary_objectives; do not silently discard either.
+- Provide a concise evidence-based selection_justification. It is a decision summary only; do not reveal or produce private chain-of-thought. Limit context_influence to relevant earlier conversational facts.
 - The primary intent must represent the hardest material work required to answer correctly, not merely the final formatting step.
 - Put other meaningful work in secondary_intents.
 - If a request says to validate, analyze, judge, design, debug, or reason first and then rewrite/summarize/explain, do NOT let the rewrite/summarize step become primary just because it appears last.
@@ -953,6 +986,9 @@ async function classifyIntentWithLLMProviders(
     { user: "Use Grok-style bluntness: what is wrong with this plan?", intent: "architecture-review", preferred_provider: null },
     { user: "Gemini please summarize this article.", intent: "rewrite", preferred_provider: "google" },
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
+    { context: "The conversation previously discussed several AI-generated travel posters.", user: "Write me a revised vacation announcement with the same joyful energy as that picture 😂", intent: "rewrite", secondary_intents: [], response_purpose: "deliverable" },
+    { context: "The conversation recently discussed several AI-generated portraits.", user: "Generate another portrait of the woman we just discussed.", intent: "image-generation", response_purpose: "deliverable" },
+    { user: "Write a short bio and generate an accompanying portrait.", intent: "rewrite", secondary_intents: ["image-generation"], response_purpose: "deliverable" },
     { user: "What do you think about your last answer?", intent: "assistant-reflection" },
     { user: "what up kat?", intent: "social-emotional" },
     {
@@ -1224,6 +1260,8 @@ type InferredRequestClassification = {
   responsePurpose?: ResponsePurpose;
   projectRelation?: ProjectRelation;
   projectTransition?: ProjectTransition;
+  decisionEvidence?: RoutingDecisionEvidence;
+  objectiveGuardReason?: string;
 };
 
 export type ClassifiedIntentWithSource = {
@@ -1234,6 +1272,62 @@ export type ClassifiedIntentWithSource = {
 // Keep both the chosen intent and its *actual origin*. A failed or unavailable
 // decision model does not become "llm" merely because the fallback happened
 // inside an asynchronous classifier.
+/**
+ * Current-turn deliverable guard. A reference to a prior image never makes
+ * image generation primary when the user explicitly requests written material.
+ * Real compound requests remain classified by instruction order and retain
+ * the secondary image objective for downstream validation.
+ */
+export function guardExplicitWrittenObjective(
+  prompt: string,
+  classification: RequestClassification
+): { classification: RequestClassification; overridden: boolean; reason: string | null } {
+  if (classification.intent !== "image-generation") {
+    return { classification, overridden: false, reason: null };
+  }
+  const textDirective = /\b(?:write|rewrite|draft|revise|polish|rephrase|compose)\s+(?:(?:me|us)\s+)?(?:.{0,90}?)\b(?:bio(?:graphy)?|profile|email|letter|post|caption|description|message|summary|paragraph|script|resume|text|copy)\b/i.exec(prompt);
+  if (!textDirective) return { classification, overridden: false, reason: null };
+  // Putting lettering onto pixels is an image edit, not drafting text for a
+  // separate written deliverable. Preserve the classifier's image capability.
+  const letteringOntoImage = /\b(?:write|add|put|place|overlay|insert|print)\b.{0,100}\b(?:text|words|caption|lettering|title|label)\b.{0,100}\b(?:on|onto|over|across|inside|in|to)\b.{0,65}\b(?:image|photo|picture|portrait|illustration|canvas|screenshot|graphic)\b/i.test(prompt);
+  if (letteringOntoImage) {
+    return { classification, overridden: false, reason: null };
+  }
+  const imageDirective = /\b(?:generate|create|draw|render|design|make)\s+(?:(?:me|us)\s+)?(?:.{0,80}?)\b(?:image|photo|picture|portrait|illustration|artwork|graphic)\b/i.exec(prompt);
+  if (imageDirective) {
+    // The existing route has one execution modality. Never turn an actual
+    // image request into text-only routing: preserve the image capability and
+    // retain the writing objective for explicit downstream failure reporting.
+    return {
+      classification: {
+        ...classification,
+        secondary_intents: Array.from(new Set([
+          ...(classification.secondary_intents ?? []).filter(value => value !== "image-generation"),
+          "rewrite" as RequestIntent
+        ]))
+      },
+      overridden: false,
+      reason: null
+    };
+  }
+  return {
+    overridden: true,
+    reason: "explicit_written_objective_with_image_reference",
+    classification: {
+      ...classification,
+      intent: "rewrite",
+      secondary_intents: (classification.secondary_intents ?? [])
+        .filter(value => value !== "rewrite" && value !== "image-generation"),
+      decision_evidence: {
+        ...classification.decision_evidence,
+        objective_guard_reason: "explicit_written_objective_with_image_reference",
+        selection_justification:
+          "Deterministic objective precedence: explicit writing instruction; image reference alone is not an image-generation request."
+      }
+    }
+  };
+}
+
 export async function inferRequestClassificationWithSource(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
@@ -1306,7 +1400,18 @@ export async function inferRequestClassificationWithSource(
       requestId: (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? options?.requestId
     }
   });
-  const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedOutput.intent, "control-plane");
+  const objectiveGuard = guardExplicitWrittenObjective(prompt, classifiedOutput);
+  if (objectiveGuard.overridden) {
+    console.info("[Intent Objective Guard] primary_intent_corrected", {
+      requestId: options?.requestId ?? null,
+      originalIntent: classifiedOutput.intent,
+      correctedIntent: objectiveGuard.classification.intent,
+      reason: objectiveGuard.reason,
+      guardVersion: "written-objective-v1"
+    });
+  }
+  const effectiveClassification = objectiveGuard.classification;
+  const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, effectiveClassification.intent, "control-plane");
   const resolvedIntent = sanitizedClassifiedIntent ?? bestHeuristicHint ?? (hasImages || hasVideoInput ? "vision-analysis" : "general-text");
   if (webSearchSignals.urlPresent || webSearchSignals.keywordMatch) {
     console.debug("[Intent Router] web-search-signal-audit", {
@@ -1324,14 +1429,16 @@ export async function inferRequestClassificationWithSource(
     }
     return resolved({
       intent: sanitizedClassifiedIntent,
-      preferredProvider: classifiedOutput.preferred_provider,
-      secondaryIntents: classifiedOutput.secondary_intents ?? [],
-      complexity: classifiedOutput.complexity ?? null,
-      providerRefusalRisk: classifiedOutput.provider_refusal_risk ?? null,
-      ...(classifiedOutput.response_purpose ? { responsePurpose: classifiedOutput.response_purpose } : {}),
-      ...(classifiedOutput.project_relation ? { projectRelation: classifiedOutput.project_relation } : {}),
-      ...(classifiedOutput.project_transition ? { projectTransition: classifiedOutput.project_transition } : {})
-    }, "llm");
+      preferredProvider: effectiveClassification.preferred_provider,
+      secondaryIntents: effectiveClassification.secondary_intents ?? [],
+      complexity: effectiveClassification.complexity ?? null,
+      providerRefusalRisk: effectiveClassification.provider_refusal_risk ?? null,
+      ...(effectiveClassification.response_purpose ? { responsePurpose: effectiveClassification.response_purpose } : {}),
+      ...(effectiveClassification.project_relation ? { projectRelation: effectiveClassification.project_relation } : {}),
+      ...(effectiveClassification.project_transition ? { projectTransition: effectiveClassification.project_transition } : {}),
+      ...(effectiveClassification.decision_evidence ? { decisionEvidence: effectiveClassification.decision_evidence } : {}),
+      ...(objectiveGuard.overridden && objectiveGuard.reason ? { objectiveGuardReason: objectiveGuard.reason } : {})
+    }, objectiveGuard.overridden ? "router-fallback" : "llm");
   }
 
   if (hasImages) return resolved({ intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
@@ -2150,7 +2257,7 @@ export async function chooseRoutingWithLLM(args: {
 You are the primary model router.
 Choose the best single candidate from the valid candidate list.
 Return ONLY compact JSON:
-{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"}}
+{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"},"selection_justification":"brief evidence-based comparison of quality, capability and cost; no chain of thought"}
 Rules:
 - selected must be one of the provided candidates.
 - Hard rules and invalid candidates have already been filtered deterministically; treat them as fixed constraints.
@@ -2209,7 +2316,9 @@ Rules:
       if (!selectedProvider || !selectedModel || !candidateKeySet.has(`${selectedProvider}:${selectedModel}`)) {
         return null;
       }
-      return { selectedProvider, selectedModel };
+      const selectionJustification = typeof parsed.selection_justification === "string"
+        ? parsed.selection_justification.trim().slice(0, 500) : "";
+      return { selectedProvider, selectedModel, selectionJustification };
     },
     timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
   });
@@ -2228,6 +2337,7 @@ Rules:
     selected: { providerName: result.result.selectedProvider, modelId: result.result.selectedModel },
     ranking,
     decisionProviderName: result.provider,
-    decisionModelId: result.modelId
+    decisionModelId: result.modelId,
+    selectionJustification: result.result.selectionJustification
   };
 }
