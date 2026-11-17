@@ -79,7 +79,103 @@ begin
   or (select count(*) from project_organization_nodes n where n.project_id=p.id and n.status='active' and n.deadline=p.deadline)<>13
   or a.deadline is distinct from p.deadline or a.approved_scope is distinct from p.approved_hash
   or a.window_id is distinct from w.authorization_id
-  or a.continuation_release_sha is distinct from 'dddb1c1f404b7d8c21d2ba4902d54bf83c2d554c'
+  or a.continuation_release_sha is null or a.continuation_release_sha !~ '^[0-9a-f]{40}
+  or a.continued_at is null or not project_provider_continued(p.id)
+  or w.owner_id is distinct from p_owner or w.cutoff is distinct from p.deadline
+  or w.resume_release_sha is distinct from a.continuation_release_sha
+  or s.owner_id is distinct from p_owner or s.authorization_id is distinct from w.authorization_id
+  or s.release_sha is distinct from a.continuation_release_sha
+  or not project_org_blocked_owner_release(w.authorization_id,a.continuation_release_sha)
+  or p_release=a.continuation_release_sha
+  or root.id is null or not root.decision_needed or root.deadline is distinct from p.deadline
+  or game.id is null or game.deadline is distinct from p.deadline
+  or not ('development'=any(root.tools)) or not ('development'=any(game.tools))
+  or not exists(select 1 from project_organization_scope_grants g
+    where g.node_id=root.id and g.scope_hash=p.approved_hash and g.parent_id is null)
+  or not exists(select 1 from project_organization_scope_grants g
+    where g.node_id=game.id and g.scope_hash=p.approved_hash and g.parent_id=root.id)
+  or exists(with recursive qa as
+    (select id from project_organization_nodes where project_id=p.id and area in ('quality_assurance','independent_qa')
+     union all select n.id from project_organization_nodes n join qa on n.parent_id=qa.id)
+     select 1 from qa join project_organization_nodes n on n.id=qa.id where 'development'=any(n.tools))
+  or rat.proposal_id is null or rat.owner_id is distinct from p_owner
+  or failed<>2
+  or src.id is distinct from '911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid
+  or src.status<>'blocked' or src.project_kind<>'management' or src.calls<>1
+  or src.project_evidence->>'organizationNodeId' is distinct from root.id::text
+  or src.project_evidence->>'providerContinuationWindow' is distinct from w.authorization_id::text
+  or src.project_evidence->>'providerContinuationRelease' is distinct from a.continuation_release_sha
+  or src.project_evidence->>'previousMissionId' is not null
+  or not exists(select 1 from mission_assignments j where j.mission_id=src.id and j.status='failed'
+    and j.result->>'detail' like '%No delegation change requested%')
+  or exists(select 1 from project_work_packages pkg where pkg.project_id=p.id)
+  or exists(select 1 from agent_missions m where m.project_id=p.id and m.status in ('draft','running','awaiting_approval'))
+  or exists(select 1 from mission_assignments j join agent_missions m on m.id=j.mission_id
+    where m.project_id=p.id and j.status in ('queued','running','waiting_external'))
+  or exists(select 1 from project_organization_work ow where ow.project_id=p.id and ow.status in ('queued','running'))
+  or project_provider_request_pending(p.id)
+ then raise exception 'Original failed management mission or owner execution authority changed';end if;
+ return jsonb_build_object('projectId',p.id,'stage','retest','status',p.status,
+  'sourceMissionId',src.id,'windowId',w.authorization_id,
+  'scopeHash',p.approved_hash,'releaseSha',p_release,
+  'cutoff',p.deadline,'historicalMissions',used,'maxMissions',p.max_missions,
+  'tokenAllowance',p.token_allowance,'nodeCount',13,
+  'stateHash',project_org_hierarchy_recovery_state(p.id));
+end
+$fn$;
+
+-- One owner action; neither creates a mission nor invokes a provider.
+-- The failed mission and its assignments stay immutable in the ledger.
+create function public.project_org_resume_blocked_management_once(
+ p_owner uuid,p_project uuid,p_release text,p_source_mission uuid,
+ p_window uuid,p_cutoff timestamptz,p_state_hash text
+) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
+declare
+ p work_projects;offer jsonb;stamp timestamptz;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from work_projects where id=p_project for update;
+ perform 1 from project_provider_execution where project_id=p_project for update;
+ offer:=project_org_blocked_management_retest_offer(p_owner,p_project,p_release);
+ if offer->>'stage' is distinct from 'retest'
+  or p_source_mission is distinct from (offer->>'sourceMissionId')::uuid
+  or p_window is distinct from (offer->>'windowId')::uuid
+  or p_cutoff is distinct from (offer->>'cutoff')::timestamptz
+  or p_cutoff<=clock_timestamp()+interval '5 minutes'
+  or p_state_hash is null or p_state_hash is distinct from offer->>'stateHash'
+ then raise exception 'Unexpired exact owner management retest state required';end if;
+ stamp:=clock_timestamp();
+ insert into project_blocked_management_retest_receipts
+  (project_id,source_mission_id,window_id,owner_id,release_sha,prior_release_sha,scope_hash,cutoff,historical_missions,authorized_at)
+ values(p.id,p_source_mission,p_window,p_owner,p_release,
+  (select continuation_release_sha from project_provider_execution where project_id=p.id),
+  p.approved_hash,p_cutoff,78,stamp);
+ update work_projects set status='running',active_mission_id=null,
+  detail='Owner admitted one corrected management retest within the existing cutoff; prior failed mission retained.',
+  updated_at=stamp where id=p.id;
+ insert into project_events(project_id,event,data) values(p.id,'blocked_management_retest_authorized',
+  jsonb_build_object('ownerId',p_owner,'sourceMissionId',p_source_mission,
+   'windowId',p_window,'releaseSha',p_release,'scopeHash',p.approved_hash,
+   'cutoff',p_cutoff,'historicalMissions',78,'maxMissions',p.max_missions,
+   'tokenAllowance',p.token_allowance,'authorizedAt',stamp));
+ return jsonb_build_object('projectId',p.id,'stage','admitted','status','running',
+  'sourceMissionId',p_source_mission,'windowId',p_window,
+  'scopeHash',p.approved_hash,'releaseSha',p_release,
+  'cutoff',p_cutoff,'historicalMissions',78,'maxMissions',p.max_missions,
+  'tokenAllowance',p.token_allowance,'authorizedAt',stamp,'existing',false);
+end
+$fn$;
+
+revoke all on function
+ public.project_org_blocked_management_retest_offer(uuid,uuid,text),
+ public.project_org_resume_blocked_management_once(uuid,uuid,text,uuid,uuid,timestamptz,text)
+ from public,anon,authenticated,service_role;
+grant execute on function
+ public.project_org_blocked_management_retest_offer(uuid,uuid,text),
+ public.project_org_resume_blocked_management_once(uuid,uuid,text,uuid,uuid,timestamptz,text)
+ to service_role;
+commit;
+
   or a.continued_at is null or not project_provider_continued(p.id)
   or w.owner_id is distinct from p_owner or w.cutoff is distinct from p.deadline
   or w.resume_release_sha is distinct from a.continuation_release_sha
