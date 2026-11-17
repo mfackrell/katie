@@ -11,7 +11,7 @@ export function useResource<T>(url: string) {
   useEffect(() => {
     let active = true,
       busy = false;
-    const controller = new AbortController();
+    let currentController: AbortController | null = null;
     if (lastUrl.current !== url) {
       lastUrl.current = url;
       setData(null);
@@ -22,13 +22,18 @@ export function useResource<T>(url: string) {
     const load = async () => {
       if (busy) return;
       busy = true;
+      const controller = new AbortController();
+      currentController = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
       try {
         const response = await fetch(url, {
           cache: "no-store",
           signal: controller.signal,
         });
         if (!response.ok)
-          throw Error("Status unavailable. Retry the connection.");
+          throw Error(response.status === 403
+            ? "Session required. Sign in to access your saved conversations."
+            : "Status unavailable. Retry the connection.");
         const payload = (await response.json()) as T;
         if (active) {
           setData(payload);
@@ -37,8 +42,12 @@ export function useResource<T>(url: string) {
         }
       } catch (e) {
         if (active)
-          setError(e instanceof Error ? e.message : "Connection unavailable");
+          setError(e instanceof Error && e.name === "AbortError"
+            ? "Request timed out. Retry the connection."
+            : e instanceof Error ? e.message : "Connection unavailable");
       } finally {
+        window.clearTimeout(timeout);
+        if (currentController === controller) currentController = null;
         busy = false;
         if (active) setLoading(false);
       }
@@ -51,7 +60,7 @@ export function useResource<T>(url: string) {
     window.addEventListener("focus", focus);
     return () => {
       active = false;
-      controller.abort();
+      currentController?.abort();
       clearInterval(timer);
       window.removeEventListener("focus", focus);
     };
