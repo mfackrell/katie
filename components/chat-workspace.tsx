@@ -21,7 +21,7 @@ export default function ChatWorkspace({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
   const [railReady, setRailReady] = useState(false);
-  useEffect(() => { try { const stored = window.localStorage.getItem("katie.statusRail.open"); setRailOpen(stored === null ? window.matchMedia("(min-width: 1024px)").matches : stored === "true"); } catch {} setRailReady(true); }, []);
+  useEffect(() => { try { const stored = window.localStorage.getItem("katie.statusRail.open"); const desktop = window.matchMedia("(min-width: 1024px)").matches; setRailOpen(desktop && (stored === null || stored === "true")); } catch {} setRailReady(true); }, []);
   function toggleRail() { const next = !railOpen; setRailOpen(next); try { window.localStorage.setItem("katie.statusRail.open", String(next)); } catch {} }
   useEffect(() => {
     const open = (event: Event) => {
