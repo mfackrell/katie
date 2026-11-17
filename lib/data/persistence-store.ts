@@ -443,6 +443,58 @@ export async function getMessages(chatId: string): Promise<Message[]> {
   });
 }
 
+/** Small, stable reverse-chronological window for the conversation UI.
+ * Inference and audit callers continue using getMessages() unchanged.
+ * The cursor is a message ID resolved within the same chat, so an untrusted
+ * browser never supplies ordering fields or changes the chat scope. */
+export async function getRecentMessagePage(
+  chatId: string,
+  beforeId?: string,
+  limit = 50,
+): Promise<{ messages: Message[]; hasOlder: boolean }> {
+  const client = getSupabaseAdminClient();
+  const pageSize = Math.max(1, Math.min(100, Math.floor(limit)));
+  let cursorTime: string | null = null;
+  if (beforeId) {
+    const { data: cursor, error: cursorError } = await client
+      .from("messages")
+      .select("created_at")
+      .eq("chat_id", chatId)
+      .eq("id", beforeId)
+      .maybeSingle<{ created_at: string }>();
+    if (cursorError || !cursor?.created_at) {
+      throw new Error("The saved history cursor is unavailable.");
+    }
+    cursorTime = cursor.created_at;
+  }
+
+  let query = client.from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(pageSize + 1);
+  if (cursorTime) {
+    // Match the descending sort's composite key exactly, including ties.
+    query = query.or(`created_at.lt.${cursorTime},and(created_at.eq.${cursorTime},id.lt.${beforeId})`);
+  }
+  const { data, error } = await query.returns<MessageRow>();
+  if (error) throw new Error(`Failed to load saved history: ${error.message}`);
+  const rows = data ?? [];
+  const messages = rows.slice(0, pageSize).reverse().map(row => {
+    const parsed = parseMessageContent(row.content);
+    return {
+      ...toMessage(row),
+      content: parsed.text,
+      ...(parsed.model ? { model: parsed.model } : {}),
+      ...(parsed.assets ? { assets: parsed.assets } : {}),
+      ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+      ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
+    };
+  });
+  return { messages, hasOlder: rows.length > pageSize };
+}
+
 export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
