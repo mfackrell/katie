@@ -189,6 +189,20 @@ async function executeScopedStandaloneWorkflow(
     const terminal=isStandaloneAccountingError(error)&&!standaloneTechnicalBlocker(standaloneAccountingCause(error)?.code);
     error=standaloneAccountingCause(error)??error;
     const finished=await finish(terminal?'paused':'failed',undefined,standaloneFailureDetails(error));
+    // A pre-stream routing timeout can pause the durable workflow after the chat
+    // receipt was claimed. Do not strand chat_requests in "processing" forever:
+    // a verified standaloneResume may reclaim this receipt from the same workflow.
+    if (standaloneAccountingCause(error)?.code === 'standalone_outcome_unknown' &&
+        new URL(request.url).pathname === '/api/chat') {
+      try {
+        const {error: chatError}=await getSupabaseAdminClient().from('chat_requests')
+          .update({status:'failed',error_message:'The saved request paused after a provider timeout. Resume the original request once its provider receipt is available; do not send a new request.',updated_at:new Date().toISOString()})
+          .eq('request_id',requestId).eq('actor_id',actorId).eq('chat_id',chatId).eq('status','processing');
+        if(chatError) console.warn('[Standalone Workflow] Unable to finalize paused chat receipt',{requestId,reason:chatError.message});
+      } catch (chatError) {
+        console.warn('[Standalone Workflow] Unable to finalize paused chat receipt',{requestId,reason:chatError instanceof Error?chatError.message:String(chatError)});
+      }
+    }
     if (finished.status==='paused'&&!terminal) throw Object.assign(new StandaloneAccountingError('pending_attempt',`Saved request execution failed: ${standaloneFailureDetails(error)}. Existing spending exposure remains held.`),{cause:error});
     throw error;
   }
