@@ -3546,6 +3546,7 @@ ${chunkWorkflowSummary}`;
                   // capability; its own exact prepared request still faces the
                   // normal accounting and owner-approval gate.
                   if (hasVideoInput || rerouteHasVisualInput ||
+                      Boolean(visualContinuity?.references.length) ||
                       accounting.provider !== attempt.provider.name ||
                       accounting.model !== attempt.modelId ||
                       !Number.isSafeInteger(accounting.inputTokens) ||
