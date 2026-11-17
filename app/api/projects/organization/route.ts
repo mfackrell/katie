@@ -3,6 +3,7 @@ import {z} from 'zod';
 import {verifiedProjectOwnerSession} from '@/lib/projects/owner-authorization';
 import {rpc} from '@/lib/missions/store';
 import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from '@/lib/projects/management-activation';
+import {blockedOwnerRecoveryOffer,ORIGINAL_BLOCKED_CUTOFF,ORIGINAL_BLOCKED_WINDOW} from '@/lib/projects/blocked-owner-recovery';
 import {getMessages} from '@/lib/data/persistence-store';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -39,12 +40,27 @@ const managementResumeInput=z.object({
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),authorizationId:z.string().uuid(),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.literal(APPROVED_TTT_CUTOFF),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput]);
+const blockedWindowInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('authorize_blocked_window'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ priorWindowId:z.literal(ORIGINAL_BLOCKED_WINDOW),priorCutoff:z.literal(ORIGINAL_BLOCKED_CUTOFF),
+ cutoff:z.string().datetime({offset:true}),authorizationId:z.string().uuid(),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const blockedResumeInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('resume_blocked_management'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),authorizationId:z.string().uuid(),
+ cutoff:z.string().datetime({offset:true}),stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
- try{return NextResponse.json({managementActivation:await managementActivationOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+ try{
+  try{return NextResponse.json({managementActivation:await managementActivationOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+  catch{return NextResponse.json({blockedOwnerRecovery:await blockedOwnerRecoveryOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+ }
  catch{return NextResponse.json({error:'Recovery state unavailable or changed. Refresh project status; no activation was performed.'},{status:409});}
 }
 // Neither workers nor cron can activate either kind of owner authority.
@@ -54,6 +70,30 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&(p.trialAction==='authorize_blocked_window'||p.trialAction==='resume_blocked_management')){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'The exact active production release is required'},{status:409});
+  const offer=await blockedOwnerRecoveryOffer(p.projectId);
+  if(offer.stage!==(p.trialAction==='authorize_blocked_window'?'authorize':'resume')
+   ||p.stateHash!==offer.stateHash)
+   return NextResponse.json({error:'Current owner recovery state changed; refresh the offer'},{status:409});
+  if(p.trialAction==='authorize_blocked_window'){
+   const next=Date.parse(p.cutoff);
+   if(!Number.isFinite(next)||next<=Date.now()+300000||next>Date.now()+86400000)
+    return NextResponse.json({error:'Explicit cutoff must be more than five minutes and at most 24 hours ahead'},{status:409});
+   return NextResponse.json(await rpc('project_org_authorize_blocked_owner_window',{
+    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
+    p_prior_window:p.priorWindowId,p_prior_cutoff:p.priorCutoff,p_cutoff:p.cutoff,
+    p_authorization:p.authorizationId,p_state_hash:p.stateHash,
+   }));
+  }
+  if(!offer.cutoff||Date.parse(offer.cutoff)<=Date.now()+300000||Date.parse(p.cutoff)!==Date.parse(offer.cutoff))
+   return NextResponse.json({error:'Authorized window expired or changed; no resume performed'},{status:409});
+  return NextResponse.json(await rpc('project_org_resume_blocked_owner_confirmed',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
+   p_authorization:p.authorizationId,p_cutoff:p.cutoff,p_state_hash:p.stateHash,
+  }));
+ }
  if('trialAction' in p&&p.trialAction==='resume_management'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'Management resume requires the exact active production release'},{status:409});

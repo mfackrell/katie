@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "measured_at": "2026-11-12",
-  "binding": "Fresh PR #1040 rerun after production-incident corrections. Engine/dependency SHA-256 values are exact; all final page-image SHA-256 values match the immutable PR #997 independent visual-review packet byte-for-byte.",
+  "measured_at": "2026-11-17",
+  "binding": "PR #1040 exact a7cf78807edf2d56a2acc65b572bc81ff3b9cc88 private/source and synthetic cross-render rerun on 2026-11-17. Recomputed render.ts SHA-256, all five cases had matching page counts, semantic fidelity and identical page-image hashes on Chromium, LibreOffice 24 and 26 (21 images), including the 12 reviewed-page bindings. Original approved private manuscript SHA-256 b466561895813598f7b5b0f9f09cda5ca6e0f130e85f96c2369577e839900aa3 was verified unchanged; no private manuscript or image bytes included here.",
   "engine_files": {
     "lib/documents/generate.ts": "8d101890abbfddf6cc844b99f61bdab460c7424501bd9695049721e6b730b22d",
     "lib/documents/model.ts": "768e9e4f5259796726557cce90a72a959617509702d5327a9299c2821f8bd9cc",
     "lib/documents/markdown.ts": "f9aa3f312868ca792d870172ae42b0884eeea85e533f2c8bd1a186261ca811c0",
-    "lib/documents/render.ts": "f726ba805834b575f9b86c261c25359b3b04f6e81ab57257fa9a158f0b6011a0",
+    "lib/documents/render.ts": "d468d2d98e0cf63d4ca7f98e1cd7fbadcd6bc52351219b7c75d12548e08ce594",
     "lib/documents/production.ts": "a795dc47dc23363533557cfdfe28e98274ebd71126492d769f6623e0e9b63660",
     "lib/documents/design.ts": "2c62e0833183b23f5f1a92b56bd23e14dc8a67cd213ae60927dfa632e98d3caa",
     "lib/documents/continuity.ts": "a0551ea98a6e8afeccad031c05cca8bf1ace679e0a52ab1c4baf5266ed69b30d",
@@ -259,6 +259,6 @@
       }
     }
   ],
-  "independent_visual_review": "PR #997 independent AI review remains artifact-bound because all 12 reviewed final page-image hashes are identical on this fresh rerun; no verdict was transferred to changed pixels.",
+  "independent_visual_review": "Prior PR #997 independent AI visual review remains bound to exactly matching final page-image SHA-256 values. Fresh PR #1040 rerender shows byte-identical 12 previously reviewed pages; no review verdict is transferred to changed pixels, no human credential or release authorization is implied.",
   "contains_private_manuscript_or_images": false
 }
