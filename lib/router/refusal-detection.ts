@@ -243,9 +243,9 @@ export async function runWithRefusalFallback<TAttempt>({
         if (!pendingAttempts.length) throw error;
         continue;
       }
-      if (error instanceof ProviderResponseError && error.code === "EMPTY_RESPONSE") {
+      if (error instanceof ProviderResponseError && (error.code === "EMPTY_RESPONSE" || error.code === "METADATA_ONLY_RESPONSE")) {
         if (retriedEmpty.has(attempt)) {
-          if (!pendingAttempts.length || !retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] })) throw error;
+          if (!pendingAttempts.length || (error.code !== "METADATA_ONLY_RESPONSE" && !retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] }))) throw error;
           lastGenerationError = error;
           onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
           continue;

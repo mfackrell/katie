@@ -92,6 +92,7 @@ import {
 } from "@/lib/router/model-intent";
 
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import { ProviderResponseError } from "@/lib/providers/response-errors";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
@@ -3683,6 +3684,8 @@ ${chunkWorkflowSummary}`;
                 });
               },
               onError: ({ attempt, error }) => {
+                const metadataOnly = error instanceof ProviderResponseError && error.code === "METADATA_ONLY_RESPONSE";
+                if (metadataOnly) chatAnswerBoundary.reset();
                 if (resolvedRequestIntent === "image-generation" &&
                     !attempt.runpodImageFallback &&
                     (attempt.provider.name === "grok" || attempt.provider.name === "google")) {
@@ -3692,7 +3695,7 @@ ${chunkWorkflowSummary}`;
                   });
                 }
                 const failureScope = classifyGenerationFailure(error);
-                if (!attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
+                if (!metadataOnly && !attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
                   void quarantineUnavailableModel(attempt.provider.name, attempt.modelId, error)
                     .catch((failure) => console.warn("[ModelRegistry] quarantine_write_failed", {
                       provider: attempt.provider.name, modelId: attempt.modelId,
@@ -3701,7 +3704,7 @@ ${chunkWorkflowSummary}`;
                 }
                 // RunPod is an independent video provider; its failures must
                 // never mark Gemini unhealthy in the shared provider registry.
-                if (failureScope === "provider" && !attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
+                if (!metadataOnly && failureScope === "provider" && !attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
                   failedProviderNames.add(attempt.provider.name);
                   void recordSharedProviderFailure(attempt.provider.name, error);
                 }

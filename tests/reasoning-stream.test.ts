@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "../lib/chat/reasoning-stream";
+import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer, isTimestampOnlyResponse } from "../lib/chat/reasoning-stream";
 
 test("emits reasoning_start then updates then final_answer in order", () => {
   const acc = new ReasoningStateAccumulator("req-1", ["Architecture", "Security"]);
@@ -144,4 +144,31 @@ test("unresolved editorial prefixes are still fail-closed", () => {
     assert.equal(boundary.write(prefix), "", prefix);
     assert.equal(boundary.flushAccepted(), prefix, "A non-editorial completed reply remains eligible only after final validation.");
   }
+});
+
+test("timestamp-only model output is withheld and rejected, including fragmented SSE", () => {
+  const marker = "[Message timestamp: 2026-11-17T14:32:46.145Z]";
+  assert.equal(isTimestampOnlyResponse(marker), true);
+  assert.equal(isTimestampOnlyResponse("  " + marker + "\n"), true);
+  assert.equal(resolveChatAnswer(marker), null);
+  for (const split of [1, 2, 8, 20, marker.length - 1]) {
+    const boundary = new ChatAnswerStreamBoundary();
+    assert.equal(boundary.write(marker.slice(0, split)) + boundary.write(marker.slice(split)), "");
+    assert.equal(boundary.flushAccepted(), "");
+    boundary.reset();
+    assert.equal(boundary.write("I saw your update."), "I saw your update.");
+  }
+});
+
+test("a timestamp mentioned before a real answer remains legitimate text", () => {
+  const marker = "[Message timestamp: 2026-11-17T14:32:46.145Z]";
+  const reply = marker + "\nThat referral call could be useful.";
+  const boundary = new ChatAnswerStreamBoundary();
+  let visible = "";
+  for (const character of reply) visible += boundary.write(character);
+  visible += boundary.flushAccepted();
+  assert.equal(visible, reply);
+  assert.equal(resolveChatAnswer(reply), reply);
+  assert.equal(isTimestampOnlyResponse(reply), false);
+  assert.equal(isTimestampOnlyResponse("The event was [Message timestamp: 2026-11-17T14:32:46.145Z]"), false);
 });
