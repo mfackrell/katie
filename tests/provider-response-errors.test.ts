@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { GoogleProvider } from "../lib/providers/google-provider";
-import { ProviderResponseError } from "../lib/providers/response-errors";
+import { ProviderResponseError, assertProviderOutput } from "../lib/providers/response-errors";
 import { runWithRefusalFallback } from "../lib/router/refusal-detection";
 import type { ChatGenerateParams, ProviderResponse } from "../lib/providers/types";
 import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/context";
@@ -113,4 +113,57 @@ test("terminal content denial cannot reroute even when a caller supplied a fallb
    rerouteOnError: async () => "runpod",
  }), /PROHIBITED_CONTENT/);
  assert.deepEqual(executed, ["google"]);
+});
+
+const timestampOnly = "[Message timestamp: 2026-11-17T14:32:46.145Z]";
+
+test("timestamp-only answer retries exactly once on the same model and recovers", async () => {
+  const attempts: string[] = [];
+  const recovered = await runWithRefusalFallback({
+    attempts: ["claude"],
+    runAttempt: async (model): Promise<ProviderResponse> => {
+      attempts.push(model);
+      return { provider: "anthropic", model: "claude-sonnet-5",
+        text: attempts.length === 1 ? timestampOnly : "That referral sounds promising." };
+    },
+    detectRefusal: () => false, shouldRetryRefusal: false,
+  });
+  assert.deepEqual(attempts, ["claude", "claude"]);
+  assert.equal(recovered.result.text, "That referral sounds promising.");
+});
+
+test("two timestamp-only answers use the existing queued fallback, not another retry", async () => {
+  const attempts: string[] = [];
+  const fallback = await runWithRefusalFallback({
+    attempts: ["claude", "backup"],
+    runAttempt: async (model): Promise<ProviderResponse> => {
+      attempts.push(model);
+      return { provider: model === "claude" ? "anthropic" : "openai",
+        model, text: model === "claude" ? timestampOnly : "A real answer from backup." };
+    },
+    detectRefusal: () => false, shouldRetryRefusal: false,
+  });
+  assert.deepEqual(attempts, ["claude", "claude", "backup"]);
+  assert.equal(fallback.attempt, "backup");
+  assert.equal(fallback.result.text, "A real answer from backup.");
+});
+
+test("timestamp-only is never saved as success when all candidates fail", async () => {
+  let calls = 0;
+  await assert.rejects(runWithRefusalFallback({
+    attempts: ["claude"],
+    runAttempt: async (): Promise<ProviderResponse> => {
+      calls += 1;
+      return { provider: "anthropic", model: "claude-sonnet-5", text: timestampOnly };
+    },
+    detectRefusal: () => false, shouldRetryRefusal: false,
+  }), (error: unknown) => error instanceof ProviderResponseError && error.code === "METADATA_ONLY_RESPONSE");
+  assert.equal(calls, 2);
+});
+
+test("normal text and real media are not mistaken for timestamp-only output", () => {
+  assert.doesNotThrow(() => assertProviderOutput({ provider: "anthropic", model: "claude-sonnet-5",
+    text: timestampOnly + "\nHere is my response." }));
+  assert.doesNotThrow(() => assertProviderOutput({ provider: "anthropic", model: "claude-sonnet-5",
+    text: timestampOnly, content: [{ type: "image", url: "data:image/png;base64,YWJj" }] }));
 });
