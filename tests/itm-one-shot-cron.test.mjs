@@ -9,8 +9,11 @@ test("recovery Cron is authenticated, one-grant-bound and cannot run normal ITM 
   assert.match(source,/grant\.dispatched_at!==null/);
   assert.match(source,/grant_consumed_no_valid_receipt/);
   assert.match(source,/if\(!grant\)return/);
-  assert.match(source,/state\.content\.sourceMessageCount!==928/);
+  assert.match(source,/state\.content\.sourceMessageCount!==1258/);
   assert.match(source,/maybeUpdateSummary\(CHAT\)/);
+  assert.match(source,/const END="271b0d79-203f-59a7-a00f-76f888d66ecc"/);
+  assert.match(source,/const CURSOR="94df59b1-7104-559f-a2df-3f70a7ed38fa"/);
+  assert.match(source,/const SOURCE_SHA="356cee3a87c4eba204b538bcc53e037b882f45d30428ce54d69cae5fffa99e08"/);
   assert.match(source,/runWithStandaloneAccounting/);
   assert.match(source,/\.select\("owner_id"\)/);
   assert.match(source,/\.returns<\{owner_id:string\|null\}>\(\)/);
