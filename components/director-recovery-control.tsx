@@ -5,6 +5,7 @@ import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 import type {ManagementActivationOffer} from "@/lib/projects/management-activation";
 import type {BlockedOwnerOffer} from "@/lib/projects/blocked-owner-recovery";
+import type {BlockedManagementRetestOffer} from "@/lib/projects/blocked-management-retest";
 
 export type DirectorRecoveryReceipt = {
   projectId: string;
@@ -23,6 +24,7 @@ export type DirectorRecoveryOffer = {
   continuation?: {decisionId:string;admittedAt:string|null;maxCutoff?:string;authorizationId?:string;authorizedAt?:string};
   managementActivation?:ManagementActivationOffer;
   blockedOwnerRecovery?:BlockedOwnerOffer;
+  managementRetest?:BlockedManagementRetestOffer;
   managementActivationError?:string;
   hierarchyRecovery?: {decisionId:string;priorCutoff:string;directorCutoff:string;stateHash:string;
     nodeCount:number;maxHours:number;activeMissionId:string|null};
@@ -177,6 +179,9 @@ function LegacyDirectorRecoveryControl({
 
 
 export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;onRefresh:()=>void}){
+ if(props.recovery.managementRetest)
+  return <BlockedManagementRetestControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
+   initial={props.recovery.managementRetest} onRefresh={props.onRefresh}/>;
  if(props.recovery.managementActivationError)return <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3" aria-label="Approved project recovery">
   <p role="alert">{props.recovery.managementActivationError}</p>
   <button type="button" className="min-h-11 rounded border px-3 py-2" onClick={props.onRefresh}>Refresh project status</button>
@@ -187,6 +192,64 @@ export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;on
  return props.recovery.managementActivation
   ?<ManagementActivationControl key={props.recovery.projectId+':'+props.recovery.releaseSha} initial={props.recovery.managementActivation} onRefresh={props.onRefresh}/>
   :<LegacyDirectorRecoveryControl {...props}/>;
+}
+
+
+function BlockedManagementRetestControl({initial,onRefresh}:{initial:BlockedManagementRetestOffer;onRefresh:()=>void}){
+ const [pending,setPending]=useState(false),[error,setError]=useState<string|null>(null);
+ const [receipt,setReceipt]=useState<string|null>(null);
+ const submitting=useRef(false);
+ const expired=Date.now()>=Date.parse(initial.cutoff)-300000;
+ async function authorize(){
+  if(submitting.current||pending||receipt||initial.stage!=='retest'||expired)return;
+  submitting.current=true;setPending(true);setError(null);
+  try{
+   const bearer=await ownerSessionBearer();
+   if(!bearer)throw Error('Sign in as Katie owner to authorize the single management retest.');
+   const request={
+    trialAction:'retest_blocked_management',projectId:initial.projectId,
+    releaseSha:initial.releaseSha,sourceMissionId:initial.sourceMissionId,
+    windowId:initial.windowId,cutoff:initial.cutoff,stateHash:initial.stateHash,
+   };
+   const response=await fetch('/api/projects/organization',{
+    method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},
+    body:JSON.stringify(request),
+   });
+   const result=await response.json();
+   if(!response.ok)throw Error(result.error??'Owner management retest rejected; refresh saved state.');
+   if(result.projectId!==initial.projectId||result.stage!=='admitted'||result.status!=='running'
+    ||result.existing!==false||result.sourceMissionId!==initial.sourceMissionId
+    ||result.windowId!==initial.windowId||result.releaseSha!==initial.releaseSha
+    ||result.scopeHash!==initial.scopeHash
+    ||Date.parse(result.cutoff)!==Date.parse(initial.cutoff)
+    ||result.historicalMissions!==78||result.maxMissions!==96||result.tokenAllowance!==600000
+    ||typeof result.authorizedAt!=='string'||!Number.isFinite(Date.parse(result.authorizedAt)))
+    throw Error('Retest receipt could not be verified. Refresh saved state; do not resubmit automatically.');
+   setReceipt(result.authorizedAt);
+   onRefresh();
+  }catch(cause){setError(cause instanceof Error?cause.message:'Management retest request failed.');}
+  finally{setPending(false);submitting.current=false;}
+ }
+ return <aside className="mx-3 my-2 min-w-0 rounded-xl border border-white/20 p-3" aria-label="One-time blocked management retest">
+  <p className="font-semibold">Original tic-tac-toe — one management retest</p>
+  <p>Preserved: 78 of 96 missions, original scope, all costs, 13 organization contracts,
+   and the existing approved cutoff {new Date(initial.cutoff).toLocaleString()}.
+   This authorizes one normal LLM management decision, not manual coding or a new window.</p>
+  <div role="status" aria-live="polite">
+   {initial.stage==='admitted'||receipt
+    ?<p>One-time retest has been recorded. The normal scheduler controls the next management mission.</p>
+    :expired?<p>Approved owner window is no longer eligible for a retest.</p>
+    :<p>Project blocked. No retest has been authorized yet.</p>}
+  </div>
+  {initial.stage==='retest'&&!receipt&&!expired&&
+   <button type="button" className="min-h-11 rounded border px-3 py-2 font-semibold"
+    onClick={()=>void authorize()} disabled={pending}>
+    {pending?'Authorizing one retest…':'Authorize one management retest'}
+   </button>}
+  <button type="button" className="min-h-11 rounded border px-3 py-2" disabled={pending}
+   onClick={onRefresh}>Refresh project status</button>
+  {error&&<p role="alert">{error}</p>}
+ </aside>;
 }
 
 function ManagementActivationControl({initial,onRefresh}:{initial:ManagementActivationOffer;onRefresh:()=>void}){
