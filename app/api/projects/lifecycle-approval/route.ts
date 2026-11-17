@@ -6,6 +6,8 @@ import {authenticatedLifecycleCheckpoint,prepareLifecycleOwnerProposal,qualified
 import {digest} from '@/lib/projects/contract';
 import config from '@/config/benchmark-715-production-qualification.json';
 export const runtime='nodejs';
+// Task 4A uses only its audited post-paid, same-task owner approval sequence.
+const TASK4A='d0e41ff5-149e-4319-9e65-dcc605fb75da';
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store, private'}});
 async function owner(request:NextRequest){
  const bearer=request.headers.get('authorization'),url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -26,7 +28,7 @@ export async function GET(request:NextRequest){
   if(!taskId){let query=db.from('benchmark_native_spending_approvals').select('task_id').eq('owner_id',principal);if(chatId)query=query.eq('chat_id',chatId);
    const recent=await query.order('created_at',{ascending:false}).limit(1).returns<{task_id:string}>();
    if(recent.error)throw Error('Authority unavailable');taskId=recent.data?.[0]?.task_id??null;}
-  if(!taskId)return reply({state:'none'});
+  if(!taskId||taskId===TASK4A)return reply({state:'none'});
   const authority=await db.from('benchmark_native_spending_approvals').select('id').eq('owner_id',principal).eq('task_id',taskId).limit(1).returns<{id:string}>();
   if(authority.error)throw Error('Task authority unavailable');
   if(!authority.data?.length){
@@ -74,6 +76,7 @@ export async function POST(request:NextRequest){
   if(request.headers.get('origin')!==config.productionUrl)return reply({error:'Approve from the Katie production application.'},403);
   const parsed=input.safeParse(await request.json());if(!parsed.success)return reply({error:'Exact proposal and explicit decision required.'},400);
   const {taskId,proposalId,decision}=parsed.data,db=getSupabaseAdminClient();
+  if(taskId===TASK4A)return reply({error:'Task 4A requires its separate post-paid owner approval; generic amendments are disabled.'},409);
   const saved=await db.from('benchmark_lifecycle_proposals').select('*').eq('id',proposalId).eq('owner_id',principal).eq('task_id',taskId).maybeSingle<LifecycleOffer>();
   if(saved.error||!saved.data)return reply({error:'Proposal ownership denied.'},403);
   const prior=await db.from('benchmark_lifecycle_decisions').select('*').eq('proposal_id',proposalId).maybeSingle<LifecycleDecision>();

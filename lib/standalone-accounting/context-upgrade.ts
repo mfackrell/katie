@@ -59,7 +59,7 @@ export function selectContextCapacityUpgrade(input: {
   const candidates=input.availableModels.flatMap(model=>{
     const current=capability(input.provider,model);
     const price=getModelPrice(input.provider,model,input.pricing);
-    if(!current||!price||current.family!==from.family||
+    if(!current||!price||original.imageOutputNanoUsd && (!price.imageOutputNanoUsd || !price.imageOutputTokensPerImage)||current.family!==from.family||
        current.tier<from.tier||
        (current.major<from.major || current.major===from.major&&current.minor<from.minor)||
        (current.tier===from.tier&&current.major===from.major&&current.minor===from.minor)||

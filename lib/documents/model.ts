@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isDocumentDeliveryNarrative } from './intent';
+import { markdownInlineText, markdownTableRow } from './markdown';
 
 const text = z.string().min(1).max(4000);
 export const blockSchema = z.discriminatedUnion('kind', [
@@ -82,16 +83,16 @@ export function pdfTextMatchesSource(extracted: string, source: string, fragment
 
 
 // Only a finite text grammar is accepted; no HTML, images, remote resources, fields or macros.
-const inline = (value: string) => value.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/`([^`]+)`/g, '$1').trim();
+const inline = markdownInlineText;
 export function parseDocument(markdown: string, targetPages?: number): DocumentSpec {
   if (isDocumentDeliveryNarrative(markdown)) throw new Error('The model returned a delivery notice rather than document content. No files were delivered.');
-  if (markdown.length > 50000 || /```|!\[|<\/?(?:script|iframe|img|style|html)\b/i.test(markdown)) throw new Error('Document contains unsupported content. No files were delivered.');
+  if (markdown.length > 50000 || /^\s*(?:`{3,}|~{3,})|!\[|<\/?(?:script|iframe|img|style|html)\b/im.test(markdown)) throw new Error('Document contains unsupported content. No files were delivered.');
   const lines = markdown.trim().split(/\r?\n/), blocks: Block[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line || /^[-*_]{3,}$/.test(line)) continue;
     if (line.includes('|') && i + 1 < lines.length && /^\|?\s*:?-{3,}/.test(lines[i + 1].trim())) {
-      const row = (v: string) => v.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(inline);
+      const row = markdownTableRow;
       const rows = [row(line)]; i += 2;
       for (; i < lines.length && lines[i].includes('|'); i++) rows.push(row(lines[i]));
       i--; blocks.push({ kind: 'table', rows }); continue;
@@ -110,5 +111,5 @@ export function parseDocument(markdown: string, targetPages?: number): DocumentS
   return documentSchema.parse({ title: blockText(blocks[0] ?? { kind: 'paragraph', text: 'Document' }).slice(0, 180), blocks, targetPages });
 }
 
-export type Finding = { rule: 'overflow' | 'overlap' | 'page-count' | 'reading-order' | 'whitespace' | 'visual'; page: number; detail: string };
+export type Finding = { rule: 'overflow' | 'overlap' | 'page-count' | 'reading-order' | 'whitespace' | 'font-size' | 'visual'; page: number; detail: string };
 export type Inspection = { pageCount: number; findings: Finding[]; extractedText: string; pageHashes: string[]; visual: 'pending' | 'passed' | 'technical-only'; };

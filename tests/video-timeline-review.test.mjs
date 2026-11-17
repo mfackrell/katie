@@ -29,7 +29,7 @@ test('actual chat route resolves fresh/saved/current video timeline turns before
  const route=readFileSync('app/api/chat/route.ts','utf8');
  const start=route.indexOf('    const temporalIntent ='),end=route.indexOf('    // A question about the video',start);
  const chooseStart=route.indexOf('    const attachmentDecision: AttachmentDecision ='),chooseEnd=route.indexOf('    const selectedBeforePruning',chooseStart);
- const choice=ts.transpileModule('async function choose(){'+route.slice(chooseStart,chooseEnd)+';return attachmentDecision;}; exports.choose=choose;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+ const choice=ts.transpileModule('async function choose(){const verifiedVisualCorrection=null;'+route.slice(chooseStart,chooseEnd)+';return attachmentDecision;}; exports.choose=choose;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
  const file={id:'saved',chatId:'source',fileName:'same.mp4',mimeType:'video/mp4'};
  const other={...file,id:'new',fileName:'other.mp4'};
  const uploaded=[{role:'user',content:'build a timestamped timeline',attachments:[file]},
@@ -50,7 +50,7 @@ test('actual chat route resolves fresh/saved/current video timeline turns before
   {message:'When did the error first appear?',newAttachments:[],catalog:[],attachmentHistory:[{role:'user',attachments:[{...file,mimeType:'text/plain'}]}],active:false},
  ];
  return Promise.all(cases.map(async fixture=>{
-  const context={benchmarkRelay:false,...intent,...fixture,chatId:"current",exports:{},console};vm.createContext(context);
+  const context={benchmarkRelay:false,imageFollowup:null,...intent,...fixture,chatId:"current",exports:{},console};vm.createContext(context);
   const resolved=vm.runInContext('(function(){'+route.slice(start,end)+';return {timelineActive,timelineSelection};})()',context);
   assert.equal(resolved.timelineActive,fixture.active,fixture.message);
   if(fixture.source)assert.equal(resolved.timelineSelection.source.id,fixture.source);

@@ -38,8 +38,10 @@ test('pre-inference Task4A recovery requires authenticated owner and exact uncha
     assert.equal(filters.previous_developer_approval_id,oldApproval);
     assert.equal(filters.project_id,project);
     assert.equal(filters.task_id,task);
+    assert.equal(filters.owner_id,owner);
     return {data:eligible?null:{
      id:'new-grant',created_at:'2026-11-05T13:43:04Z',
+     revoked_at:'2026-11-05T20:17:27Z',consumed_at:null,
      developer_authority:{task4aRecovery:{version:'preinference-invalid-handoff-v1',
       oldApprovalId:oldApproval,issueNumber:969,ownerConsentDigest:digest}}
     },error:null};
@@ -86,6 +88,9 @@ test('pre-inference Task4A recovery requires authenticated owner and exact uncha
  assert.equal(savedResult.recovered,true);
  assert.equal(savedResult.originalIssueNumber,969);
  assert.equal(savedResult.noNewSpendingAuthorized,true);
+ assert.equal(savedResult.active,false);
+ assert.equal(savedResult.revokedAt,'2026-11-05T20:17:27Z');
+ assert.equal(savedResult.consumedAt,null);
  assert.equal(commits,1,'Read-only status must not authorize additional spending');
  if(savedOwnerEnv===undefined)delete process.env.KATIE_OWNER_AUTH_USER_ID;
  else process.env.KATIE_OWNER_AUTH_USER_ID=savedOwnerEnv;

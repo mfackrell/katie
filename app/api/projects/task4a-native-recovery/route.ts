@@ -23,11 +23,12 @@ export async function GET(request:NextRequest){
  if(!data||data.ready!==true){
   // Owner-only read-back of the committed approval: no new consent or grant.
   const {data:saved,error:savedError}=await db.from('benchmark_native_spending_approvals')
-   .select('id,created_at,developer_authority')
+   .select('id,created_at,revoked_at,consumed_at,developer_authority')
    .eq('previous_developer_approval_id',ORIGINAL_APPROVAL)
-   .eq('project_id',ORIGINAL).eq('task_id',ORIGINAL_TASK).maybeSingle();
+   .eq('project_id',ORIGINAL).eq('task_id',ORIGINAL_TASK)
+   .eq('owner_id',process.env.KATIE_OWNER_AUTH_USER_ID).maybeSingle();
   if(savedError)return reply({error:'Saved recovery status unavailable'},503);
-  const record=saved as null|{created_at:string;developer_authority?:{
+  const record=saved as null|{created_at:string;revoked_at?:string|null;consumed_at?:string|null;developer_authority?:{
    task4aRecovery?:{version?:string;oldApprovalId?:string;issueNumber?:number;ownerConsentDigest?:string}
   }};
   const recovery=record?.developer_authority?.task4aRecovery;
@@ -35,7 +36,8 @@ export async function GET(request:NextRequest){
    &&recovery?.oldApprovalId===ORIGINAL_APPROVAL&&recovery?.issueNumber===969
    &&typeof recovery?.ownerConsentDigest==='string')
    return reply({ready:false,recovered:true,recordedAt:record.created_at,
-    originalIssueNumber:969,noNewSpendingAuthorized:true});
+    revokedAt:record.revoked_at??null,consumedAt:record.consumed_at??null,
+    active:false,originalIssueNumber:969,noNewSpendingAuthorized:true});
   return reply({ready:false,
    error:'Existing authorization, original failed workflow, or continuation deadline is no longer eligible'},409);
  }

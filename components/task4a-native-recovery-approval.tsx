@@ -3,7 +3,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 
 const ORIGINAL_CHAT='e53defeb-16eb-457e-aa07-435141165ee8';
-type Proposal={ready?:boolean;recovered?:boolean;recordedAt?:string;digest?:string;proposal?:{
+type Proposal={ready?:boolean;recovered?:boolean;recordedAt?:string;revokedAt?:string|null;active?:boolean;digest?:string;proposal?:{
  taskId:string;oldApprovalId:string;continuationId:string;model:string;
  limits:{cumulativeTokens:number;developmentCalls:number;assessmentCalls:number;
  completionCalls:number;ceilingMicrousd:number};
@@ -14,7 +14,15 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
  const [busy,setBusy]=useState(false);
  const [result,setResult]=useState<{kind:'success'|'error';message:string}|null>(null);
  const resultRef=useRef<HTMLParagraphElement|null>(null);
- useEffect(()=>{if(result)resultRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[result]);
+ useEffect(()=>{
+  if(!result)return;
+  // Let the compact result card finish layout before scrolling the containing
+  // mobile approval rail. The card can shrink when the proposal disappears.
+  const id=requestAnimationFrame(()=>{
+   resultRef.current?.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+  });
+  return ()=>cancelAnimationFrame(id);
+ },[result]);
  const enabled=chatId===ORIGINAL_CHAT;
  const refresh=useCallback(async()=>{
   if(!enabled)return;
@@ -27,7 +35,9 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
    const data=await response.json() as Proposal;
    if(response.ok&&data.recovered){
     setOffer(null);
-    setResult({kind:'success',message:'Native recovery was approved and saved for original issue #969. This approval alone does not authorize paid execution.'});
+    setResult({kind:'success',message:data.revokedAt
+     ? 'Historical native recovery for issue #969 was recorded, then revoked. No active recovery or paid execution is authorized by this receipt.'
+     : 'Historical native recovery for issue #969 was recorded. This receipt alone does not authorize current or paid execution.'});
    }else setOffer(response.ok?data:null);
   }catch{setOffer(null);}
  },[enabled]);
@@ -48,7 +58,7 @@ export function Task4aNativeRecoveryApproval({chatId}:{chatId:string}){
    });
    const data=await response.json() as {accepted?:boolean;error?:string};
    if(!response.ok||data.accepted!==true)throw Error(data.error??'Owner confirmation rejected');
-   setResult({kind:'success',message:'Native recovery was approved and saved for original issue #969. This approval alone does not authorize paid execution.'});
+   setResult({kind:'success',message:'Native recovery was recorded for original issue #969. This does not authorize paid execution.'});
    setOffer(null);
    await refresh();
   }catch(e){setResult({kind:'error',message:e instanceof Error?e.message:'Recovery unavailable'});}

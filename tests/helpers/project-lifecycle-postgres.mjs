@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {runScenarios} from '../../scripts/project-browser-engine.mjs';
 import {modules} from './load-project-modules.mjs';
+import {installHistoricalProviderModeSchema} from './assert-project-organization-compatibility.mjs';
 
 // Only the Supabase wire transport is replaced. All lifecycle, assignment,
 // approval, claim, settlement and checkpoint RPCs execute installed PostgreSQL.
@@ -44,6 +45,7 @@ export async function verifyProjectLifecyclePostgres(db){
   await db.query("update work_projects set status='paused' where status='running';update agent_missions set status='blocked' where status='running'");
   await db.query('reset role');
   // Metadata queried by current runtime; no authorization or lifecycle stubs.
+  await installHistoricalProviderModeSchema(db);
   await db.query("create table if not exists model_registry(provider_name text,model_id text,pricing_status text,pricing_input_per_1m numeric,pricing_output_per_1m numeric,pricing_verified_at timestamptz,is_active boolean)");
   await db.query('alter table benchmark_full_project_bindings add column trial_id uuid, add column benchmark_contract_hash text, add column baseline_sha text, add column model text');
   await db.query('set role service_role');

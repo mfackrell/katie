@@ -1,6 +1,10 @@
+import {authenticateTask4aVerifierRelease} from '../../scripts/benchmark/task4a-verifier-release.mjs';
+import {task4aVerifierReader,validateTask4aVerifierCheckpoint} from '../../scripts/benchmark/task4a-verifier-recovery.mjs';
+import {authenticateTask4aFailedRun,loadTask4aLinkedDiagnostics} from '../../scripts/benchmark/task4a-failed-run-link.mjs';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
+import {encodeProviderExecutionHandoff,providerExecutionRequestHash} from '../../scripts/benchmark/provider-execution-handoff.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
@@ -22,7 +26,7 @@ export const projectAcceptanceSchema = z.object({
   headSha: z.string().regex(/^[a-f0-9]{40}$/), passed: z.boolean(),
   checks: z.array(z.object({ name: z.string().trim().min(1).max(200), passed: z.boolean(), detail: z.string().trim().min(1).max(2000) }).strict()).min(1).max(20),
 }).strict();
-export type ProjectAcceptanceBinding = { projectId: string; contractHash: string; scenarioNames: string[] };
+export type ProjectAcceptanceBinding = { projectId: string; contractHash: string; scenarioNames: string[]; packageScope?:{baseSha:string;paths:string[]} };
 const receiptSchema = z.object({
   version: z.literal(1), repository: z.string().max(200), run_id: z.number().int().positive(),
   issue_number: z.number().int().positive(), pr_url: z.string().max(500).nullable(), outcome: z.enum(["READY", "BLOCKED"]),
@@ -30,6 +34,9 @@ const receiptSchema = z.object({
   tested_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
   reviewed_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
   projectAcceptance: projectAcceptanceSchema.optional(),
+  providerExecutionEvidence:z.object({failure:z.string().max(400),findings:z.string().max(3200),verification:z.string().max(3200),
+    candidateHead:z.string().regex(/^[a-f0-9]{40}$/).nullable(),responses:z.number().int().nonnegative(),
+    observedTokens:z.number().int().nonnegative(),unknownUsage:z.number().int().nonnegative()}).strict().optional(),
 }).strict();
 export function parseCompletionReceipt(value: unknown, repo: string, issue: number, runId: number, conclusion: string | null, project?: ProjectAcceptanceBinding) {
   const receipt = receiptSchema.parse(value);
@@ -99,7 +106,7 @@ function github() {
 
 // Nonbillable: authenticate Task 1 evidence before proposing/approving authority.
 // No provider request, dispatcher or mutation of historical recovery records.
-export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string){
+export async function authenticatedLifecycleCheckpoint(taskId:string,approvedContinuation?:string,failedRunLink?:Record<string,unknown>,failedVerifier=false){
  const task=await readTask(taskId),context=await getDevelopmentProjectContext(taskId);
  if(!context||!task.repository_full_name||(task.status!=='blocked'&&!(approvedContinuation&&task.status==='dispatching')))throw Error('A blocked original development task is required');
  const db=getSupabaseAdminClient(),client=github();
@@ -115,7 +122,8 @@ export async function authenticatedLifecycleCheckpoint(taskId:string,approvedCon
   if(/\/actions\/runs\/\d+$/.test(path))releaseSha=String(result.data.head_sha??'');
   return binary?Buffer.from(result.data as ArrayBuffer):result.data;
  };
- const {record,diagnostics}=await loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:reader});
+ const authenticatedReader=failedVerifier?await task4aVerifierReader(reader):reader;
+ const {record,diagnostics}=await (failedRunLink?loadTask4aLinkedDiagnostics({task,evidence:failedRunLink,github:reader}):loadRecoveryDiagnostics({task,repository:task.repository_full_name,github:authenticatedReader}));
  if(!record)throw Error('Authenticated checkpoint required');
  await validateRecoveryRecords({record,completedEvidence:recoveryCompletedEvidence(record,diagnostics),task,context,project,
   trialId:snap.data.snapshot.approval.trial_id,authorityKind:snap.data.authorityKind,accountId:snap.data.accountId,
@@ -132,6 +140,54 @@ export async function authenticatedLifecycleCheckpoint(taskId:string,approvedCon
   digest(JSON.parse(commit.data.message))!==digest(metadata))throw Error('Checkpoint metadata differs');
  return {task,context,snapshot:snap.data,record,diagnostics,checkpoint:{...record,scopeHash:record.approvedScopeHash,runId:String(record.runId),releaseSha}};
 }
+
+// Read-only dual-run proof. Never rewrites the authoritative latest receipt.
+export async function authenticatedTask4aReplacementCheckpoint(){
+ const task=await readTask('d0e41ff5-149e-4319-9e65-dcc605fb75da');
+ const client=github();
+ const evidence=await authenticateTask4aFailedRun({task,github:async(path:string,binary=false)=>{
+  const r=await client.request('GET '+path);
+  return binary?Buffer.from(r.data as ArrayBuffer):r.data;
+ }});
+ const saved=await authenticatedLifecycleCheckpoint(task.id,'d1f7d69c-850f-4ce4-88de-a70d4222e157',evidence);
+ if(saved.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
+    String(saved.record.runId)!=='42102615797'||
+    saved.checkpoint.releaseSha!=='d530aa94dd8d9c2bc442b43b324ace312d0d62b9')
+  throw Error('Original dual-run WIP proof changed');
+ return {...saved,evidence:{...evidence,checkpointDigest:digest(saved.checkpoint)}};
+}
+
+// Original task UUID and public Git commit IDs; these are identifiers, not credentials.
+const TASK4A_ORIGINAL_TASK_ID = 'd0e41ff5-149e-4319-9e65-dcc605fb75da';
+const TASK4A_SAVED_WIP_COMMIT = '2667a81d4f18452e9ca59498c8805670b04cfe47';
+const TASK4A_SOURCE_COMMIT = '3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0';
+export async function authenticatedTask4aCapacityCheckpoint(approvedContinuation?:string){
+ const e=await authenticatedLifecycleCheckpoint(TASK4A_ORIGINAL_TASK_ID,approvedContinuation);
+ if(e.record.checkpointSha!==TASK4A_SAVED_WIP_COMMIT||e.checkpoint.releaseSha!==TASK4A_SOURCE_COMMIT)throw Error('Latest Task 4A checkpoint changed');
+ const runs=await github().actions.listWorkflowRuns({owner:'mfackrell',repo:'katie',workflow_id:'autonomous-development.yml',created:'>=2026-11-07T19:20:08Z',per_page:100});
+ if(runs.data.total_count!==1||runs.data.workflow_runs.length!==1||runs.data.workflow_runs[0].id!==42405698589)
+  throw Error('Additional or ambiguous original execution history');
+ return e;
+}
+
+// The final successor authenticates the latest settled run, never the older
+// capacity checkpoint or an unverified Git tag.
+export async function authenticatedTask4aFinalCheckpoint(approvedContinuation?:string){
+ const e=await authenticatedLifecycleCheckpoint(TASK4A_ORIGINAL_TASK_ID,approvedContinuation);
+ if(e.record.checkpointSha!=='d2610d94289a0ba5aafcaa60598cae7c21507cfe'||
+  String(e.record.runId)!=='42443455661'||e.record.approvalId!=='ac443164-faf7-45be-96f1-cc93dfc85346'||
+  e.checkpoint.releaseSha!=='c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed'||
+  e.record.sourceTreeSha!=='26869fb977fd29b4f96652b9de3d47e0f0e0ffeb')throw Error('Final Task 4A checkpoint changed');
+ return e;
+}
+export async function authenticatedTask4aVerifierCheckpoint(approvedContinuation?:string){
+ const e=await authenticatedLifecycleCheckpoint(TASK4A_ORIGINAL_TASK_ID,approvedContinuation,undefined,true);
+ const proof=validateTask4aVerifierCheckpoint(e.record,e.diagnostics);
+ return {...e,checkpoint:{...e.checkpoint,...proof}};
+}
+export async function dispatchTask4aVerifierOnce(){return dispatchOrdinaryNativeDevelopment(TASK4A_ORIGINAL_TASK_ID,false,true,true,true);}
+
+export async function dispatchTask4aFinalOnce(){return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',false,true,true);}
 
 export async function prepareLifecycleOwnerProposal(taskId:string){
  const evidence=await authenticatedLifecycleCheckpoint(taskId);
@@ -184,17 +240,28 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   const persist=(current:AgentTask,status:string,detail:string|null,external=current.external)=>save(current,status,detail,external,assignmentLease);
   // Project metadata must eventually be appended by a DB-bound project
   // dispatcher. Ordinary/model-authored assignments cannot mint this authority.
-  if (/<!--\s*katie-project\b/.test(task.input + '\n' + task.snapshot.instructions)) {
+  if (/<!--\s*(?:katie-project\b|katie-native-provider\b)/.test(task.input + '\n' + task.snapshot.instructions)) {
     return persist(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
   let benchmarkHeader=''; let benchmarkModel=''; let benchmarkRepository='';let benchmarkContractHash='';
+  let providerDeadline:string|null=null;
   // Benchmark engineering enters at the EXISTING durable dispatch boundary.
   // No alternate scheduler or issue path is authorized by this feature gate.
   const nativeDispatchEnabled=process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled';
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
   if(project){
-    const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
-    if(!fullBinding&&task.repository_full_name==='mfackrell/katie'){
+    if(project.organizationVersion===1&&task.repository_full_name!=='mfackrell/katie')return persist(task,'blocked','This repository has no qualified native adapter for delegated project authority.');
+    if(project.organizationVersion===1){
+      const {data,error}=await getSupabaseAdminClient().from('project_provider_execution').select('deadline').eq('project_id',project.projectId).maybeSingle<{deadline:string}>();
+      if(error)throw Error('Provider execution authority lookup failed closed');
+      if(data){
+        if(!nativeDispatchEnabled||project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'||!(Date.parse(data.deadline)>Date.now()))
+          throw Error('Provider execution authority is expired or incompatible with this project');
+        providerDeadline=data.deadline;
+      }
+    }
+    const fullBinding=providerDeadline?null:await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
+    if(!providerDeadline&&!fullBinding&&task.repository_full_name==='mfackrell/katie'){
       if(project.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'){
         // Preparation is a no-op unless the *original* project has both an
         // authenticated continuation and a separately approved coding scope.
@@ -204,6 +271,11 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
         });
         if(result.error||result.data!==true)return persist(task,'dispatching','Waiting for verified Task 4A owner, scope and native spending authority. No external work submitted.');
         return persist(task,'dispatching','Task 4A native authority prepared; existing authenticated dispatcher will submit the bounded development task.');
+      }
+      if(project.organizationVersion===1){
+        const delegated=await getSupabaseAdminClient().rpc<boolean>('project_org_prepare_native',{p_task:task.id,p_lease:assignmentLease??null});
+        if(delegated.error||delegated.data!==true)return persist(task,'blocked','Delegated native capacity or scope is unavailable; the responsible manager must resolve the exception.');
+        return persist(task,'dispatching','Native task authority derived from the original owner envelope and management delegation. Awaiting trusted dispatch.');
       }
       return persist(task,'dispatching','Waiting for authenticated original Developer resource authority and trusted native dispatch. No external work has been submitted.');
     }
@@ -222,7 +294,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       if(dispatchError||!dispatch)throw Error('Full benchmark dispatch could not bind approved task and spending authorization');
     }
   }
-  if (project && nativeDispatchEnabled) {
+  if (project && nativeDispatchEnabled && !providerDeadline) {
     const {data:binding,error}=await getSupabaseAdminClient()
       .from('benchmark_development_dispatches')
       .select('task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status')
@@ -290,17 +362,30 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   if(project){
     const saved=await getDevelopmentProjectContext(task.id,true);
     if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
-    const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=project;
+    const {version,projectId,baseSha,baselineSha,allowedPaths,cumulativePaths,contractHash,contract,game,gameFinal}=project;
     if (project.originalUserOutcome && project.approvedMilestone) {
       approvedSource = 'ORIGINAL USER OUTCOME (authoritative; do not replace with assistant summaries):\n' +
         project.originalUserOutcome + '\n\nAPPROVED MILESTONE (source-bound):\n' +
         JSON.stringify(project.approvedMilestone) + '\n\n';
     }
-    const routed=benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
+    const routed=providerDeadline?{codingModel:'gpt-5.3-codex',reviewModel:'gpt-5.3-codex'}:benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
       await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
-    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,...(cumulativePaths?{cumulativePaths}:{}),contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...(providerDeadline?{providerExecution:true}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
-  const fullBody = `${marker(task)}\n\n${benchmarkHeader}${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  const requestBody = `${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  let providerExecutionRelease:string|null=null;
+  if(providerDeadline&&project){
+    const releaseSha=await qualifiedOrdinaryDevelopmentRelease();
+    const key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+    if(!releaseSha||!key)throw Error('Trusted provider execution release or signing authority unavailable');
+    const proof={authorityKind:'provider-execution' as const,taskId:task.id,projectId:project.projectId,scopeHash:project.scopeHash,
+      contractHash:project.contractHash,baselineSha:project.baselineSha,releaseSha,requestHash:providerExecutionRequestHash(requestBody),
+      expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(providerDeadline))};
+    const productionRuntime=sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key);
+    benchmarkHeader=encodeProviderExecutionHandoff({...proof,productionRuntime},key)+'\n\n';
+    providerExecutionRelease=releaseSha;
+  }
+  const fullBody = `${marker(task)}\n\n${benchmarkHeader}${requestBody}`;
   let issueBody: string;
   try {
     issueBody = packDevelopmentRequest(fullBody, marker(task));
@@ -324,10 +409,10 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   } catch (error) { return persist(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner.",{...task.external,dispatchFailure:dispatchFailure(error)}); }
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
-  task = { ...task, external: { ...task.external, attempted: true,dispatchStartedAt:new Date().toISOString(), ...(project?{projectId:project.projectId}:{}) } };
+  task = { ...task, external: { ...task.external, attempted: true,dispatchStartedAt:new Date().toISOString(), ...(project?{projectId:project.projectId}:{}), ...(providerExecutionRelease?{providerExecutionRelease}:{}) } };
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
-      title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
+      title: providerExecutionRelease?`[agent] [provider-execution] Scoped project assignment ${task.id}`:`[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
       body: issueBody,
     });
     return persist(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
@@ -683,6 +768,13 @@ async function dispatchOwnerResourceAmendment(db:ReturnType<typeof getSupabaseAd
 }
 
 // Dispatch only a separately authenticated, append-only owner development renewal.
+export async function qualifiedTask4aVerifierHandoffRelease(){
+ const release=process.env.VERCEL_GIT_COMMIT_SHA;
+ if(process.env.VERCEL_ENV!=='production'||!release)throw Error('Production release unavailable');
+ const client=github();
+ return authenticateTask4aVerifierRelease(release,async path=>(await client.request('GET '+path)).data);
+}
+
 export async function qualifiedOrdinaryDevelopmentRelease(){
  const release=process.env.VERCEL_GIT_COMMIT_SHA;
  if(process.env.VERCEL_ENV!=='production'||!release||!/^[a-f0-9]{40}$/.test(release))return null;
@@ -691,7 +783,7 @@ export async function qualifiedOrdinaryDevelopmentRelease(){
  const {data}=await client.repos.getContent({...binding,path:'scripts/benchmark/native-development-host.mjs',ref:release});
  return !Array.isArray(data)&&data.type==='file'&&Buffer.from(data.content,'base64').toString('utf8').includes('readOrdinaryNativeAuthority')?release:null;
 }
-async function dispatchOrdinaryNativeDevelopment(){
+async function dispatchOrdinaryNativeDevelopment(onlyTaskId?:string,replacement=false,capacityExecution=false,finalExecution=false,verifierExecution=false){
  if(process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.VERCEL_ENV!=='production')return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
@@ -699,29 +791,74 @@ async function dispatchOrdinaryNativeDevelopment(){
  const now=new Date().toISOString();
  // Traverse read-only pages so stale approvals cannot hide another task's authority.
  for(let offset=0;;offset+=8){
- const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string}}}>();
+ const rows=await db.from('benchmark_native_spending_approvals').select('*').is('trial_id',null).is('consumed_at',null).is('revoked_at',null).or('deadline.gt.'+now).order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+7).returns<{id:string;task_id:string;project_id:string;account_id:string;model:string;deadline:string;previous_developer_approval_id:string|null;developer_authority:{checkpoint?:unknown;binding:unknown;task4aContinuationId?:string;task4aRecovery?:{version?:string};task4aOwnerRenewal?:{version?:string;previousApprovalId?:string;previousContinuationId?:string;originalClaimId?:string;consentDigest?:string;productionReleaseSha?:string};task4aPostpaid?:{version?:string;ownerDigest?:string;priorApprovalId?:string;priorGrantId?:string;genericConflictApprovalId?:string}}}>();
  if(rows.error)throw Error('Ordinary authority inspection unavailable');
  if(!rows.data?.length)return false;
  release??=await qualifiedOrdinaryDevelopmentRelease();if(!release)return false;
  for(const a of rows.data){
+  // The scheduler cannot activate capacity. Only the explicit execution route
+  // enters this mode after a separate exact owner execution consent.
+  const capacityRenewal='task4aCapacityRenewal' in (a.developer_authority??{});
+  const finalSuccessor='task4aFinalSuccessor' in (a.developer_authority??{});
+  const verifierRecovery='task4aVerifierRecovery' in (a.developer_authority??{});
+  if(verifierRecovery!==verifierExecution)continue;
+  if(finalSuccessor!==finalExecution||capacityRenewal!==capacityExecution)continue;
+  if(onlyTaskId&&a.task_id!==onlyTaskId)continue;
   if(!a.developer_authority||Date.parse(a.deadline)<=Date.now())continue;
   let task:AgentTask,c:Awaited<ReturnType<typeof getDevelopmentProjectContext>>;
+  // The original post-paid owner consent deliberately leaves project/mission
+  // BLOCKED until task4a_postpaid_claim validates all three immutable receipts.
+  // Ordinary dispatch's scope loader requires RUNNING, making that claim
+  // unreachable. Permit a read-only PRE-CLAIM binding only for the one original
+  // Task 4A / saved-task / explicitly postpaid successor; all other tasks keep
+  // their existing running-project requirement.
+  const task4aPostpaidPreclaim=a.project_id==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
+    a.task_id==='d0e41ff5-149e-4319-9e65-dcc605fb75da'&&
+    Boolean(a.previous_developer_approval_id)&&
+    a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1';
   try{
-   task=await readTask(a.task_id);c=await getDevelopmentProjectContext(task.id,true);if(!c||c.projectId!==a.project_id)continue;
+   task=await readTask(a.task_id);
+   c=await getDevelopmentProjectContext(task.id,!task4aPostpaidPreclaim);
+   if(!c||c.projectId!==a.project_id)continue;
+   if(task4aPostpaidPreclaim){
+    // Never widen ordinary dispatch or use a stale/changed scope. This only
+    // admits inspection before the immutable SQL one-shot claim, which still
+    // enforces blocked/blocked/failed/blocked, owner digests and payment limits.
+    if(task.status!=='blocked')continue;
+    const [{data:p,error:pe},{data:j,error:je}]=await Promise.all([
+     db.from('work_projects').select('status,phase,approved_hash,approval_hash,active_mission_id')
+       .eq('id',a.project_id).maybeSingle<{status:string;phase:string;approved_hash:string|null;approval_hash:string|null;active_mission_id:string|null}>(),
+     db.from('mission_assignments').select('status,mission_id')
+       .eq('id',task.id).maybeSingle<{status:string;mission_id:string}>()
+    ]);
+    if(pe||je||!p||!j||p.status!=='blocked'||p.phase!=='development'||
+       p.approved_hash!==c.scopeHash||!p.approved_hash||p.approved_hash!==p.approval_hash||
+       p.active_mission_id!==j.mission_id||j.status!=='failed')continue;
+    const {data:m,error:me}=await db.from('agent_missions')
+      .select('status,project_id').eq('id',j.mission_id)
+      .maybeSingle<{status:string;project_id:string}>();
+    if(me||!m||m.status!=='blocked'||m.project_id!==a.project_id)continue;
+   }
    if(a.previous_developer_approval_id){
     // One pre-provider Task 4A gate failure has no WIP checkpoint to recover.
     // Only the separately owner-consented, immutable replacement approval
     // may use the original issue; ordinary successors retain the WIP gate.
     const pregrant=c.projectId==='6d1c29f1-b31e-47a5-aabb-cbcf1326f388'&&
-      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1';
+      a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'&&
+      a.developer_authority?.task4aPostpaid?.version!=='postpaid-same-task-v1';
     if(pregrant){
       const {data:ready,error}=await db.rpc<boolean>('task4a_pregrant_redispatch_ready',{
         p_task:task.id,p_approval:a.id
       });
       if(error||ready!==true)continue;
     }else{
-      const evidence=await authenticatedLifecycleCheckpoint(task.id,a.id);
-      if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+      const evidence=verifierRecovery?await authenticatedTask4aVerifierCheckpoint(a.id):finalSuccessor?await authenticatedTask4aFinalCheckpoint(a.id):capacityRenewal?await authenticatedTask4aCapacityCheckpoint(a.id):replacement?await authenticatedTask4aReplacementCheckpoint():await authenticatedLifecycleCheckpoint(task.id,a.id);
+      if(capacityRenewal){
+        if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
+      }else if(a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1'){
+        if(evidence.record.checkpointSha!=='8e53ce01693303fc50daf5da1567e93e725f9b2d'||
+          digest(evidence.checkpoint)!==(a.developer_authority.checkpoint as {digest?:string}|undefined)?.digest)continue;
+      }else if(digest(evidence.checkpoint)!==digest(a.developer_authority.checkpoint))continue;
     }
    }
   }catch{continue;} // Ineligible or unavailable evidence denies this row, not unrelated approvals.
@@ -733,7 +870,8 @@ async function dispatchOrdinaryNativeDevelopment(){
   let authority:ReturnType<typeof classifyDeveloperDispatchAuthority>;
   try{authority=classifyDeveloperDispatchAuthority(c.projectId,a.developer_authority);}
   catch{continue;}
-  if(authority.authorityKind==='task4a-developer'){
+  const postpaid=authority.authorityKind==='task4a-developer'&&a.developer_authority?.task4aPostpaid?.version==='postpaid-same-task-v1';
+  if(authority.authorityKind==='task4a-developer'&&!postpaid){
     const verified=await db.rpc<boolean>('task4a_native_authority_ready',{
       p_project:c.projectId,p_task:task.id,p_authority:authority.task4aContinuationId
     });
@@ -741,45 +879,216 @@ async function dispatchOrdinaryNativeDevelopment(){
   }
   const proof:DeveloperDispatchPayload={...authority,taskId:task.id,projectId:c.projectId,approvalId:a.id,accountId:a.account_id,scopeHash:c.scopeHash,contractHash:c.contractHash,baselineSha:c.baselineSha,releaseSha:release,expiresAt:Math.min(Date.now()+30*60000,Date.parse(a.deadline))};
   const header=encodeDeveloperHandoff({...proof,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key)},key);
-  const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=c;
-  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
+  const {version,projectId,baseSha,baselineSha,allowedPaths,cumulativePaths,contractHash,contract,game,gameFinal}=c;
+  const projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,...(cumulativePaths?{cumulativePaths}:{}),contractHash,contract,codingModel:a.model,reviewModel:a.model,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->';
   const source=c.originalUserOutcome&&c.approvedMilestone?c.originalUserOutcome+'\n'+JSON.stringify(c.approvedMilestone)+'\n':'';
   const body=packDevelopmentRequest(marker(task)+'\n\n'+header+'\n'+projectHeader+'\n'+source+task.input+'\n\nSaved agent responsibilities:\n'+task.snapshot.instructions+'\nDefinition version: '+task.definition_version,marker(task));
   const issue=Number(task.external.issueNumber);
+  let recoveredClaimedDispatch=false,postpaidClaimedDispatch=false,replacementClaimedDispatch=false,capacityClaimedDispatch=false;
   if(a.previous_developer_approval_id){
    if(!Number.isSafeInteger(issue)||issue<1)continue;
    const existing=await client.issues.get({...binding,issue_number:issue});
    const priorBody=unpackDevelopmentRequest(existing.data.body??'');
    if(existing.data.user?.login.toLowerCase()!==binding.owner.toLowerCase()||
      !priorBody.startsWith(marker(task)+'\n'))continue;
-   if(authority.authorityKind==='task4a-developer'&&
+   if(postpaid&&capacityRenewal){
+     const previous=readDeveloperHandoff(priorBody,key,0);
+     if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||previous.projectId!==c.projectId||
+        previous.approvalId!==a.previous_developer_approval_id||previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
+        previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
+        previous.releaseSha!==(verifierExecution?'61184faf4628d6fd9172cde8f16428e01700468b':finalExecution?'c6320a8ec39c9a3749d2d3bc3b50f11e9368e5ed':'3c148a4ea9a2f8bee9d35b7e430eee0f66ff58a0'))continue;
+     const consent=await db.rpc<boolean>(verifierExecution?'task4a_verifier_execution_authorized':finalExecution?'task4a_final_execution_authorized':'task4a_capacity_execution_authorized',{p_release:release});
+     if(consent.error||consent.data!==true)continue;
+     capacityClaimedDispatch=true;
+   }else if(postpaid&&replacement){
+     const evidence=await authenticatedTask4aReplacementCheckpoint();
+     const previous=readDeveloperHandoff(priorBody,key,0);
+     if(previous.authorityKind!=='task4a-developer'||previous.taskId!==task.id||
+       previous.projectId!==c.projectId||previous.approvalId!==a.id||
+       previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
+       previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
+       previous.releaseSha!=='25363d8cd0906e7915c4e0aa6443142a95a76c20')continue;
+     const ready=await db.rpc<boolean>('task4a_replacement_authorized',{
+       p_release:release,p_evidence:evidence.evidence
+     });
+     if(ready.error||ready.data!==true)continue;
+     replacementClaimedDispatch=true;
+   }else if(postpaid){
+     const priorReceipt=task.external.receipt as {outcome?:string;run_id?:number;pr_url?:string|null}|undefined;
+     if(issue!==969||priorReceipt?.outcome!=='BLOCKED'||priorReceipt.run_id!==42102615797||
+       priorReceipt.pr_url!==null)continue;
+     let previous:ReturnType<typeof readDeveloperHandoff>;
+     try{previous=readDeveloperHandoff(priorBody,key,0);}catch{continue;}
+     if(previous.authorityKind!=='task4a-developer'||
+       previous.taskId!==task.id||previous.projectId!==c.projectId||
+       // The audited mistaken generic approval is the chain parent, but the
+       // original signed issue still belongs to the historical paid approval.
+       previous.approvalId!==(a.developer_authority?.task4aPostpaid?.genericConflictApprovalId===a.previous_developer_approval_id
+         ?a.developer_authority.task4aPostpaid?.priorApprovalId:a.previous_developer_approval_id)||
+       previous.accountId!==a.account_id||previous.scopeHash!==c.scopeHash||
+       previous.contractHash!==c.contractHash||previous.baselineSha!==c.baselineSha||
+       previous.releaseSha!==task.external.developerReleaseSha)continue;
+     const {data:offer,error:offerError}=await db.rpc<{
+       ready:boolean;digest?:string;proposal?:{approvalId:string;
+         authorityReceiptId:string;redispatchReceiptId:string}
+     }>('task4a_postpaid_paid_proposal',{p_release:release});
+     if(offerError||offer?.ready!==true||!offer.digest||
+       offer.proposal?.approvalId!==a.id)continue;
+     const {data:events,error:eventsError}=await db.from('project_events')
+       .select('id,event,data,created_at').eq('project_id',c.projectId)
+       .in('event',['task4a_postpaid_owner_authorized',
+         'task4a_postpaid_redispatch_authorized','task4a_postpaid_paid_authorized'])
+       .returns<{id:string;event:string;created_at:string;data:{
+         ownerId:string;consentDigest:string;newApprovalId?:string;
+         redispatchReceiptId?:string;proposal?:unknown
+       }}>();
+     if(eventsError||!events||events.length!==3)continue;
+     const by=(event:string)=>events.find(e=>e.event===event);
+     const authorityReceipt=by('task4a_postpaid_owner_authorized');
+     const redispatchReceipt=by('task4a_postpaid_redispatch_authorized');
+     const paidReceipt=by('task4a_postpaid_paid_authorized');
+     if(!authorityReceipt||!redispatchReceipt||!paidReceipt||
+       authorityReceipt.id!==offer.proposal.authorityReceiptId||
+       authorityReceipt.data.newApprovalId!==a.id||
+       authorityReceipt.data.consentDigest!==a.developer_authority.task4aPostpaid?.ownerDigest||
+       redispatchReceipt.id!==offer.proposal.redispatchReceiptId||
+       redispatchReceipt.data.ownerId!==authorityReceipt.data.ownerId||
+       paidReceipt.data.ownerId!==authorityReceipt.data.ownerId||
+       paidReceipt.data.redispatchReceiptId!==redispatchReceipt.id||
+       paidReceipt.data.consentDigest!==offer.digest||
+       JSON.stringify(paidReceipt.data.proposal)!==JSON.stringify(offer.proposal))continue;
+     const failedRun=await client.actions.getWorkflowRun({
+       owner:binding.owner,repo:binding.repo,run_id:42102615797
+     });
+     if(failedRun.data.status!=='completed'||failedRun.data.conclusion!=='failure'||
+       failedRun.data.path!=='.github/workflows/autonomous-development.yml'||
+       failedRun.data.head_branch!=='main')continue;
+     // A cross-repository or truncated inventory can never permit another run.
+     // Later genuine original-issue dispatches are a permanent single-claim stop.
+     const runs=await client.actions.listWorkflowRunsForRepo({
+       owner:binding.owner,repo:binding.repo,event:'workflow_dispatch',
+       created:'>='+authorityReceipt.created_at,per_page:100
+     });
+     if(runs.data.total_count>100||runs.data.workflow_runs.some(run=>
+       run.path==='.github/workflows/autonomous-development.yml'))continue;
+     postpaidClaimedDispatch=true;
+   }else if(authority.authorityKind==='task4a-developer'&&
       a.developer_authority?.task4aRecovery?.version==='preinference-invalid-handoff-v1'){
-     // Authenticate the old incorrect signed issue against the historical
-     // dispatch instant. It must never be replayed as a new grant.
-     let oldProof:ReturnType<typeof readDeveloperHandoff>;
-     try{oldProof=readDeveloperHandoff(priorBody,key,
+     // The first issue rewrite succeeded, but GitHub rejected the malformed
+     // workflow_dispatch *after* the existing SQL claim was consumed. The
+     // currently signed issue is Task4A-bound, not the historical ordinary
+     // approval. Never reset that claim or trust an unsigned retry.
+     let priorProof:ReturnType<typeof readDeveloperHandoff>;
+     try{priorProof=readDeveloperHandoff(priorBody,key,
        Date.parse(String(task.external.dispatchStartedAt??'')));}catch{continue;}
-     const oldApproval=a.previous_developer_approval_id;
      const failure=task.external.receipt as {outcome?:string;run_id?:number;pr_url?:string|null}|undefined;
-     if(oldProof.authorityKind!=='ordinary-developer'||
-       oldProof.projectId!==c.projectId||oldProof.taskId!==task.id||
-       oldProof.approvalId!==oldApproval||oldProof.scopeHash!==c.scopeHash||
-       oldProof.contractHash!==c.contractHash||oldProof.baselineSha!==c.baselineSha||
-       issue!==969||failure?.outcome!=='BLOCKED'||failure?.run_id!==41673059705||
-       failure?.pr_url!==null)continue;
-     const run=await client.actions.getWorkflowRun({...binding,run_id:41673059705});
-     if(run.data.conclusion!=='failure'||run.data.status!=='completed'||
-       run.data.head_sha!==task.external.developerReleaseSha||
-       run.data.event!=='issues')continue;
+     if(issue!==969||failure?.outcome!=='BLOCKED'||failure?.run_id!==41673059705||
+       failure?.pr_url!==null||priorProof.projectId!==c.projectId||
+       priorProof.taskId!==task.id||priorProof.scopeHash!==c.scopeHash||
+       priorProof.contractHash!==c.contractHash||priorProof.baselineSha!==c.baselineSha)continue;
+     if(priorProof.authorityKind==='task4a-developer'){
+       // The exact prior signed handoff remains on issue #969 after the
+       // original dispatch failed. Owner-governed authority succession MUST
+       // authenticate that signed old approval and the immutable renewal.
+       const renewal=a.developer_authority?.task4aOwnerRenewal;
+       if(renewal?.version==='blocked-dispatch-owner-v1'){
+         if(priorProof.approvalId!==renewal.previousApprovalId||
+            priorProof.task4aContinuationId!==renewal.previousContinuationId||
+            priorProof.releaseSha!==task.external.developerReleaseSha||
+            priorProof.accountId!==a.account_id||
+            a.previous_developer_approval_id!==renewal.previousApprovalId||
+            renewal.originalClaimId!=='283dd2c4-5bac-4804-b8ed-3358c22896b0')continue;
+         const {data:ownerRecovery,error:ownerRecoveryError}=await db.from('project_events')
+           .select('id,data').eq('project_id',c.projectId)
+           .eq('event','task4a_blocked_dispatch_owner_recovered')
+           .maybeSingle<{id:string;data:{newNativeApprovalId:string;newContinuationId:string;previousNativeApprovalId:string;originalFailedClaimId:string;consentDigest:string;proposal:{productionReleaseSha:string}}}>();
+         if(ownerRecoveryError||!ownerRecovery||
+            ownerRecovery.data.newNativeApprovalId!==a.id||
+            ownerRecovery.data.newContinuationId!==authority.task4aContinuationId||
+            ownerRecovery.data.previousNativeApprovalId!==renewal.previousApprovalId||
+            ownerRecovery.data.originalFailedClaimId!==renewal.originalClaimId||
+            ownerRecovery.data.consentDigest!==renewal.consentDigest||
+            ownerRecovery.data.proposal.productionReleaseSha!==renewal.productionReleaseSha)continue;
+       }else if(priorProof.approvalId!==a.id||
+                priorProof.task4aContinuationId!==authority.task4aContinuationId||
+                priorProof.releaseSha!==task.external.developerReleaseSha||
+                priorProof.accountId!==a.account_id)continue;
+       // Recovery-only consent cannot authorize the native workflow. Require
+       // the independent exact paid consent, with a freshly qualified digest.
+       const {data:offer,error:offerError}=await db.rpc<{
+        ready:boolean;digest?:string;proposal?:{originalClaimId:string;approvalId:string;
+         recoveryReceiptId:string;recoveryDigest:string}
+       }>('task4a_paid_execution_proposal',{p_release:release});
+       if(offerError||offer?.ready!==true||!offer.digest||offer.proposal?.approvalId!==a.id)continue;
+       const [{data:recovery,error:recoveryError},{data:paid,error:paidError}]=await Promise.all([
+        db.from('project_events').select('id,data').eq('project_id',c.projectId)
+         .eq('event','task4a_failed_dispatch_owner_authorized')
+         .maybeSingle<{id:string;data:{consentDigest:string;originalClaimId:string;
+          recoveryOnly:boolean;dispatchAuthorized:boolean}}>(),
+        db.from('project_events').select('id,data').eq('project_id',c.projectId)
+         .eq('event','task4a_failed_dispatch_paid_execution_authorized')
+         .maybeSingle<{id:string;data:{consentDigest:string;recoveryReceiptId:string;
+          recoveryConsentDigest:string;originalClaimId:string;proposal:unknown}}>()
+       ]);
+       if(recoveryError||paidError||!recovery||!paid||
+          recovery.id!==offer.proposal.recoveryReceiptId||
+          recovery.data.recoveryOnly!==true||recovery.data.dispatchAuthorized!==false||
+          recovery.data.consentDigest!==offer.proposal.recoveryDigest||
+          recovery.data.originalClaimId!==offer.proposal.originalClaimId||
+          paid.data.recoveryReceiptId!==recovery.id||
+          paid.data.recoveryConsentDigest!==recovery.data.consentDigest||
+          paid.data.originalClaimId!==offer.proposal.originalClaimId||
+          paid.data.consentDigest!==offer.digest||
+          JSON.stringify(paid.data.proposal)!==JSON.stringify(offer.proposal))continue;
+       // GitHub acceptance is external to Postgres. A missing/partial run
+       // inventory is uncertainty, NOT evidence permitting another dispatch.
+       const runs=await client.actions.listWorkflowRunsForRepo({
+        owner:binding.owner,repo:binding.repo,event:'workflow_dispatch',
+        created:'>=2026-11-05T13:43:41Z',per_page:100
+       });
+       if(runs.data.total_count>100||runs.data.workflow_runs.some(run=>
+          run.path==='.github/workflows/autonomous-development.yml'))continue;
+       recoveredClaimedDispatch=true;
+     }else if(priorProof.authorityKind==='ordinary-developer'){
+       if(priorProof.approvalId!==a.previous_developer_approval_id)continue;
+       const run=await client.actions.getWorkflowRun({...binding,run_id:41673059705});
+       if(run.data.conclusion!=='failure'||run.data.status!=='completed'||
+          run.data.head_sha!==task.external.developerReleaseSha||
+          run.data.event!=='issues')continue;
+     }else continue;
+
    }
   }else if(task.external.attempted||task.external.issueNumber)continue;
-  const claim=await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});if(claim.error||claim.data!==true)continue;
+  const claim=capacityClaimedDispatch
+   ?await db.rpc(verifierExecution?'task4a_verifier_execution_claim':finalExecution?'task4a_final_execution_claim':'task4a_capacity_execution_claim',{p_release:release})
+   :replacementClaimedDispatch
+   ?await db.rpc('task4a_replacement_claim',{p_release:release})
+   :postpaidClaimedDispatch
+   ?await db.rpc('task4a_postpaid_claim',{p_release:release})
+   :recoveredClaimedDispatch
+   ?await db.rpc('task4a_claim_failed_dispatch',{p_release:release})
+   :await db.rpc('developer_claim_dispatch',{p_approval:a.id,p_release:release});
+  if(claim.error||claim.data!==true)continue;
   const claimed=await readTask(task.id);
   // An uncertain external acceptance retains the single dispatch claim. Never retry creation automatically.
   if(a.previous_developer_approval_id){
    await client.issues.update({...binding,issue_number:issue,body});
-   await client.actions.createWorkflowDispatch({...binding,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
-   await save(claimed,'submitted','Owner-authorized original task continuation dispatched.',{...claimed.external,attempted:true,developerDispatchRunPending:true});
+   await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
+   if(capacityClaimedDispatch){
+    const sent=await db.rpc<boolean>(verifierExecution?'task4a_verifier_execution_submitted':finalExecution?'task4a_final_execution_submitted':'task4a_capacity_execution_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('Capacity successor dispatch accepted but audit failed; no retry permitted');
+   }else if(replacementClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_replacement_record_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('Replacement accepted but audit failed; no retry permitted');
+   }else if(postpaidClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_postpaid_record_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('GitHub accepted same-task dispatch but audit failed; no retry allowed');
+   }else if(recoveredClaimedDispatch){
+    const sent=await db.rpc<boolean>('task4a_record_failed_dispatch_submitted',{p_release:release});
+    if(sent.error||sent.data!==true)throw Error('GitHub accepted recovered dispatch; immutable receipt storage failed; no retry permitted');
+   }else{
+    await save(claimed,'submitted','Owner-authorized original task continuation dispatched.',{...claimed.external,attempted:true,developerDispatchRunPending:true});
+   }
   }else{
    const created=await client.issues.create({...binding,title:'[agent] '+task.input.split('\n')[0].slice(0,180),body});
    await save(claimed,'submitted','Original owner-authorized Developer task dispatched.',{...claimed.external,attempted:true,issueNumber:created.data.number,issueUrl:created.data.html_url,repository:binding.fullName});
@@ -789,6 +1098,21 @@ async function dispatchOrdinaryNativeDevelopment(){
  if(rows.data.length<8)return false;
  }
 }
+// Invoked only after a digest-bound original-owner consent. This is Katie's
+// existing native dispatcher scoped to one exact saved development task.
+export async function dispatchTask4aFailedDispatchOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
+}
+export async function dispatchTask4aPostpaidOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da');
+}
+export async function dispatchTask4aReplacementOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',true);
+}
+export async function dispatchTask4aCapacityOnce(){
+ return dispatchOrdinaryNativeDevelopment('d0e41ff5-149e-4319-9e65-dcc605fb75da',false,true);
+}
+
 export async function dispatchOwnerRenewedNativeDevelopment() {
  if(await dispatchOrdinaryNativeDevelopment())return true;
  const release=process.env.VERCEL_GIT_COMMIT_SHA;
@@ -881,6 +1205,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   for (const run of runs.data.workflow_runs) {
     if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
     if(typeof task.external.developerDispatchSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.developerDispatchSince)||run.head_sha!==task.external.developerReleaseSha||(task.external.lifecycleProposalId&&(run.event!=='workflow_dispatch'||run.id===(task.external.receipt as {run_id?:number}|undefined)?.run_id))))continue;
+    if(typeof task.external.providerExecutionRelease==='string'&&run.head_sha!==task.external.providerExecutionRelease)continue;
     if(!task.external.ownerSuccessorConsentId&&typeof task.external.resourceAmendmentSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.resourceAmendmentSince)||run.head_sha!==task.external.resourceAmendmentRelease||run.event!=='workflow_dispatch'))continue;
     if((!task.external.resourceAmendmentId||task.external.ownerSuccessorConsentId)&&typeof task.external.paidSuccessorSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.paidSuccessorSince)||run.head_sha!==task.external.paidSuccessorRelease||run.event!=='workflow_dispatch'))continue;
     if(!task.external.resourceAmendmentId&&!task.external.paidSuccessorId&&typeof task.external.pregrantRecoverySince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.pregrantRecoverySince)||run.head_sha!==task.external.pregrantRecoveryRelease||run.event!=='workflow_dispatch'))continue;
@@ -897,7 +1222,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     if (!parsed.success || parsed.data.issue_number !== issueNumber) continue;
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
     const updated=await persist(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
-    if(receipt.outcome!=='READY'&&project){
+    if(receipt.outcome!=='READY'&&project&&!task.external.providerExecutionRelease&&!receipt.providerExecutionEvidence){
       // Nonbillable only: emit a recoverable owner proposal before any new execution.
       // Accounting/worker transitions may still be settling; owner reads revalidate.
       try{await prepareLifecycleOwnerProposal(updated.id);}catch{/* Preserve the terminal receipt; unavailable evidence never grants authority. */}
@@ -951,9 +1276,17 @@ export async function developmentEvidence(task: AgentTask, project?: ProjectAcce
     const include=Boolean(patch)&&patchBytes+size<=12000;if(include)patchBytes+=size;
     return{path:file.filename,status:file.status,additions:file.additions,deletions:file.deletions,...(include?{patch}:{patchUnavailable:true})};
   });
+  let packageDelta:{baseSha:string;headSha:string;changedFiles:Array<{path:string}>}|undefined;
+  if(project?.packageScope){
+    const delta=await client.repos.compareCommitsWithBasehead({owner:binding.owner,repo:binding.repo,basehead:project.packageScope.baseSha+'...'+testedHead,per_page:100});
+    if(!delta.data.files?.length||delta.data.files.length>=300||delta.data.status!=='ahead'||delta.data.merge_base_commit.sha!==project.packageScope.baseSha)throw Error('Incomplete or divergent package delta');
+    const paths=delta.data.files.flatMap(f=>[f.filename,...(f.previous_filename?[f.previous_filename]:[])]);
+    if(paths.some(path=>!project.packageScope!.paths.some(prefix=>path===prefix||prefix.endsWith('/')&&path.startsWith(prefix))))throw Error('Package diff escaped delegated paths');
+    packageDelta={baseSha:project.packageScope.baseSha,headSha:testedHead,changedFiles:paths.map(path=>({path}))};
+  }
   const {data:after}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
   if(!after.draft||after.state!=='open'||after.merged||after.head.sha!==testedHead||after.base.sha!==pr.base.sha||after.head.repo?.full_name!==binding.fullName||after.base.repo.full_name!==binding.fullName)throw new Error('Draft changed while collecting immutable verification evidence');
-  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,...(project?{projectAcceptance:receipt.projectAcceptance}:{}),
+  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,...(packageDelta?{packageDelta}:{}),...(project?{projectAcceptance:receipt.projectAcceptance}:{}),
     validation:{buildJob:build.html_url,conclusion:build.conclusion,excerpts,note:"Selected build-log excerpts, not the full log. Patches exceeding the 12 KB evidence allowance are explicitly omitted; the complete changed-file list is retained."}};
 }
 

@@ -149,7 +149,36 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   // this project fixture intentionally does not create those ordinary RPCs.
   await db.query(readFileSync('supabase/migrations/20261103181500_task4a_pregrant_recovery.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261103225000_task4a_successor_continuation.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261105144000_task4a_failed_dispatch_one_shot.sql','utf8'));
   await db.query('set role service_role');
+  if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_RACE==='1'||
+     process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE==='1'||
+     process.env.KATIE_TEST_ONLY_TASK4A_WATCHDOG_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{
+    successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
+    ownerGovernedPaidMode:true,postpaidMode:true,
+    watchdogMode:process.env.KATIE_TEST_ONLY_TASK4A_WATCHDOG_RACE==='1',connect
+   });
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_TWO_CONSENT_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{
+    successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
+    ownerGovernedPaidMode:true,failedDispatchConcurrent:true,connect
+   });
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_BLOCKED_OWNER_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{
+    successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
+    ownerGovernedConcurrent:true,connect
+   });
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_FAILED_DISPATCH_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true,failedDispatchMode:true,failedDispatchConcurrent:true,connect});
+   return;
+  }
   if(process.env.KATIE_TEST_ONLY_TASK4A_RACE==='1'){
    // A separate disposable PostgreSQL cluster per invocation ensures the
    // concurrent original-identity fixture cannot collide with the existing
@@ -160,6 +189,7 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await verifyTask4aSavedSpecificationPostgres(db);
   await verifyTask4aPregrantRecoveryPostgres(db);
   await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true});
+  await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true,failedDispatchMode:true});
   await verifyTask4aNativePostgres(db,connect);
   await verifyPostMigrationResearchAdmission(db);
   await verifyProjectLifecyclePostgres(db);

@@ -19,8 +19,8 @@ const quota=section('    const retainedFreshAttachments =','    const restored =
 const pdf=(id,name)=>({id,fileId:id,chatId:'old-chat',fileName:name,mimeType:'application/pdf',preview:'SOURCE-'+id,pdfInventory:{version:'pdf-pages-v1',pageCount:1,pages:[]},createdAt:'2026-10-15T12:00:00Z'});
 async function run(message,fresh,saved,genericIds=[]){
  let selectorCalls=0;
- const decision=await vm.runInNewContext(code(`(async()=>{${selection}return {attachmentDecision,freshPdfSelection};})()`),{benchmarkRelay:false,
-  ...scope,...load('lib/uploads/pdf-inventory.ts'),message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},chatId:"current-chat",newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,
+ const decision=await vm.runInNewContext(code(`(async()=>{${selection}return {attachmentDecision,freshPdfSelection};})()`),{benchmarkRelay:false,imageFollowup:null,
+  ...scope,...load('lib/uploads/pdf-inventory.ts'),message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},chatId:"current-chat",newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,explicitSavedProjectReference:false,recentVerifiedVisualCorrection:()=>null,
   selectStoredAttachments:async()=>{selectorCalls++;return {method:'none',selections:saved.filter(f=>genericIds.includes(f.id)).map(attachment=>({attachment,mode:'source'}))};},
  });
  vm.runInNewContext(code(quota),{newAttachments:fresh,timelineActive:false,...decision});

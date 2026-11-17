@@ -47,7 +47,7 @@ const reasoningKey=(item,model)=>createHash('sha256').update(JSON.stringify([mod
 // Responses contract defines encrypted_content as encrypted reasoning tokens;
 // max_output_tokens bounds all generated tokens, including hidden reasoning.
 // https://developers.openai.com/api/reference/resources/responses/methods/create
-export function createNativeReasoningProvenance(){
+export function createNativeReasoningProvenance({usageOptional=false}={}){
  const caps=new Map();
  return {
   bound(item,model){return caps.get(reasoningKey(item,model));},
@@ -59,8 +59,9 @@ export function createNativeReasoningProvenance(){
      try{const e=JSON.parse(line.slice(6));if(e.type==='response.completed')terminal=e.response;}catch{}
     }
    }else{try{terminal=JSON.parse(result.body);}catch{}}
-   if(terminal?.status!=='completed'||terminal.id!==result.providerRequestId||
-      terminal.usage?.total_tokens!==result.actualTokens||!Number.isSafeInteger(terminal.usage?.output_tokens)||terminal.usage.output_tokens<0||terminal.usage.output_tokens>outputCap||!Array.isArray(terminal.output))return;
+   if(terminal?.status!=='completed'||terminal.id!==result.providerRequestId||!Array.isArray(terminal.output))return;
+   if((!usageOptional||result.actualTokens!==null)&&(terminal.usage?.total_tokens!==result.actualTokens||
+      !Number.isSafeInteger(terminal.usage?.output_tokens)||terminal.usage.output_tokens<0||terminal.usage.output_tokens>outputCap))return;
    for(const item of terminal.output){
     if(item?.type!=='reasoning'||typeof item.id!=='string'||typeof item.encrypted_content!=='string'||!item.encrypted_content)continue;
     const key=reasoningKey(item,model);

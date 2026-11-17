@@ -1,4 +1,5 @@
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { ProviderResponseError } from "@/lib/providers/response-errors";
 import type {
   CollaborationCapability,
   CollaborationProviderName,
@@ -71,15 +72,24 @@ export function getCapabilityEscalationInstruction(): string {
   ].join("\n");
 }
 
+/** Never publish a model-generated internal capability command as chat text. */
+export function containsCapabilityControlMarker(raw:string):boolean {
+  return raw.includes(CAPABILITY_REQUEST_PREFIX);
+}
+
 export function parseCapabilityEscalationRequest(
   raw: string,
 ): CollaborationRequest | null {
   const trimmed = raw.trim();
-  if (!trimmed.startsWith(CAPABILITY_REQUEST_PREFIX)) {
-    return null;
-  }
+  // Some models emit a short preamble before the internal control line.
+  // A control line may occur after prose, but never take control from a
+  // quoted/indented snippet or a response containing multiple directives.
+  const matches = [...trimmed.matchAll(/(?:^|\r?\n)[ \t]*KATIE_CAPABILITY_REQUEST:[ \t]*/g)];
+  if (matches.length !== 1 || trimmed.indexOf(CAPABILITY_REQUEST_PREFIX) !==
+      trimmed.lastIndexOf(CAPABILITY_REQUEST_PREFIX)) return null;
 
-  const jsonText = trimmed.slice(CAPABILITY_REQUEST_PREFIX.length).trim();
+  const control = matches[0];
+  const jsonText = trimmed.slice((control.index ?? 0) + control[0].length).trim();
   if (!jsonText) {
     return null;
   }
@@ -134,73 +144,33 @@ export async function runCapabilityAwareGeneration(input: {
   streamedText: string;
   escalationRequest: CollaborationRequest | null;
 }> {
+  // The lead is a control-capable model, not yet an approved user-facing
+  // answer. Buffer its entire output so a late protocol command cannot leak
+  // after an ordinary introductory sentence (production failure 2026-11-15).
   let rawStreamedText = "";
-  let bufferedPrefix = "";
-  let normalOutputStarted = false;
-
-  const flushBufferedAsNormal = async () => {
-    if (!bufferedPrefix) {
-      return;
-    }
-    const value = bufferedPrefix;
-    bufferedPrefix = "";
-    normalOutputStarted = true;
-    await input.onTextDelta(value);
-  };
-
   const result = input.provider.generateStream
     ? await runWithStandaloneActivity("capability_lead", () => input.provider.generateStream!(input.params, {
-        async onTextDelta(delta) {
-          rawStreamedText += delta;
-
-          if (normalOutputStarted) {
-            await input.onTextDelta(delta);
-            return;
-          }
-
-          bufferedPrefix += delta;
-          const normalized = bufferedPrefix.trimStart();
-
-          if (
-            CAPABILITY_REQUEST_PREFIX.startsWith(normalized) ||
-            normalized.startsWith(CAPABILITY_REQUEST_PREFIX)
-          ) {
-            return;
-          }
-
-          await flushBufferedAsNormal();
-        },
+        async onTextDelta(delta) { rawStreamedText += delta; },
       }))
     : await runWithStandaloneActivity("capability_lead", () => input.provider.generate(input.params));
 
-  const rawText = result.text || rawStreamedText || bufferedPrefix;
+  const rawText = result.text || rawStreamedText;
   const escalationRequest = parseCapabilityEscalationRequest(rawText);
-
   if (escalationRequest) {
-    return {
-      result: {
-        ...result,
-        text: rawText,
-      },
-      streamedText: rawStreamedText,
-      escalationRequest,
-    };
+    // No preamble or protocol bytes have been emitted.
+    return { result: {...result,text:rawText}, streamedText:rawStreamedText, escalationRequest };
   }
 
-  if (!normalOutputStarted && bufferedPrefix) {
-    await flushBufferedAsNormal();
+  // Malformed controls must fail closed. Do not mark this task completed with
+  // an internal request or silently transmit a second paid inference attempt.
+  if (containsCapabilityControlMarker(rawText) || containsCapabilityControlMarker(rawStreamedText)) {
+    throw new ProviderResponseError("Internal capability handoff was malformed; no final answer was published.",false,"CAPABILITY_PROTOCOL_INVALID");
   }
 
-  if (!input.provider.generateStream && rawText) {
-    await input.onTextDelta(rawText);
-  }
-
+  if (rawText) await input.onTextDelta(rawText);
   return {
-    result: {
-      ...result,
-      text: rawText,
-    },
-    streamedText: rawStreamedText || rawText,
-    escalationRequest: null,
+    result: {...result,text:rawText},
+    streamedText:rawText,
+    escalationRequest:null,
   };
 }

@@ -6,10 +6,13 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority} from '../scripts/benchmark/developer-dispatch-contract.mjs';
+import {classifyTask4aRecoveryHistory} from '../scripts/benchmark/ordinary-native-authority.mjs';
 import {encodeNativeHandoff} from '../scripts/benchmark/native-dispatch-contract.mjs';
 import {projectMarker,contractHash} from '../scripts/project-context.mjs';
 import {requireTask4aNativeGrant} from '../scripts/benchmark/task4a-native-gate.mjs';
 import {forwardAuthorizedModelRequest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
+import {createResponsesProvider} from '../scripts/benchmark/native-provider-receipts.mjs';
+import {nativeChildInterruptionRetryable} from '../scripts/benchmark/native-http-bridge.mjs';
 
 const id='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
 const task='b1111111-1111-4111-8111-111111111111';
@@ -36,6 +39,38 @@ test('Task4A can never classify an unbound grant as ordinary development',()=>{
  assert.match(code,/classifyDeveloperDispatchAuthority\(c\.projectId,a\.developer_authority\)/);
  assert.match(code,/task4a_native_authority_ready/);
  assert.match(code,/if\(verified\.error\|\|verified\.data!==true\)continue/);
+});
+test('paid Task4A WIP never falls back to historical zero-call pregrant recovery',()=>{
+ const originalTask='d0e41ff5-149e-4319-9e65-dcc605fb75da';
+ const nativeApproval='d1f7d69c-850f-4ce4-88de-a70d4222e157';
+ const original={authorityKind:'task4a-developer',projectId:id,taskId:originalTask,
+  approvalId:nativeApproval};
+ const inherited={id:nativeApproval,developer_authority:{
+  task4aRecovery:{version:'preinference-invalid-handoff-v1'},
+  task4aPostpaid:{version:'postpaid-same-task-v1',priorGrantId:'65ba2f60-2021-449e-8569-58a96b1695d8'}
+ }};
+ assert.deepEqual(classifyTask4aRecoveryHistory({proof:original,approval:inherited}),
+  {postpaid:true,pregrant:false},'Four paid calls and original WIP are not pregrant');
+ assert.deepEqual(classifyTask4aRecoveryHistory({proof:original,
+  approval:{...inherited,developer_authority:{...inherited.developer_authority,task4aPostpaid:undefined}}}),
+  {postpaid:false,pregrant:true},'Genuine earlier pregrant remains distinct');
+ for(const bad of [
+  {...original,projectId:randomUUID()},
+  {...original,taskId:randomUUID()},
+  {...original,authorityKind:'ordinary-developer'},
+  {...original,approvalId:randomUUID()}
+ ]){
+  const result=classifyTask4aRecoveryHistory({proof:bad,approval:inherited});
+  assert.equal(result.postpaid,false,'Foreign/mismatched source cannot claim postpaid WIP');
+ }
+ const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+ assert.match(host,/classifyTask4aRecoveryHistory\(\{proof,approval\}\)/);
+ assert.match(host,/if\(task4aHistory\.pregrant\)/);
+ assert.match(host,/if\(task4aHistory\.postpaid&&priorRefs\.length===0\)/);
+ assert.match(host,/loadRecoveryDiagnostics/);
+ assert.match(host,/validateRecoveryRecords/);
+ assert.match(host,/prepareRecovery/);
+ console.log('TASK4A_REAL_PAID_WIP_DISTINCT_FROM_PREGRANT_NEGATIVE_AND_POSITIVE_PASS');
 });
 test('Task4A handoff is signed separately and bound to original project and continuation',()=>{
  const signed=encodeDeveloperHandoff(proof,key);
@@ -112,6 +147,62 @@ test('missing provider receipt cannot count as accepted execution',async()=>{
   assert.deepEqual(s.events.slice(0,3),['task4a_native_live','task4a_native_reserve','upstream']);
  }
 });
+
+test('Task4A: provider rejects unauthorized pinned model only AFTER financial reservation; no retry or fabricated receipt',async()=>{
+ for(const status of [401,403,404]){
+  const events=[];
+  let providerAttempts=0,receipts=0;
+  const upstream=createResponsesProvider({
+   apiKey:'synthetic-provider-denial-only-no-real-key',
+   fetchImpl:async(url,options)=>{
+    providerAttempts++;events.push('provider');
+    assert.equal(new URL(url).origin,'https://api.openai.com');
+    assert.equal(new URL(url).pathname,'/v1/responses');
+    assert.equal(options.method,'POST');
+    assert.equal(options.redirect,'error');
+    assert.equal(JSON.parse(options.body).model,'gpt-5.3-codex');
+    return {ok:false,status};
+   }
+  });
+  upstream.nonbillableFixture=true;
+  const db={rpc:async(name,args)=>{
+   events.push(name);
+   if(name==='task4a_native_live')return {data:true,error:null};
+   if(name==='task4a_native_reserve'){
+    assert.equal(args.p_model,'gpt-5.3-codex');
+    assert.ok(args.p_tokens>0);
+    return {data:'held-operation',error:null};
+   }
+   throw Error('Unexpected RPC '+name);
+  }};
+  await assert.rejects(forwardAuthorizedModelRequest({
+   db,grantToken:'x'.repeat(40),developerProjectId:id,trialId:null,task4a:true,
+   executionEpoch:1,model:'gpt-5.3-codex',upperTokens:120,
+   requestBody:{model:'gpt-5.3-codex',input:[],max_output_tokens:20},
+   upstream,providerNamespace:'openai-responses',
+   recordReceipt:async()=>{receipts++}
+  }),e=>e.message==='GATEWAY_UPSTREAM_UNCERTAIN'&&
+       e.operationId==='held-operation'&&e.cause?.message==='GATEWAY_PROVIDER_HTTP_'+status);
+  assert.deepEqual(events,['task4a_native_live','task4a_native_reserve','provider']);
+  assert.equal(providerAttempts,1,'No automatic extra provider attempts');
+  assert.equal(receipts,0,'No fabricated completion/settlement after denial');
+  assert.equal(nativeChildInterruptionRetryable({code:null,signal:'SIGKILL'},'upstream-uncertain'),false);
+ }
+});
+test('Task4A provider policy is explicit: catalog lookup is not inference authorization',()=>{
+ const sql=readFileSync('supabase/migrations/20261105224500_task4a_postpaid_same_task_continuation.sql','utf8');
+ assert.match(sql,/'mode','provider_enforced_at_responses_execution'/);
+ assert.match(sql,/'providerAuthorizationMode','provider_enforced_at_responses_execution'/);
+ assert.match(sql,/'modelLookupProvesInferencePermission',false/);
+ assert.match(sql,/'financialAdmissionBeforeProvider',true/);
+ assert.match(sql,/'providerDenialPolicy','fail_closed_hold_unresolved_no_automatic_retry'/);
+ assert.match(sql,/a\.model is distinct from 'gpt-5\.3-codex'/);
+ assert.match(sql,/price\.pricing_status is distinct from 'verified'/);
+ assert.match(sql,/assessment_reserve_tokens=60000/);
+ assert.match(sql,/completion_reserve_tokens=60000/);
+ assert.doesNotMatch(sql,/task4a_postpaid_model_eligible|task4a_credential_lookup/);
+});
+
 test('ordinary and benchmark modes retain their original RPCs',async()=>{
  for(const variant of [
   {trialId:null,developerProjectId:id,task4a:false,live:'developer_gateway_execution_live',reserve:'developer_native_reserve'},

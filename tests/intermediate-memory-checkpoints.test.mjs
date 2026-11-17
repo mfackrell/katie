@@ -11,8 +11,8 @@ test("two bounded model stages process 30 older conversational messages",()=>{
   assert.match(summary,/SUMMARY_BATCH_MESSAGES = 30/);
   assert.match(summary,/remaining < SUMMARY_BATCH_MESSAGES/);
   assert.match(summary,/olderMessages\.slice\(after, after \+ SUMMARY_BATCH_MESSAGES\)/);
-  assert.match(summary,/summarizeNewBatch\(batch\)/);
-  assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
+  assert.match(summary,/summarizeNewBatch\(batch,provider,client,/);
+  assert.match(summary,/reconcileEpisodePlan\(episodes,newSummary,provider,client,/);
   assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
@@ -57,22 +57,51 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 
-test("v9 uses Grok factual episodes and bounded index-only retention",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v9-grok-grounded-factual-episodes"/);
+test("v11 uses Grok Responses API with bounded factual episodes and index-only retention",()=>{
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v14-strict-stage-receipts"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
-  assert.equal((summary.match(/client\.chat\.completions\.create\(/g)||[]).length,2);
-  assert.match(summary,/parseRetentionPlan\(completedText\(response, "retention plan"/);
-  assert.match(summary,/p_processor_version: ITM_PROCESSOR_VERSION/);
+  assert.equal((summary.match(/client\.post\("\/responses"/g)||[]).length,1);
+  assert.match(summary,/reasoning: \{ effort: "low" \}/);
+  assert.match(summary,/type: "json_schema"/);
+  assert.match(summary,/store: false/);
+  assert.match(summary,/parseRetentionPlan\(raw, prior\.length\)/);
+  assert.match(summary,/p_processor_version: processorVersion\(provider\)/);
   assert.match(summary,/p_state: "blocked"/);
-  assert.match(summary,/reconcileEpisodePlan\(episodes, newSummary\)/);
+  assert.match(summary,/reconcileEpisodePlan\(episodes,newSummary,provider,client,/);
   assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
   assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
-  assert.match(summary,/parseGroundedEpisodes\(completedText\(response, "factual episodes"/);
+  assert.match(summary,/parseGroundedEpisodes\(raw,messages\)/);
   assert.match(summary,/!message\.content\.includes\(quote\)/);
   assert.match(summary,/getMessages\(chatId\)/);
   assert.doesNotMatch(summary,/getRecentMessages\(chatId, Number\.MAX_SAFE_INTEGER\)/);
   assert.match(summary,/When a new episode corrects/);
-  assert.match(summary,/createActivityAccountingFetch\("grok", "memory-summary"\)/);
-  assert.doesNotMatch(summary,/api\.anthropic\.com|CLAUDE_API_KEY/);
+  assert.match(summary,/createActivityAccountingFetch\(provider,"memory-summary",\{/);
+  assert.match(summary,/timeoutMs:\(\)=>Math\.max\(1,deadline-Date\.now\(\)\)/);
+  assert.match(summary,/timeoutCode:"memory_timeout"/);
+  assert.doesNotMatch(summary,/withinSummaryDeadline/);
+});
+
+test("post-answer ITM does not inherit a closed HTTP response signal",()=>{
+  const accounting=readFileSync("lib/standalone-accounting/context.ts","utf8");
+  assert.match(accounting,/export function runWithDurablePostAnswerAccounting/);
+  assert.match(accounting,/\.\.\.scope\.context, signal: undefined/);
+  assert.match(route,/maybeUpdateSummary\(chatId\)/);
+  assert.match(route,/const retention = maybeUpdateRelevantLongTermMemory/);
+  assert.doesNotMatch(route,/cachedWorkflowValue\("memory-(?:summary|retention|cleanup)"/);
+  assert.match(summary,/standaloneAccountingCause\(error\)/);
+  assert.match(summary,/standaloneFailureDetails\(error\)/);
+  assert.match(summary,/isRequestAbort\(error\)/);
+});
+
+test("new native Claude transport and prior-provider exposure gate preserve the release contract",()=>{
+  const migration=readFileSync("supabase/migrations/20261115194500_itm_native_claude_recovery_exposure.sql","utf8");
+  assert.match(summary,/client\.post<Record<string, unknown>, ClaudeMessagesResponse>\("\/messages"/);
+  assert.doesNotMatch(summary,/client\.chat\.completions\.create/);
+  assert.match(summary,/thinking: \{ type: "between_tools" \}/);
+  assert.match(summary,/claudeSchema\(schema\)/);
+  assert.match(summary,/inspect_itm_batch_provider_exposure/);
+  assert.match(migration,/security definer/);
+  assert.match(migration,/grant execute on function public\.inspect_itm_batch_provider_exposure/);
+  assert.match(summary,/p_state: "blocked"/);
 });

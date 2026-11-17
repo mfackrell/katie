@@ -52,6 +52,30 @@ test('ordinary host forecasts eleven exhausted native calls without treating oth
  const result=await readOrdinaryLifecycleCapacity(fixture());
  assert.equal(result.status,'insufficient');assert.ok(result.shortages.includes('nativeCalls'));
 });
+
+test('capacity successor requires a separate claim and retains every ordinary/native authority check',async()=>{
+ const f=fixture(),project='6d1c29f1-b31e-47a5-aabb-cbcf1326f388',authority='capacity-successor';
+ f.project.id=project;f.proof.projectId=project;f.approval.project_id=project;
+ f.account.developer_project_id=project;f.snapshot.binding.projectId=project;
+ f.proof.authorityKind='task4a-developer';f.proof.task4aContinuationId=authority;
+ f.approval.developer_authority.task4aContinuationId=authority;
+ f.approval.developer_authority.task4aCapacityRenewal={version:'capacity-only-v1'};
+ let executionReady=false;const calls=[];
+ f.db.rpc=async(name,args)=>{
+  calls.push(name);
+  if(name==='task4a_capacity_execution_ready'){
+   assert.deepEqual(args,{p_approval:f.approval.id,p_release:f.releaseSha});return {data:executionReady,error:null};
+  }
+  if(name==='benchmark_lifecycle_snapshot')return {data:f.snapshot,error:null};
+  assert.equal(name,'task4a_native_authority_ready');return {data:true,error:null};
+ };
+ await assert.rejects(readOrdinaryNativeAuthority(f),/ORDINARY_NATIVE_AUTHORITY_DENIED/);
+ assert.deepEqual(calls,['task4a_capacity_execution_ready']);
+ executionReady=true;calls.length=0;
+ assert.equal(await readOrdinaryNativeAuthority(f),f.snapshot);
+ assert.deepEqual(calls,['task4a_capacity_execution_ready','benchmark_lifecycle_snapshot','task4a_native_authority_ready']);
+ f.snapshot.ownerId='foreign';await assert.rejects(readOrdinaryNativeAuthority(f),/ORDINARY_NATIVE_AUTHORITY_DENIED/);
+});
 test('missing snapshot preserves already known revoked authority',async()=>{
  const f=fixture();f.approval.revoked_at=new Date().toISOString();f.db.rpc=async()=>({error:'missing',data:null});
  const result=await readOrdinaryLifecycleCapacity(f);assert.ok(result.uncertainties.includes('ordinary_authoritative_snapshot_unavailable'));

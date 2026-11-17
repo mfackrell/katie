@@ -1,0 +1,89 @@
+name: document-phase2-qualification
+
+on:
+  pull_request:
+    paths:
+      - 'lib/documents/**'
+      - 'lib/chat/task-progress.ts'
+      - 'app/api/chat/route.ts'
+      - 'tests/document*.test.ts'
+      - 'tests/document*.test.mjs'
+      - 'fixtures/documents/**'
+      - 'scripts/document-phase*.mjs'
+      - 'scripts/document-font-investigation.mjs'
+      - 'scripts/document-page-continuity.mjs'
+      - 'scripts/document-cross-render-investigation.py'
+      - 'scripts/document-cross-render-acceptance.mjs'
+      - 'tests/document-cross-render-policy.test.py'
+      - '.github/workflows/document-phase2-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  document-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck full code base
+        run: npm run typecheck
+      - name: Validate private acceptance runner syntax without reading private data
+        run: |
+          node --check scripts/document-phase2-private-acceptance.mjs
+          node --test tests/document-page-continuity.test.mjs tests/document-independent-review.test.mjs
+      - name: Compile offline qualification suites
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.tests.json
+          mkdir -p .test-dist/node_modules
+          ln -s .. .test-dist/node_modules/@
+      - name: Regress original document production, accounting and secure delivery
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-production.test.js
+      - name: Verify semantic escapes and actual strict PDF font minimum
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-markdown-escapes.test.js .test-dist/tests/document-content-font.test.js
+      - name: Verify font-relative line spacing and large-heading margin safety
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-line-spacing.test.js
+      - name: Trace computed CSS and actual PDF font operators without inference
+        run: node scripts/document-font-investigation.mjs
+      - name: Phase 1 reproduction with actual generator
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase1-qualification.test.js
+      - name: Phase 2 genuine document comparison and delivery contract
+        run: node --experimental-test-isolation=none --test .test-dist/tests/document-phase2-composition.test.js
+      - name: Preserve render evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-phase2-browser-evidence
+          path: test-artifacts/documents/
+          if-no-files-found: warn
+      - name: Install office rendering
+        run: |
+          command -v soffice >/dev/null || sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+          command -v soffice
+      - name: Cross-render geometry and continuity
+        run: node scripts/document-phase1-word-acceptance.mjs
+      - name: Separate explicit page constraints from measured cross-render parity
+        run: |
+          python3 tests/document-cross-render-policy.test.py
+          python3 scripts/document-cross-render-investigation.py --docx test-artifacts/documents/phase1/business-agreement.docx --metadata test-artifacts/documents/phase1/business-agreement.json --office ci-office=/usr/bin/soffice --output test-artifacts/documents/cross-render
+      - name: Audit exact semantic text, actual fonts, margins and continuity across generated artifacts
+        run: node scripts/document-cross-render-acceptance.mjs --office ci-office=/usr/bin/soffice
+      - name: Preserve real DOCX and independent office rendered pages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-phase2-office-evidence
+          path: test-artifacts/documents/
+          if-no-files-found: warn
+      - name: Require all eleven independent Phase 2 gates before approval
+        run: node scripts/document-phase2-release-gate.mjs

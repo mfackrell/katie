@@ -1,3 +1,4 @@
+import {assertTask4aSuccessorRequest} from './task4a-successor-envelope.mjs';
 import {admitNativeRequest,nativeAdmissionError} from './native-request-admission.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 
@@ -9,7 +10,7 @@ export const tokenDigest=token=>{
 };
 export async function forwardAuthorizedModelRequest({
  db,grantToken,trialId,executionEpoch,model,requestBody,
- upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance,requireInputCount=false,developerProjectId=null,task4a=false
+ upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance,requireInputCount=false,developerProjectId=null,task4a=false,successorEnvelope=null
 }){
  if(!db||typeof db.rpc!=='function'||typeof upstream!=='function'||
     typeof recordReceipt!=='function'||(!trialId&&!developerProjectId)||(trialId&&developerProjectId)||!providerNamespace||
@@ -34,6 +35,7 @@ export async function forwardAuthorizedModelRequest({
    ['image_url','input_audio','input_image','audio','file_id'].includes(key)||containsNontext(child));
  };
  const syntheticFixture=upstream.nonbillableFixture===true;
+ if(successorEnvelope&&(!task4a||!requireInputCount||syntheticFixture))throw Error('TASK4A_SUCCESSOR_COUNT_REQUIRED');
  if(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)||(!syntheticFixture&&containsNontext(requestBody.input)))
   throw nativeAdmissionError(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)?'request-object':'nontext-input',requestBody);
  const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
@@ -56,7 +58,7 @@ export async function forwardAuthorizedModelRequest({
   if(!Number.isSafeInteger(inputTokens)||inputTokens<0||inputTokens>120000)throw Error('GATEWAY_INPUT_COUNT_INVALID');
   // Retain opaque provenance as conservative extra headroom even though the
   // provider count includes request formatting and reasoning context.
-  admissionTokens=inputTokens+admission.opaqueTokens+outputCap+1024;
+  admissionTokens=successorEnvelope?assertTask4aSuccessorRequest({envelope:successorEnvelope,inputTokens,opaqueTokens:admission.opaqueTokens,outputTokens:outputCap}):inputTokens+admission.opaqueTokens+outputCap+1024;
   if(process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS==='enabled')console.log('NATIVE_GATEWAY_INPUT_COUNT',JSON.stringify({inputTokens,opaqueHeadroom:admission.opaqueTokens,outputCap,protocolHeadroom:1024,reservationTokens:admissionTokens,requestHash}));
  }
  if(!Number.isSafeInteger(admissionTokens)||admissionTokens>upperTokens)

@@ -7,6 +7,7 @@ import { contentText, pdfTextMatchesSource, normalizedText, type PdfTextFragment
 
 export const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 export type RenderedDocument = { pdf: Buffer; images: Buffer[]; heights: number[]; inspection: Inspection };
+export const MINIMUM_PDF_BODY_CSS_PX = Math.ceil(PAGE.font * 96 / 72 * 100) / 100;
 
 /** These are read locally, never fetched from a CDN. Explicit Next tracing packages them. */
 async function script(path: string) { return readFile(join(process.cwd(), 'node_modules', path), 'utf8'); }
@@ -41,6 +42,21 @@ export async function renderDocument(browser: Browser, bytes: Buffer, spec: Docu
       });
       await document.fonts.ready;
     }, bytes.toString('base64'));
+    // Chromium quantizes 14.666666px (11pt) downward to Tf=14.6599998.
+    // Ceil ONLY floor-sized body text to the next 0.01 CSS px (14.67px).
+    // This increases actual PDF em size to 11.0024996pt; no acceptance
+    // tolerance, PDF scaling, OOXML alteration, or page-layout shortcut.
+    await page.evaluate(({ nominal, rasterSafe }) => {
+      const parents = new Set<HTMLElement>();
+      const walker = document.createTreeWalker(document.getElementById('document')!, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.textContent?.trim() && node.parentElement) parents.add(node.parentElement);
+      }
+      for (const element of parents) {
+        const pixels = parseFloat(getComputedStyle(element).fontSize);
+        if (pixels >= nominal && pixels < rasterSafe) element.style.fontSize = `${rasterSafe}px`;
+      }
+    }, { nominal: PAGE.font * 96 / 72, rasterSafe: MINIMUM_PDF_BODY_CSS_PX });
     await page.addStyleTag({ content: '@page{size:letter;margin:0}html,body{margin:0;padding:0}section.docx{box-shadow:none;margin:0!important;break-after:page;font-variant-ligatures:none}section.docx:last-child{break-after:auto}section.docx article{display:block}section.docx table{border-collapse:collapse}' });
     const layout = await page.evaluate(({ width, height, margin }) => {
       const sections = [...document.querySelectorAll<HTMLElement>('section.docx')];
@@ -133,7 +149,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
       pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
       const document = await pdfjs.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)), isEvalSupported: false }).promise;
       if (document.numPages > maxPages || document.numPages < 1) throw new Error('PDF page count exceeds rendering bounds.');
-      const results: Array<{ png: string; text: string; fragments: PdfTextFragment[]; overflow: boolean; blank: boolean }> = [];
+      const results: Array<{ png: string; text: string; fragments: PdfTextFragment[]; fontSizesPt: number[]; overflow: boolean; blank: boolean }> = [];
       for (let i = 1; i <= document.numPages; i++) {
         const p = await document.getPage(i), viewport = p.getViewport({ scale: 1.5 });
         const canvas = window.document.createElement('canvas'); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
@@ -160,6 +176,12 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
           fragments[j] = { str: item.str, hasEOL: Boolean(item.hasEOL), ...(lineBreakAfter ? { lineBreakAfter: true } : {}) };
           if (item.str.trim()) nextVisible = item;
         }
+        // Vertical em-vector magnitude in PDF points, not glyph ink height.
+        // Bullet markers are numbering decoration; all body/heading/cell text
+        // is subject to the original strict minimum without rounding.
+        const fontSizesPt = items.filter((item: { str: string }) =>
+          item.str.trim() && !/^[•●]$/.test(item.str.trim())
+        ).map((item: { transform: number[] }) => Math.hypot(item.transform[2], item.transform[3]));
         const natural = p.getViewport({ scale: 1 });
         const overflow = items.some((item: { str: string; transform: number[]; width: number; height: number }) => {
           const x = item.transform[4], y = item.transform[5];
@@ -167,7 +189,7 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
         });
         const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         let ink = 0; for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 180 && pixels[offset + 1] < 180 && pixels[offset + 2] < 180) ink++;
-        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), fragments, overflow, blank: ink < 40 });
+        results.push({ png: canvas.toDataURL('image/png'), text: items.map((item: { str: string; hasEOL: boolean }) => item.str + (item.hasEOL ? '\n' : '')).join(''), fragments, fontSizesPt, overflow, blank: ink < 40 });
         canvas.width = canvas.height = 1; p.cleanup();
       }
       await document.destroy(); URL.revokeObjectURL(url); URL.revokeObjectURL(workerUrl);
@@ -175,7 +197,8 @@ export async function rasterizePdf(browser: Browser, pdf: Buffer) {
     }, { main, worker, data: pdf.toString('base64'), maxPages: PAGE.maxPages });
     const images = pages.map(p => Buffer.from(p.png.split(',')[1], 'base64'));
     if (images.reduce((sum, b) => sum + b.length, 0) > 12_000_000) throw new Error('Document raster exceeds inspection budget.');
-    return { images, text: pages.map(p => p.text).join('\n'), fragments: pages.flatMap((p, i) => i === 0 ? p.fragments : [{str:'',hasEOL:true},...p.fragments]), findings: pages.flatMap((p, i): Finding[] => [
+    return { images, pageTexts: pages.map(p=>p.text), fontMeasurements: pages.map((p,i)=>({ page:i+1, minimumPt: p.fontSizesPt.length ? Math.min(...p.fontSizesPt) : null, sizesPt:[...new Set(p.fontSizesPt)] })), text: pages.map(p => p.text).join('\n'), fragments: pages.flatMap((p, i) => i === 0 ? p.fragments : [{str:'',hasEOL:true},...p.fragments]), findings: pages.flatMap((p, i): Finding[] => [
+      ...(p.fontSizesPt.some(size => !Number.isFinite(size) || size < PAGE.font) ? [{ rule: 'font-size' as const, page: i + 1, detail: 'Actual PDF text is below the approved 11-point minimum.' }] : []),
       ...(p.overflow ? [{ rule: 'overflow' as const, page: i + 1, detail: 'PDF text lies outside page bounds.' }] : []),
       ...(p.blank ? [{ rule: 'whitespace' as const, page: i + 1, detail: 'Rasterized PDF page has no readable ink.' }] : []),
     ]) };

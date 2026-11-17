@@ -46,7 +46,7 @@ export async function dispatchReviewedRelease(input:{delegationId:string;mission
  if(owner!=='mfackrell'||repo!=='katie')throw Error('No trusted release workflow configured for this connected repository');
  const gh=client();
  await gh.actions.createWorkflowDispatch({
-  owner,repo,workflow_id:'executive-autonomous-release.yml',ref:'main',
+  owner:owner,repo:repo,workflow_id:'executive-autonomous-release.yml',ref:'main',
   inputs:{pr_number:String(pr),issue_number:String(receipt.issue_number),
     run_id:String(receipt.run_id),head_sha:receipt.tested_head_sha!}
  });

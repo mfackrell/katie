@@ -37,11 +37,22 @@
     {
       "path": "/api/internal/runpod-still/reconcile",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/itm-stage2-recovery",
+      "schedule": "* * * * *"
     }
   ],
   "git": {
     "deploymentEnabled": {
-      "codex/visual-review-integration": false
+      "fix/owner-renewal-resume-controls-20261116": false,
+      "fix/commissioning-diagnostics-1061": false,
+      "codex/visual-review-integration": false,
+      "fix/scoped-root-delegation-retry-20261114": false,
+      "fix/management-loop-1048": false,
+      "fix/paused-expired-window-renewal-1050": false,
+      "fix/generated-image-perception-20261116": false,
+      "fix/generated-image-recall-20261116": false
     }
   }
 }

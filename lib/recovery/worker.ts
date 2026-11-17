@@ -153,7 +153,7 @@ async function retryExistingAfterTrustedRelease(c:Case,e:SourceEvidence,diagnosi
  if(!published.data.statuses.some(x=>x.context.toLowerCase().includes('vercel')&&x.state==='success'))return false;
  // No code-generation workflow is involved. These inputs pin the unchanged
  // game/app code SHA and its original owner-authored task.
- await client.actions.createWorkflowDispatch({...repo,workflow_id:'project-reverify.yml',ref:'main',
+ await client.actions.createWorkflowDispatch({owner:repo.owner,repo:repo.repo,workflow_id:'project-reverify.yml',ref:'main',
   inputs:{issue_number:String(e.issueNumber),pr_number:String(prNumber),expected_sha:e.headSha}});
  const resumed=await rpc<{status:string}|null>('reverify_project_after_existing_fix',{
   p_case:c.id,p_lease:c.lease,p_issue:e.issueNumber,p_pr:prNumber,p_head:e.headSha,p_release_sha:main
@@ -374,7 +374,7 @@ async function monitorRecoveryCases():Promise<void>{
       const originalPr=int((bound.task.external.prUrl as string|undefined)?.split('/').pop());
       if(originalIssue&&originalPr&&bound.project.active_mission_id){
        // The existing project-reverify workflow does not run a coding agent.
-       await client.actions.createWorkflowDispatch({...repo,workflow_id:'project-reverify.yml',ref:'main',
+       await client.actions.createWorkflowDispatch({owner:repo.owner,repo:repo.repo,workflow_id:'project-reverify.yml',ref:'main',
         inputs:{issue_number:String(originalIssue),pr_number:String(originalPr),expected_sha:bound.headSha}});
        const resumed=await rpc<{status:string}|null>('resume_project_after_recovery',{
         p_case:c.id,p_actor:c.actor_id,p_chat:c.chat_id,p_original_issue:originalIssue,

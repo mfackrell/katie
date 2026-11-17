@@ -44,7 +44,11 @@ import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
 import { Task4aContinuationOwnerApproval } from "@/components/task4a-continuation-owner-approval";
 import { Task4aSavedSpecificationRecovery } from "@/components/task4a-saved-specification-recovery";
 import { Task4aNativeRecoveryApproval } from "@/components/task4a-native-recovery-approval";
+import { Task4aFailedDispatchRecoveryApproval } from "@/components/task4a-failed-dispatch-recovery-approval";
+import { Task4aPostpaidContinuationApproval } from "@/components/task4a-postpaid-continuation-approval";
+import { Task4aBlockedDispatchOwnerApproval } from "@/components/task4a-blocked-dispatch-owner-approval";
 import { Task4aSuccessorOwnerApproval } from "@/components/task4a-successor-owner-approval";
+import { DirectorRecoveryControl, type DirectorRecoveryOffer } from "@/components/director-recovery-control";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
@@ -810,6 +814,9 @@ export function ChatPanel({
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   useEffect(() => { setDeleteCandidate(null); setDeleteFailure(null); }, [chatId]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
+  const [gameTrialRefresh, setGameTrialRefresh] = useState(0);
+  const [directorRecovery, setDirectorRecovery] = useState<{chatId:string;offer:DirectorRecoveryOffer}|null>(null);
+  const [gameTrial, setGameTrial] = useState<{chatId:string;mode:'start'|'stop'}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
   const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
   const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
@@ -818,7 +825,7 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const composerValueRef = useRef("");
   const [composerResetVersion, resetComposerInput] = useState(0);
-  const [replyTo, setReplyTo] = useState<Pick<Message, "id" | "role" | "content"> | null>(null);
+  const [replyTo, setReplyTo] = useState<(Pick<Message, "id" | "role" | "content"> & { imageIndex?: number }) | null>(null);
   useEffect(() => setReplyTo(null), [chatId]);
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
@@ -1204,17 +1211,22 @@ export function ChatPanel({
     if(!chatId||!actorId||loading)return;
     let cancelled=false,inFlight=false,done=false;
     setProjectApproval(null);
+    setGameTrial(null);
     setResourceRecovery(null);
     setProjectApprovalError(null);
     const refresh=async()=>{
       if(cancelled||inFlight||done||document.visibilityState==='hidden')return;
       inFlight=true;
       try {
-        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
+        const bearer=await ownerSessionBearer();
+        if(!bearer&&!cancelled)setDirectorRecovery(null);
+        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store',...(bearer?{headers:{Authorization:`Bearer ${bearer}`}}:{})});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;trialState?:'active'|'available'|null;directorRecovery?:DirectorRecoveryOffer|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
+        setGameTrial(p.trialState==='available'?{chatId,mode:'start'}:p.trialState==='active'&&p.status!=='completed'&&p.status!=='stopped'?{chatId,mode:'stop'}:null);
+        setDirectorRecovery(p.directorRecovery?{chatId,offer:p.directorRecovery}:null);
         setResourceRecovery(p.resourceRecovery?{chatId,proposal:p.resourceRecovery}:null);
         // Executive missions can deliver after the immediate chat reply, even
         // without a software project (or after its completion). Stop only when
@@ -1232,15 +1244,18 @@ export function ChatPanel({
     document.addEventListener('visibilitychange',resume);
     void refresh();
     return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume);};
-  },[actorId,chatId,loading,projectProgressSignature]);
+  },[actorId,chatId,loading,projectProgressSignature,gameTrialRefresh]);
 
   async function approveProject(hash:string) {
     if(!chatId||!actorId||projectApprovalPending||loading)return;
     setProjectApprovalPending(true);
     setProjectApprovalError(null);
     try {
+      const ownerOnly=projectApproval?.approval.providerControlled;
+      const bearer=ownerOnly?await ownerSessionBearer():null;
+      if(ownerOnly&&!bearer)throw Error('Sign in as Katie owner to approve the trial scope.');
       const response=await fetch('/api/projects',{
-        method:'POST',headers:{'Content-Type':'application/json'},
+        method:'POST',headers:{'Content-Type':'application/json',...(bearer?{Authorization:`Bearer ${bearer}`}:{})},
         body:JSON.stringify({actorId,chatId,approvalHash:hash}),
       });
       const result=await response.json() as {error?:string;status?:string;messages?:Message[]};
@@ -1254,6 +1269,31 @@ export function ChatPanel({
     }catch(error){
       setProjectApprovalError(error instanceof Error?error.message:'Approval failed. Refresh the project scope.');
     }finally {setProjectApprovalPending(false);}
+  }
+
+  async function controlGameTrial(){
+    if(!gameTrial||gameTrial.chatId!==chatId||!actorId||!chatId||projectApprovalPending||loading)return;
+    const trialAction=gameTrial.mode;
+    setProjectApprovalPending(true);setProjectApprovalError(null);
+    try{
+      const bearer=await ownerSessionBearer();
+      if(!bearer)throw Error('Sign in as Katie owner to control the trial.');
+      const response=await fetch('/api/projects/organization',{
+        method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},
+        body:JSON.stringify({actorId,chatId,trialAction})
+      });
+      const result=await response.json() as {projectId?:string;error?:string;messages?:Message[]};
+      if(!response.ok||!result.projectId)throw Error(result.error??'Trial control failed.');
+      if(Array.isArray(result.messages)){
+        setMessages(result.messages);
+        setMessagesByChatId(current=>({...current,[chatId]:result.messages!}));
+      }
+      setGameTrial(trialAction==='start'?{chatId,mode:'stop'}:null);
+      setGameTrialRefresh(value=>value+1);
+      setStatusMessage(trialAction==='start'?'Trial started. Katie will prepare the game scope for review.':'Trial stopped.');
+    }catch(error){
+      setProjectApprovalError(error instanceof Error?error.message:'Trial control failed.');
+    }finally{setProjectApprovalPending(false);}
   }
 
   async function approveRecovery(hash:string,ceiling:number,hours:48|72){
@@ -1636,7 +1676,9 @@ export function ChatPanel({
     const replySnapshot = reactionContent ? null : replyTo;
     const documentSourceMessageId = replySnapshot?.role === "assistant" &&
       latestComposerText === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
-    const content = reactionContent ?? (documentSourceMessageId ? latestComposerText : replySnapshot
+    const imageSource = replySnapshot?.role === "assistant" && replySnapshot.imageIndex !== undefined
+      ? { messageId: replySnapshot.id, assetIndex: replySnapshot.imageIndex } : undefined;
+    const content = reactionContent ?? ((documentSourceMessageId || imageSource) ? latestComposerText : replySnapshot
       ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${latestComposerText}`
       : latestComposerText);
     const composerImages = reactionContent ? [] : [...selectedImages];
@@ -1765,6 +1807,7 @@ export function ChatPanel({
           chatId,
           message: requestContent,
           documentSourceMessageId,
+          ...(imageSource ? { imageSource } : {}),
           images: requestImages,
           fileReferences: refsToSend,
           attachmentManifest: countCurrentAttachments([...priorReferences,...filesToUpload.map(file=>({mimeType:file.type})),...videosToUpload.map(file=>({mimeType:file.type}))],composerImages.map(image=>image.preview)),
@@ -3055,15 +3098,30 @@ export function ChatPanel({
         className="min-h-0 max-h-[45dvh] shrink overflow-y-auto overscroll-contain touch-pan-y px-3 py-2 empty:hidden sm:max-h-[55dvh] sm:px-6"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
-        {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
+        {chatId && chatId!=='e53defeb-16eb-457e-aa07-435141165ee8' && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aSuccessorOwnerApproval key={'task4a-successor:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aNativeRecoveryApproval key={'task4a-native:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aBlockedDispatchOwnerApproval key={'task4a-blocked-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aFailedDispatchRecoveryApproval key={'task4a-failed-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aPostpaidContinuationApproval key={'task4a-postpaid:'+chatId} chatId={chatId} /> : null}
         {resourceRecovery?.chatId===chatId && !managedAgentId ? (
           <DeveloperResourceCard proposal={resourceRecovery.proposal}
            pending={projectApprovalPending||loading} error={projectApprovalError}
            onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
+        ):null}
+        {directorRecovery?.chatId===chatId && !managedAgentId ? (
+          <DirectorRecoveryControl key={actorId+':'+chatId} recovery={directorRecovery.offer}
+            onRefresh={()=>setGameTrialRefresh(value=>value+1)} />
+        ):null}
+        {gameTrial?.chatId===chatId && !managedAgentId ? (
+          <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3">
+            <button type="button" className="min-h-11 font-semibold" disabled={projectApprovalPending||loading} onClick={()=>void controlGameTrial()}>
+              {gameTrial.mode==='start'?'Start the two-hour tic-tac-toe trial':'Stop the tic-tac-toe trial'}
+            </button>
+            {projectApprovalError && <p role="alert">{projectApprovalError}</p>}
+          </aside>
         ):null}
         {projectApproval?.chatId===chatId && !managedAgentId ? (
           <ProjectApprovalCard
@@ -3240,6 +3298,16 @@ export function ChatPanel({
                     />
                   </div>
                   {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      aria-label={`Use generated image ${(message.assets?.indexOf(asset) ?? 0) + 1} from this message`}
+                      aria-pressed={replyTo?.id === message.id && replyTo.imageIndex === message.assets?.indexOf(asset)}
+                      onClick={() => setReplyTo({id:message.id,role:message.role,content:message.content,
+                        imageIndex:message.assets?.indexOf(asset) ?? 0})}
+                      className="mt-2 rounded-lg border border-white/20 px-3 py-1.5 text-xs hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    >Use this image in my next message</button>
+                  ) : null}
+                  {message.role === "assistant" ? (
                     <RememberFaceControl
                       actorId={actorId}
                       chatId={message.chatId}
@@ -3338,7 +3406,7 @@ export function ChatPanel({
           {statusMessage}
         </p>
         {replyTo && <div className="mb-2 flex items-start justify-between gap-2 rounded-xl border border-sky-400/20 bg-sky-400/5 px-3 py-2 text-xs text-zinc-300">
-          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
+          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}{replyTo.imageIndex !== undefined ? ` — image ${replyTo.imageIndex + 1}` : ""}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
           <button type="button" aria-label="Cancel reply" onClick={()=>setReplyTo(null)} className="shrink-0 rounded px-2 py-1 hover:bg-white/10">✕</button>
         </div>}
         {!hasValidChatSelection ? (
