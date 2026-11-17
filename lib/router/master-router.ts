@@ -1,3 +1,4 @@
+import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 import type { ProjectTransition } from "@/lib/chat/task-progress";
 import {
   buildCandidateMetadata,
@@ -54,6 +55,7 @@ export type ResolvedRoutingIntent = {
   responsePurpose?: ResponsePurpose;
   projectRelation?: ProjectRelation;
   projectTransition?: ProjectTransition;
+  decisionEvidence?: import("@/lib/router/model-intent").RoutingDecisionEvidence;
   objectiveGuardReason?: string;
 };
 export type SelectionExplainer = {
@@ -706,6 +708,7 @@ export async function chooseProvider(
   context: string,
   providers: LlmProvider[],
   options?: {
+    routing_mode?: import("@/lib/router/model-intent").RoutingMode;
     diverseFallbackProviders?: boolean;
     decisionCandidatesPerProvider?: number;
     decisionTimeoutMs?: number;
@@ -808,6 +811,7 @@ export async function chooseProvider(
           : "control-plane-unavailable-used-local-classifier";
       }
     } catch (error) {
+      if (isTerminalAttemptError(error)) throw error;
       console.warn(`[Route Intent] classifier_failed requestId=${traceRequestId}`, error);
       intentAuthority = "fallback";
       intentResolutionReason = "llm-failed";
@@ -823,6 +827,7 @@ export async function chooseProvider(
           preferredProvider: requestClassification.preferredProvider ?? null,
           intentSource: "llm",
           secondaryIntents: requestClassification.secondaryIntents ?? [],
+          decisionEvidence: requestClassification.decisionEvidence,
           complexity: requestClassification.complexity ?? null,
           providerRefusalRisk: requestClassification.providerRefusalRisk ?? null,
           ...(requestClassification.responsePurpose ? { responsePurpose: requestClassification.responsePurpose } : {}),
@@ -866,7 +871,8 @@ export async function chooseProvider(
   console.info(`[Route Intent Resolved] ${JSON.stringify(resolvedIntent)}`);
   const intent = resolvedIntent.intent;
   const preferredProvider = resolvedIntent.preferredProvider;
-  const actorRoutingProfile = options?.actorRoutingProfile;
+  const neutral = getAccountingScope()?.kind === "standalone";
+  const actorRoutingProfile = neutral ? undefined : options?.actorRoutingProfile;
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
     provider,
@@ -876,7 +882,7 @@ export async function chooseProvider(
   }));
 
   const delegatedWebRetrievalForMarketing =
-    intent === "marketing-analysis" &&
+    !neutral && intent === "marketing-analysis" &&
     (resolvedIntent.secondaryIntents ?? []).includes("web-search");
 
   if (delegatedWebRetrievalForMarketing) {
@@ -924,6 +930,11 @@ export async function chooseProvider(
     registryLookup
   });
 
+  if (neutral && options?.hasImages) {
+    availableByProvider = availableByProvider.map(entry => ({...entry, models: entry.models.filter(modelId =>
+      buildCandidateMetadata(entry.provider.name, modelId, intent, {registryLookup}).supports_vision)}));
+  }
+
   // Native web access is not enough: the exact Grok model must have a
   // reviewed token price and the one-turn server-search accounting policy.
   // This only constrains standalone paid chat; project-orchestrator routing
@@ -959,7 +970,9 @@ export async function chooseProvider(
     throw noCandidateError;
   }
 
-  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider, actorRoutingProfile });
+  rankedCandidates = neutral
+    ? availableByProvider.flatMap(({provider, models}) => models.map(modelId => ({provider, modelId, score: 0})))
+    : scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider, actorRoutingProfile });
   const unbiasedTopCandidate = actorRoutingProfile
     ? scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider })[0]
     : null;
@@ -1151,11 +1164,15 @@ export async function chooseProvider(
 
   let selected: Selection;
 
-  if (!rankedCandidates.length) {
+  if (neutral && (resolvedIntent.intentSource !== "llm" && resolvedIntent.intentSource !== "upstream"
+      || !resolvedIntent.decisionEvidence?.classification_model)) {
+    selected = fallbackToDeterministic("stage_one_understanding_unavailable");
+  } else if (!rankedCandidates.length) {
     selected = fallbackToDeterministic("no_ranked_candidates");
   } else {
     llmCandidatesUsed = rankedCandidates.map((candidate) => {
       const metadata = buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent, { registryLookup });
+      if (neutral) return {...metadata, prior_score: 0};
       const breakdown = scoreModelCandidateWithBreakdown(candidate.provider.name, candidate.modelId, intent, {
         registryLookup,
         actorRoutingProfile
@@ -1171,7 +1188,7 @@ export async function chooseProvider(
         }
       };
     });
-    llmCandidatesUsed = shortlistDecisionCandidates(llmCandidatesUsed, options?.decisionCandidatesPerProvider);
+    if (!neutral) llmCandidatesUsed = shortlistDecisionCandidates(llmCandidatesUsed, options?.decisionCandidatesPerProvider);
     console.info(`[LLM Router Preferences] ${JSON.stringify({ requestId: traceRequestId, intent, preferenceProfile })}`);
     console.info(
       `[LLM Router Candidates] ${JSON.stringify({ requestId: traceRequestId, count: llmCandidatesUsed.length, candidates: llmCandidatesUsed })}`
@@ -1210,6 +1227,8 @@ export async function chooseProvider(
     }
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
+      routing_mode: options?.routing_mode,
+      understanding: requestClassification ?? resolvedIntent,
       prompt,
       intent,
       secondaryIntents: resolvedIntent.secondaryIntents ?? [],
