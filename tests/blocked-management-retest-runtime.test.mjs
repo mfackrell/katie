@@ -73,12 +73,16 @@ test('real Chromium one-time retest control requires owner click and shows a rec
  const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js']
   .map(file=>readFileSync('node_modules/'+file,'utf8')).join('\n');
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
+ // Sparticuz headless Chromium can hang when opening a second page in this CI fixture.
+ // Reuse one page; each scenario navigates to a fresh document and resets its route.
+ const page=await browser.newPage();
  try{
   for(const scenario of ['success','no-owner','409','admitted']){
    console.log('RETEST_CHROMIUM_SCENARIO_START: '+scenario);
-   console.log('RETEST_CHROMIUM_STEP: '+scenario+' newPage:begin');
-   const page=await browser.newPage();
-   console.log('RETEST_CHROMIUM_STEP: '+scenario+' newPage:done');
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' reusePage:begin');
+   await page.unroute('http://localhost/**');
+   page.removeAllListeners('pageerror');
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' reusePage:done');
    let posts=0,releaseResponse,requestObserved;
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    const requestSeen=new Promise(resolve=>{requestObserved=resolve;});
@@ -160,10 +164,7 @@ test('real Chromium one-time retest control requires owner click and shows a rec
     }
    }
    assert.equal(posts,scenario==='success'||scenario==='409'?1:0);
-   console.log('RETEST_CHROMIUM_STEP: '+scenario+' page-close:begin');
-   await page.close({runBeforeUnload:false});
-   console.log('RETEST_CHROMIUM_STEP: '+scenario+' page-close:done');
    console.log('RETEST_CHROMIUM_SCENARIO_PASS: '+scenario);
   }
- }finally{await browser.close();}
+ }finally{await page.close({runBeforeUnload:false});await browser.close();}
 });
