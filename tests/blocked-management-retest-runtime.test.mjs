@@ -76,7 +76,10 @@ test('real Chromium one-time retest control requires owner click and shows a rec
  try{
   for(const scenario of ['success','no-owner','409','admitted']){
    console.log('RETEST_CHROMIUM_SCENARIO_START: '+scenario);
-   const page=await browser.newPage();let posts=0,releaseResponse,requestObserved;
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' newPage:begin');
+   const page=await browser.newPage();
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' newPage:done');
+   let posts=0,releaseResponse,requestObserved;
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    const requestSeen=new Promise(resolve=>{requestObserved=resolve;});
    // Fail-closed watchdog: a failing browser assertion must never leave a held
@@ -103,19 +106,27 @@ test('real Chromium one-time retest control requires owner click and shows a rec
     await gate;
     return route.fulfill({status:scenario==='409'?409:200,json:scenario==='409'?{error:'Stale state'}:admitted});
    });
-   await page.goto('http://localhost/control');
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' goto:begin');
+   await page.goto('http://localhost/control',{waitUntil:'domcontentloaded',timeout:12000});
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' goto:done');
    if(scenario==='admitted'){
     await page.getByText('One-time retest has been recorded.').waitFor();
     assert.equal(await page.getByRole('button',{name:'Authorize one management retest'}).count(),0);
    }else{
     const button=page.getByRole('button',{name:'Authorize one management retest'});
-    await button.waitFor();
+    console.log('RETEST_CHROMIUM_STEP: '+scenario+' button:begin');
+    await button.waitFor({timeout:12000});
+    console.log('RETEST_CHROMIUM_STEP: '+scenario+' button:done');
     // Successful/stale-owner cases verify a double-click cannot duplicate an
     // authenticated POST. An unauthenticated request needs one click only.
+    console.log('RETEST_CHROMIUM_STEP: '+scenario+' click:begin');
     await button.evaluate((el,doubleClick)=>{el.click();if(doubleClick)el.click();},scenario!=='no-owner');
+    console.log('RETEST_CHROMIUM_STEP: '+scenario+' click:done');
     if(scenario==='no-owner'){
      try{
+      console.log('RETEST_CHROMIUM_STEP: no-owner alert:begin');
       await page.getByRole('alert').filter({hasText:'Sign in as Katie owner'}).waitFor({timeout:8000});
+      console.log('RETEST_CHROMIUM_STEP: no-owner alert:done');
       console.log('RETEST_CHROMIUM_NO_OWNER_DENIAL_PASS: no authenticated POST');
      }catch(error){
       throw Error('No-owner denial was not rendered: '+error.message+
@@ -149,7 +160,9 @@ test('real Chromium one-time retest control requires owner click and shows a rec
     }
    }
    assert.equal(posts,scenario==='success'||scenario==='409'?1:0);
-   await page.close();
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' page-close:begin');
+   await page.close({runBeforeUnload:false});
+   console.log('RETEST_CHROMIUM_STEP: '+scenario+' page-close:done');
    console.log('RETEST_CHROMIUM_SCENARIO_PASS: '+scenario);
   }
  }finally{await browser.close();}
