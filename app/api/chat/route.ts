@@ -1725,7 +1725,7 @@ async function executeChat(request: NextRequest) {
         createdAt,
         ...(role === "assistant" && model ? { model } : {}),
         attachments: attachments?.map(file=>({id:file.id,fileName:file.fileName,observationSourceHash:file.observationSourceHash,observationAgreement:file.observationAgreement}))
-      }))}` : "",
+      })))}` : "",
       `Active project (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null : null)}`,
       `Current requested deliverable (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.objective?.text ?? null : null)}`,
       `Outstanding questions: ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })) : [])}`,
