@@ -253,7 +253,8 @@ test('Nov 17 exact capacity failure flows through recovery and an LLM-picked oth
       routerCalls++;
       return {provider:'google',model:modelId??'gemini-2.5-pro',
         text:JSON.stringify({selected:{provider:'anthropic',model:'claude-sonnet-5-5'},
-          selection_justification:'Reviewed capacity and full-context fit for this conversation.'})};
+          selection_justification:'Reviewed capacity and full-context fit for this conversation.',
+          alternatives:[{provider:'google',model:'gemini-2.5-pro',why_not_selected:'Less established conversational continuity for this exact recovery fixture.'}]})};
     },
   };
   const intent={
