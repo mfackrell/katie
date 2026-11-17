@@ -411,7 +411,7 @@ export function ConversationsScreen() {
           </div>
         ))
       )}
-      {!list.length && !chats.loading && (
+      {!list.length && !chats.loading && !chats.error && !actors.error && (
         <p className="py-8 text-zinc-400">
           {session.data?.guest
             ? "No guest conversations match. Sign in above to see your owner history."
