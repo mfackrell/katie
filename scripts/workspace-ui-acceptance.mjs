@@ -85,6 +85,7 @@ const project = {
 const states = new Map(),
   mutations = [],
   errors = [];
+let simulateGuest = false;
 let workFailure = false;
 let benchmarkApproved=false,continuationAvailable=false,continuationApproved=false,continuationRenewal=false;
 let server;
@@ -167,6 +168,7 @@ try {
       }
       return reply({consent:benchmarkApproved?{id:'synthetic-consent',expires_at:new Date(Date.now()+3600000).toISOString(),dispatch_error:null}:null,qualification:null,execution:null,canRetry:false,deploymentChanged:false});
     }
+    if (url.pathname === "/api/session") return reply(req.method() === "GET" ? { guest: simulateGuest } : { ready: true, guest: simulateGuest });
     if (url.pathname === "/api/actors") {
       if (req.method() === "POST") {
         const actor = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ...body };
@@ -194,7 +196,7 @@ try {
         chats.push(chat);
         return reply({ chat }, 201);
       }
-      return reply({ chats });
+      return reply({ chats: simulateGuest ? [] : chats });
     }
     if (url.pathname === "/api/admin/repos") return reply({ repos: [] });
     if (url.pathname === "/api/ui-state") {
@@ -280,7 +282,17 @@ try {
         chatMessages.splice(index, 1);
         return reply({ success: true });
       }
-      return reply({ messages: chatMessages.filter(message => message.chatId === url.searchParams.get("chatId")), videoProgress: {} });
+      const history = chatMessages.filter(message => message.chatId === url.searchParams.get("chatId"));
+      if (url.searchParams.get("recent") === "1") {
+        const newestFirst = [...history].sort((x, y) =>
+          y.createdAt.localeCompare(x.createdAt) || y.id.localeCompare(x.id));
+        const before = url.searchParams.get("before");
+        const start = before ? newestFirst.findIndex(message => message.id === before) + 1 : 0;
+        assert.ok(start >= 0, "History cursor must belong to the selected conversation");
+        const window = newestFirst.slice(start, start + 51);
+        return reply({ messages: window.slice(0, 50).reverse(), hasOlder: window.length > 50, videoProgress: {} });
+      }
+      return reply({ messages: history, videoProgress: {} });
     }
     if (url.pathname === "/api/search")
       return reply({
@@ -453,6 +465,35 @@ try {
   await page.getByText("Synthetic message for mobile delete test").waitFor({ state: "hidden" });
   assert.equal(chatMessages.length, 0);
   assert.equal(mutations.filter(r => r.path === "/api/messages").length, 1);
+
+  // A long owner conversation must render only the newest 50 messages on mobile,
+  // then fetch older saved pages only after a deliberate user action.
+  for (let i = 0; i < 61; i++) {
+    chatMessages.push({
+      id: (i + 32).toString(16).padStart(8, "0") + "-0000-4000-8000-000000000000",
+      actorId: e, chatId: c, role: i % 2 ? "assistant" : "user",
+      content: "Historic checkpoint " + i,
+      createdAt: new Date(Date.UTC(2026, 10, 17, 12, 0, i)).toISOString(),
+    });
+  }
+  await page.reload();
+  await page.getByText("Historic checkpoint 60", { exact: true }).waitFor();
+  assert.equal(await page.locator('[id^="message-"]').count(), 50);
+  assert.equal(await page.getByText("Historic checkpoint 0", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Load earlier messages" }).click();
+  await page.getByText("Historic checkpoint 0", { exact: true }).waitFor();
+  assert.equal(await page.locator('[id^="message-"]').count(), 61);
+
+  // An unauthenticated mobile browser must explain that its private owner
+  // history is hidden, instead of misleadingly displaying an empty account.
+  simulateGuest = true;
+  await page.goto(origin + "/conversations");
+  await page.getByText("This browser is in guest mode.", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Operations analysis", { exact: true }).count(), 0);
+  await page.getByText("Owner sign in (optional)", { exact: true }).waitFor();
+  simulateGuest = false;
+  await page.goto(origin + "/conversations/" + c);
+  await page.getByText("Historic checkpoint 60", { exact: true }).waitFor();
 
   assert.ok(
     await page.evaluate(
