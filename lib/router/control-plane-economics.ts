@@ -83,3 +83,18 @@ export async function rankControlPlaneByActualCost(
   // curated order is only a tie breaker. Normal admission still guards dispatch.
   return priced.sort((a,b) => a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : a.index-b.index).map(x => x.candidate);
 }
+
+/** No transmission, reservation, attempt ordinal, or receipt is created. */
+export async function quoteSerializedRoutingRequest(provider: LlmProvider, params: ChatGenerateParams) {
+  if (getAccountingScope()?.kind !== 'standalone') return null;
+  const capture: {prepared?: FrozenPreparedRequest} = {};
+  try { await preparation.run(capture, () => provider.generate({...params,
+    // Preparation must not persist a candidate as the executed provider audit.
+    onProviderSystemPrepared: undefined, providerPayloadCaptureTrace: undefined,
+  })); }
+  catch { /* Adapters may wrap the preparation sentinel. */ }
+  const request = capture.prepared;
+  if (!request || request.provider !== provider.name || request.model !== params.modelId) return null;
+  const quote = estimatePreparedRequest(request);
+  return {request_hash: request.hash, endpoint: request.endpoint, ...quote};
+}

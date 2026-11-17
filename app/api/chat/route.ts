@@ -1,3 +1,4 @@
+import { resolveChatRoutingMode } from '@/lib/routing-preferences/server';
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
 import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, retainedPdfExportFileId as resolveRetainedPdfExportFileId, retainedPdfDualFormatFileId as resolveRetainedPdfDualFormatFileId, requiresProfessionalDocumentAcceptance, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
@@ -200,6 +201,7 @@ const requestSchema = z.object({
   attachmentManifest: attachmentManifestSchema.optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
+  routing_mode: z.enum(["best_answer", "best_value"]).optional(),
   routingTraceEnabled: z.boolean().optional(),
   providerPayloadCapture: z.literal(true).optional(),
   activeRepoId: z.string().min(1).optional(),
@@ -773,6 +775,11 @@ async function executeChat(request: NextRequest) {
     const overrideModel = captureCommand ? "claude-sonnet-5" : suppliedOverrideModel;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    // Admission already bound the durable owner/actor/chat. UI mode is only a hint.
+    const routingMode = verifiedWorkflow
+      ? await cachedWorkflowValue('routing-preference-mode', () => resolveChatRoutingMode(
+          {actorId, chatId}, Boolean(overrideProvider || overrideModel)))
+      : undefined;
     let selectedDocumentSource: string | null = null;
     if (documentSourceMessageId) {
       // Explicit selection only. Never pick old documents heuristically from STM
@@ -1707,6 +1714,7 @@ async function executeChat(request: NextRequest) {
       hasManualOverride: Boolean(overrideProvider || overrideModel),
     });
     const controlPlaneConversationContext = [
+      ...(getAccountingScope()?.kind === "standalone" ? [`Actor/persona and memory supplied for response requirements (bounded excerpt): ${persona.length <= 3000 ? persona : persona.slice(0, 1500) + "\n[Actor context excerpt truncated]\n" + persona.slice(-1500)}`] : []),
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4).map(({role,content,createdAt,attachments})=>({
         role,content,createdAt,
@@ -1733,6 +1741,150 @@ async function executeChat(request: NextRequest) {
     let responsePurposeHint: "conversation" | "deliverable" | undefined;
     let projectRelationHint: "new_project" | "same_project" | undefined;
     let routingHints: RoutingHint[] = [];
+    // Stage two quotes the same prepared context and request builder as generation.
+    // Stage one supplies intent before continuity loads any reference image bytes.
+    let generationContext: Awaited<ReturnType<typeof computeGenerationContext>> | undefined;
+    const computeGenerationContext = async (classification?: ResolvedRoutingIntent, fallbackIntent = resolvedRequestIntent, fallbackResponsePurpose = responsePurposeHint) => {
+      const resolvedRequestIntent = classification?.intent ?? fallbackIntent;
+      const resolvedRoutingIntentForReroute = classification;
+      const responsePurposeHint = classification?.responsePurpose ?? fallbackResponsePurpose;
+      const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity(
+        creativeNarrativeRequest, resolvedRequestIntent);
+
+      // Select continuity only after classifying the literal current turn. The
+      // existence of an unresolved audit in this chat is never enough to resume it.
+      // Routing selects execution capabilities, not a different parent task.
+      taskProgress = pdfProgress;
+      projectRelationHint = contextClassification?.projectRelation;
+      const pendingReviewClarification = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
+        message, progress: taskProgress, history, projectRelation: projectRelationHint,
+      });
+      const verifyingSavedDraft = Boolean(pendingReviewClarification &&
+        isSavedDraftVerificationRetry(pendingReviewClarification.pending, message));
+      const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
+        ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
+      documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
+      documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
+      documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
+      // Legacy isolated route test harnesses evaluate function bodies without module
+      // imports; production bundles always supply the typed continuity module.
+      const documentBinding = typeof resolveDurableDocumentRequest === 'function'
+        ? resolveDurableDocumentRequest(message, documentProduction,
+            taskProgress.documentContract, documentSourceMessageId)
+        : { request: documentProduction, contract: undefined };
+      documentProduction = documentBinding.request;
+      if (documentBinding.contract) {
+        // Preserve the original firsthand user-message identifier. A missing
+        // provenance source may not be silently relabeled as the current user.
+        const inheritedSource = documentBinding.contract.provenance === 'inherited-user'
+          ? [...attachmentHistory].reverse().find(turn => turn.role === 'user' &&
+              documentRequest(turn.content)?.pages === documentBinding.request?.pages)?.id
+          : undefined;
+        const originalUserId = documentBinding.contract.sourceUserMessageId ||
+          inheritedSource ||
+          (documentBinding.contract.provenance === 'current-user' ? taskProgressUserMessageId : undefined);
+        if (originalUserId) taskProgress = { ...taskProgress,
+          documentContract: { ...documentBinding.contract, sourceUserMessageId: originalUserId },
+        };
+      }
+      const reviewTaskProgress = savedDraftOriginalTask ? {
+        ...taskProgress,
+        lastUserIntent: "continuation" as const,
+        objective: { text: savedDraftOriginalTask, userMessageId: pendingReviewClarification!.pending.binding?.taskId ?? pendingReviewClarification!.requestId },
+        pending: [],
+      } : taskProgress;
+      if (pendingReviewClarification) {
+        console.info("[ReviewContinuity] Matched current task and question", {
+          requestId, originalRequestId: pendingReviewClarification.requestId,
+          questionMessageId: pendingReviewClarification.questionMessageId,
+          verificationRetry: verifyingSavedDraft, actorId, chatId,
+        });
+      }
+      // A historical ledger is not evidence of pending work unless its source
+      // still binds to this user turn. The task prompt selector already excludes
+      // synthetic conversation projects and unrelated saved assignments.
+      const sourceLinkedPendingWork = Boolean(
+        taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer" &&
+        selectTaskProgressPrompt({
+          message, currentUserMessageId: taskProgressUserMessageId, history,
+          progress: reviewTaskProgress, responsePurpose: "deliverable",
+          managedTask: Boolean(currentAgentTask()),
+          explicitProjectControl, explicitSavedProjectReference,
+          pendingReviewContinuation: false,
+          projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+        }).text
+      );
+      const responsePolicy = decideResponsePolicy({
+        message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
+        hasAttachments: attachments.length > 0 || images.length > 0,
+        requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
+        hasPendingDeliverable: sourceLinkedPendingWork || Boolean(pendingReviewClarification),
+        explicitReviewRetry: verifyingSavedDraft,
+      });
+      const taskProgressPrompt = selectTaskProgressPrompt({
+        message, currentUserMessageId: taskProgressUserMessageId, history,
+        progress: reviewTaskProgress, responsePurpose: responsePolicy.purpose,
+        managedTask: Boolean(currentAgentTask()),
+        explicitProjectControl, explicitSavedProjectReference,
+        pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
+        projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
+      });
+      const taskProgressContext = imageFollowup ? "" : taskProgressPrompt.text;
+      console.info("[TaskProgress] Prompt scope", {
+        requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
+        historyTurnCount: history.length,
+      });
+      const resumptionContext = pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing
+        ? buildReviewResumptionContext(pendingReviewClarification.pending, message) : "";
+      const requiredReviewForRequest = verifyingSavedDraft ||
+        (reviewMode === "always" && responsePolicy.requiresSubstantiveProcessing);
+      console.info("[ResponsePolicy] selected", {
+        requestId, purpose: responsePolicy.purpose, reason: responsePolicy.reason,
+        reviewMode, requiredReview: requiredReviewForRequest,
+        projectId: taskProgress.projectContext?.userMessageId,
+        taskId: taskProgress.objective?.userMessageId,
+      });
+
+      // Restore actor-owned identity anchors before image generation. History text alone
+      // cannot preserve a face. Non-image requests never load image bytes.
+      const visualContinuity = resolvedRequestIntent === "image-generation" && !currentAgentTask()
+        ? await loadVisualContinuity({
+            actorId, chatId, prompt: message, actorName: name, existingImageCount: images.length,
+          })
+        : null;
+      console.info("[VisualContinuity] image reference preflight", {
+        requestId, count: visualContinuity?.references.length ?? 0,
+        subjects: visualContinuity?.references.map(item => item.key) ?? [],
+      });
+
+      return { creativeTextNarrativeRequest, pendingReviewClarification, verifyingSavedDraft, savedDraftOriginalTask, responsePolicy, taskProgressContext, resumptionContext, requiredReviewForRequest, visualContinuity, reviewTaskProgress, documentBinding };
+    };
+    const prepareGenerationContext = async (classification?: ResolvedRoutingIntent) =>
+      generationContext ??= await computeGenerationContext(classification);
+
+    const prepareCandidateRequest = (selectedModelId: string, context: Awaited<ReturnType<typeof prepareGenerationContext>>, classification: ResolvedRoutingIntent | undefined, forReview = false) => {
+      const { creativeTextNarrativeRequest, responsePolicy, taskProgressContext, resumptionContext, visualContinuity } = context;
+      return ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
+        name,
+        persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
+          ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
+          ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
+          ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+        summary,
+        history: historyForProvider,
+        message: forReview ? message : visualContinuity
+          ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\n\nADDITIONAL REQUEST CONTEXT:\n" + messageForGeneration)
+          : messageForGeneration,
+        requestIntent: classification?.intent ?? resolvedRequestIntent,
+        secondaryIntents: storedWebsite.fresh ? [...(classification?.secondaryIntents ?? []), "web-search"] : classification?.secondaryIntents ?? [],
+        images: visualContinuity ? [...visualContinuity.references.map(ref => ref.image), ...images] : images,
+        modelId: selectedModelId,
+        attachments,
+        onProviderSystemPrepared: audit =>
+          saveProviderSystemAudit(actorId, chatId, requestId, audit)
+      }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
+    };
+
     const videoRoutingPolicy = resolveVideoRoutingPolicy(attachments.some(requiresGoogleFileSource), overrideProvider);
 
     if (hasVideoInput) {
@@ -1880,6 +2032,9 @@ async function executeChat(request: NextRequest) {
         actorId,
         actorRoutingProfile,
         routingHints,
+        routing_mode: routingMode,
+        routingRequestParams: async classification => prepareCandidateRequest(
+          "", await prepareGenerationContext(classification), classification),
         routingTraceEnabled,
         routingRequestId: requestId
       });
@@ -1970,107 +2125,13 @@ async function executeChat(request: NextRequest) {
       fallbackChain = filterPricedImageFallbacks(fallbackChain, candidate =>
         Boolean(getModelPrice(candidate.provider.name, candidate.modelId, PRICING_SNAPSHOT)?.imageOutputNanoUsd));
     }
-    const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity(
-      creativeNarrativeRequest, resolvedRequestIntent);
-
-    // Select continuity only after classifying the literal current turn. The
-    // existence of an unresolved audit in this chat is never enough to resume it.
-    // Routing selects execution capabilities, not a different parent task.
-    taskProgress = pdfProgress;
-    projectRelationHint = contextClassification?.projectRelation;
-    const pendingReviewClarification = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
-      message, progress: taskProgress, history, projectRelation: projectRelationHint,
-    });
-    const verifyingSavedDraft = Boolean(pendingReviewClarification &&
-      isSavedDraftVerificationRetry(pendingReviewClarification.pending, message));
-    const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
-      ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
-    documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
-    documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
-    documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
-    // Legacy isolated route test harnesses evaluate function bodies without module
-    // imports; production bundles always supply the typed continuity module.
-    const documentBinding = typeof resolveDurableDocumentRequest === 'function'
-      ? resolveDurableDocumentRequest(message, documentProduction,
-          taskProgress.documentContract, documentSourceMessageId)
-      : { request: documentProduction, contract: undefined };
-    documentProduction = documentBinding.request;
-    if (documentBinding.contract) {
-      // Preserve the original firsthand user-message identifier. A missing
-      // provenance source may not be silently relabeled as the current user.
-      const inheritedSource = documentBinding.contract.provenance === 'inherited-user'
-        ? [...attachmentHistory].reverse().find(turn => turn.role === 'user' &&
-            documentRequest(turn.content)?.pages === documentBinding.request?.pages)?.id
-        : undefined;
-      const originalUserId = documentBinding.contract.sourceUserMessageId ||
-        inheritedSource ||
-        (documentBinding.contract.provenance === 'current-user' ? taskProgressUserMessageId : undefined);
-      if (originalUserId) taskProgress = { ...taskProgress,
-        documentContract: { ...documentBinding.contract, sourceUserMessageId: originalUserId },
-      };
-    }
-    const reviewTaskProgress = savedDraftOriginalTask ? {
-      ...taskProgress,
-      lastUserIntent: "continuation" as const,
-      objective: { text: savedDraftOriginalTask, userMessageId: pendingReviewClarification!.pending.binding?.taskId ?? pendingReviewClarification!.requestId },
-      pending: [],
-    } : taskProgress;
-    if (pendingReviewClarification) {
-      console.info("[ReviewContinuity] Matched current task and question", {
-        requestId, originalRequestId: pendingReviewClarification.requestId,
-        questionMessageId: pendingReviewClarification.questionMessageId,
-        verificationRetry: verifyingSavedDraft, actorId, chatId,
-      });
-    }
-    // A historical ledger is not evidence of pending work unless its source
-    // still binds to this user turn. The task prompt selector already excludes
-    // synthetic conversation projects and unrelated saved assignments.
-    const sourceLinkedPendingWork = Boolean(
-      taskProgress.projectContext && taskProgress.objective && taskProgress.lastUserIntent === "answer" &&
-      selectTaskProgressPrompt({
-        message, currentUserMessageId: taskProgressUserMessageId, history,
-        progress: reviewTaskProgress, responsePurpose: "deliverable",
-        managedTask: Boolean(currentAgentTask()),
-        explicitProjectControl, explicitSavedProjectReference,
-        pendingReviewContinuation: false,
-        projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
-      }).text
-    );
-    const responsePolicy = decideResponsePolicy({
-      message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
-      hasAttachments: attachments.length > 0 || images.length > 0,
-      requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
-      hasPendingDeliverable: sourceLinkedPendingWork || Boolean(pendingReviewClarification),
-      explicitReviewRetry: verifyingSavedDraft,
-    });
-    const taskProgressPrompt = selectTaskProgressPrompt({
-      message, currentUserMessageId: taskProgressUserMessageId, history,
-      progress: reviewTaskProgress, responsePurpose: responsePolicy.purpose,
-      managedTask: Boolean(currentAgentTask()),
-      explicitProjectControl, explicitSavedProjectReference,
-      pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
-      projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
-    });
-    const taskProgressContext = imageFollowup ? "" : taskProgressPrompt.text;
-    console.info("[TaskProgress] Prompt scope", {
-      requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
-      historyTurnCount: history.length,
-    });
-    const resumptionContext = pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing
-      ? buildReviewResumptionContext(pendingReviewClarification.pending, message) : "";
-    const requiredReviewForRequest = verifyingSavedDraft ||
-      (reviewMode === "always" && responsePolicy.requiresSubstantiveProcessing);
-    console.info("[ResponsePolicy] selected", {
-      requestId, purpose: responsePolicy.purpose, reason: responsePolicy.reason,
-      reviewMode, requiredReview: requiredReviewForRequest,
-      projectId: taskProgress.projectContext?.userMessageId,
-      taskId: taskProgress.objective?.userMessageId,
-    });
+    const { creativeTextNarrativeRequest, pendingReviewClarification, verifyingSavedDraft, savedDraftOriginalTask, responsePolicy, requiredReviewForRequest, visualContinuity, reviewTaskProgress, documentBinding } = await prepareGenerationContext(resolvedRoutingIntentForReroute);
 
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
     // and unrelated factual questions retain the router's original decision.
-    if (creativeTextNarrativeRequest && !storedWebsite.fresh) {
+    // Standalone selection belongs to the LLM; keep the legacy orchestration path isolated.
+    if (getAccountingScope()?.kind !== "standalone" && creativeTextNarrativeRequest && !storedWebsite.fresh) {
       const claude = providers.find(candidate => candidate.name === "anthropic");
       if (claude) {
         try {
@@ -2466,18 +2527,6 @@ ${savedProjectSourceWarning.retainedObjective}`;
       included: personaForGeneration.includes("KATIE_RUNTIME_CONTEXT:")
     });
 
-    // Restore actor-owned identity anchors before image generation. History text alone
-    // cannot preserve a face. Non-image requests never load image bytes.
-    const visualContinuity = resolvedRequestIntent === "image-generation" && !currentAgentTask()
-      ? await loadVisualContinuity({
-          actorId, chatId, prompt: message, actorName: name, existingImageCount: images.length,
-        })
-      : null;
-    console.info("[VisualContinuity] image reference preflight", {
-      requestId, count: visualContinuity?.references.length ?? 0,
-      subjects: visualContinuity?.references.map(item => item.key) ?? [],
-    });
-
     const imageGenerationRequested = resolvedRequestIntent === "image-generation";
     // Bound once per request. Assigned only after exact attachment selection,
     // persistence, ownership, and retained-source checks succeed.
@@ -2664,26 +2713,10 @@ ${savedProjectSourceWarning.retainedObjective}`;
                   summary,
                 })
               : undefined;
-            const createParams = (selectedModelId: string, forReview = false) =>
-              ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), providerPayloadCaptureTrace: ownerCaptureTrace, ...buildGenerationParams({
-                name,
-                persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
-                  ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
-                  ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
-                  ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
-                summary,
-                history: historyForProvider,
-                message: forReview ? message : visualContinuity
-                  ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\n\nADDITIONAL REQUEST CONTEXT:\n" + messageForGeneration)
-                  : messageForGeneration,
-                requestIntent: resolvedRequestIntent,
-                secondaryIntents: storedWebsite.fresh ? [...(resolvedRoutingIntentForReroute?.secondaryIntents ?? []), "web-search"] : resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
-                images: visualContinuity ? [...visualContinuity.references.map(ref => ref.image), ...images] : images,
-                modelId: selectedModelId,
-                attachments,
-                onProviderSystemPrepared: audit =>
-                  saveProviderSystemAudit(actorId, chatId, requestId, audit)
-              }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
+            const createParams = (selectedModelId: string, forReview = false) => ({
+              ...prepareCandidateRequest(selectedModelId, generationContext!, resolvedRoutingIntentForReroute, forReview),
+              providerPayloadCaptureTrace: ownerCaptureTrace,
+            });
 
             if (!verifyingSavedDraft && shouldRunChunkedWorkflow(message, attachments)) {
               const chunkWorkflowSummary = await analyzeChunkedAttachments({
@@ -3411,6 +3444,9 @@ ${chunkWorkflowSummary}`;
                   actorId,
                   actorRoutingProfile,
                   routingHints,
+                  routing_mode: routingMode,
+                  routingRequestParams: async classification => prepareCandidateRequest(
+                    "", await prepareGenerationContext(classification), classification),
                   routingTraceEnabled,
                   routingRequestId: `${requestId}:refusal-reroute-${refusalRerouteCount}`,
                   resolvedIntent: {
@@ -3623,6 +3659,9 @@ ${chunkWorkflowSummary}`;
                     actorId,
                     actorRoutingProfile,
                     routingHints,
+                    routing_mode: routingMode,
+                    routingRequestParams: async classification => prepareCandidateRequest(
+                      "", await prepareGenerationContext(classification), classification),
                     routingTraceEnabled,
                     routingRequestId: `${requestId}:error-reroute-${errorRerouteCount}`,
                     resolvedIntent: {

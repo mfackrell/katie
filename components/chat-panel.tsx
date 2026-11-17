@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { RoutingPreferenceControls, useRoutingPreferences } from "@/components/routing-preferences";
 import { createPortal } from "react-dom";
 import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
@@ -896,6 +897,7 @@ export function ChatPanel({
     return()=>window.removeEventListener("standalone-accounting-resume",listener);
   },[actorId,chatId]);
 
+  const routingPreferences = useRoutingPreferences(actorId, chatId);
   const [meta, setMeta] = useState<{ provider: string; model: string } | null>(
     null,
   );
@@ -1811,6 +1813,7 @@ export function ChatPanel({
           images: requestImages,
           fileReferences: refsToSend,
           attachmentManifest: countCurrentAttachments([...priorReferences,...filesToUpload.map(file=>({mimeType:file.type})),...videosToUpload.map(file=>({mimeType:file.type}))],composerImages.map(image=>image.preview)),
+          ...(routingPreferences.value && !selectedOverride ? { routing_mode: routingPreferences.value.effective } : {}),
           overrideProvider: selectedOverride?.providerName,
           overrideModel: selectedOverride?.modelId,
           activeRepoId: activeRepoId || undefined,
@@ -3049,6 +3052,7 @@ export function ChatPanel({
                   />
                   <span>Live activity</span>
                 </label>
+                <RoutingPreferenceControls preferences={routingPreferences} />
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
                   const selectedValue =

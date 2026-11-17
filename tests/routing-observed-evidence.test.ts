@@ -1,0 +1,133 @@
+import test, {mock} from 'node:test';
+import * as admin from '@/lib/data/supabase/admin';
+import assert from 'node:assert/strict';
+import { OpenAiProvider } from '@/lib/providers/openai-provider';
+import { ClaudeProvider } from '@/lib/providers/claude-provider';
+import { quoteSerializedRoutingRequest } from '@/lib/router/control-plane-economics';
+import { resolveRoutingEvidence, expectedCost, qualityFromObservations, type ObservedRoutingRow } from '@/lib/router/observed-evidence';
+import { getAccountingScope, runWithStandaloneAccounting } from '@/lib/standalone-accounting/context';
+import { buildCandidateMetadata } from '@/lib/router/model-intent';
+import { estimatePreparedRequest, prepareStandaloneRequest } from '@/lib/standalone-accounting/estimate';
+
+const owner = {userId:'test-owner',actorId:'test-actor',chatId:'test-chat',requestId:'test-request'};
+const tasks = [
+  'Hello Katie', 'Reconcile debt covenants and write a board memo',
+  'Implement idempotent payment recovery', 'Continue the poem in my voice',
+  'Help me write an emotionally careful reply', 'Explain the screenshot',
+];
+for (const task of tasks) test(`native serialized pricing includes full request without paid probes: ${task}`, async () => {
+  const fetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {calls++; throw Error('No network in quotation tests');};
+  try {
+    await runWithStandaloneAccounting(owner, async () => {
+      const params = {name:'Katie',persona:'Keep my actor voice. '.repeat(100), summary:'Earlier source evidence',
+        history:[{role:'user' as const,content:'Retain these continuity details. '.repeat(100)}],user:task};
+      const quotes = [];
+      for (const [provider,model] of [[new OpenAiProvider('test-only-key'),'gpt-4o-mini'],[new ClaudeProvider('test-only-key'),'claude-sonnet-4-6']] as const) {
+        const quote = await quoteSerializedRoutingRequest(provider,{...params,modelId:model});
+        assert.ok(quote); assert.equal(quote.status,'estimated',JSON.stringify(quote.issues));
+        assert.ok(quote.inputTokens > params.user.length + params.persona.length);
+        assert.ok(quote.outputAllowance > 1024);
+        assert.match(quote.request_hash,/^[a-f0-9]{64}$/);
+        assert.ok(BigInt(quote.estimatedCostMicrousd!) > 0n);
+        const changed = await quoteSerializedRoutingRequest(provider,{...params,modelId:model,summary:'different memory'});
+        assert.notEqual(changed?.request_hash,quote.request_hash);
+        quotes.push(quote);
+      }
+      assert.notEqual(quotes[0].estimatedCostMicrousd,quotes[1].estimatedCostMicrousd);
+      const scope = getAccountingScope();
+      assert.equal(scope?.kind === 'standalone' ? scope.counter.size : -1,0);
+    });
+    assert.equal(calls,0,'quotation must stop before every provider transmission');
+  } finally {globalThis.fetch=fetch;}
+});
+const row = (provider='openai',model='gpt-4o-mini', overrides: Partial<ObservedRoutingRow> = {}): ObservedRoutingRow => ({
+  request_id:'prior-delivery',observed_at:new Date().toISOString(),provider,model,intent:'rewrite',status:'pass',
+  reason:'explicit_output_present',output_tokens:50,cache_hit_tokens:0,attempts:1,...overrides,
+});
+test('quality observations retain provenance, recency, sample count and limits; missing evidence is unknown', () => {
+  const rows = [row(), row('openai','gpt-4o-mini',{request_id:'failed-delivery',status:'fail'}),
+    row('openai','gpt-4o-mini',{intent:'code-generation'}),
+    row('openai','gpt-4o-mini',{observed_at:'2020-01-01T00:00:00Z'}),
+    row('openai','gpt-4o-mini',{observed_at:'2099-01-01T00:00:00Z'})];
+  const known = qualityFromObservations(rows,'openai','gpt-4o-mini','rewrite');
+  assert.equal(known.observations[0].sample_count,2);
+  assert.equal(known.observations[0].passes,1); assert.equal(known.observations[0].failures,1);
+  assert.deepEqual(known.observations[0].provenance,['prior-delivery','failed-delivery']);
+  assert.match(known.observations[0].uncertainty,/no correctness/);
+  assert.deepEqual(qualityFromObservations(rows,'anthropic','claude-sonnet-4-6','rewrite'),{status:'unknown',observations:[]});
+  assert.doesNotMatch(JSON.stringify(known),/quality_score|ranking/);
+});
+function quote(model: string, media = false, textLength = 10000) {
+  // Immutable PNG header with known 512x512 dimensions; no URL is fetched.
+  const png = Buffer.alloc(24); Buffer.from([137,80,78,71,13,10,26,10]).copy(png);png.writeUInt32BE(512,16);png.writeUInt32BE(512,20);
+  const prepared = prepareStandaloneRequest('openai',model,'/v1/chat/completions',{model,max_tokens:1,
+    messages:[{role:'user',content: media ? [{type:'text',text:'a'.repeat(textLength)},
+      {type:'image_url',image_url:{url:'data:image/png;base64,'+png.toString('base64'),detail:'high'}}] : 'a'.repeat(textLength)}]});
+  return {request_hash:prepared.hash,endpoint:prepared.endpoint,...estimatePreparedRequest(prepared)};
+}
+const cost = (model:string, rows:ObservedRoutingRow[], media=false) => expectedCost('openai',model,quote(model,media),rows,'123');
+const value = (c:ReturnType<typeof cost>) => BigInt(c.expected_generation_plus_observed_overhead_micro_usd!);
+test('reviewed candidate prices change the cost winner with observed retries and cache hits', () => {
+  const mini = row(), full = row('openai','gpt-4.1');
+  assert.ok(value(cost(mini.model,[mini])) < value(cost(full.model,[full])));
+  assert.ok(value(cost(mini.model,[{...mini,attempts:30}])) > value(cost(full.model,[full])));
+  const expensive = cost('gpt-4.1',[full]);
+  const cached = cost('gpt-4.1',[{...full,cache_hit_tokens:10000}]);
+  assert.ok(value(cached) < value(expensive));
+  assert.equal(cost(mini.model,[]).expected_generation_plus_observed_overhead_micro_usd,null);
+  assert.equal(cost(mini.model,[mini]).expected_all_in_micro_usd,null,'without helper receipts total overhead is unknown');
+  const allIn = cost(mini.model,[{...mini,overhead_micro_usd:'999'}]);
+  assert.equal(value(allIn) + 876n, BigInt(allIn.expected_all_in_micro_usd!));
+  assert.equal(allIn.overhead_sample_count,1);
+});
+test('native image token pricing can reverse a real priced model comparison', () => {
+  const a = row(), b = row('openai','gpt-4.1');
+  assert.ok(value(cost(a.model,[a])) < value(cost(b.model,[b])));
+  // Small text contexts make the mini model visual tile tariff dominate.
+  const mini = quote('gpt-4o-mini',true,1), full = quote('gpt-4.1',true,1);
+  assert.equal(mini.status,'estimated'); assert.equal(full.status,'estimated');
+  assert.ok(mini.imageTokens > full.imageTokens);
+  assert.ok(BigInt(mini.estimatedCostMicrousd!) > BigInt(full.estimatedCostMicrousd!));
+  assert.notEqual(mini.request_hash,quote('gpt-4o-mini').request_hash);
+});
+test('quotation outside standalone accounting never invokes a provider', async () => {
+  const provider = new OpenAiProvider('test-only');
+  provider.generate = async () => {throw Error('must not invoke');};
+  assert.equal(await quoteSerializedRoutingRequest(provider,{name:'K',persona:'',summary:'',history:[],user:'Hi',modelId:'gpt-4o-mini'}),null);
+});
+
+test('runtime resolver uses admitted identity, observed task evidence and serialized candidate payloads', async () => {
+  let rpcCalls = 0;
+  const db = mock.method(admin,'getSupabaseAdminClient',() => ({rpc: async (name:string,args:Record<string,string>) => {
+    rpcCalls++;
+    assert.equal(name,'standalone_routing_observations');
+    assert.deepEqual(args,{p_owner:owner.userId,p_actor:owner.actorId,p_chat:owner.chatId,p_request:owner.requestId,p_intent:'rewrite'});
+    return {data:{observations:[row()],overhead_micro_usd:'123'},error:null};
+  }} as unknown as ReturnType<typeof admin.getSupabaseAdminClient>));
+  try {
+    const provider = new OpenAiProvider('test-only');
+    const result = await runWithStandaloneAccounting(owner,() => resolveRoutingEvidence([
+      buildCandidateMetadata('openai','gpt-4o-mini','rewrite'),buildCandidateMetadata('openai','gpt-4.1','rewrite'),
+    ],[provider],{name:'Katie',persona:'actor persona',summary:'memory',history:[],user:'Rewrite this'},'rewrite'));
+    assert.equal(rpcCalls,1);
+    assert.equal(result.candidates['openai:gpt-4o-mini'].quality.observations[0].sample_count,1);
+    assert.deepEqual(result.candidates['openai:gpt-4.1'].quality,{status:'unknown',observations:[]});
+    assert.match(JSON.stringify(result.candidates['openai:gpt-4o-mini'].economics),/serialized_request/);
+    const before = rpcCalls;
+    assert.deepEqual(await resolveRoutingEvidence([],[],undefined,'rewrite'),{overhead:{status:'unknown'},candidates:{}});
+    assert.equal(rpcCalls,before,'orchestrator calls cannot read standalone evidence');
+  } finally {db.mock.restore();}
+});
+
+test('unverified text quality still supplies trusted economic history', () => {
+  const unverified = row('openai','gpt-4o-mini',{status:'unverified',overhead_micro_usd:'25'});
+  assert.deepEqual(qualityFromObservations([unverified],unverified.provider,unverified.model,'rewrite'),
+    {status:'unknown',observations:[]});
+  const economic = cost(unverified.model,[unverified]);
+  assert.equal(economic.sample_count,1);
+  assert.equal(economic.expected_output_tokens,1); // This fixture quote has a one-token output ceiling.
+  assert.equal(economic.expected_attempts,1);
+  assert.match(economic.expected_all_in_micro_usd!,/^[0-9]+$/);
+});

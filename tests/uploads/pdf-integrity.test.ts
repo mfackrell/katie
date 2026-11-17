@@ -5,6 +5,7 @@ import { runWithOrchestratorAccounting } from "../../lib/standalone-accounting/c
 const test = (name: string, fn: () => void | Promise<void>) =>
     nodeTest(name, () => runWithOrchestratorAccounting(fn));
 import assert from "node:assert/strict";
+import ts from "typescript";
 import { createStoredUploadService } from "../../lib/uploads/stored-uploads";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -188,7 +189,24 @@ test("production generation and independent review use the same attachment evide
     const inspected = route.indexOf("pdf.pdfEvidence=await inspectSavedPdf");
     const assembled = route.indexOf("const createParams =", inspected);
     assert.ok(inspected > 0 && assembled > inspected);
-    assert.match(route.slice(assembled, assembled + 1600), /attachments,/);
+    const ast = ts.createSourceFile("route.ts", route, ts.ScriptTarget.Latest, true);
+    const declaration = (name: string) => {
+        const matches: ts.VariableDeclaration[] = [];
+        const visit = (node: ts.Node) => {
+            if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) matches.push(node);
+            ts.forEachChild(node, visit);
+        };
+        visit(ast);
+        assert.equal(matches.length, 1, `Production route must have one ${name} declaration`);
+        return matches[0];
+    };
+    const builder = declaration("prepareCandidateRequest");
+    const createParams = declaration("createParams");
+    assert.match(builder.getText(ast), /\battachments,/);
+    assert.match(builder.getText(ast), /forReview \? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE/);
+    assert.equal(createParams.getStart(ast), assembled + "const ".length);
+    assert.match(createParams.getText(ast), /prepareCandidateRequest\(selectedModelId, generationContext!, resolvedRoutingIntentForReroute, forReview\)/);
+    assert.match(createParams.getText(ast), /forReview = false/);
     assert.match(route, /inspectSavedPdf\(chatId,source,actorId,pdfPageTaskForSource\(pdfSourceTask, pdf.fileName/);
     assert.match(route, /const pdfTaskContext = pdfReviewContinuation/);
     const assessment = route.slice(route.indexOf("assessmentParams:"));
