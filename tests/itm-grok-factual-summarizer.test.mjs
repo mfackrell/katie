@@ -525,7 +525,7 @@ test("previous metered Grok batch routes to native Claude without another Grok t
   assert.equal(h.memory().sourceMessageCount,30);
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
   assert.equal(h.events.filter(e=>e.name==="claim_intermediate_memory_batch").length,1);
-  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v14.*:anthropic$/);
+  assert.match(h.events.find(e=>e.name==="claim_intermediate_memory_batch").args.p_processor_version,/v15.*:anthropic$/);
 });
 
 test("previously sent Claude source batch never reverses fallback to Grok",async()=>{
