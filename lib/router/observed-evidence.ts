@@ -7,7 +7,7 @@ import type { ChatGenerateParams, LlmProvider } from '@/lib/providers/types';
 
 export type ObservedRoutingRow = {
   request_id: string; observed_at: string; provider: string; model: string;
-  status: 'pass' | 'fail'; reason: string; intent: string;
+  status: 'pass' | 'fail' | 'unverified'; reason: string; intent: string;
   output_tokens: number | null; cache_hit_tokens: number | null; attempts: number;
   overhead_micro_usd?: string | null;
 };
@@ -60,6 +60,7 @@ export function expectedCost(provider: LlmProvider['name'], model: string,
   const allIn = expected !== null && projectedOverhead !== null && overhead !== null
     ? (BigInt(expected) - BigInt(overhead) + projectedOverhead).toString() : null;
   return {source: 'serialized provider preparation and scoped observed receipts', serialized_request: quote,
+    unresolved_enrichment: ['Selected-model runtime metadata', 'Later chunked attachment analysis, collaboration/research and review results'],
     expected_output_tokens: output, expected_cache_hit_tokens: cache, expected_attempts: attempts,
     sample_count: valid.length, provenance: valid.map(row => row.request_id),
     latest_observation: valid.map(row => row.observed_at).sort().at(-1) ?? null,

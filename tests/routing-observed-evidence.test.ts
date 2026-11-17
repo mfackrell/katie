@@ -120,3 +120,14 @@ test('runtime resolver uses admitted identity, observed task evidence and serial
     assert.equal(rpcCalls,before,'orchestrator calls cannot read standalone evidence');
   } finally {db.mock.restore();}
 });
+
+test('unverified text quality still supplies trusted economic history', () => {
+  const unverified = row('openai','gpt-4o-mini',{status:'unverified',overhead_micro_usd:'25'});
+  assert.deepEqual(qualityFromObservations([unverified],unverified.provider,unverified.model,'rewrite'),
+    {status:'unknown',observations:[]});
+  const economic = cost(unverified.model,[unverified]);
+  assert.equal(economic.sample_count,1);
+  assert.equal(economic.expected_output_tokens,1); // This fixture quote has a one-token output ceiling.
+  assert.equal(economic.expected_attempts,1);
+  assert.match(economic.expected_all_in_micro_usd!,/^[0-9]+$/);
+});

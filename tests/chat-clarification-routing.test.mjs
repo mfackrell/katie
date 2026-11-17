@@ -60,6 +60,7 @@ const documentSelection = code(statement(declaration('documentProduction')));
 const collaborationGate = blockBetween(statement(declaration('websiteResearchRequired')), statement(declaration('collaborationEnabledForRequest')));
 const generationParams = code(unique(findNodes(node => ts.isFunctionDeclaration(node) &&
   node.name?.text === 'buildGenerationParams'), 'buildGenerationParams function'));
+const prepareCandidateRequest = code(statement(declaration('prepareCandidateRequest')));
 const createParams = code(statement(declaration('createParams')));
 const enqueueDelta = code(statement(declaration('enqueueDelta')));
 const runAttempt = code(unique(findNodes(node => ts.isPropertyAssignment(node) &&
@@ -234,6 +235,9 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     const visualContinuity = null; // The fixture exercises non-image review routing.
     const imageGenerationRequested = false; // Mirror the real route's resolved image intent in this non-image route slice.
     const creativeTextNarrativeRequest = false; // Non-image review fixture has no fictional narrative; mirror the production intent gate.
+    const generationContext = {responsePolicy, taskProgressContext, resumptionContext,
+      creativeTextNarrativeRequest, visualContinuity};
+    ${prepareCandidateRequest}
     ${createParams}
     ${enqueueDelta}
     const execute = ${runAttempt};

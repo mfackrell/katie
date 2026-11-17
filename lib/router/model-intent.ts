@@ -2399,6 +2399,9 @@ Rules:
 
 /** Reviewed prices, native request quotes and scoped observed outcomes inform stage two. */
 export function buildNeutralDecisionEvidence(candidate: CandidateMetadata, prompt: string, context = "", registryLookup?: RegistryLookup, evidence?: RoutingEvidence["candidates"][string]) {
+  // Retain the public call signature; text length cannot establish request cost.
+  void prompt;
+  void context;
   const registry = lookupRegistryModel(registryLookup, candidate.providerName, candidate.modelId);
   const price = getModelPrice(candidate.providerName, candidate.modelId);
   return {

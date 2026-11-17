@@ -30,7 +30,8 @@ begin
   where w.owner_id=p_owner and w.actor_id=p_actor and w.chat_id=p_chat
    and w.request_id<>p_request and w.status='completed' and w.updated_at>=now()-interval '30 days'
    and w.checkpoints->'routing-delivery-audit:v1'->>'classifiedIntent'=p_intent
-   and w.checkpoints->'routing-delivery-audit:v1'->>'status' in ('pass','fail')
+   -- Economic receipts remain useful when answer quality cannot be verified.
+   -- Quality eligibility is applied independently by the evidence resolver.
   order by w.updated_at desc limit 100
  ) e;
  select case when count(*)>0 and count(*) filter(where state<>'settled')=0 then coalesce(sum(actual_microusd),0)::text else null end into overhead

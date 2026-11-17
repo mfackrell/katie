@@ -13,6 +13,75 @@ review, transplant its resulting patch commit onto original PR #1081 branch
 No commit SHA is claimed for this uncommitted working tree. Do not merge or
 release based on these local results alone.
 
+## Repair review follow-up (2026-11-17)
+
+These receipts supersede the earlier local validation below. This repair is
+uncommitted; the workflow must identify its eventual commit before transplantation
+onto the same original #1081 branch. Nothing was pushed, merged or deployed.
+
+- `supabase/migrations/20261117150000_routing_observations.sql` now admits scoped,
+  completed same-task history independently of delivery-audit pass/fail status.
+  `lib/router/observed-evidence.ts` accepts `unverified` rows for economics while
+  retaining unknown quality, and lists unresolved later request enrichment.
+- `app/api/chat/route.ts` shares candidate request construction between initial
+  routing, both reroutes and generation. `lib/router/master-router.ts` supplies
+  stage-one classification to deferred context preparation before stage two.
+  Preparation includes task progress, document/response/resumption/creative
+  instructions, secondary web search, visual-continuity prompts and reference
+  images. Context and reference bytes are loaded once, after intent classification.
+  Selected-model runtime metadata and later chunking/research/review enrichment
+  remain explicitly unresolved at initial quotation time.
+- `lib/router/control-plane-economics.ts` strips audit/capture callbacks while
+  quoting, preventing candidate preparation from persisting an execution audit.
+  `lib/router/model-intent.ts` retains legacy unused argument compatibility while
+  fixing the lint failure found by the build.
+- `tests/routing-generation-preparation.test.ts` executes the route's actual
+  routing/generation closures for visual continuity and secondary web search,
+  checks instruction/media parity and native serialized request hashes, and
+  verifies that quotes do not persist execution audits.
+  `tests/chat-clarification-routing.test.mjs` loads the shared production builder
+  in its existing AST fixture; all assertions are retained.
+  `tests/routing-observed-evidence.test.ts` adds unverified-quality economic
+  history coverage. `tests/routing-preferences-postgres.test.mjs` now stores the
+  real written-delivery audit, seeds settled output/cache/retry/helper receipts,
+  and connects the real SQL RPC to the runtime resolver while requiring quality
+  to remain unknown. The PostgreSQL-to-resolver regression is implemented but
+  **not locally qualified** because the server cannot bind its temporary socket.
+
+Verified on Node 24.22.2:
+
+- `npm run typecheck`, test TypeScript compilation, `npm run build`,
+  `node --check tests/routing-preferences-postgres.test.mjs`, and
+  `git diff --check`: PASS. Build retains an existing React hook warning.
+- Fourteen files through the unchanged strict reporter: **162 tests PASS**, zero
+  failed/cancelled/skipped/todo and completed=tests=passed in every report:
+  preparation 2, observed evidence 12, neutral two-stage routing 34, preferences
+  11, control-plane economics 6, model-intent routing 7, decision audit 11,
+  delivery audit 7, final runtime context 2, video routing 8, document routing 3,
+  clarification/review routing 21, attachment integrity 16, agent runtime 22.
+  Logs and reporter JSON are `/tmp/repair-<test-file-stem>.log` and
+  `/tmp/repair-<test-file-stem>-report.json`.
+- Required PostgreSQL test: BLOCKED/FAIL, PostgreSQL 16.15 cannot bind the private
+  Unix socket (`Operation not permitted`); log `/tmp/repair-postgres.log`.
+- Required browser test: BLOCKED/FAIL in both viewports, Chromium aborts at
+  `sandbox_host_linux.cc` with `shutdown: Operation not permitted`;
+  log `/tmp/repair-browser.log`. No test or guard was skipped or weakened.
+- Full `ci:gate` attempted with `KATIE_TEST_PG_BIN=/usr/lib/postgresql/16/bin`;
+  stopped after repeated sandbox `spawnSync ... EPERM` failures. No full-gate
+  pass is claimed; log `/tmp/repair-gate.log`. URL checker has the same child
+  process restriction (`/tmp/repair-url.log`). Standalone smoke failed because
+  `next start` exited before completion (`/tmp/repair-smoke.log`).
+- The supplied prior `agent-test.log` failed exactly two ITM files due to their
+  conditional PG skips when `KATIE_TEST_PG_BIN` was absent. On the isolated runner,
+  export that variable for the entire gate, not just the routing PG invocation.
+  No unrelated ITM source or tests were changed.
+
+Release qualification remains blocked on the unchanged required native PG,
+browser, full gate and independent review. Use the isolated runner recipe below;
+no single-user SQL run or unit test substitutes for those requirements. Build and
+compilation logs are `/tmp/repair-build.log`, `/tmp/repair-typecheck.log` and
+`/tmp/repair-compile.log`. The checksum manifest is refreshed for this repair.
+
 ## Corrections beyond the recovered source
 
 - `app/api/chat/route.ts`: pass assembled actor/persona, memory/summary, full
@@ -117,7 +186,8 @@ mkdir -p .test-dist/node_modules
 ln -sfn .. .test-dist/node_modules/@
 KATIE_TEST_REPORT_PATH=/tmp/routing-evidence.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs .test-dist/tests/routing-observed-evidence.test.js
 KATIE_TEST_REPORT_PATH=/tmp/routing-browser.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/routing-preferences-browser.test.mjs
-KATIE_TEST_PG_BIN=/usr/lib/postgresql/18/bin KATIE_TEST_REPORT_PATH=/tmp/routing-pg.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/routing-preferences-postgres.test.mjs
+export KATIE_TEST_PG_BIN=/usr/lib/postgresql/18/bin
+KATIE_TEST_REPORT_PATH=/tmp/routing-pg.json node --experimental-test-isolation=none --test-reporter=./scripts/test-reporter.mjs tests/routing-preferences-postgres.test.mjs
 npm run ci:gate
 ```
 

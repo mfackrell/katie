@@ -1,4 +1,5 @@
-import test from 'node:test';
+import test, {mock} from 'node:test';
+import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 import {readFileSync, mkdtempSync, rmSync, existsSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
@@ -64,7 +65,17 @@ test('native preference migration denies browser roles and enforces durable scop
     await client.query(readFileSync('supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql','utf8'));
     await client.query(readFileSync('supabase/migrations/20261117150000_routing_observations.sql','utf8'));
     await client.query('insert into standalone_owner_bindings(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
-    const audit = {status:'pass',reason:'explicit_output_present',classifiedIntent:'rewrite',provider:'openai',model:'gpt-4o-mini'};
+    const compiled = createRequire(new URL('../.test-dist/routing-postgres.cjs', import.meta.url));
+    const {auditRoutingDelivery} = compiled('./lib/router/routing-delivery-audit');
+    const {resolveRoutingEvidence} = compiled('./lib/router/observed-evidence');
+    const {runWithStandaloneAccounting} = compiled('./lib/standalone-accounting/context');
+    const {buildCandidateMetadata} = compiled('./lib/router/model-intent');
+    const {OpenAiProvider} = compiled('./lib/providers/openai-provider');
+    const admin = compiled('./lib/data/supabase/admin');
+    const audit = {...auditRoutingDelivery({userMessage:'Rewrite this email', selectedIntent:'rewrite',
+      answer:'Dear team, here is the revised plan.', imageCount:0}),
+      classifiedIntent:'rewrite',provider:'openai',model:'gpt-4o-mini'};
+    assert.equal(audit.status,'unverified','actual successful written-delivery audit cannot certify quality');
     for (const [request,intent,age] of [['relevant','rewrite','1 day'],['other-task','code-generation','1 day'],['stale','rewrite','40 days']]) {
       await client.query(`insert into standalone_workflows(owner_id,actor_id,chat_id,request_id,request_hash,request_body,status,checkpoints,updated_at)
         values($1,$2,$3,$4,repeat('a',64),'{}','completed',$5,now()-$6::interval)`,
@@ -83,10 +94,43 @@ test('native preference migration denies browser roles and enforces durable scop
     assert.equal(observed.observations[0].output_tokens,null,'no receipts means unknown usage');
     assert.equal(observed.observations[0].overhead_micro_usd,null,'no helper receipts means unknown overhead');
     assert.equal(observed.overhead_micro_usd,null,'no current receipts means unknown overhead');
+    await client.query('reset role');
+    await client.query("insert into standalone_pricing_versions(version,metadata) values('test','{}')");
+    const receipt = async (request, key, category, usage, cost) => client.query(`
+      insert into standalone_provider_attempts(owner_id,actor_id,chat_id,request_id,attempt_key,
+       prepared_hash,prepared_payload,source_prepared_hash,base_attempt_key,pricing_version,provider,model,
+       category,preflight_estimate,estimator_version,reason,state,reserved_microusd,actual_microusd,
+       budget_revision,usage,provider_receipt_id)
+      values($1,$2,$3,$4,$5,repeat('a',64),'{}',repeat('a',64),$5,'test','openai','gpt-4o-mini',
+       $6,'{}','test','test','settled',$8,$8,1,$7,$4||$5)`,
+      [owner,actor,chat,request,key,category,usage,cost]);
+    await receipt('relevant','chat:0','chat',{outputTokens:80,cachedInputTokens:12},'40');
+    await receipt('relevant','chat:1','chat',{outputTokens:120,cachedInputTokens:8},'50');
+    await receipt('relevant','helper:0','routing',{outputTokens:5,cachedInputTokens:0},'23');
+    await receipt('current','helper:0','routing',{outputTokens:5,cachedInputTokens:0},'17');
+    await client.query('set role service_role');
+    const database = mock.method(admin,'getSupabaseAdminClient',() => ({rpc: async (name, input) => {
+      assert.equal(name,'standalone_routing_observations');
+      return {data:(await client.query(rpc,[input.p_owner,input.p_actor,input.p_chat,input.p_request,input.p_intent])).rows[0].evidence,error:null};
+    }}));
+    try {
+      const result = await runWithStandaloneAccounting({userId:owner,actorId:actor,chatId:chat,requestId:'current'},
+        () => resolveRoutingEvidence([buildCandidateMetadata('openai','gpt-4o-mini','rewrite')],
+          [new OpenAiProvider('test-only')],{name:'Katie',persona:'Actor voice',summary:'',history:[],user:'Rewrite my next email'},'rewrite'));
+      const candidate = result.candidates['openai:gpt-4o-mini'];
+      assert.deepEqual(candidate.quality,{status:'unknown',observations:[]});
+      assert.equal(candidate.economics.expected_output_tokens,100);
+      assert.equal(candidate.economics.expected_cache_hit_tokens,10);
+      assert.equal(candidate.economics.expected_attempts,2);
+      assert.deepEqual(candidate.economics.provenance,['relevant']);
+      assert.equal(candidate.economics.expected_total_control_plane_micro_usd,'23');
+      assert.match(candidate.economics.expected_all_in_micro_usd,/^[0-9]+$/);
+    } finally {database.mock.restore();}
     await assert.rejects(client.query(rpc,[owner,'44444444-4444-4444-8444-444444444444',chat,'current','rewrite']),/STANDALONE_SCOPE_DENIED/);
     await assert.rejects(client.query(rpc,['44444444-4444-4444-8444-444444444444',actor,chat,'current','rewrite']),/STANDALONE_SCOPE_DENIED/);
     await client.query('reset role');
     // Remove private ledger references before checking preference FK cascades.
+    await client.query('delete from standalone_provider_attempts');
     await client.query('delete from standalone_workflows');
     await client.query('delete from standalone_owner_bindings');
     await client.query('delete from chats where id=$1', [chat]);

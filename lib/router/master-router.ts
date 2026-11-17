@@ -709,7 +709,7 @@ export async function chooseProvider(
   context: string,
   providers: LlmProvider[],
   options?: {
-    routingRequestParams?: Omit<import("@/lib/providers/types").ChatGenerateParams, "modelId">;
+    routingRequestParams?: Omit<import("@/lib/providers/types").ChatGenerateParams, "modelId"> | ((intent: ResolvedRoutingIntent) => Promise<Omit<import("@/lib/providers/types").ChatGenerateParams, "modelId">>);
     routing_mode?: import("@/lib/router/model-intent").RoutingMode;
     diverseFallbackProviders?: boolean;
     decisionCandidatesPerProvider?: number;
@@ -1229,7 +1229,7 @@ export async function chooseProvider(
     }
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
-      requestEvidence: neutral ? await resolveRoutingEvidence(llmCandidatesUsed, providers, options?.routingRequestParams, intent) : undefined,
+      requestEvidence: neutral ? await resolveRoutingEvidence(llmCandidatesUsed, providers, typeof options?.routingRequestParams === "function" ? await options.routingRequestParams(resolvedIntent) : options?.routingRequestParams, intent) : undefined,
       routing_mode: options?.routing_mode,
       understanding: requestClassification ?? resolvedIntent,
       prompt,

@@ -88,7 +88,10 @@ export async function rankControlPlaneByActualCost(
 export async function quoteSerializedRoutingRequest(provider: LlmProvider, params: ChatGenerateParams) {
   if (getAccountingScope()?.kind !== 'standalone') return null;
   const capture: {prepared?: FrozenPreparedRequest} = {};
-  try { await preparation.run(capture, () => provider.generate(params)); }
+  try { await preparation.run(capture, () => provider.generate({...params,
+    // Preparation must not persist a candidate as the executed provider audit.
+    onProviderSystemPrepared: undefined, providerPayloadCaptureTrace: undefined,
+  })); }
   catch { /* Adapters may wrap the preparation sentinel. */ }
   const request = capture.prepared;
   if (!request || request.provider !== provider.name || request.model !== params.modelId) return null;
