@@ -90,6 +90,30 @@ test('a generic preparation exception surfaces the database durable pause instea
  await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw Error('Temporary discovery failure')}),error=>Boolean(error&&typeof error==='object'&&'code' in error&&error.code==='standalone_pending_attempt'));
  assert.equal(stored.status,'paused');
 });
+test('routing timeout pauses the durable workflow and clears only its processing chat receipt',async()=>{
+ const updates:Array<{table:string;values:Record<string,unknown>;filters:Record<string,string>}>=[];
+ const admin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ as unknown as Record<string,unknown>;
+ admin.from=(table:string)=>{
+  const filters:Record<string,string>={};
+  return {
+   eq(key:string,value:string){filters[key]=value;return this;},
+   async update(values:Record<string,unknown>){
+    updates.push({table,values,filters:{...filters}});
+    return {error:null};
+   },
+  };
+ };
+ const timeout=Object.assign(Error('routing-rerank model timed out'),{code:'standalone_outcome_unknown'});
+ await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw timeout}),error=>error===timeout);
+ assert.equal(stored.status,'paused');
+ assert.equal(updates.length,1);
+ assert.equal(updates[0].table,'chat_requests');
+ assert.deepEqual(updates[0].filters,{request_id:'original-request',actor_id:actorId,chat_id:chatId,status:'processing'});
+ assert.equal(updates[0].values.status,'failed');
+ assert.match(String(updates[0].values.error_message),/Resume the original request/);
+ // This test never transmits a provider request or modifies any original receipt.
+});
+
 test('SDK-wrapped accounting denial preserves its pause across execution boundaries',async()=>{
  const denial=Object.assign(Error('Connection error'),{cause:Object.assign(Error('Approval required'),{code:'standalone_approval_required'})});
  await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw denial}),error=>error===denial.cause);
