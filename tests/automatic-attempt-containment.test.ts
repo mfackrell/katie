@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
-import { inferRequestClassification } from "@/lib/router/model-intent";
+import { controlPlaneAttemptTimeoutMs, inferRequestClassification } from "@/lib/router/model-intent";
 import { selectQualityFirstReviewer } from "@/lib/collaboration/routing";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
 import { runRequiredDraftReview } from "@/lib/collaboration/required-review";
@@ -72,6 +72,45 @@ test("timeout requests cancellation and remains terminal if the provider ignores
     return true;
   });
   assert.equal(signal?.aborted, true);
+});
+
+test("standalone routing consumes a late in-flight receipt without reissuing the provider call", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  assert.equal(controlPlaneAttemptTimeoutMs(12_000, false), 12_000);
+  assert.equal(controlPlaneAttemptTimeoutMs(12_000, true), 17_000);
+  let calls = 0;
+  let originalSignal: AbortSignal | undefined;
+  const result = withProviderAttemptTimeout(signal => {
+    originalSignal = signal;
+    calls++;
+    return new Promise<string>(resolve => {
+      setTimeout(() => resolve("late saved provider response"), 30);
+    });
+  }, controlPlaneAttemptTimeoutMs(25, true), "routing-rerank:openai:gpt-5-mini");
+  await Promise.resolve();
+  t.mock.timers.tick(30); // Exceeds nominal 25ms; remains inside the same 37ms attempt.
+  assert.equal(await result, "late saved provider response");
+  assert.equal(calls, 1);
+  assert.equal(originalSignal?.aborted, false);
+});
+
+test("standalone routing remains terminal when its bounded receipt grace expires", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  let originalSignal: AbortSignal | undefined;
+  const result = withProviderAttemptTimeout(signal => {
+    originalSignal = signal;
+    calls++;
+    queueMicrotask(() => t.mock.timers.tick(38));
+    return new Promise<never>(() => {});
+  }, controlPlaneAttemptTimeoutMs(25, true), "routing-rerank:openai:gpt-5-mini");
+  await assert.rejects(result, error => {
+    assert.equal(isTerminalAttemptError(error), true);
+    assert.match(String(error), /billing outcome is unknown/);
+    return true;
+  });
+  assert.equal(calls, 1, "never transmit again after an uncertain paid attempt");
+  assert.equal(originalSignal?.aborted, true);
 });
 
 test("an expired attempt budget blocks dispatch before invoking the provider", async () => {
