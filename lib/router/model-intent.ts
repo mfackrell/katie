@@ -1,3 +1,4 @@
+import { resolveReviewerRoutingEvidence } from './reviewer-evidence';
 import type { ProjectTransition } from "@/lib/chat/task-progress";
 import { isNonConversationalModel } from "@/lib/models/non-conversational";
 import {
@@ -2284,6 +2285,7 @@ Rules:
 - Do not include markdown or any non-JSON text.
 `.trim();
 
+  const reviewerEvidence = await resolveReviewerRoutingEvidence(args.intent, args.candidates);
   const result = await executeControlPlaneJsonTask({
     taskName: "routing-rerank",
     decisionProviders: eligibleDecisionProviders,
@@ -2298,6 +2300,7 @@ Rules:
       modality_flags: args.modalityFlags,
       hard_route_context: args.hardRouteContext,
       preference_profile: args.preferenceProfile,
+      reviewer_quality_evidence: reviewerEvidence,
       candidates: candidateList
     })}`,
     parse: (raw) => {
