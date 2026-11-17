@@ -113,8 +113,21 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
   const child=fork('tests/benchmark-renewal-postgres.test.mjs',[],{
    cwd:process.cwd(),execArgv:[],
    stdio:['ignore','pipe','pipe','ipc'],
-   env:{...process.env,KATIE_TEST_BLOCKED_OWNER_RECOVERY:'1',
-    KATIE_TEST_BLOCKED_OWNER_BROWSER:'0',KATIE_TEST_BLOCKED_OWNER_RACE_FIXTURE:'1',
+   // The standalone native workflow sets these flags at job scope; full
+   // npm test does not. Bind the complete 76-mission fixture chain explicitly
+   // so the child cannot exit successfully before installing committed DDL.
+   env:{...process.env,
+    KATIE_TEST_COMPLETION_CONTROLS:'1',
+    KATIE_TEST_AMENDMENT_SUCCESSOR:'1',
+    KATIE_TEST_CAPACITY_RENEWAL:'1',
+    KATIE_TEST_LIFECYCLE_AUTHORIZATION:'1',
+    KATIE_TEST_ORDINARY_AUTHORITY:'1',
+    KATIE_TEST_PROJECT_ORGANIZATION:'1',
+    KATIE_TEST_DIRECTOR_ONE_SHOT:'1',
+    KATIE_TEST_ORG_AMENDMENTS:'1',
+    KATIE_TEST_BLOCKED_OWNER_RECOVERY:'1',
+    KATIE_TEST_BLOCKED_OWNER_BROWSER:'0',
+    KATIE_TEST_BLOCKED_OWNER_RACE_FIXTURE:'1',
     KATIE_TEST_PG_TCP:'1'},
   });
   let childOutput='',ready=false,port=55489,dataDir=null;
