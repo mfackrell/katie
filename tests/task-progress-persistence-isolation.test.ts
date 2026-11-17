@@ -248,7 +248,9 @@ test("final policy and mocked Anthropic outbound system exclude any synthetic pr
         onProviderSystemPrepared:async audit=>{audited=audit.systemMessages.join("\n");},
       }));
       assert.equal(outbound,audited);
-      assert.match(outbound,/NEXT RESPONSE: a natural personal conversation/);
+      assert.equal(policy.generationInstruction,null);
+      assert.match(outbound,/Actor prompt unchanged\./);
+      assert.doesNotMatch(outbound,/NEXT RESPONSE: a natural personal conversation/);
       assert.doesNotMatch(outbound,/KATIE_DURABLE_TASK_PROGRESS|CURRENT QUESTION OR DELIVERABLE|ACTIVE PARENT PROJECT/);
       assert.doesNotMatch(outbound,/NEXT RESPONSE: a brief conversational answer/);
     }finally{globalThis.fetch=oldFetch;}
