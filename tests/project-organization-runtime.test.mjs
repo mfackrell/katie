@@ -303,7 +303,17 @@ test('ratified provider trial guides its existing root to delegate Game Delivery
  const grantOnly=scopedRootDelegationDirective(withDev);
  assert.match(grantOnly,/grant_scope/);assert.doesNotMatch(grantOnly,/Issue amend_delegation/);
  const fullyDelegated={...withDev,scopeGrants:[...input.scopeGrants,{node_id:game,scope_hash:scope,paths}]};
- assert.equal(scopedRootDelegationDirective(fullyDelegated),'');
+ const completeDirective=scopedRootDelegationDirective(fullyDelegated);
+ assert.match(completeDirective,/CURRENT ROOT DELEGATION ALREADY GRANTED/);
+ assert.ok(completeDirective.includes(game),'the real direct-report ID is represented');
+ assert.ok(completeDirective.includes(scope),'the current scope grant is represented');
+ assert.match(completeDirective,/no-op amend_delegation/);
+ assert.match(completeDirective,/repeat grant_scope/);
+ assert.doesNotMatch(completeDirective,/Issue amend_delegation|Issue grant_scope|MANDATORY FIRST ROOT DECISION/);
+ const capabilityOnlyMissing={...input,scopeGrants:[...input.scopeGrants,{node_id:game,scope_hash:scope,paths}]};
+ const actualAmendment=scopedRootDelegationDirective(capabilityOnlyMissing);
+ assert.match(actualAmendment,/Issue amend_delegation/);
+ assert.doesNotMatch(actualAmendment,/Issue grant_scope/);
 });
 
 test('claimed scoped root receives durable approved paths and proposes only validated existing-node delegation',async()=>{
