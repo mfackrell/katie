@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "phase": 2,
+  "acceptance": [
+    {
+      "id": "PAGE_COUNT_EXACT",
+      "status": "passed",
+      "evidence": "Actual approved private source and synthetic resume render exactly 2 pages in Chromium, LibreOffice 24.2.7.2 and 26.2.6.3. Agreement/report have requested_pages=null; no one-page cap is invented."
+    },
+    {
+      "id": "SOURCE_FIDELITY",
+      "status": "passed",
+      "evidence": "Source SHA b466561895813598f7b5b0f9f09cda5ca6e0f130e85f96c2369577e839900aa3 unchanged. DOCX semantic extraction and all three PDF ordered-glyph comparisons PASS for every acceptance case, including all table cells."
+    },
+    {
+      "id": "FONT_FLOOR",
+      "status": "passed",
+      "evidence": "Actual PDF minima are 11.002499616562496pt in Chromium and 11pt in both Office versions for all cases. OOXML content/default body declarations remain >=11pt; strict font rejection regression retained."
+    },
+    {
+      "id": "DOCX_OFFICE_PARITY",
+      "status": "passed",
+      "evidence": "All acceptance cases have equal physical page count, preserved ordered glyphs, intact blocks, and printed-margin checks in three renderers. Recorded Office coordinate deltas are <0.173pt, not claimed pixel identity."
+    },
+    {
+      "id": "NO_AVOIDABLE_PAGE_BREAK",
+      "status": "passed",
+      "evidence": "Actual same-source standard/natural/compact comparison retained. Uncapped report/agreement finish on the minimum possible one page; both resumes obey exactly two requested pages. No universal utilization threshold or new page cap is introduced."
+    },
+    {
+      "id": "HEADING_GROUP_CONTINUITY",
+      "status": "passed",
+      "evidence": "Actual ordered glyph-to-page mapping shows every heading with its first supporting block and every content block intact in all three renderers, including the large multiline heading margin fixture."
+    },
+    {
+      "id": "ENGAGEMENT_GROUP_CONTINUITY",
+      "status": "passed",
+      "evidence": "All level-three semantic groups and the 39 private resume blocks remain intact on matching pages in Chromium and both LibreOffice versions. No resume-specific formatting rule was added."
+    },
+    {
+      "id": "TABLE_AND_CLAUSE_INTEGRITY",
+      "status": "passed",
+      "evidence": "Both financial tables, all numbered agreement clauses and signature groups fit intact on the actual accepted pages in all three renderers. Ordered cell fidelity and heading support checks pass. Header repetition is not required on these single-page tables; no broader untested large-table claim is made."
+    },
+    {
+      "id": "PAGE_COMPOSITION",
+      "status": "passed",
+      "evidence": "Owner-provided separate AI review of all 12 final pages across Chromium, LibreOffice 24 and LibreOffice 26: PASS. Original review and report retained verbatim; 80-entry private archive manifest and every reviewed image hash verified. Current integrated engine and dependencies match reviewed implementation. This is not human-professional or cryptographically signed certification."
+    },
+    {
+      "id": "DELIVERY_SEPARATION",
+      "status": "passed",
+      "evidence": "Existing strict-professional negative tests and authenticated technical-only delivery tests pass. Old raster approval is deliberately not inherited by changed line boxes; no new golden aesthetic fingerprint was self-approved."
+    },
+    {
+      "id": "NO_PAID_INFERENCE_CI",
+      "status": "passed",
+      "evidence": "No provider calls in artifact qualification. Deterministic mechanical inspectors explicitly withhold independent design approval. Private rendering ran with outbound network deny-all."
+    }
+  ],
+  "private_source_available_only_outside_public_ci": true,
+  "release_allowed": false,
+  "mechanical_evidence_file": "fixtures/documents/phase2-mechanical-evidence.json",
+  "independent_visual_review": "PASS",
+  "independent_review_record": {
+    "path": "fixtures/documents/independent-review/pr997-independent-review-8c4bf882.json",
+    "sha256": "8eb8a4723d51750e0584591f5769b7e756ae2f83bebf77ec3459a1240ff27e19",
+    "report_path": "fixtures/documents/independent-review/pr997-independent-review-8c4bf882.md",
+    "report_sha256": "5ecd3774f455a687aa1545aee7de0eada91d3a004b8dca11023b265429246747",
+    "reviewed_candidate_sha": "8c4bf88279533d7ec7dca5ab975195056b8b8e80",
+    "accepted_review_type": "independent_ai_visual",
+    "owner_direction_date": "2026-11-10",
+    "owner_direction": "Incorporate this assessment into PR #997, reconcile latest main, and requalify; do not merge yet.",
+    "cryptographic_signature": false,
+    "human_professional_review": false
+  }
+}

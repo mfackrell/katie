@@ -20,6 +20,7 @@ import {
   validateRoutingDecision
 } from "@/lib/router/model-intent";
 import { shortlistDecisionCandidates } from "@/lib/router/candidate-shortlist";
+import { getModelPrice } from "@/lib/standalone-accounting/pricing";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
 import { LlmProvider } from "@/lib/providers/types";
@@ -53,6 +54,7 @@ export type ResolvedRoutingIntent = {
   responsePurpose?: ResponsePurpose;
   projectRelation?: ProjectRelation;
   projectTransition?: ProjectTransition;
+  objectiveGuardReason?: string;
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -63,6 +65,7 @@ export type SelectionExplainer = {
   top_factors?: Array<{ label: string; detail?: string; delta?: number | null }>;
   top_candidates?: Array<{ model?: string; provider?: string; score?: number | null; why_not_selected?: string }> | null;
   selected_source?: "llm-primary" | "deterministic-fallback";
+  selection_justification?: string;
   top_candidate_score?: number | null;
   hard_rule_applied?: string | null;
   fallback_used?: boolean;
@@ -725,6 +728,7 @@ export async function chooseProvider(
   let llmPrimaryUsed = false;
   let deterministicFallbackUsed = false;
   let fallbackReason: string | null = null;
+  let llmSelectionJustification: string | null = null;
   let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
 
@@ -799,7 +803,9 @@ export async function chooseProvider(
       classificationSource = classified.source;
       if (classificationSource === "router-fallback") {
         intentAuthority = "heuristic";
-        intentResolutionReason = "control-plane-unavailable-used-local-classifier";
+        intentResolutionReason = requestClassification?.objectiveGuardReason
+          ? "deterministic-objective-precedence"
+          : "control-plane-unavailable-used-local-classifier";
       }
     } catch (error) {
       console.warn(`[Route Intent] classifier_failed requestId=${traceRequestId}`, error);
@@ -828,7 +834,16 @@ export async function chooseProvider(
           // LLM decision. Keep the same minimal contract as upstream intents.
           intent: requestClassification.intent,
           preferredProvider: requestClassification.preferredProvider ?? null,
-          intentSource: "router-fallback"
+          intentSource: "router-fallback",
+          ...(requestClassification.objectiveGuardReason ? {
+            objectiveGuardReason: requestClassification.objectiveGuardReason,
+            secondaryIntents: requestClassification.secondaryIntents ?? [],
+            complexity: requestClassification.complexity ?? null,
+            providerRefusalRisk: requestClassification.providerRefusalRisk ?? null,
+            ...(requestClassification.responsePurpose ? { responsePurpose: requestClassification.responsePurpose } : {}),
+            ...(requestClassification.projectRelation ? { projectRelation: requestClassification.projectRelation } : {}),
+            ...(requestClassification.projectTransition ? { projectTransition: requestClassification.projectTransition } : {})
+          } : {})
         }
     : bestHint?.hintIntent
       ? {
@@ -908,6 +923,23 @@ export async function chooseProvider(
     hasVideoInput: Boolean(options?.hasVideoInput),
     registryLookup
   });
+
+  // Native web access is not enough: the exact Grok model must have a
+  // reviewed token price and the one-turn server-search accounting policy.
+  // This only constrains standalone paid chat; project-orchestrator routing
+  // retains its separate authorization and accounting lifecycle.
+  if (getAccountingScope()?.kind === "standalone" &&
+      (intent === "web-search" || intent === "news-summary")) {
+    availableByProvider = availableByProvider
+      .map(entry => ({
+        provider:entry.provider,
+        models:entry.models.filter(modelId =>
+          entry.provider.name === "grok" &&
+          Boolean(getModelPrice("grok",modelId))),
+      }))
+      .filter(entry=>entry.models.length>0);
+    console.info(`[Research Accounting] requestId=${traceRequestId} qualified_models=${availableByProvider.reduce((n,entry)=>n+entry.models.length,0)}`);
+  }
 
   const eligibleCandidateCount = availableByProvider.reduce(
     (total, entry) => total + entry.models.length,
@@ -1230,6 +1262,7 @@ export async function chooseProvider(
           selected = fallbackToDeterministic("llm_router_selection_invalid_after_validation");
         } else {
           llmPrimaryUsed = true;
+          llmSelectionJustification = llmRouting.selectionJustification ?? null;
           console.info(`[LLM Router] selected=${validated.provider.name}:${validated.modelId}`);
           selected = {
             provider: validated.provider,
@@ -1286,5 +1319,9 @@ export async function chooseProvider(
     );
   }
 
-  return applyPolicyGuardrail(selected);
+  const finalDecision = applyPolicyGuardrail(selected);
+  if (llmSelectionJustification && finalDecision.explainer) {
+    finalDecision.explainer.selection_justification = llmSelectionJustification;
+  }
+  return finalDecision;
 }

@@ -4,6 +4,7 @@ import { createStoredUploadService } from "../lib/uploads/stored-uploads";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "../lib/uploads/direct-upload-client";
 import type { FileReference } from "../lib/providers/types";
 import { imageObservationHash, STILL_IMAGE_OBSERVATION_VERSION } from '../lib/uploads/still-image-observations';
+import { verifiedKatieVisualEpisode } from '../lib/chat/visual-memory';
 
 function fakeStorage() {
   const files = new Map<string, Blob>();
@@ -52,17 +53,93 @@ test('saved Qwen observations retain provenance and can be refined only for the 
   const image:FileReference={fileId:'source-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
   const description={observedSummary:'A profile says gardener.',summaryModel:'runpod:Qwen/Qwen3-VL-8B-Instruct',summaryCoverage:'full' as const,observationSourceHash:imageObservationHash(image.imageDataUrl!),observationQuestion:'Describe the profile',observationVersion:STILL_IMAGE_OBSERVATION_VERSION,observationAt:'2026-10-29T18:00:00Z',observationLimitations:[]};
   const saved=await service.persist(chatId,image,undefined,{source:new Blob(['image']),description,actorId});
+  assert.equal(saved.visualMemory?.sourceHash,description.observationSourceHash);
+  assert.equal(saved.visualMemory?.observedAt,description.observationAt);
+  assert.ok(verifiedKatieVisualEpisode(saved),"Persisted actor entry must contain a source-bound visual episode");
+  const unbound=await service.persist(chatId,image,undefined,{source:new Blob(['image']),description:{
+    observedSummary:description.observedSummary,summaryModel:description.summaryModel,summaryCoverage:description.summaryCoverage,
+  },actorId});
+  assert.equal(unbound.visualMemory,undefined,
+    "An observation summary without source-bound evidence remains available but cannot impersonate Katie's own perception");
+  await assert.rejects(
+    service.persist(chatId,image,undefined,{description:{...description,observationSourceHash:'f'.repeat(64)},actorId}),
+    /does not match its source image/,
+  );
   const refined={...description,observedSummary:'The small print says gardener and homesteader.',observationQuestion:'Read the small print',observationAt:'2026-10-29T18:01:00Z'};
   await assert.rejects(service.updateImageObservation(chatId,saved,'33333333-3333-4333-8333-333333333333',refined),/identity/);
   await assert.rejects(service.updateImageObservation(chatId,saved,actorId,{...refined,observationSourceHash:'changed'}),/identity/);
   const updated=await service.updateImageObservation(chatId,saved,actorId,refined);
   assert.equal(updated.id,saved.id);assert.equal(updated.observedSummary,refined.observedSummary);
-  assert.deepEqual((await service.catalog(actorId,'actor')).attachments,[updated]);
+  assert.equal(updated.visualMemory?.sourceHash,imageObservationHash(image.imageDataUrl!));
+  assert.equal(updated.visualMemory?.observedAt,refined.observationAt);
+  assert.ok(verifiedKatieVisualEpisode(updated),"Refinements must update the same visual memory episode");
+  // A later refusal must not rewrite Katie's established experience as though
+  // the earlier successful inspection never happened.
+  const refused={...refined,observedSummary:undefined,summaryCoverage:'metadata' as const,
+    observationAgreement:'policy-limited' as const,observationAt:'2026-10-29T18:02:00Z'};
+  const preserved=await service.updateImageObservation(chatId,updated,actorId,refused);
+  assert.equal(preserved.observedSummary,updated.observedSummary);
+  assert.deepEqual(preserved.visualMemory,updated.visualMemory);
+  assert.ok(verifiedKatieVisualEpisode(preserved),"The earlier valid visual recollection survives a later refusal");
+  const actorCatalog=(await service.catalog(actorId,'actor')).attachments;
+  assert.equal(actorCatalog.length,2);
+  assert.deepEqual(actorCatalog.find(entry=>entry.id===preserved.id),preserved);
+  assert.equal(actorCatalog.find(entry=>entry.id===unbound.id)?.visualMemory,undefined);
   assert.equal((await service.restore(chatId,updated,actorId)).imageDataUrl,image.imageDataUrl);
   assert.equal(await fake.files.get(`chats/${chatId}/${saved.id}.source`)!.text(),'image');
   const canonical=JSON.parse(await fake.files.get(`chats/${chatId}/${saved.id}.json`)!.text());
   assert.equal(canonical.observationHistory[0].observedSummary,description.observedSummary);
   assert.equal(canonical.evidenceDescriptor.observationSourceHash,description.observationSourceHash);
+  assert.equal(canonical.evidenceDescriptor.visualMemory.version,"katie-visual-episode-v1");
+  assert.equal(canonical.observationHistory[0].visualMemory.sourceHash,imageObservationHash(image.imageDataUrl!));
+  assert.equal(canonical.observationHistory.at(-1).observationAgreement,'policy-limited',
+    "A failed new observation is retained as evidence but cannot override the prior memory");
+  assert.equal(canonical.observationHistory.at(-1).summaryCoverage,'metadata');
+});
+
+test("a subsequent model rerun cannot supersede an approved correction of the same picture", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "test-only-secret");
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const actorId = "22222222-2222-4222-8222-222222222222";
+  const picture: FileReference = {
+    fileId: "visual-correction-pixels", fileName: "image.png", mimeType: "image/png",
+    preview: "retained original", imageDataUrl: "data:image/png;base64,c2FtZS1pbWFnZQ==",
+  };
+  const sourceHash = imageObservationHash(picture.imageDataUrl!);
+  const baseline = {
+    observedSummary: "A model misidentified the object in the picture.",
+    summaryModel: "runpod:Qwen/Qwen3-VL-8B-Instruct",
+    summaryCoverage: "full" as const, observationVersion: STILL_IMAGE_OBSERVATION_VERSION,
+    observationSourceHash: sourceHash, observationAt: "2026-11-04T19:53:32Z",
+  };
+  const saved = await service.persist(chatId, picture, undefined, {
+    source: new Blob(["original-picture"]), description: baseline, actorId,
+  });
+  const manual = {
+    ...baseline,
+    observedSummary: "The corrected, owner-approved picture description is the authoritative account.",
+    summaryModel: "manual:ChatGPT-verified-visual-correction",
+    observationAt: "2026-11-05T12:53:17Z",
+    manualCorrection: {
+      approvedByUser: true, correctedAt: "2026-11-05T12:53:17Z",
+      correctedBy: "manual:ChatGPT-verified-visual-correction",
+      originalSummaryModel: baseline.summaryModel, sourceMessageId: "source-message",
+    },
+  };
+  const corrected = await service.updateImageObservation(chatId, saved, actorId, manual);
+  assert.equal(corrected.observedSummary, manual.observedSummary);
+  assert.ok(verifiedKatieVisualEpisode(corrected));
+  const afterRerun = await service.updateImageObservation(chatId, corrected, actorId, {
+    ...baseline, observedSummary: "A newer Qwen output is inconsistent with the owner-approved correction.",
+    observationAt: "2026-11-05T13:03:00Z",
+  });
+  assert.equal(afterRerun.observedSummary, manual.observedSummary);
+  assert.equal(afterRerun.summaryModel, manual.summaryModel);
+  const canonical = JSON.parse(await fake.files.get(`chats/${chatId}/${saved.id}.json`)!.text());
+  assert.equal(canonical.evidenceDescriptor.observedSummary, manual.observedSummary);
+  assert.match(canonical.observationHistory.at(-1).observedSummary,
+    /newer Qwen output is inconsistent/, "The latest unapproved rerun survives only as history");
 });
 
 test("large binary uploads use private signed storage and full extraction hydrates from a compact reference", async () => {
@@ -1353,4 +1430,156 @@ test("decoder timing survives private cache retries and owner reads, forged fiel
   assert.equal(await service.readVideoTiming(chat, saved.id, actor), undefined);
   fake.files.set(cachePath, new Blob([JSON.stringify({ actorId: actor, reference: { mimeType: 123 }, decoderTiming: timing })]));
   assert.equal(await service.readVideoTiming(chat, saved.id, actor), undefined);
+});
+
+test("mobile JPEG uploads the original through private 512 KiB same-origin chunks and finalizes once", async () => {
+  const bytes=new Uint8Array(2_635_407);
+  for(let index=0;index<bytes.length;index+=1)bytes[index]=index%251;
+  const file=new File([bytes],"phone-image.jpeg",{type:"image/jpeg"});
+  const fake=fakeStorage();
+  let processing=0;
+  const service=createStoredUploadService(fake.storage,"test-only-secret",{buildReferences:async files=>{
+    processing++;
+    assert.equal(files.length,1);
+    assert.equal(files[0].name,file.name);
+    assert.deepEqual(new Uint8Array(await files[0].arrayBuffer()),bytes);
+    return [{fileId:"mobile-photo-1",fileName:file.name,mimeType:file.type,attachmentKind:"image",preview:"Image retained privately"}];
+  }});
+  const calls:string[]=[];
+  const lengths:number[]=[];
+  let signedToken="",preparedId="";
+  const fetcher:typeof fetch=async(url,init)=>{
+    const path=String(url);calls.push(path);
+    if(path==="/api/upload/prepare"){
+      const payload=JSON.parse(String(init?.body));
+      assert.equal(payload.transport,"json-base64-v3");
+      const prepared=await service.prepare(payload);
+      signedToken=prepared.uploadToken;preparedId=prepared.uploadId;
+      return Response.json(prepared);
+    }
+    if(path==="/api/upload/chunk"){
+      const headers=init?.headers as Record<string,string>;
+      assert.equal(headers["x-katie-upload-token"],signedToken);
+      assert.equal(headers["Content-Type"],"application/octet-stream");
+      const chunk=new Uint8Array(await (init?.body as Blob).arrayBuffer());
+      lengths.push(chunk.length);
+      assert.ok(chunk.length<=512*1024);
+      const result=await service.uploadChunk(signedToken,Number(headers["x-katie-chunk-index"]),chunk);
+      return Response.json(result);
+    }
+    if(path==="/api/upload/status")
+      return Response.json(await service.chunkStatus(signedToken));
+    if(path==="/api/upload/complete"){
+      const payload=JSON.parse(String(init?.body));
+      assert.equal(payload.uploadToken,signedToken);
+      return Response.json({fileReference:await service.complete(signedToken)});
+    }
+    if(path==="/api/upload/telemetry")
+      return new Response(null,{status:204});
+    throw Error("Still-image bytes must never use the cross-origin Storage PUT");
+  };
+  const stages:string[]=[];
+  const saved=await uploadFilesDirect([file],message=>stages.push(message),fetcher);
+  assert.equal(saved.length,1);
+  assert.equal(saved[0].attachmentKind,"image");
+  assert.equal(processing,1);
+  assert.equal(lengths.length,Math.ceil(file.size/(512*1024)));
+  assert.equal(lengths.reduce((total,next)=>total+next,0),file.size);
+  assert.equal(calls.filter(x=>x==="/api/upload/complete").length,1);
+  assert.equal(calls.filter(x=>x==="/api/upload/prepare").length,1);
+  assert.ok(stages.some(x=>x.includes("100%")));
+  assert.deepEqual(new Uint8Array(await fake.files.get("incoming/"+preparedId)!.arrayBuffer()),bytes);
+  assert.ok(saved[0].storageToken,"Original private storage remains bound to its signed reference");
+});
+
+test("a lost mobile image chunk acknowledgement is verified before retrying its signed bytes",async()=>{
+  const file=new File([new Uint8Array(98_304)],"photo.png",{type:"image/png"});
+  const fake=fakeStorage();
+  const service=createStoredUploadService(fake.storage,"test-only-secret",{buildReferences:async()=>[
+    {fileId:"photo",fileName:file.name,mimeType:file.type,attachmentKind:"image",preview:"Photo"}]});
+  let token="",chunks=0,statuses=0;
+  const fetcher:typeof fetch=async(url,init)=>{
+    const path=String(url);
+    if(path==="/api/upload/prepare"){
+      const prepared=await service.prepare(JSON.parse(String(init?.body)));
+      token=prepared.uploadToken;return Response.json(prepared);
+    }
+    if(path==="/api/upload/chunk"){
+      chunks++;
+      const headers=init?.headers as Record<string,string>;
+      const bytes=new Uint8Array(await (init?.body as Blob).arrayBuffer());
+      await service.uploadChunk(token,Number(headers["x-katie-chunk-index"]),bytes);
+      throw new TypeError("Mobile HTTP acknowledgment lost after committed storage write");
+    }
+    if(path==="/api/upload/status"){statuses++;return Response.json(await service.chunkStatus(token));}
+    if(path==="/api/upload/complete")return Response.json({fileReference:await service.complete(token)});
+    if(path==="/api/upload/telemetry")return new Response(null,{status:204});
+    throw Error("unexpected route "+path);
+  };
+  const result=await uploadFilesDirect([file],()=>{},fetcher);
+  assert.equal(result.length,1);
+  assert.equal(chunks,1,"Never retransmit a chunk already verified in private storage");
+  assert.equal(statuses,1);
+});
+
+test("image transfer watchdog terminates an unresponsive browser request and never starts analysis",async()=>{
+  const file=new File([new Uint8Array(1_024)],"stalled.jpeg",{type:"image/jpeg"});
+  let attempts=0,completed=0,telemetry=0;
+  const id="11111111-1111-4111-8111-111111111111";
+  const fetcher:typeof fetch=async(url)=>{
+    const path=String(url);
+    if(path==="/api/upload/prepare")return Response.json({
+      uploadUrl:"https://storage.example/private",uploadToken:"signed-fixture-receipt",uploadId:id
+    });
+    if(path==="/api/upload/chunk"){
+      attempts++;
+      return new Promise<Response>(()=>{/* Deliberately ignores AbortSignal, like a stalled mobile request. */});
+    }
+    if(path==="/api/upload/status")return Response.json({
+      uploadId:id,chunkCount:1,chunkBytes:512*1024,transport:"json-base64-v3",
+      uploadedIndexes:[],uploadedSubIndexes:[],complete:false
+    });
+    if(path==="/api/upload/telemetry"){telemetry++;return new Response(null,{status:204});}
+    if(path==="/api/upload/complete"){completed++;throw Error("May not finalize missing image bytes");}
+    throw Error("Unexpected cross-origin upload: "+path);
+  };
+  await assert.rejects(
+    uploadFilesDirect([file],()=>{},fetcher,undefined,{chunkTimeoutMs:20,retryDelayMs:0}),
+    /Image upload stopped at part 1\/1.*timed out.*Nothing was sent for image analysis/s
+  );
+  assert.equal(attempts,3);
+  assert.equal(completed,0);
+  assert.equal(telemetry,1);
+});
+
+test("signed image chunks are immutable across identical and conflicting retries", async () => {
+  const fake=fakeStorage();
+  const originalFrom=fake.storage.from.bind(fake.storage);
+  const signedStorage={
+    ...fake.storage,
+    from: () => {
+      const objects=originalFrom("katie-attachments");
+      return {
+        ...objects,
+        upload: async (...args: Parameters<typeof objects.upload>) => {
+          const [path, , options]=args;
+          if (path.startsWith("chunks/") && options?.upsert===false && fake.files.has(path))
+            return {data:null,error:{message:"Object already exists"}};
+          return objects.upload(...args);
+        },
+      };
+    },
+  } as unknown as Parameters<typeof createStoredUploadService>[0];
+  const service=createStoredUploadService(signedStorage,"test-image-immutable-secret");
+  const input={name:"unchanged.png",type:"image/png",size:256,transport:"json-base64-v3"};
+  const prepared=await service.prepare(input);
+  const bytes=new Uint8Array(256).fill(7);
+  await service.uploadChunk(prepared.uploadToken,0,bytes);
+  await service.uploadChunk(prepared.uploadToken,0,bytes);
+  await assert.rejects(service.uploadChunk(prepared.uploadToken,0,new Uint8Array(256).fill(8)),
+    /Conflicting image upload chunk/);
+  const saved=fake.files.get(`chunks/${prepared.uploadId}-000`);
+  assert.ok(saved,"First accepted image chunk is retained");
+  assert.deepEqual(new Uint8Array(await saved.arrayBuffer()),bytes,
+    "Conflicting retry did not mutate the original private bytes");
 });

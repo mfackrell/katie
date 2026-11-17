@@ -63,6 +63,9 @@ test("google thinking support is opt-in per model", async () => {
 
 test("google model capability helpers separate generation from analysis", async () => {
   assert.equal(isImageGenerationModel("nano-banana-pro-preview"), true);
+  assert.equal(isImageGenerationModel("gemini-3.1-flash-image"), true);
+  assert.equal(isImageGenerationModel("gemini-3.1-flash-lite-image"), true);
+  assert.equal(isVisionAnalysisModel("gemini-3.1-flash-image"), false);
   assert.equal(isImageGenerationModel("gemini-3-pro-image-preview"), false);
   assert.equal(isVisionAnalysisModel("gemini-3.1-pro"), true);
   assert.equal(isVisionAnalysisModel("gemini-3-pro-image-preview"), false);
@@ -2071,4 +2074,75 @@ test("provider diagnostic metadata excludes upstream messages and secrets", () =
   assert.deepEqual(getProviderErrorDiagnostics({status: 400, phase: "response-parse", cause: {code: "invalid_response", message: "secret"}}), {
     status: 400, code: null, type: null, phase: "response-parse", causeCode: "invalid_response",
   });
+});
+
+test("classifier repairs production-style false image intent before capability routing without another inference", async () => {
+  let classifications = 0;
+  const classifier = provider("openai", ["gpt-5.6-sol"], async ({ modelId }) => {
+    classifications += 1;
+    return {
+      text: JSON.stringify({
+        intent: "image-generation",
+        secondary_intents: ["rewrite"],
+        complexity: "medium",
+        response_purpose: "deliverable",
+        preferred_provider: null,
+        primary_objective: "Write a revised dating bio",
+        objective_evidence: ["write me a revised bio"],
+        context_influence: "Prior generated imagery was discussed",
+        selection_justification: "Incorrectly chose image generation"
+      }),
+      model: modelId ?? "gpt-5.6-sol",
+      provider: "openai"
+    };
+  }).provider;
+  const request = "FB is about as far down the rabbit hole i'm willing to go. write me a revised bio that will land! and get me the chick like the one GPT made....😏😂";
+  const classification = await inferRequestClassificationWithSource(request, false, {
+    decisionProviders: [{ provider: classifier, modelId: "gpt-5.6-sol" }],
+    requestId: "regression-nov16-bio"
+  });
+  assert.equal(classifications, 1);
+  assert.equal(classification.classification.intent, "rewrite");
+  assert.equal(classification.source, "router-fallback");
+  assert.equal(classification.classification.decisionEvidence?.primary_objective, "Write a revised dating bio");
+  assert.match(classification.classification.decisionEvidence?.selection_justification ?? "", /Deterministic objective precedence/);
+});
+
+test("master router corrects false image classification for a written biography without losing routing evidence", async () => {
+  const decisionProvider = provider("openai", ["gpt-5.6-sol"], async ({ user, modelId }) => {
+    if (user.includes("Intent Classifier")) {
+      return {
+        text: JSON.stringify({
+          intent: "image-generation",
+          secondary_intents: ["rewrite"],
+          complexity: "medium",
+          response_purpose: "deliverable",
+          preferred_provider: null,
+          selection_justification: "Mistook the picture reference as an image task"
+        }),
+        model: modelId ?? "gpt-5.6-sol",
+        provider: "openai"
+      };
+    }
+    return {
+      text: JSON.stringify({
+        selected: { provider: "openai", model: "gpt-5.6-sol" },
+        selection_justification: "A capable writing model can produce the requested text."
+      }),
+      model: modelId ?? "gpt-5.6-sol",
+      provider: "openai"
+    };
+  }).provider;
+  const decision = await chooseProvider(
+    "Write a short biography inspired by the portrait that we generated earlier.",
+    "Previous discussion included several generated portraits.",
+    [decisionProvider],
+    { routingRequestId: "test-compound-objective-precedence" }
+  );
+  assert.equal(decision.resolvedIntent.intent, "rewrite");
+  assert.deepEqual(decision.resolvedIntent.secondaryIntents, []);
+  assert.equal(decision.resolvedIntent.responsePurpose, "deliverable");
+  assert.equal(decision.resolvedIntent.objectiveGuardReason, "explicit_written_objective_with_image_reference");
+  assert.equal(decision.intentResolutionReason, "deterministic-objective-precedence");
+  assert.equal(decision.explainer?.selection_justification, "A capable writing model can produce the requested text.");
 });

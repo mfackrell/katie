@@ -407,18 +407,30 @@ export async function deleteSingleMessage(chatId: string, messageId: string): Pr
 
 export async function getMessages(chatId: string): Promise<Message[]> {
   const client = getSupabaseAdminClient();
-  const { data, error } = await client
-    .from("messages")
-    .select("id,actor_id,chat_id,role,content,created_at")
-    .eq("chat_id", chatId)
-    .order("created_at", { ascending: true })
-    .returns<MessageRow>();
-
-  if (error) {
-    throw new Error(`Failed to load messages for chat ${chatId}: ${error.message}`);
+  // PostgREST caps each response at 1,000 rows by default. A single ascending
+  // query silently lost every newer exchange once long-lived chats hit that
+  // cap. Read bounded pages with deterministic ordering and never return a
+  // partial conversation when a later page fails.
+  const pageSize = 500;
+  const rows: MessageRow[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await client
+      .from("messages")
+      .select("id,actor_id,chat_id,role,content,created_at")
+      .eq("chat_id", chatId)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1)
+      .returns<MessageRow>();
+    if (error) {
+      throw new Error(`Failed to load messages for chat ${chatId}: ${error.message}`);
+    }
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
   }
 
-  return (data ?? []).map((row: MessageRow) => {
+  return rows.map((row: MessageRow) => {
     const parsed = parseMessageContent(row.content);
     return {
       ...toMessage(row),

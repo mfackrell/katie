@@ -7,13 +7,16 @@ export function documentRequest(message: string): { pages?: number } | null {
   if (/^\s*(?:explain\b|how\s+(?:do|does|can|to)\b|what\s+(?:is|are)\b)/i.test(message) ||
       /\b(?:do not|don't|never)\s+(?:create|produce|generate|make|export|save|convert)\b/i.test(message)) return null;
   // Format references used as INPUT must not turn PDF analysis into file production.
-  const output = message.replace(/\b(?:attached|uploaded|source|existing|this|that)\s+(?:pdf|docx|word (?:document|file))\b/gi, 'source attachment');
+  // An imperative to EDIT an existing file is an output request even when
+  // its object is "this Word document"; ordinary PDF-source analysis is not.
+  const editingFile = /^\s*(?:(?:please|now)\s+)?(?:revise|edit|update|redo|reissue)\b[^.!?\n]{0,100}\b(?:pdf|docx|word document)\b/i.test(message);
+  const output = editingFile ? message : message.replace(/\b(?:attached|uploaded|source|existing|this|that)\s+(?:pdf|docx|word (?:document|file))\b/gi, 'source attachment');
   // Only an affirmative CURRENT instruction may start the document pipeline.
   // A discussion like "we are trying to get you to generate pdf's" contains
   // the same action words, but is a status report, not a generation request.
   // Inspect each candidate: an actual instruction may follow a status report.
   const requestLead = /^(?:(?:hey\s+)?katie[,:]?\s+)?(?:(?:please|now|also|just|then|kindly|go\s+ahead\s+and)\s+|(?:can|could|would|will)\s+you(?:\s+please)?(?:\s+help\s+me(?:\s+to)?)?\s+|(?:i|we)\s+(?:want|need|would\s+like|would\s+appreciate)\s+(?:you\s+)?to\s+|(?:i['’]d|we['’]d)\s+like\s+(?:you\s+)?to\s+|let['’]s\s+|let\s+us\s+|help\s+me(?:\s+to)?\s+|you\s+(?:need\s+to|have\s+to|must|should)\s+)*$/i;
-  const requested = [...output.matchAll(/\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/gi)]
+  const requested = [...output.matchAll(/\b(?:create|produce|generate|prepare|format|make|deliver|export|save|convert|build|revise|edit|redo|update|reissue|give\s+me)\b([^.!?\n]{0,120})\b(?:docx|word (?:document|file|version|copy)|pdf)\b/gi)]
     .some(production => {
       const preceding = output.slice(0, production.index);
       const boundary = Math.max(preceding.lastIndexOf('\n'), preceding.lastIndexOf('.'),
@@ -83,6 +86,23 @@ export function answeredDocumentRequest(progress: {
   return progress.lastUserIntent === 'answer' && progress.objective &&
     progress.answered.some(answer => answer.userMessageId === currentUserMessageId && answer.taskId === progress.objective!.userMessageId)
     ? documentRequest(progress.objective.text) : null;
+}
+
+/** A model-authored delivery notice is never document source content.
+ * This is a narrow shape check, not a résumé or document-format template.
+ * Timestamp wrappers and links must not turn fabricated file claims into PDFs. */
+export function isDocumentDeliveryNarrative(value: string): boolean {
+  let opening = value.trimStart();
+  for (let index = 0; index < 3; index++) {
+    const next = opening.replace(/^\[(?:message timestamp|timestamp|generated at):[^\]\r\n]{1,100}\]\s*/i, '').trimStart();
+    if (next === opening) break;
+    opening = next;
+  }
+  const first = opening.slice(0, 1600);
+  const statusLead = /^(?:(?:i(?:'ve| have)\s+)?(?:successfully\s+)?(?:created|generated|rendered|produced|prepared|formatted)(?:\s+and\s+(?:inspected|reviewed|validated))?\s+(?:\d{1,3}|one|two|three|four|five|six)\s+pages?\b|here (?:are|is)\s+(?:your|the)\s+(?:final\s+)?(?:word|pdf|downloads?|documents?|files?)\b|both files are (?:now\s+)?(?:available|ready) for download\b)/i;
+  const internalDownload = /\/api\/documents\/download\?/i.test(opening);
+  const downloadOffer = /\b(?:download\s+(?:word|pdf)(?:\s+document)?|both files? (?:are|now)|files? (?:are|now) available|links? (?:for|to) (?:word|pdf))\b/i.test(first);
+  return statusLead.test(first) || (internalDownload && downloadOffer);
 }
 
 /** Detect a model's false assertion that it cannot create files, rather than

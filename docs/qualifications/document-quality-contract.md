@@ -1,7 +1,7 @@
 # Autonomous document delivery — quality contract
 
 ## Purpose
-A valid file is not necessarily an acceptable deliverable. Document success is the conjunction of the user's constraints, semantic integrity, technical fidelity, and professional presentation appropriate to the document's purpose.
+A technically valid file is not necessarily aesthetically polished. Delivery requires the user's hard constraints, semantic integrity, rendering and technical fidelity; independent professional-design review improves the candidate when possible but cannot veto delivery of mechanically accepted files.
 
 This is a **general acceptance contract**, not a résumé template. It applies to résumés, financial reports, business proposals, letters, contracts, and other supported document types.
 
@@ -24,9 +24,9 @@ This is a **general acceptance contract**, not a résumé template. It applies t
 
 ## 4. Independent acceptance
 - Mechanical acceptance: parseable DOCX and PDF; exact content survival; correct requested page count; verified PDF glyph order; authenticated delivery; rejection of unauthorized downloads.
-- Structural acceptance: semantic groupings survive rendering, page breaks preserve logical relationships, and no material formatting defect is left unaddressed.
-- Visual acceptance: inspect rasterized **final** pages, including any corrected re-render; a model PASS cannot override deterministic violations.
-- Fail closed on a genuinely unfixable defect or an unmet hard constraint. Do not treat successful CI alone as professional quality evidence.
+- Structural acceptance: semantic groupings and reading order remain intact; any unavoidable aesthetic limitations are reported as presentation findings, not mistaken for lost content.
+- Visual improvement: critique rasterized **final** pages when a qualified, authorized model is available. Compare revised images to the previous candidate; retain the last mechanically valid candidate if feedback is blocked, unavailable, invalid, unchanged, or regressed. A model PASS cannot override deterministic violations.
+- Fail closed on a genuine technical defect, authorization/spending uncertainty, or unmet hard constraint. Do not fail document delivery solely because cosmetic revisions are unavailable or unsuccessful; do not treat successful CI alone as professional aesthetic quality evidence.
 
 ## 5. Release verification
 1. Reproduce the actual failed artifact/requirement and identify which boundary was broken.

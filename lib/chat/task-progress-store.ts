@@ -29,11 +29,22 @@ function qualifySource(project: { projectContext: {userMessageId: string; text: 
   projectAuthority?: ProjectAuthority }, expectedChatId: string, sources: Map<string, UserSource>):
   { authority: ProjectAuthority; text: string } | null {
   const id = project.projectContext.userMessageId;
-  if (hasProjectAuthority(project.projectContext, project.projectAuthority))
-    return { authority: project.projectAuthority!, text: project.projectContext.text };
   const source = sources.get(id);
-  if (!source || source.chat_id !== expectedChatId || !isUserWorkAssignment(source.content))
-    return null;
+  // A flag stored in JSON is not proof of authority. Every active or catalog
+  // project must resolve to the original actor-owned persisted user message.
+  if (!source || source.chat_id !== expectedChatId) return null;
+  if (hasProjectAuthority(project.projectContext, project.projectAuthority)) {
+    const claimed = project.projectContext.text.trim();
+    const original = source.content.trim();
+    // A project may quote the current question from a longer user assignment,
+    // but it cannot attach arbitrary text to an unrelated persisted message.
+    if (!claimed || !(claimed === original ||
+      (claimed.length >= 20 && original.includes(claimed)))) return null;
+    return { authority: project.projectAuthority!, text: original };
+  }
+  // Older checkpoints never had an authority marker. Recover them only when
+  // the actual persisted user message independently requests work.
+  if (!isUserWorkAssignment(source.content)) return null;
   return { authority: { kind: "user-work", sourceMessageId: id }, text: source.content };
 }
 
@@ -47,13 +58,26 @@ function retireUnverifiedActive(state: TaskProgressState): TaskProgressState {
 
 async function qualifyActiveState(actorId: string, chatId: string, state: TaskProgressState): Promise<TaskProgressState> {
   const context = state.projectContext;
-  if (!context) return state;
-  if (hasProjectAuthority(context, state.projectAuthority)) return state;
-  const snapshot = state.projects?.find(project => project.projectContext.userMessageId === context.userMessageId);
-  const sources = await readUserSources(actorId, [context.userMessageId]);
-  const evidence = qualifySource({ projectContext: context }, snapshot?.sourceChatId ?? chatId, sources);
-  return evidence ? { ...state, projectAuthority: evidence.authority,
-    projectContext: { ...context, text: evidence.text } } : retireUnverifiedActive(state);
+  const sources = await readUserSources(actorId, [
+    ...(context ? [context.userMessageId] : []),
+    ...(state.projects ?? []).map(project => project.projectContext.userMessageId),
+  ]);
+  // Preserve historical snapshots for audit while stripping unverified authority
+  // from the in-memory copy. A flagged stale snapshot must not enter the catalog.
+  const projects = state.projects?.map(project => {
+    const evidence = qualifySource(project, project.sourceChatId ?? chatId, sources);
+    return evidence
+      ? { ...project, projectAuthority: evidence.authority,
+          projectContext: { ...project.projectContext, text: evidence.text } }
+      : { ...project, projectAuthority: undefined };
+  });
+  const qualified = { ...state, ...(projects ? { projects } : {}) };
+  if (!context) return qualified;
+  const snapshot = projects?.find(project => project.projectContext.userMessageId === context.userMessageId);
+  const evidence = qualifySource({ projectContext: context, projectAuthority: state.projectAuthority },
+    snapshot?.sourceChatId ?? chatId, sources);
+  return evidence ? { ...qualified, projectAuthority: evidence.authority,
+    projectContext: { ...context, text: evidence.text } } : retireUnverifiedActive(qualified);
 }
 
 function isProgress(value: unknown): value is TaskProgressState {
@@ -88,7 +112,8 @@ export async function verifyTaskProgressForUse(
     console.warn("[TaskProgress] Source verification unavailable; withholding active binding", {
       actorId, chatId, reason: error instanceof Error ? error.message : String(error),
     });
-    return retireUnverifiedActive(state);
+    return retireUnverifiedActive({ ...state,
+      projects: state.projects?.map(project => ({ ...project, projectAuthority: undefined })) });
   }
 }
 
@@ -148,9 +173,8 @@ export async function loadActorTaskProjects(actorId: string): Promise<ProjectSna
       (mergeTaskProjects(row.state, []).projects ?? []).map(project => ({
         project, chatId: row.chat_id, updatedAt: row.updated_at,
       })));
-  const sources = await readUserSources(actorId, candidates
-    .filter(item => !hasProjectAuthority(item.project.projectContext, item.project.projectAuthority))
-    .map(item => item.project.projectContext.userMessageId));
+  const sources = await readUserSources(actorId,
+    candidates.map(item => item.project.projectContext.userMessageId));
   return candidates.flatMap(({project,chatId,updatedAt}) => {
     const verified = qualifySource(project, project.sourceChatId ?? chatId, sources);
     if (!verified) return []; // Retained in storage, never silently resumable.

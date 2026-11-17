@@ -125,7 +125,7 @@ function fixture() {
     return Response.json(matches.slice(0, Number(url.searchParams.get('limit') ?? matches.length)));
   };
   const modules = new Map();
-  const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
+  const globals = { benchmarkIntake:false, benchmarkRelay:false,imageFollowup:null, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
     // These protocol fixtures exercise route decisions; durable accounting and
     // authenticated resume are covered by the standalone workflow tests.
     workflowTimestamp: () => '2026-10-28T00:00:00.000Z',
@@ -232,6 +232,8 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
   const state = await vm.runInNewContext(compile(`(async () => {
     ${generationParams}
     const visualContinuity = null; // The fixture exercises non-image review routing.
+    const imageGenerationRequested = false; // Mirror the real route's resolved image intent in this non-image route slice.
+    const creativeTextNarrativeRequest = false; // Non-image review fixture has no fictional narrative; mirror the production intent gate.
     ${createParams}
     ${enqueueDelta}
     const execute = ${runAttempt};
@@ -241,8 +243,8 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     ${code(statement(declaration('imageAssets')))}
     const assistantText = result.text || streamedText;
     const assistantPresentation = null;
-    ${code(statement(contentCall))}
     const assistantMessageId = taskProgressAssistantMessageId;
+    ${code(statement(contentCall))}
     ${completionBlock}
     return { result, taskProgress, escalatedConversation, reviewCompleted };
   })()`), {
@@ -417,6 +419,7 @@ test('actual route resolves identity before historical attachment retrieval and 
   const events = [];
   const result = await vm.runInNewContext(compile(`(async () => {
     ${contextResolutionBlock}
+    ${code(statement(declaration('verifiedVisualCorrection')))}
     ${code(statement(declaration('attachmentDecision')))}
     let taskProgress = pdfProgress;
     // Simulate a later capability router incorrectly treating the generic question
@@ -449,8 +452,9 @@ test('actual route resolves identity before historical attachment retrieval and 
       assert.equal(context.activeProject.text, DISTRIBUTION_POSTING);
       return {method:'summary-selector', selections:[]};
     },
-    pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
+    imageFollowup: null, pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
     mediaMemory: null, savedVideoFollowUp: null,
+    recentVerifiedVisualCorrection:()=>null,
     responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
     explicitProjectControl: false, explicitSavedProjectReference: false,
     resolvedRoutingIntentForReroute: { complexity: 'low' },
@@ -486,7 +490,17 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   const definition=name=>unique(findNodes(node=>
     ts.isFunctionDeclaration(node)&&node.name?.text===name ||
     ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>ts.isIdentifier(declaration.name)&&declaration.name.text===name),ast),`image helper ${name}`).getText(ast).replace(/^export\s+/,'');
-  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
+  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','explicitFreshImageInspection','approvedCorrectionForImage','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','currentTurnImageGroundingContext','imageObservationAsText'].map(definition).join('\n');
+  // The route executes the real versioned visual-memory verifier; introducing
+  // a new image helper must not cause these isolated production-code tests to
+  // substitute a placeholder for Katie's first-person provenance contract.
+  const visualSource=readFileSync('lib/chat/visual-memory.ts','utf8');
+  const visualAst=ts.createSourceFile('visual-memory.ts',visualSource,ts.ScriptTarget.Latest,true);
+  const visualDefinition=name=>unique(findNodes(node=>
+    ts.isFunctionDeclaration(node)&&node.name?.text===name ||
+    ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>ts.isIdentifier(d.name)&&d.name.text===name),visualAst),
+    `visual memory helper ${name}`).getText(visualAst).replace(/^export\s+/,'');
+  const visualDefinitions=['KATIE_VISUAL_EPISODE_VERSION','SOURCE_HASH','buildKatieVisualEpisode'].map(visualDefinition).join('\n');
   const events=[];
   const image={fileId:'profile-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
   const context=identityFixture(f,progress,history,[image],async()=>{throw Error('Ordinary profile evidence must not become project intake');},async()=>{throw Error('Legacy Gemini/Grok observation must not run before Qwen');});
@@ -512,6 +526,7 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
     },
   });
   const result=await vm.runInNewContext(compile(`(async()=>{
+    ${visualDefinitions}
     ${definitions}
     ${contextResolutionBlock}
     ${code(statement(declaration('attachments')))}
@@ -521,7 +536,8 @@ test('actual standalone route observes with Qwen, retains evidence, then gives t
   assert.equal(result.retained.length,1);assert.equal(result.retained[0].hasOriginal,true);
   assert.equal(result.attachments[0].mimeType,'text/plain');assert.equal(result.attachments[0].imageDataUrl,undefined);
   assert.match(result.attachments[0].extractedText,/gardener and homesteader/);
-  assert.match(result.attachments[0].extractedText,/not raw image pixels/);
+  assert.match(result.attachments[0].extractedText,/Katie's own visual recollection/);
+  assert.match(result.attachments[0].extractedText,/not performing a new inspection of raw pixels/);
 });
 
 test('explicit project intake inspects fresh image and PDF evidence before binding the new project', async () => {

@@ -66,7 +66,7 @@ export interface Message {
   content: string;
   presentation?: StructuredResponse;
   attachments?: ConversationAttachment[];
-  assets?: Array<{ type: string; url: string }>;
+  assets?: import("@/lib/images/generated-source").ImageAsset[];
   createdAt: string;
 }
 

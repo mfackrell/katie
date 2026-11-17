@@ -122,10 +122,13 @@ async function executeScopedStandaloneWorkflow(
         let jsonError:unknown;try{jsonError=JSON.parse(body);}catch{/* Streaming body is parsed above. */}
         const technicalEvent=[...events,...(jsonError&&typeof jsonError==='object'?[jsonError]:[])].find(event=>
           (['accounting_pause','error','reasoning_error'].includes(event.type)||event.error)&&standaloneTechnicalBlocker(event.code));
-        const technical=Boolean(technicalEvent);
+        // Unsupported image-generation billing is not an approval the owner can grant.
+        // The chat route emits a saved reasoning_error; finalize it as a failure.
+        const terminalImageBilling=events.find(event=>event.type==='reasoning_error'&&event.code==='standalone_unsupported_billing');
+        const technical=Boolean(technicalEvent||terminalImageBilling);
         const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
         const executionFailure=events.find(event=>event.type==='error'||event.type==='reasoning_error');
-        const failureMessage=technicalEvent ? String(technicalEvent.code)+': '+String(technicalEvent.message??technicalEvent.error??'Image inspection is unsupported.').slice(0,1800) : executionFailure ? String(executionFailure.message??executionFailure.error??'Saved request execution failed.') : undefined;
+        const failureMessage=(technicalEvent||terminalImageBilling) ? String((technicalEvent||terminalImageBilling).code)+': '+String((technicalEvent||terminalImageBilling).message??(technicalEvent||terminalImageBilling).error??'Image generation unavailable.').slice(0,1800) : executionFailure ? String(executionFailure.message??executionFailure.error??'Saved request execution failed.') : undefined;
         const result={body,status:response.status,headers:Array.from(response.headers.entries())};
         const finished=await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
         if(finished.status==='paused'&&!paused&&!executionFailure&&!technical)
@@ -147,6 +150,12 @@ async function executeScopedStandaloneWorkflow(
                   if(done)break;
                   if(value){record(value);if(!disconnected)controller.enqueue(value);}
                 }
+                // The answer may already be visible in chat. Settlement must
+                // remain mandatory, but its status is not a reason to hold the
+                // saved answer in a temporary streaming bubble.
+                if(!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify({
+                  type:'processing_update',stage:'accounting',message:'Finalizing the saved request and accounting.'
+                })+'\n'));
                 const notice=await settle(collected());
                 if(notice&&!disconnected)controller.enqueue(new TextEncoder().encode(JSON.stringify(notice)+'\n'));
                 if(!disconnected)controller.close();

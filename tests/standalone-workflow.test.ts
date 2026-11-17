@@ -181,6 +181,14 @@ test('standalone NDJSON forwards the first chunk while the workflow is still run
  source.enqueue(encoder.encode(final));source.close();
  const second=await reader.read();
  assert.equal(new TextDecoder().decode(second.value),final);
+ // The answer is delivered before accounting settles. A real status event
+ // follows in the live stream, but must not change the durable answer replay.
+ const settlementProgress=await reader.read();
+ assert.equal(settlementProgress.done,false);
+ assert.deepEqual(JSON.parse(new TextDecoder().decode(settlementProgress.value)),{
+   type:'processing_update',stage:'accounting',
+   message:'Finalizing the saved request and accounting.'
+ });
  assert.equal((await reader.read()).done,true);
  assert.equal(stored.status,'completed');
  const replay=await executeStandaloneWorkflow(request(),payload,async()=>{executions++;throw Error('Completed request must replay, not redispatch')});

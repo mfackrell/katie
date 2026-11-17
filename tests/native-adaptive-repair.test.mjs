@@ -132,12 +132,12 @@ test('final independent review exposes real omitted defect and starts another re
  assert.equal(f.repairs,1);assert.equal(f.result.finalReview.reviewedHeadSha,f.result.candidateHead);
  // Execute the exact workflow predicate, not a rewritten test approximation.
  const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
- const marker=`jq -e --arg head "$TEST_HEAD" --arg project "$PROJECT_ID" '`;
+ const marker=`jq -e --arg head "$TEST_HEAD" --arg project "$PROJECT_ID" --arg mode "$PROVIDER_EXECUTION" '`;
  const start=workflow.indexOf(marker)+marker.length,end=workflow.indexOf(`' "$evidence"`,start);
  assert.ok(start>=marker.length&&end>start,'Real native completion gate must exist');
  const predicate=workflow.slice(start,end),head=f.result.candidateHead;
  const receipt={...f.result,version:1,metered:true,completed:true,projectId:'frozen-project',reviewedHeadSha:head};
- const accepted=value=>spawnSync('jq',['-e','--arg','head',head,'--arg','project','frozen-project',predicate],{input:JSON.stringify(value),encoding:'utf8'}).status===0;
+ const accepted=value=>spawnSync('jq',['-e','--arg','head',head,'--arg','project','frozen-project','--arg','mode','false',predicate],{input:JSON.stringify(value),encoding:'utf8'}).status===0;
  assert.equal(receipt.review.verdict,'pass','Initial independent verdict is retained');
  assert.equal(receipt.repairVerification,null,'This is a review-only defect, not failed deterministic evidence');
  assert.equal(accepted(receipt),true);

@@ -10,16 +10,16 @@ function zipJSON(name,body){
  end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+file.length,12);end.writeUInt32LE(local.length+file.length+content.length,16);
  return Buffer.concat([local,file,content,central,file,end]);
 }
-function fixture(){
+function fixture(providerControlled=false){
  const historical=JSON.parse(readFileSync('tests/fixtures/take-eleven-specification-696.json','utf8'));
  const plan=JSON.parse(historical.jobs.find(j=>j.role==='revise').result.text);
  const p={id:randomUUID(),status:'running',phase:'development',approved_hash:'b'.repeat(64),approval_hash:'b'.repeat(64)};
  const config={name:'Developer',instructions:'Implement only the approved original requirements.',research:false,attachments:false,development:true,reviewMode:'always',maxActiveTasks:1,maxInputChars:16000};
  const agent={id:randomUUID(),version:1,config},mission={id:randomUUID(),project_id:p.id,project_kind:'development',repository_id:randomUUID(),objective:historical.project.objective,status:'running',team:[agent]},lease=randomUUID();
  const job={id:randomUUID(),mission_id:mission.id,job_key:'implement',role:'development',agent_id:agent.id,status:'running',lease,payload:{approved:true},dependencies:[],instruction:'Implement the saved scope.',attempts:2};
- const task={id:job.id,agent_id:agent.id,actor_id:randomUUID(),chat_id:randomUUID(),snapshot:config,definition_version:1,kind:'development',input:'Implement the original approved Take Eleven scope.',initial_input:'Implement the original approved Take Eleven scope.',repository_id:mission.repository_id,repository_full_name:'owner/repo',request_id:'fixture:'+job.id,status:'dispatching',external:{},details:null};
+ const task={id:job.id,agent_id:agent.id,actor_id:randomUUID(),chat_id:randomUUID(),snapshot:config,definition_version:1,kind:'development',input:'Implement the original approved Take Eleven scope.',initial_input:'Implement the original approved Take Eleven scope.',repository_id:mission.repository_id,repository_full_name:providerControlled?'mfackrell/katie':'owner/repo',request_id:'fixture:'+job.id,status:'dispatching',external:{},details:null};
  const {digest}=modules()('@/lib/projects/contract');
- const c={version:1,projectId:p.id,baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40),allowedPaths:plan.allowedPaths,contractHash:digest(plan.finalContract),contract:plan.finalContract,scopeHash:p.approved_hash};
+ const c={version:1,...(providerControlled?{organizationVersion:1}:{}),projectId:p.id,baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40),allowedPaths:plan.allowedPaths,contractHash:digest(plan.finalContract),contract:plan.finalContract,scopeHash:p.approved_hash};
  let writes=0,claims=0,failPreflight=false,loseAck=false,stale=false,receiptReady=false;
  const events=[],commits=[];let issue=null;
  const receipt={version:1,repository:'owner/repo',run_id:99,issue_number:7,pr_url:'https://github.com/owner/repo/pull/8',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''},tested_head_sha:'c'.repeat(40),reviewed_head_sha:'c'.repeat(40),projectAcceptance:{version:1,projectId:p.id,contractHash:c.contractHash,headSha:'c'.repeat(40),passed:true,checks:c.contract.scenarios.map(s=>({name:s.name,passed:true,detail:'Controlled observed original acceptance state'}))}};
@@ -38,10 +38,16 @@ function fixture(){
   if(name==='commit_mission_work'){assert.equal(args.p_lease,lease);commits.push(args);job.status=args.p_status;return true;}
   return false;
  };
- const db={from:table=>{const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},returns(){return q;},maybeSingle:async()=>({data:table==='benchmark_full_project_bindings'?null:{repository_full_name:'owner/repo'},error:null}),then:resolve=>Promise.resolve({data:[],error:null}).then(resolve)};return q;}};
+ const db={from:table=>{
+  if(providerControlled)assert.ok(['project_provider_execution','repo_sync_runs'].includes(table),'Unexpected legacy accounting lookup: '+table);
+  const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},returns(){return q;},maybeSingle:async()=>({data:table==='benchmark_full_project_bindings'?null:table==='project_provider_execution'?{deadline:new Date(Date.now()+60000).toISOString()}:{repository_full_name:task.repository_full_name},error:null}),then:resolve=>Promise.resolve({data:[],error:null}).then(resolve)};return q;}};
  class GitHub{
-  users={getAuthenticated:async()=>{if(failPreflight){const error=Error('503 temporary GitHub failure');error.status=503;throw error;}return{data:{type:'User',login:'owner'}};}};
-  repos={get:async()=>({data:{owner:{type:'User',login:'owner'}}})};
+  users={getAuthenticated:async()=>{if(failPreflight){const error=Error('503 temporary GitHub failure');error.status=503;throw error;}return{data:{type:'User',login:providerControlled?'mfackrell':'owner'}};}};
+  repos={
+   get:async()=>({data:{owner:{type:'User',login:providerControlled?'mfackrell':'owner'}}}),
+   getCommit:async()=>({data:{sha:process.env.VERCEL_GIT_COMMIT_SHA}}),
+   getContent:async()=>({data:{type:'file',content:Buffer.from('readOrdinaryNativeAuthority').toString('base64')}}),
+  };
   issues={create:async args=>{writes++;issue={number:7,html_url:'https://github.com/owner/repo/issues/7',title:args.title,body:args.body,user:{login:'owner'}};if(loseAck)throw Error('Acknowledgment lost after acceptance');return{data:issue};},listForRepo:async()=>({data:issue?[issue]:[]})};
   actions={getWorkflow:async()=>({data:{path:'.github/workflows/autonomous-development.yml',state:'active'}}),listWorkflowRuns:async()=>({data:{workflow_runs:receiptReady?[{id:99,status:'completed',conclusion:'success',event:'issues',repository:{full_name:'owner/repo'},head_repository:{full_name:'owner/repo'},head_branch:'main',path:'.github/workflows/autonomous-development.yml',html_url:'https://github.com/owner/repo/actions/runs/99'}]:[]}}),listWorkflowRunArtifacts:async()=>({data:{artifacts:[{id:10,name:'agent-completion',expired:false,size_in_bytes:1000}]}}),downloadArtifact:async()=>({data:zipJSON('agent-result.json',receipt)})};
  }
@@ -92,4 +98,23 @@ test('existing project and mission workers automatically reconcile a stranded au
  assert.equal(result.claimed,1);assert.equal(f.job.status,'completed');assert.equal(f.commits.at(-1).p_status,'completed');
  assert.equal(f.task.external.receipt.outcome,'READY');assert.equal(f.writes,1);assert.equal(f.events.filter(n=>n==='atomic-recovery-existing-task').length,1);
  assert.equal(f.commits.at(-1).p_result.verification.testedHeadSha,'c'.repeat(40));
+}));
+
+test('provider-controlled dispatch never reads the legacy benchmark accounting tables',()=>withToken(async()=>{
+ const env={
+  KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:'d'.repeat(40),
+  KATIE_NATIVE_HANDOFF_HMAC_KEY:'test-only-signing-key'.repeat(2),SUPABASE_SERVICE_ROLE_KEY:'test-only-service-key',
+ };
+ const old=Object.fromEntries(Object.keys(env).map(name=>[name,process.env[name]]));
+ try{
+  Object.assign(process.env,env);
+  const f=fixture(true);
+  const result=await f.development.dispatchDevelopment(f.task,f.c,f.lease);
+  assert.equal(result.status,'submitted');
+  assert.equal(result.external.providerExecutionRelease,env.VERCEL_GIT_COMMIT_SHA);
+  assert.equal(f.writes,1);
+  assert.deepEqual(f.events,['claim_project_dispatch','save_project_development_dispatch']);
+ }finally{
+  for(const [name,value] of Object.entries(old))if(value===undefined)delete process.env[name];else process.env[name]=value;
+ }
 }));

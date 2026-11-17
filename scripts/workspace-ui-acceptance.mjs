@@ -45,6 +45,14 @@ const chats = [
     updatedAt: "2026-10-20T14:00:00Z",
   },
 ];
+const chatMessages = [{
+  id: "88888888-9999-4999-8999-888888888888",
+  actorId: e,
+  chatId: c,
+  role: "user",
+  content: "Synthetic message for mobile delete test",
+  createdAt: "2026-10-20T14:00:00Z",
+}];
 const item = {
   key: "mission:" + m,
   source: "mission",
@@ -264,7 +272,16 @@ try {
     if (url.pathname === "/api/models")
       return reply({ openai: ["gpt-example"], google: [] });
     if (url.pathname === "/api/version") return reply({ version: "fixture" });
-    if (url.pathname === "/api/messages") return reply({ messages: [] });
+    if (url.pathname === "/api/messages") {
+      if (req.method() === "DELETE") {
+        const index = chatMessages.findIndex(message =>
+          message.id === url.searchParams.get("messageId") && message.chatId === url.searchParams.get("chatId"));
+        assert.ok(index >= 0, "Only the selected synthetic message can be removed");
+        chatMessages.splice(index, 1);
+        return reply({ success: true });
+      }
+      return reply({ messages: chatMessages.filter(message => message.chatId === url.searchParams.get("chatId")), videoProgress: {} });
+    }
     if (url.pathname === "/api/search")
       return reply({
         results: [
@@ -286,8 +303,12 @@ try {
     .getByRole("heading", { name: "Welcome back", exact: true })
     .waitFor();
   await page.getByText("Operations analysis", { exact: true }).waitFor();
-  page.once("dialog", dialog => dialog.dismiss());
   await page.getByRole("button", { name: "Delete chat: Operations analysis", exact: true }).click();
+  const homeDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
+  await homeDeleteDialog.waitFor();
+  assert.equal(mutations.filter(r => r.path === "/api/chats").length, 0);
+  await homeDeleteDialog.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await page.getByRole("alertdialog").count(), 0);
   assert.equal(mutations.filter(r => r.path === "/api/chats").length, 0);
   await page.screenshot({ path: output + "/home-desktop.png", fullPage: true });
   await page.getByRole("link", { name: "Conversations", exact: true }).click();
@@ -295,8 +316,10 @@ try {
     .getByRole("heading", { name: "Conversations", exact: true })
     .waitFor();
   assert.equal(await page.getByText("Internal QA history").count(), 0);
-  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Delete chat: Disposable UI check", exact: true }).click();
+  const disposableDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
+  await disposableDeleteDialog.waitFor();
+  await disposableDeleteDialog.getByRole("button", { name: "Delete conversation", exact: true }).click();
   await page.getByText("Disposable UI check", { exact: true }).waitFor({ state: "hidden" });
   assert.equal(chats.some(chat => chat.title === "Disposable UI check"), false);
   await page.getByLabel("Search conversations").fill("Operations");
@@ -410,6 +433,27 @@ try {
     .click();
   await page.getByText("Operations analysis", { exact: true }).click();
   await composer.waitFor();
+  await page.getByRole("button", { name: "Delete chat: Operations analysis", exact: true }).click();
+  const mobileDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
+  await mobileDeleteDialog.waitFor();
+  assert.equal(mutations.filter(r => r.path === "/api/chats").length, 1, "Mobile confirmation must not send a request");
+  await mobileDeleteDialog.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await page.getByRole("alertdialog").count(), 0);
+
+  await page.getByText("Synthetic message for mobile delete test").waitFor();
+  await page.getByRole("button", { name: "Delete user message", exact: true }).click();
+  const messageDeleteDialog = page.getByRole("alertdialog", { name: "Delete message?" });
+  await messageDeleteDialog.waitFor();
+  assert.equal(mutations.filter(r => r.path === "/api/messages").length, 0, "Opening confirmation cannot delete a message");
+  await messageDeleteDialog.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(chatMessages.length, 1);
+  await page.getByRole("button", { name: "Delete user message", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Delete message?" })
+    .getByRole("button", { name: "Delete message", exact: true }).click();
+  await page.getByText("Synthetic message for mobile delete test").waitFor({ state: "hidden" });
+  assert.equal(chatMessages.length, 0);
+  assert.equal(mutations.filter(r => r.path === "/api/messages").length, 1);
+
   assert.ok(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

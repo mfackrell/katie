@@ -281,3 +281,102 @@ test("cached workflow checkpoint cannot bypass the actor-owned source gate", asy
     assert.match(route,/syncTaskProgress\(verifiedTaskProgress, attachmentHistory\)/);
   });
 });
+
+
+test("a stored authority flag alone cannot restore a missing or unrelated user source",async()=>{
+  const marked = applyUserToTaskProgress(emptyTaskProgress(),{
+    messageId:validProject,text:executiveBrief,
+  });
+  assert.ok(hasProjectAuthority(marked.projectContext,marked.projectAuthority));
+  // A cross-chat verified source must point to the actual source chat, not the
+  // chat containing the later cached snapshot.
+  const real = {...marked,projects:[{
+    projectContext:marked.projectContext!,projectAuthority:marked.projectAuthority,
+    objective:marked.objective,pending:[],answered:[],sourceChatId:validChat,
+  }]};
+  await withDb(mockDatabase([currentRow(real)],[goodSource()]),async()=>{
+    const verified=(await loadTaskProgress(actor,chat))!;
+    assert.equal(verified.projectContext?.userMessageId,validProject);
+    assert.ok(hasProjectAuthority(verified.projectContext,verified.projectAuthority));
+    assert.equal((await loadActorTaskProjects(actor)).length,1);
+  });
+  // Even with a matching stored authority flag, another actor's user turn,
+  // an assistant message, missing origin, or an unrelated claim is not work.
+  const cases=[
+    [] as Source[],
+    [{...goodSource(),actor_id:"another-actor"}],
+    [{...goodSource(),role:"assistant"}],
+    [{...goodSource(),chat_id:chat}],
+  ];
+  for(const sources of cases){
+    const db=mockDatabase([currentRow(real)],sources);
+    await withDb(db,async()=>{
+      const restored=(await loadTaskProgress(actor,chat))!;
+      assert.equal(restored.projectContext,null);
+      assert.equal(restored.projectAuthority,undefined);
+      assert.deepEqual(await loadActorTaskProjects(actor),[]);
+      assert.equal(db.writes.length,0,"Rejected source cannot mutate stored history");
+    });
+  }
+  const mismatched={...real,projectContext:{...real.projectContext!,text:"A different fabricated project brief"}};
+  await withDb(mockDatabase([currentRow(mismatched)],[goodSource()]),async()=>{
+    const restored=(await loadTaskProgress(actor,chat))!;
+    assert.equal(restored.projectContext,null);
+    assert.equal(restored.projectAuthority,undefined);
+  });
+});
+
+test("forged inactive project authority cannot appear in catalog or survive cached replay",async()=>{
+  const forged = {...emptyTaskProgress(),projects:[{
+    projectContext:{userMessageId:orphan,text:"Some imaginary assignment"},
+    objective:{userMessageId:orphan,text:"A casual chat topic"},
+    projectAuthority:{kind:"user-work" as const,sourceMessageId:orphan},
+    pending:[],answered:[],
+  }]};
+  const db=mockDatabase([currentRow(forged)],[goodSource()]);
+  await withDb(db,async()=>{
+    const cached=(await verifyTaskProgressForUse(actor,chat,forged))!;
+    assert.equal(cached.projectContext,undefined);
+    assert.equal(cached.projects?.length,1,"Historical snapshot must remain intact");
+    assert.equal(cached.projects?.[0].projectAuthority,undefined);
+    assert.deepEqual(taskProjectCatalog(cached),[]);
+    assert.deepEqual(await loadActorTaskProjects(actor),[]);
+    const saved=await saveTaskProgress(actor,chat,forged);
+    assert.equal(saved,true);
+    assert.equal(db.writes[0].state.projects?.[0].projectAuthority,undefined);
+    assert.equal(db.writes[0].state.projects?.length,1);
+  });
+});
+
+test("conversationally phrased real dashboard project survives a short answer and source validation",async()=>{
+  const assignment="I'd like us to build a monthly finance dashboard for our business.";
+  assert.equal(isUserWorkAssignment(assignment),true);
+  assert.equal(isUserWorkAssignment("Can you build a dashboard for our finance project?"),true);
+  for(const nonTask of ["I have two alpacas.","I wondered whether dashboards are interesting.",
+    "Here's a photo of the beach.","Let's just chat.","How are you, Katie?"]){
+    assert.equal(isUserWorkAssignment(nonTask),false,nonTask);
+  }
+  const real = applyUserToTaskProgress(emptyTaskProgress(),{messageId:validProject,text:assignment});
+  assert.equal(real.projectContext?.userMessageId,validProject);
+  const db=mockDatabase([currentRow(real)],[{
+    actor_id:actor,chat_id:chat,id:validProject,role:"user",content:assignment,
+  }]);
+  await withDb(db,async()=>{
+    const restored=(await loadTaskProgress(actor,chat))!;
+    assert.ok(hasProjectAuthority(restored.projectContext,restored.projectAuthority));
+    const asked=applyAssistantToTaskProgress(restored,{messageId:"q-month",
+      text:"Which reporting month should the dashboard start with?",responsePurpose:"deliverable"});
+    assert.equal(asked.pending.length,1);
+    const answered=applyUserToTaskProgress(asked,{messageId:"a-month",text:"October"});
+    assert.equal(answered.lastUserIntent,"answer");
+    assert.equal(answered.answered[0].answer,"October");
+    assert.equal(answered.projectContext?.userMessageId,validProject);
+    const rebuilt=syncTaskProgress(answered,[]);
+    assert.ok(hasProjectAuthority(rebuilt.projectContext,rebuilt.projectAuthority));
+    assert.equal(rebuilt.answered[0].answer,"October");
+    assert.equal(await saveTaskProgress(actor,chat,answered),true);
+    const fromDisk=(await loadTaskProgress(actor,chat))!;
+    assert.equal(fromDisk.projectContext?.userMessageId,validProject);
+    assert.equal(fromDisk.answered[0].answer,"October");
+  });
+});

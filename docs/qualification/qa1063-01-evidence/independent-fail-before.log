@@ -1,0 +1,56 @@
+PAUSED_RENEWAL_INSTALLED_BASELINE_PASS: six installed authority function bodies match production
+OWNER_RECOVERY_INSTALLED_DEFINITIONS_PASS: [{"proname":"project_org_hierarchy_recovery_state","prosrc_md5":"05a347c978ea882956e201256432da48","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_renew_paused_window","prosrc_md5":"fa27c7d176a2fbd07fb1ba8ec7b0bc5e","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"},{"proname":"project_org_renewed_management_source","prosrc_md5":"dc929acd8a9d6fee1e5ca30f37f0836b","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres}"},{"proname":"project_org_resume_management","prosrc_md5":"9b8261fa82efac70ee8fa44af0c0bf80","prosecdef":true,"proconfig":["search_path=public, pg_temp"],"proacl":"{postgres=X/postgres,service_role=X/postgres}"}]
+INDEPENDENT_QA_INSTALLATION_PASS: 89 public tables unchanged; SMART/owner writers and adapters unchanged; four function ACLs verified
+PROJECT_HIERARCHY_RECOVERY_POSTGRES_PASS: owner, atomic rollback, full hierarchy, replay, history
+SCOPED_ROOT_RETRY_RELEASE_CLAIM_DELEGATION_PASS
+(node:12) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+COMMISSIONING_STRANDED_BEFORE: predecessor leaves saved ready/open-exception state waiting with no mission
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: actually-paused
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: expired-lease
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: null-lease-until
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: wrong-phase
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: inactive-node
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: expired-node
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: missing-decision
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: mixed-decision
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: foreign-exception-owner
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: mission-not-completed
+INDEPENDENT_QA_SAVED_READY_NEGATIVE_PASS: newer-failed-assignment
+✖ Append-only renewal retains expired authority, hydrates without spending, and fences exact stages (17504.859384ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18210.457216
+
+✖ failing tests:
+
+test at tests/benchmark-renewal-postgres.test.mjs:15:1
+✖ Append-only renewal retains expired authority, hydrates without spending, and fences exact stages (17504.859384ms)
+  AssertionError [ERR_ASSERTION]: invalid-release-membership: no recovery mission
+  + actual - expected
+  
+  + '7f531b7e-1617-4bd7-b417-28347dea0d1d'
+  - undefined
+  
+      at Module.assertCommissioningExceptionRecovery (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-commissioning-exception-recovery.mjs:98:11)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Module.assertManagementLoopRecovery (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-management-loop-recovery.mjs:70:3)
+      at async Module.assertProjectScopeRatification (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-project-scope-ratification.mjs:590:5)
+      at async Module.assertProjectOrganizationCompatibility (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-project-organization-compatibility.mjs:114:2)
+      at async Module.assertOrdinaryAuthority (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-ordinary-authority.mjs:226:55)
+      at async Module.assertLifecycleAuthorization (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-lifecycle-authorization.mjs:105:53)
+      at async assertCapacityRenewal (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-capacity-renewal.mjs:73:3)
+      at async assertAmendmentSuccessor (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-amendment-successor.mjs:51:52)
+      at async assertCompletionBudgetControls (file:///workspace/scratch/4ec232054490/qa-1063-probes/tests/helpers/assert-completion-budget-controls.mjs:67:55) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '7f531b7e-1617-4bd7-b417-28347dea0d1d',
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

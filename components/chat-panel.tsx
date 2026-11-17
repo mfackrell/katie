@@ -6,6 +6,8 @@ import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
+import { ChatComposerInput } from "@/components/chat-composer-input";
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog";
 import { SAVED_DOCUMENT_EXPORT_PROMPT } from "@/lib/documents/intent";
 import {
   ClipboardEvent,
@@ -14,6 +16,8 @@ import {
   MouseEvent as ReactMouseEvent,
   useEffect,
   useMemo,
+  memo,
+  useCallback,
   useRef,
   useState,
 } from "react";
@@ -33,11 +37,18 @@ import {
   type ReasoningUiState
 } from "@/lib/chat/reasoning-stream";
 import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
+import { upsertSavedAssistant } from "@/lib/chat/saved-answer-publication";
 import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { LifecycleOwnerApproval } from "@/components/lifecycle-owner-approval";
 import { Task4aContinuationOwnerApproval } from "@/components/task4a-continuation-owner-approval";
 import { Task4aSavedSpecificationRecovery } from "@/components/task4a-saved-specification-recovery";
+import { Task4aNativeRecoveryApproval } from "@/components/task4a-native-recovery-approval";
+import { Task4aFailedDispatchRecoveryApproval } from "@/components/task4a-failed-dispatch-recovery-approval";
+import { Task4aPostpaidContinuationApproval } from "@/components/task4a-postpaid-continuation-approval";
+import { Task4aBlockedDispatchOwnerApproval } from "@/components/task4a-blocked-dispatch-owner-approval";
+import { Task4aSuccessorOwnerApproval } from "@/components/task4a-successor-owner-approval";
+import { DirectorRecoveryControl, type DirectorRecoveryOffer } from "@/components/director-recovery-control";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
@@ -312,7 +323,6 @@ type SelectionExplainer = {
 
 const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
 const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
-const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
 const MAX_DIRECT_IMAGE_BYTES = 1_750_000;
 const MAX_IMAGE_DIMENSION = 1600;
 const MIN_IMAGE_DIMENSION = 640;
@@ -781,6 +791,9 @@ function normalizeAvailableModels(payload: unknown): AvailableModels {
   return normalized;
 }
 
+const MemoizedAssistantMarkdown = memo(AssistantMarkdown);
+const MemoizedMessageReactions = memo(MessageReactions);
+
 export function ChatPanel({
   managedAgentId,
   actorId,
@@ -797,19 +810,27 @@ export function ChatPanel({
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
+  const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
+  useEffect(() => { setDeleteCandidate(null); setDeleteFailure(null); }, [chatId]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
+  const [gameTrialRefresh, setGameTrialRefresh] = useState(0);
+  const [directorRecovery, setDirectorRecovery] = useState<{chatId:string;offer:DirectorRecoveryOffer}|null>(null);
+  const [gameTrial, setGameTrial] = useState<{chatId:string;mode:'start'|'stop'}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
   const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
   const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
-  const [replyTo, setReplyTo] = useState<Pick<Message, "id" | "role" | "content"> | null>(null);
+  const composerValueRef = useRef("");
+  const [composerResetVersion, resetComposerInput] = useState(0);
+  const [replyTo, setReplyTo] = useState<(Pick<Message, "id" | "role" | "content"> & { imageIndex?: number }) | null>(null);
   useEffect(() => setReplyTo(null), [chatId]);
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
   const [draftReady,setDraftReady]=useState(false);
-  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
+  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);resetComposerInput(version=>version+1);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
   const draftInitialized=useRef(false);
   useEffect(()=>{
     if(draftInitialized.current||!draft.state)return;
@@ -830,6 +851,7 @@ export function ChatPanel({
     return()=>window.clearTimeout(timer);
   },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
+  const [answerDisplayed, setAnswerDisplayed] = useState(false);
   const accountingResumeInFlight = useRef(false);
   const [accountingResumeFailure, setAccountingResumeFailure] = useState("");
   useEffect(() => {
@@ -914,6 +936,9 @@ export function ChatPanel({
   const [collaborationActive, setCollaborationActive] = useState(false);
   const [collaborationSummary, setCollaborationSummary] = useState<CollaborationUiMetadata | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const onMessageReaction = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("katie:reaction-reply-queued", {detail:{chatId}}));
+  }, [chatId]);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [showModelControls, setShowModelControls] = useState(true);
   const [selectionExplainer, setSelectionExplainer] = useState<SelectionExplainer | null>(null);
@@ -921,6 +946,7 @@ export function ChatPanel({
   const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
   const [showLiveReasoningExplainer, setShowLiveReasoningExplainer] = useState(true);
   const [reasoningState, setReasoningState] = useState<ReasoningUiState>(createReasoningUiState);
+  const [processingActivity, setProcessingActivity] = useState<Array<{stage:string;message:string}>>([]);
   const [reasoningPopupVisible, setReasoningPopupVisible] = useState(false);
   const [reasoningPopupDismissed, setReasoningPopupDismissed] = useState(false);
   const [explainerOpen, setExplainerOpen] = useState(false);
@@ -945,35 +971,11 @@ export function ChatPanel({
 
   const hasComposerAttachments = selectedImages.length + selectedVideos.length + selectedFiles.length + fileReferences.length > 0;
   const composerAttachmentsReady = attachmentsReady && attachmentChatId===chatId;
-  const canSend = useMemo(
-    () =>
-      !managedAgentId && draftReady && (attachmentsReady || input.trim().length > 0) &&
-      (!hasComposerAttachments || composerAttachmentsReady) && hasValidChatSelection &&
-      (input.trim().length > 0 ||
-        selectedImages.length > 0 ||
-        selectedVideos.length > 0 ||
-        selectedFiles.length > 0 ||
-        fileReferences.length > 0) &&
-      !loading &&
-      !uploadingFiles,
-    [
-      input,
-      loading,
-      selectedFiles.length,
-      selectedImages.length,
-      selectedVideos.length,
-      uploadingFiles,
-      fileReferences.length,
-      hasValidChatSelection,
-      managedAgentId,
-      draftReady,
-      attachmentsReady,
-      hasComposerAttachments,
-      composerAttachmentsReady,
-      attachmentChatId,
-      chatId,
-    ],
-  );
+  // Submit uses the immediate composer ref, never the debounced saved-draft echo.
+  const canSendForText = (text: string) =>
+    !managedAgentId && draftReady && (attachmentsReady || text.trim().length > 0) &&
+    (!hasComposerAttachments || composerAttachmentsReady) && hasValidChatSelection &&
+    (text.trim().length > 0 || hasComposerAttachments) && !loading && !uploadingFiles;
 
   const scrollToTop = () => {
     messagesContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
@@ -1154,6 +1156,8 @@ export function ChatPanel({
       setCollaborationActive(false);
       setCollaborationSummary(null);
       setReasoningState(createReasoningUiState());
+      setProcessingActivity([]);
+      setAnswerDisplayed(false);
       setReasoningPopupVisible(false);
       setCopiedMessageId(null);
 
@@ -1207,17 +1211,22 @@ export function ChatPanel({
     if(!chatId||!actorId||loading)return;
     let cancelled=false,inFlight=false,done=false;
     setProjectApproval(null);
+    setGameTrial(null);
     setResourceRecovery(null);
     setProjectApprovalError(null);
     const refresh=async()=>{
       if(cancelled||inFlight||done||document.visibilityState==='hidden')return;
       inFlight=true;
       try {
-        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
+        const bearer=await ownerSessionBearer();
+        if(!bearer&&!cancelled)setDirectorRecovery(null);
+        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store',...(bearer?{headers:{Authorization:`Bearer ${bearer}`}}:{})});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;trialState?:'active'|'available'|null;directorRecovery?:DirectorRecoveryOffer|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
+        setGameTrial(p.trialState==='available'?{chatId,mode:'start'}:p.trialState==='active'&&p.status!=='completed'&&p.status!=='stopped'?{chatId,mode:'stop'}:null);
+        setDirectorRecovery(p.directorRecovery?{chatId,offer:p.directorRecovery}:null);
         setResourceRecovery(p.resourceRecovery?{chatId,proposal:p.resourceRecovery}:null);
         // Executive missions can deliver after the immediate chat reply, even
         // without a software project (or after its completion). Stop only when
@@ -1235,15 +1244,18 @@ export function ChatPanel({
     document.addEventListener('visibilitychange',resume);
     void refresh();
     return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume);};
-  },[actorId,chatId,loading,projectProgressSignature]);
+  },[actorId,chatId,loading,projectProgressSignature,gameTrialRefresh]);
 
   async function approveProject(hash:string) {
     if(!chatId||!actorId||projectApprovalPending||loading)return;
     setProjectApprovalPending(true);
     setProjectApprovalError(null);
     try {
+      const ownerOnly=projectApproval?.approval.providerControlled;
+      const bearer=ownerOnly?await ownerSessionBearer():null;
+      if(ownerOnly&&!bearer)throw Error('Sign in as Katie owner to approve the trial scope.');
       const response=await fetch('/api/projects',{
-        method:'POST',headers:{'Content-Type':'application/json'},
+        method:'POST',headers:{'Content-Type':'application/json',...(bearer?{Authorization:`Bearer ${bearer}`}:{})},
         body:JSON.stringify({actorId,chatId,approvalHash:hash}),
       });
       const result=await response.json() as {error?:string;status?:string;messages?:Message[]};
@@ -1257,6 +1269,31 @@ export function ChatPanel({
     }catch(error){
       setProjectApprovalError(error instanceof Error?error.message:'Approval failed. Refresh the project scope.');
     }finally {setProjectApprovalPending(false);}
+  }
+
+  async function controlGameTrial(){
+    if(!gameTrial||gameTrial.chatId!==chatId||!actorId||!chatId||projectApprovalPending||loading)return;
+    const trialAction=gameTrial.mode;
+    setProjectApprovalPending(true);setProjectApprovalError(null);
+    try{
+      const bearer=await ownerSessionBearer();
+      if(!bearer)throw Error('Sign in as Katie owner to control the trial.');
+      const response=await fetch('/api/projects/organization',{
+        method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},
+        body:JSON.stringify({actorId,chatId,trialAction})
+      });
+      const result=await response.json() as {projectId?:string;error?:string;messages?:Message[]};
+      if(!response.ok||!result.projectId)throw Error(result.error??'Trial control failed.');
+      if(Array.isArray(result.messages)){
+        setMessages(result.messages);
+        setMessagesByChatId(current=>({...current,[chatId]:result.messages!}));
+      }
+      setGameTrial(trialAction==='start'?{chatId,mode:'stop'}:null);
+      setGameTrialRefresh(value=>value+1);
+      setStatusMessage(trialAction==='start'?'Trial started. Katie will prepare the game scope for review.':'Trial stopped.');
+    }catch(error){
+      setProjectApprovalError(error instanceof Error?error.message:'Trial control failed.');
+    }finally{setProjectApprovalPending(false);}
   }
 
   async function approveRecovery(hash:string,ceiling:number,hours:48|72){
@@ -1278,6 +1315,7 @@ export function ChatPanel({
 
   function requestProjectChanges() {
     setInput("Change this project's scope: ");
+    resetComposerInput(version=>version+1);
     requestAnimationFrame(()=>textareaRef.current?.focus());
   }
 
@@ -1408,7 +1446,7 @@ export function ChatPanel({
           }
         } else if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
-          if (!cancelled) setInput(pending.content);
+          if (!cancelled) {setInput(pending.content);resetComposerInput(version=>version+1);}
           if (!cancelled) {
             const failure: Message = { id: error.messageId ?? pending.requestId ?? crypto.randomUUID(), chatId,
               role: "assistant", content: chatFailureContent(error.message), createdAt: new Date().toISOString() };
@@ -1629,17 +1667,20 @@ export function ChatPanel({
       );
       return;
     }
-    if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!canSend && !reactionContent)) {
+    const latestComposerText = composerValueRef.current.trim();
+    if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!reactionContent && !canSendForText(latestComposerText))) {
       return;
     }
 
     setAccountingResumeFailure("");
     const replySnapshot = reactionContent ? null : replyTo;
     const documentSourceMessageId = replySnapshot?.role === "assistant" &&
-      input.trim() === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
-    const content = reactionContent ?? (documentSourceMessageId ? input.trim() : replySnapshot
-      ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${input.trim()}`
-      : input.trim());
+      latestComposerText === SAVED_DOCUMENT_EXPORT_PROMPT ? replySnapshot.id : undefined;
+    const imageSource = replySnapshot?.role === "assistant" && replySnapshot.imageIndex !== undefined
+      ? { messageId: replySnapshot.id, assetIndex: replySnapshot.imageIndex } : undefined;
+    const content = reactionContent ?? ((documentSourceMessageId || imageSource) ? latestComposerText : replySnapshot
+      ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${latestComposerText}`
+      : latestComposerText);
     const composerImages = reactionContent ? [] : [...selectedImages];
     let preparedImages: ReturnType<typeof prepareComposerImages>;
     try { preparedImages=prepareComposerImages(composerImages);setAttachmentError(""); }
@@ -1653,7 +1694,9 @@ export function ChatPanel({
 
     if (!reactionContent) {
       setReplyTo(null);
+      composerValueRef.current = "";
       setInput("");
+      resetComposerInput(value => value + 1);
       setSelectedImages([]);
       setSelectedVideos([]);
       setSelectedFiles([]);
@@ -1672,6 +1715,8 @@ export function ChatPanel({
     setStatusMessage("Routing request and selecting the lead model…");
     setFailoverNotice("");
     setReasoningState(createReasoningUiState());
+    setProcessingActivity([]);
+    setAnswerDisplayed(false);
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
       setReasoningPopupVisible(true);
@@ -1693,6 +1738,12 @@ export function ChatPanel({
     });
 
     let requestStage = "preparing attachments";
+    let answerCommitted = false;
+    let recoveredAndSettled = false;
+    let lastStreamProgressAt = Date.now();
+    let recoveryWatchdogClosed = false;
+    let recoveryWatchdogBusy = false;
+    let recoveryWatchdogTimer: number | null = null;
     let uploadedReferencesForRetry: FileReference[] | null = null;
     const clientRequestId = crypto.randomUUID();
 
@@ -1756,6 +1807,7 @@ export function ChatPanel({
           chatId,
           message: requestContent,
           documentSourceMessageId,
+          ...(imageSource ? { imageSource } : {}),
           images: requestImages,
           fileReferences: refsToSend,
           attachmentManifest: countCurrentAttachments([...priorReferences,...filesToUpload.map(file=>({mimeType:file.type})),...videosToUpload.map(file=>({mimeType:file.type}))],composerImages.map(image=>image.preview)),
@@ -1809,6 +1861,66 @@ export function ChatPanel({
 
       requestStage = "sending chat request";
       const ownerBearer = await ownerSessionBearer();
+      // The browser may lose an NDJSON stream while the server continues to
+      // generate and durably persist an answer. Recovery checks the SAME
+      // request ID, not a new model generation, only when stream progress
+      // stalls. The workflow ledger must be complete before closing the
+      // original stream; memory/accounting are never skipped.
+      lastStreamProgressAt = Date.now();
+      recoveryWatchdogTimer = window.setInterval(() => {
+        if (recoveryWatchdogClosed || recoveryWatchdogBusy ||
+            abortControllerRef.current !== abortController ||
+            composerChatRef.current !== chatId ||
+            Date.now() - lastStreamProgressAt < 12_000) return;
+        recoveryWatchdogBusy = true;
+        void (async () => {
+          try {
+            const headers = new Headers();
+            if (ownerBearer) headers.set("Authorization", `Bearer ${ownerBearer}`);
+            const statusResponse = await fetch(
+              `/api/chat/status?chatId=${encodeURIComponent(chatId)}&requestId=${encodeURIComponent(clientRequestId)}`,
+              {headers,cache:"no-store"},
+            );
+            if (!statusResponse.ok) return;
+            const savedStatus = await statusResponse.json() as {
+              status?: string; assistantMessageId?: string | null; workflowStatus?: string | null;
+            };
+            if (savedStatus.status !== "completed" || !savedStatus.assistantMessageId) return;
+            const messagesResponse = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,
+              {headers,cache:"no-store"});
+            if (!messagesResponse.ok) return;
+            const saved = await messagesResponse.json() as {messages?: Message[]};
+            if (!saved.messages?.some(row =>
+                row.role === "assistant" && row.id === savedStatus.assistantMessageId)) return;
+            if (recoveryWatchdogClosed || abortControllerRef.current !== abortController ||
+                composerChatRef.current !== chatId) return;
+            if (!answerCommitted) {
+              answerCommitted = true;
+              setMessages(saved.messages);
+              setMessagesByChatId(cache => ({...cache,[chatId]:saved.messages!}));
+              setStreamingAnswer("");
+              setAnswerDisplayed(true);
+              setStatusMessage("Saved reply restored; finishing request accounting.");
+            }
+            // Only a confirmed terminal workflow lets us close the abandoned
+            // transport. A saved chat response alone is NOT settled accounting.
+            if (savedStatus.workflowStatus === "completed") {
+              recoveredAndSettled = true;
+              clearPendingChatRequest(chatId);
+              abortController.abort();
+            } else if (savedStatus.workflowStatus === "paused" ||
+                       savedStatus.workflowStatus === "failed") {
+              setStatusMessage("Reply saved; the remaining workflow needs attention in Usage.");
+            }
+          } catch {
+            // A transient status or messages-read failure cannot authorize a
+            // duplicate provider request or cancel an accepted workflow.
+          } finally {
+            recoveryWatchdogBusy = false;
+          }
+        })();
+      }, 4_000);
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -1900,6 +2012,7 @@ export function ChatPanel({
         // for the next send rather than uploading the file a second time.
         if (uploadedReferencesForRetry && composerChatRef.current===chatId) setFileReferences(cleanPendingAttachments({images:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
         setInput(content);
+        resetComposerInput(version=>version+1);
         setStatusMessage(httpCause);
         return;
       }
@@ -1918,46 +2031,46 @@ export function ChatPanel({
       let provider = "unknown";
       let model = "unknown";
       let sawInitialMetadata = false;
-      let sawReasoningStart = false;
       let sawFinalReasoningAnswer = false;
-      let fallbackReasoningDeltaCount = 0;
-      let fallbackProgress = 0;
+      let savedAssistantMessageId: string | null = null;
+      let sawPersistedContent = false;
 
-      const applyFallbackReasoningFromDelta = (delta: string) => {
-        if (!delta.trim() || sawReasoningStart) {
-          return;
-        }
-        const now = new Date().toISOString();
-        setReasoningState((current) =>
-          applyReasoningEvent(current, {
-            type: "reasoning_start",
-            requestId: `fallback-${chatId}`,
-            categories: FALLBACK_REASONING_CATEGORIES,
-            startedAt: now
-          }),
-        );
-        sawReasoningStart = true;
+      // The server's content event follows the durable assistant-message write.
+      // Do not wait for memory processing or workflow settlement to visually
+      // finalize a reply that has already been saved. Pending workflow
+      // recovery/accounting remains active until the stream actually ends.
+      const commitSavedAnswer = () => {
+        if (answerCommitted || !savedAssistantMessageId || !sawPersistedContent) return;
+        answerCommitted = true;
+        setAnswerDisplayed(true);
+        const assistantMessage: Message = {
+          id: savedAssistantMessageId,
+          chatId,
+          role: "assistant",
+          model,
+          content: textContent,
+          ...(presentation ? { presentation } : {}),
+          assets,
+          createdAt: new Date().toISOString(),
+        };
+        // Do not mutate another state from inside a React updater. React may
+        // re-run an updater when concurrent rendering restarts.
+        setMessages(current => upsertSavedAssistant(current, assistantMessage));
+        setMessagesByChatId(cache => ({
+          ...cache,
+          [chatId]: upsertSavedAssistant(cache[chatId] ?? [], assistantMessage),
+        }));
+        setStreamingAnswer("");
+        setMeta({ provider, model });
+        setStatusMessage("Answer saved. Finalizing memory and request accounting…");
       };
 
-      const applyFallbackReasoningUpdate = (delta: string) => {
-        if (!delta.trim() || !sawReasoningStart) {
-          return;
-        }
-        const category = FALLBACK_REASONING_CATEGORIES[fallbackReasoningDeltaCount % FALLBACK_REASONING_CATEGORIES.length];
-        fallbackReasoningDeltaCount += 1;
-        fallbackProgress = Math.min(95, fallbackProgress + 4);
-        setReasoningState((current) =>
-          applyReasoningEvent(current, {
-            type: "reasoning_update",
-            requestId: current.requestId ?? `fallback-${chatId}`,
-            category,
-            explanationDelta: delta,
-            score: null,
-            confidence: null,
-            progress: fallbackProgress,
-            updatedAt: new Date().toISOString()
-          }),
-        );
+      const recordProcessingUpdate = (stage: string, message: string) => {
+        setStatusMessage(message);
+        setProcessingActivity(current => {
+          if (current.at(-1)?.stage === stage && current.at(-1)?.message === message) return current;
+          return [...current, {stage,message}].slice(-8);
+        });
       };
 
       while (true) {
@@ -1965,7 +2078,7 @@ export function ChatPanel({
         if (done) {
           break;
         }
-
+        lastStreamProgressAt = Date.now();
         buffered += decoder.decode(value, { stream: true });
         const lines = buffered.split("\n");
         buffered = lines.pop() ?? "";
@@ -1978,10 +2091,12 @@ export function ChatPanel({
           const chunk = JSON.parse(line) as
             | ChatMetadataChunk
             | { type: "delta"; text: string }
+            | { type: "processing_update"; stage: string; message: string }
             | {type:"accounting_pause";code:string;requestId:string;message:string}
             | ReasoningStreamEvent
             | {
                 type: "content";
+                messageId?: string;
                 text: string;
                 presentation?: StructuredResponse;
                 assets?: Array<{ type: string; url: string }>;
@@ -2005,6 +2120,10 @@ export function ChatPanel({
             return;
           }
           if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
+          if (chunk.type === "processing_update") {
+            recordProcessingUpdate(chunk.stage,chunk.message);
+            continue;
+          }
 
           // Required review emits metadata without modelId/provider. Render its
           // progress instead of accidentally clearing the active model state.
@@ -2064,9 +2183,8 @@ export function ChatPanel({
 
           if (chunk.type === "delta") {
             textContent += chunk.text;
-            setStreamingAnswer(textContent);
-            applyFallbackReasoningFromDelta(chunk.text);
-            applyFallbackReasoningUpdate(chunk.text);
+            if (!answerCommitted) setStreamingAnswer(textContent);
+            // Output text belongs only to the answer, never to Thinking.
           }
 
           if (
@@ -2075,18 +2193,18 @@ export function ChatPanel({
             chunk.type === "reasoning_snapshot" ||
             chunk.type === "final_answer"
           ) {
-            if (chunk.type === "reasoning_start") {
-              sawReasoningStart = true;
-            }
             if (chunk.type === "final_answer") {
               sawFinalReasoningAnswer = true;
             }
             setReasoningState((current) => applyReasoningEvent(current, chunk));
+            if (chunk.type === "final_answer") commitSavedAnswer();
           }
 
           if (chunk.type === "content") {
+            savedAssistantMessageId = chunk.messageId ?? null;
+            sawPersistedContent = true;
             textContent = chunk.text;
-            setStreamingAnswer(textContent);
+            if (!answerCommitted) setStreamingAnswer(textContent);
             if (chunk.presentation) {
               const verified = parseStructuredResponse(chunk.presentation);
               if (verified && verified.fallbackMarkdown === chunk.text) presentation = verified;
@@ -2096,6 +2214,8 @@ export function ChatPanel({
             }
             provider = chunk.provider ?? provider;
             model = chunk.model ?? model;
+            // This event is emitted only after the canonical database write.
+            commitSavedAnswer();
           }
         }
       }
@@ -2105,9 +2225,11 @@ export function ChatPanel({
           | ChatMetadataChunk
           | { type: "delta"; text: string }
             | {type:"accounting_pause";code:string;requestId:string;message:string}
+          | { type: "processing_update"; stage: string; message: string }
           | ReasoningStreamEvent
           | {
               type: "content";
+              messageId?: string;
               text: string;
               presentation?: StructuredResponse;
               assets?: Array<{ type: string; url: string }>;
@@ -2116,6 +2238,7 @@ export function ChatPanel({
             };
 
         if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message, trailingChunk.messageId);
+        if (trailingChunk.type === "processing_update") recordProcessingUpdate(trailingChunk.stage,trailingChunk.message);
 
         if (trailingChunk.type === "metadata" && trailingChunk.review) {
           setStatusMessage(reviewStatusMessage(trailingChunk.review));
@@ -2162,9 +2285,8 @@ export function ChatPanel({
 
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
-          setStreamingAnswer(textContent);
-          applyFallbackReasoningFromDelta(trailingChunk.text);
-          applyFallbackReasoningUpdate(trailingChunk.text);
+          if (!answerCommitted) setStreamingAnswer(textContent);
+          // Output text belongs only to the answer, never to Thinking.
         }
 
         if (
@@ -2173,18 +2295,18 @@ export function ChatPanel({
           trailingChunk.type === "reasoning_snapshot" ||
           trailingChunk.type === "final_answer"
         ) {
-          if (trailingChunk.type === "reasoning_start") {
-            sawReasoningStart = true;
-          }
           if (trailingChunk.type === "final_answer") {
             sawFinalReasoningAnswer = true;
           }
           setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
+          if (trailingChunk.type === "final_answer") commitSavedAnswer();
         }
 
         if (trailingChunk.type === "content") {
+          savedAssistantMessageId = trailingChunk.messageId ?? null;
+          sawPersistedContent = true;
           textContent = trailingChunk.text;
-          setStreamingAnswer(textContent);
+          if (!answerCommitted) setStreamingAnswer(textContent);
           if (trailingChunk.presentation) {
             const verified = parseStructuredResponse(trailingChunk.presentation);
             if (verified && verified.fallbackMarkdown === trailingChunk.text) presentation = verified;
@@ -2194,27 +2316,38 @@ export function ChatPanel({
           }
           provider = trailingChunk.provider ?? provider;
           model = trailingChunk.model ?? model;
+          commitSavedAnswer();
         }
+      }
+
+      // A provisional delta is not a saved response. Reconcile through the
+      // existing request-ID recovery flow if content/ID is missing.
+      if (!answerCommitted && (!sawPersistedContent || !savedAssistantMessageId)) {
+        throw new Error("Stream ended without a confirmed persisted assistant message ID.");
       }
 
       abortControllerRef.current = null;
       setMeta({ provider, model });
+      if (!answerCommitted) {
+        // Legacy/fallback stream lacking a saved message ID: preserve behavior,
+        // but never append a second message after early finalization.
+        const assistantMessage: Message = {
+          id: savedAssistantMessageId ?? crypto.randomUUID(),
+          chatId,
+          role: "assistant",
+          model,
+          content: textContent,
+          ...(presentation ? { presentation } : {}),
+          assets,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages(current => upsertSavedAssistant(current, assistantMessage));
+        setMessagesByChatId(cache => ({
+          ...cache,
+          [chatId]: upsertSavedAssistant(cache[chatId] ?? [], assistantMessage),
+        }));
+      }
       setStreamingAnswer("");
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        chatId,
-        role: "assistant",
-        model,
-        content: textContent,
-        ...(presentation ? { presentation } : {}),
-        assets,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages((current) => {
-        const nextMessages = [...current, assistantMessage];
-        setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
-        return nextMessages;
-      });
       if (!sawFinalReasoningAnswer) {
         setReasoningState((current) =>
           applyReasoningEvent(current, {
@@ -2234,6 +2367,11 @@ export function ChatPanel({
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
+      if (recoveredAndSettled && answerCommitted) {
+        clearPendingChatRequest(chatId);
+        setStatusMessage("Saved reply restored; request complete.");
+        return;
+      }
       if (error instanceof PausedChatError) {
         // The original request is already retained on the server. Do not
         // restore it as a sendable draft, manufacture a failed assistant
@@ -2245,13 +2383,21 @@ export function ChatPanel({
         return;
       }
 
+      if (answerCommitted) {
+        // Answer was saved and already displayed; post-answer errors must not
+        // manufacture another assistant response or replace the good answer.
+        setStatusMessage(`Answer saved; later workflow processing needs attention: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+
       if (requestStage === "preparing attachments") {
         // The optimistic message never reached /api/chat. Restore its draft
         // and the original browser File objects so a retry can consult the
         // durable /api/upload/result instead of uploading video bytes again.
         if (!reactionContent && composerChatRef.current===chatId) {
           setAttachmentError(error instanceof Error?error.message:"The selected attachments could not be prepared.");
-          setInput(replySnapshot ? input : content);
+          setInput(replySnapshot ? composerValueRef.current : content);
+          resetComposerInput(version=>version+1);
           setReplyTo(replySnapshot);
           setSelectedFiles(filesToUpload);
           setSelectedVideos(videosToUpload);
@@ -2347,7 +2493,7 @@ export function ChatPanel({
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
-            if (!reactionContent) { setInput(replySnapshot ? input : content); setReplyTo(replySnapshot); }
+            if (!reactionContent) { setInput(replySnapshot ? composerValueRef.current : content); resetComposerInput(version=>version+1); setReplyTo(replySnapshot); }
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
@@ -2385,8 +2531,11 @@ export function ChatPanel({
       });
       setStatusMessage(message);
     } finally {
+      recoveryWatchdogClosed = true;
+      if (recoveryWatchdogTimer !== null) window.clearInterval(recoveryWatchdogTimer);
       abortControllerRef.current = null;
       setLoading(false);
+      setAnswerDisplayed(false);
       setStreamingModel(null);
     setStreamingAnswer("");
       setIsRoutingSelectionInFlight(false);
@@ -2398,8 +2547,10 @@ export function ChatPanel({
   }
 
   async function handleDeleteMessage(messageId: string) {
-    if (loading || deletingMessageId || !window.confirm("Permanently delete this message? This cannot be undone.")) return;
+    if (deletingMessageId || deleteCandidate !== messageId) return;
+    if (loading) { setDeleteFailure("Finish the current response before deleting a message."); return; }
     setDeletingMessageId(messageId);
+    setDeleteFailure(null);
     try {
       const bearer = await ownerSessionBearer();
       const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&messageId=${encodeURIComponent(messageId)}`, {
@@ -2413,9 +2564,12 @@ export function ChatPanel({
       setMessages(current => current.filter(message => message.id !== messageId));
       setMessagesByChatId(current => ({...current, [chatId]: (current[chatId] ?? []).filter(message => message.id !== messageId)}));
       setReplyTo(current => current?.id === messageId ? null : current);
+      setDeleteCandidate(null);
       setStatusMessage("Message deleted.");
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Message deletion failed.");
+      const message = error instanceof Error ? error.message : "Message deletion failed.";
+      setDeleteFailure(message);
+      setStatusMessage(message);
     } finally {
       setDeletingMessageId(null);
     }
@@ -2468,12 +2622,15 @@ export function ChatPanel({
 
   function handleEmojiSelect(emoji: { emoji: string }) {
     const textarea = textareaRef.current;
-    const selectionStart = textarea?.selectionStart ?? input.length;
-    const selectionEnd = textarea?.selectionEnd ?? input.length;
-    const nextValue = `${input.slice(0, selectionStart)}${emoji.emoji}${input.slice(selectionEnd)}`;
+    const current = composerValueRef.current;
+    const selectionStart = textarea?.selectionStart ?? current.length;
+    const selectionEnd = textarea?.selectionEnd ?? current.length;
+    const nextValue = `${current.slice(0, selectionStart)}${emoji.emoji}${current.slice(selectionEnd)}`;
     const nextCursorPosition = selectionStart + emoji.emoji.length;
 
+    composerValueRef.current = nextValue;
     setInput(nextValue);
+    resetComposerInput(version=>version+1);
     setEmojiPickerOpen(false);
 
     requestAnimationFrame(() => {
@@ -2603,22 +2760,6 @@ export function ChatPanel({
         if(composerChatRef.current===originChatId)setUploadingFiles(false);
       });
   }
-
-  function handleInputChange(event: FormEvent<HTMLTextAreaElement>) {
-    const textarea = event.currentTarget;
-    setInput(textarea.value);
-
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
-  }
-
-  useEffect(() => {
-    if (!textareaRef.current || input.length !== 0) {
-      return;
-    }
-
-    textareaRef.current.style.height = "auto";
-  }, [input]);
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
   const showExplainer = !modelExplainerHidden && (isRoutingSelectionInFlight || hasExplainerData(selectionExplainer));
@@ -2904,9 +3045,9 @@ export function ChatPanel({
                     checked={showLiveReasoningExplainer}
                     onChange={(event) => handleLiveReasoningVisibility(event.target.checked)}
                     className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
-                    aria-label="Show live reasoning explainer"
+                    aria-label="Show live processing activity"
                   />
-                  <span>Live reasoning</span>
+                  <span>Live activity</span>
                 </label>
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
@@ -2950,29 +3091,54 @@ export function ChatPanel({
 
       {attachmentSaveError&&<p role="alert" className="px-5 text-xs text-amber-200">Attachments are retained for this session; browser storage could not save them for refresh.</p>}
       {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
-      {chatId && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
-      {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
-      {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
-      {resourceRecovery?.chatId===chatId && !managedAgentId ? (
-        <DeveloperResourceCard proposal={resourceRecovery.proposal}
-         pending={projectApprovalPending||loading} error={projectApprovalError}
-         onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
-      ):null}
-      {projectApproval?.chatId===chatId && !managedAgentId ? (
-        <ProjectApprovalCard
-          approval={projectApproval.approval}
-          pending={projectApprovalPending || loading}
-          error={projectApprovalError}
-          onApprove={(hash)=>{void approveProject(hash);}}
-          onRequestChanges={requestProjectChanges}
-        />
-      ) : null}
+      <section
+        role="region"
+        aria-label="Project approvals and recovery"
+        tabIndex={0}
+        className="min-h-0 max-h-[45dvh] shrink overflow-y-auto overscroll-contain touch-pan-y px-3 py-2 empty:hidden sm:max-h-[55dvh] sm:px-6"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
+        {chatId && chatId!=='e53defeb-16eb-457e-aa07-435141165ee8' && !managedAgentId ? <LifecycleOwnerApproval key={chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aContinuationOwnerApproval key={'task4a:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aSavedSpecificationRecovery key={'task4a-spec:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aSuccessorOwnerApproval key={'task4a-successor:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aNativeRecoveryApproval key={'task4a-native:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aBlockedDispatchOwnerApproval key={'task4a-blocked-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aFailedDispatchRecoveryApproval key={'task4a-failed-dispatch:'+chatId} chatId={chatId} /> : null}
+        {chatId && !managedAgentId ? <Task4aPostpaidContinuationApproval key={'task4a-postpaid:'+chatId} chatId={chatId} /> : null}
+        {resourceRecovery?.chatId===chatId && !managedAgentId ? (
+          <DeveloperResourceCard proposal={resourceRecovery.proposal}
+           pending={projectApprovalPending||loading} error={projectApprovalError}
+           onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
+        ):null}
+        {directorRecovery?.chatId===chatId && !managedAgentId ? (
+          <DirectorRecoveryControl key={actorId+':'+chatId} recovery={directorRecovery.offer}
+            onRefresh={()=>setGameTrialRefresh(value=>value+1)} />
+        ):null}
+        {gameTrial?.chatId===chatId && !managedAgentId ? (
+          <aside className="mx-3 my-2 rounded-xl border border-white/20 p-3">
+            <button type="button" className="min-h-11 font-semibold" disabled={projectApprovalPending||loading} onClick={()=>void controlGameTrial()}>
+              {gameTrial.mode==='start'?'Start the two-hour tic-tac-toe trial':'Stop the tic-tac-toe trial'}
+            </button>
+            {projectApprovalError && <p role="alert">{projectApprovalError}</p>}
+          </aside>
+        ):null}
+        {projectApproval?.chatId===chatId && !managedAgentId ? (
+          <ProjectApprovalCard
+            approval={projectApproval.approval}
+            pending={projectApprovalPending || loading}
+            error={projectApprovalError}
+            onApprove={(hash)=>{void approveProject(hash);}}
+            onRequestChanges={requestProjectChanges}
+          />
+        ) : null}
+      </section>
 
       {statusRailOpen && statusMount ? createPortal(
         <div className="space-y-2 text-xs" aria-live="polite">
           <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
           {imageObservationStages.length > 0 && <ul aria-label="Image analysis stages" className="space-y-1 text-zinc-400">{imageObservationStages.map((stage,index)=><li key={`${index}:${stage}`}>{stage}</li>)}</ul>}
-          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
+          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} processingActivity={processingActivity} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
         </div>, statusMount
       ) : null}
       {!statusRailOpen && showLiveReasoningExplainer && reasoningPopupVisible ? (
@@ -2982,6 +3148,7 @@ export function ChatPanel({
               loading={loading}
               state={reasoningState}
               statusMessage={statusMessage}
+              processingActivity={processingActivity}
               collaborationActive={collaborationActive}
               collaborationActivity={collaborationActivity}
               collaborationSummary={collaborationSummary}
@@ -3054,6 +3221,7 @@ export function ChatPanel({
                   onClick={() => {
                     setReplyTo({id:message.id,role:message.role,content:message.content});
                     setInput(SAVED_DOCUMENT_EXPORT_PROMPT);
+                    resetComposerInput(version=>version+1);
                     requestAnimationFrame(()=>textareaRef.current?.focus());
                   }}
                   className="shrink-0 rounded-lg border border-sky-400/25 px-2 py-1 text-[11px] text-sky-300 hover:bg-sky-400/10 disabled:opacity-40">Word/PDF</button>
@@ -3067,7 +3235,7 @@ export function ChatPanel({
               >
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
               </button>
-              <button type="button" onClick={() => void handleDeleteMessage(message.id)} disabled={loading || deletingMessageId !== null} aria-label={`Delete ${message.role} message`} className="shrink-0 rounded-lg border border-red-500/25 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/10 disabled:opacity-40">{deletingMessageId === message.id ? "Deleting…" : "Delete"}</button></div>
+              <button type="button" onClick={() => { setDeleteFailure(null); setDeleteCandidate(message.id); }} disabled={loading || deletingMessageId !== null} aria-label={`Delete ${message.role} message`} className="shrink-0 rounded-lg border border-red-500/25 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/10 disabled:opacity-40">{deletingMessageId === message.id ? "Deleting…" : "Delete"}</button></div>
             </div>
             {message.role === "assistant" &&
             message.content.startsWith("[Katie video analysis pending:") ? (() => {
@@ -3098,16 +3266,14 @@ export function ChatPanel({
               message.role === "assistant" ? (
                 <div className="break-words text-zinc-100/95">
                   {!(message.presentation?.blocks.some(block => block.type === "markdown")) &&
-                    <AssistantMarkdown>{message.content}</AssistantMarkdown>}
+                    <MemoizedAssistantMarkdown>{message.content}</MemoizedAssistantMarkdown>}
                   {message.presentation && <StructuredResponseView response={message.presentation} assets={message.assets} actorId={actorId} chatId={message.chatId} messageId={message.id} onDownload={url => void handleDownload(url, `katie-generated-${Date.now()}.png`)} ordered={message.presentation.blocks.some(block => block.type === "markdown")} />}
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
               )
             ) : null}
-            {message.role === "assistant" && message.id && <MessageReactions actorId={actorId} chatId={chatId} messageId={message.id} disabled={loading || Boolean(managedAgentId)} onReaction={() => {
-              window.dispatchEvent(new CustomEvent("katie:reaction-reply-queued", {detail:{chatId}}));
-            }} />}
+            {message.role === "assistant" && message.id && <MemoizedMessageReactions actorId={actorId} chatId={chatId} messageId={message.id} disabled={loading || Boolean(managedAgentId)} onReaction={onMessageReaction} />}
             {message.attachments?.length ? (
               <ul aria-label="Referenced files" className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
                 {message.attachments.map(file => (
@@ -3132,6 +3298,16 @@ export function ChatPanel({
                     />
                   </div>
                   {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      aria-label={`Use generated image ${(message.assets?.indexOf(asset) ?? 0) + 1} from this message`}
+                      aria-pressed={replyTo?.id === message.id && replyTo.imageIndex === message.assets?.indexOf(asset)}
+                      onClick={() => setReplyTo({id:message.id,role:message.role,content:message.content,
+                        imageIndex:message.assets?.indexOf(asset) ?? 0})}
+                      className="mt-2 rounded-lg border border-white/20 px-3 py-1.5 text-xs hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    >Use this image in my next message</button>
+                  ) : null}
+                  {message.role === "assistant" ? (
                     <RememberFaceControl
                       actorId={actorId}
                       chatId={message.chatId}
@@ -3155,7 +3331,7 @@ export function ChatPanel({
               ))}
           </div>
         ))}
-        {loading && (
+        {loading && !answerDisplayed && (
           <div
             aria-label="Katie response progress"
             aria-busy="true"
@@ -3172,6 +3348,16 @@ export function ChatPanel({
                       `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
               </p>
             </div>
+            {processingActivity.length > 1 && !streamingAnswer ? (
+              <ol aria-label="Katie live processing activity" className="mt-2 space-y-1 border-t border-white/10 pt-2 text-xs text-zinc-400">
+                {processingActivity.slice(-3).map((step,index) => (
+                  <li key={index} className="flex gap-2">
+                    <span className="text-emerald-400" aria-hidden="true">•</span>
+                    <span>{step.message}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
             {streamingAnswer ? (
               <div aria-label="Streaming assistant response" className="mt-3 border-t border-white/10 pt-3 text-zinc-100/95">
                 <AssistantMarkdown>{streamingAnswer}</AssistantMarkdown>
@@ -3179,6 +3365,11 @@ export function ChatPanel({
             ) : null}
           </div>
         )}
+        {loading && answerDisplayed ? (
+          <p role="status" className="max-w-4xl px-2 py-1 text-xs text-zinc-400">
+            {statusMessage || "Saved reply delivered; finalizing request records."}
+          </p>
+        ) : null}
         <div className="pointer-events-none sticky bottom-3 z-10 ml-auto hidden w-fit flex-col gap-2 pr-1 sm:bottom-4 sm:flex">
           <button
             type="button"
@@ -3215,7 +3406,7 @@ export function ChatPanel({
           {statusMessage}
         </p>
         {replyTo && <div className="mb-2 flex items-start justify-between gap-2 rounded-xl border border-sky-400/20 bg-sky-400/5 px-3 py-2 text-xs text-zinc-300">
-          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
+          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}{replyTo.imageIndex !== undefined ? ` — image ${replyTo.imageIndex + 1}` : ""}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
           <button type="button" aria-label="Cancel reply" onClick={()=>setReplyTo(null)} className="shrink-0 rounded px-2 py-1 hover:bg-white/10">✕</button>
         </div>}
         {!hasValidChatSelection ? (
@@ -3279,8 +3470,29 @@ export function ChatPanel({
           </ul>
         ) : null}
 
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-2 shadow-[0_14px_36px_rgba(0,0,0,0.2)] backdrop-blur-sm sm:rounded-[28px] sm:p-3 sm:shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
-          <div className="flex items-end gap-2">
+        <ChatComposerInput
+          key={chatId}
+          externalValue={input}
+          resetVersion={composerResetVersion}
+          currentValueRef={composerValueRef}
+          textareaRef={textareaRef}
+          onDraftChange={setInput}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          actorName={activeActorName}
+          managed={Boolean(managedAgentId)}
+          draftReady={draftReady}
+          attachmentsReady={attachmentsReady}
+          hasAttachments={hasComposerAttachments}
+          composerAttachmentsReady={composerAttachmentsReady}
+          hasValidChatSelection={hasValidChatSelection}
+          loading={loading}
+          uploadingFiles={uploadingFiles}
+          collaborationActive={collaborationActive}
+          routingInFlight={isRoutingSelectionInFlight}
+          statusMessage={statusMessage}
+          onCancel={handleCancelRequest}
+          fileControl={<>
             <input
               ref={fileInputRef}
               type="file"
@@ -3296,21 +3508,8 @@ export function ChatPanel({
             >
               📷
             </button>
-            <div className="relative min-w-0 flex-1">
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                enterKeyHint="send"
-                autoComplete="off"
-                autoCorrect="on"
-                spellCheck
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={`Ask ${activeActorName || "Katie"}…`}
-                className="min-h-[44px] max-h-36 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2.5 text-[16px] leading-6 text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring sm:min-h-[48px] sm:max-h-48 sm:rounded-2xl sm:px-4 sm:py-3 sm:pr-14 sm:text-sm"
-              />
+          </>}
+          emojiControl={<>
               <div ref={emojiPickerRef} className="absolute bottom-2 right-2 block">
                 <button
                   type="button"
@@ -3335,38 +3534,20 @@ export function ChatPanel({
                   </div>
                 ) : null}
               </div>
-            </div>
-            <div className="flex flex-none items-end gap-2">
-              {loading ? (
-                <button
-                  type="button"
-                  onClick={handleCancelRequest}
-                  className="h-11 rounded-xl border border-red-400/30 bg-red-500/10 px-3 text-xs font-medium text-red-100 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 sm:rounded-2xl sm:px-4 sm:text-sm"
-                >
-                  Cancel
-                </button>
-              ) : null}
-              <button
-                type="submit"
-                disabled={!canSend}
-                className="h-11 min-w-16 flex-none rounded-xl bg-gradient-to-r from-emerald-500 to-sky-500 px-4 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(16,185,129,0.25)] transition active:scale-95 disabled:opacity-50 sm:rounded-2xl sm:px-5 sm:py-3"
-              >
-                {uploadingFiles
-                  ? "Uploading..."
-                  : loading
-                    ? collaborationActive
-                      ? "Collaborating..."
-                      : isRoutingSelectionInFlight
-                        ? "Routing..."
-                        : statusMessage.toLowerCase().includes("synthes")
-                          ? "Synthesizing..."
-                          : "Thinking..."
-                    : "Send"}
-              </button>
-            </div>
-          </div>
-        </div>
+          </>}
+        />
       </form>
+      {deleteCandidate && (
+        <DeleteConfirmationDialog
+          title="Delete message?"
+          description="Permanently delete this message? This cannot be undone."
+          confirmLabel="Delete message"
+          busy={deletingMessageId !== null}
+          error={deleteFailure}
+          onCancel={() => setDeleteCandidate(null)}
+          onConfirm={() => void handleDeleteMessage(deleteCandidate)}
+        />
+      )}
     </main>
   );
 }

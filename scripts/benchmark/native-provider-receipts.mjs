@@ -4,18 +4,19 @@
 import {createHash} from 'node:crypto';
 export const NATIVE_MONETARY_CONTROL_VERSION='atomic-exposure-v1';
 export const NATIVE_INPUT_COUNT_VERSION='provider-input-count-v1';
-export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https://api.openai.com'}){
+export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https://api.openai.com',usageOptional=false,signal}){
  if(typeof apiKey!=='string'||apiKey.length<20)throw Error('GATEWAY_PROVIDER_KEY_REQUIRED');
  const target=new URL('/v1/responses',baseUrl);
  if(target.origin!=='https://api.openai.com'||target.username||target.password)
    throw Error('GATEWAY_UNAPPROVED_PROVIDER_ORIGIN');
+ const timeout=ms=>signal?AbortSignal.any([signal,AbortSignal.timeout(ms)]):AbortSignal.timeout(ms);
  const provider=async body=>{
   if(body.service_tier!==undefined&&body.service_tier!=='default')throw Error('GATEWAY_SERVICE_TIER_DENIED');
   body={...body,service_tier:'default'};
   const resp=await fetchImpl(target,{
    method:'POST',redirect:'error',
    headers:{authorization:'Bearer '+apiKey,'content-type':'application/json'},
-   body:JSON.stringify(body),signal:AbortSignal.timeout(120000)
+   body:JSON.stringify(body),signal:timeout(120000)
   });
   if(!resp.ok)throw Error('GATEWAY_PROVIDER_HTTP_'+resp.status);
   const raw=await resp.text();
@@ -33,12 +34,16 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
    if(['response.completed','response.incomplete'].includes(parsed?.type))terminal=parsed.response;
   }
   // Never synthesize token counts or a provider request id.
-  if(!terminal||typeof terminal.id!=='string'||
-   !Number.isSafeInteger(terminal.usage?.total_tokens)||terminal.usage.total_tokens<0)
+  const observedUsage=Number.isSafeInteger(terminal?.usage?.total_tokens)&&terminal.usage.total_tokens>=0;
+  if(!terminal||typeof terminal.id!=='string'||(!usageOptional&&!observedUsage))
    throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING');
   if(terminal.service_tier!=='default')throw Error('GATEWAY_PROVIDER_TIER_UNCERTAIN');
-  return {providerRequestId:terminal.id,actualTokens:terminal.usage.total_tokens,
-   usage:terminal.usage,body:raw,contentType:resp.headers.get('content-type')||'text/event-stream'};
+  const refusal=terminal.incomplete_details?.reason==='content_filter'||Array.isArray(terminal.output)&&terminal.output.some(item=>Array.isArray(item?.content)&&item.content.some(part=>part?.type==='refusal'));
+  if(usageOptional&&(!terminal.id||terminal.error||
+     !(refusal||terminal.status==='completed'||terminal.status==='incomplete'&&terminal.incomplete_details?.reason==='max_output_tokens')))
+   throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING');
+  return {providerRequestId:terminal.id,actualTokens:observedUsage?terminal.usage.total_tokens:null,
+   usage:terminal.usage,body:raw,contentType:resp.headers.get('content-type')||'text/event-stream',...(usageOptional?{refusal}:{})};
  };
  provider.countInputTokens=async body=>{
   const requestHash=createHash('sha256').update(JSON.stringify(body)).digest('hex');
@@ -50,7 +55,7 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
   let response;
   try{response=await fetchImpl(new URL('/v1/responses/input_tokens',target),{
    method:'POST',redirect:'error',headers:{authorization:'Bearer '+apiKey,'content-type':'application/json'},
-   body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)
+   body:JSON.stringify(payload),signal:timeout(10000)
   });}catch{throw Error('GATEWAY_INPUT_COUNT_UNAVAILABLE');}
   if(!response.ok)throw Error('GATEWAY_INPUT_COUNT_UNAVAILABLE');
   let result;

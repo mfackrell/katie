@@ -21,7 +21,7 @@ test('ordinary continuation waits for dispatch and cannot consume the predecesso
  assert.deepEqual(filter(task,[{...old,id:102,created_at:'2026-11-01T12:01:00Z',head_sha:'new'}]),[102]);
 });
 test('stopped or unverifiable ordinary rows do not starve later approvals',async()=>{
- const start=source.indexOf('async function dispatchOrdinaryNativeDevelopment()'),end=source.indexOf('  const client=github(),binding=await repository(task);',start);
+ const start=source.indexOf('async function dispatchOrdinaryNativeDevelopment('),end=source.indexOf('  const client=github(),binding=await repository(task);',start);
  const prefix=stripTypeScriptTypes(source.slice(start,end)+'return task.id;}if(rows.data.length<8)return false;}}');
  const rows=[...Array.from({length:8},(_,i)=>({id:'stopped'+i,task_id:'stopped'+i,project_id:'p',deadline:'2099-01-01',developer_authority:{}})),{id:'live',task_id:'live',project_id:'p',deadline:'2099-01-01',developer_authority:{}}];
  let offset=0;

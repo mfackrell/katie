@@ -1,4 +1,5 @@
 import type { Message } from "@/lib/types/chat";
+import type { DocumentContract } from "@/lib/documents/continuity";
 
 /**
  * Task progress is a source-linked conversation ledger, not another model's
@@ -45,6 +46,8 @@ export type ProjectSnapshot = {
   requirementsRevision?: number;
 };
 export type TaskProgressState = {
+  /** Explicit document identity/page constraints, never synthesized from model text. */
+  documentContract?: DocumentContract;
   version: 1;
   /** Per-active-project criteria version; ordinary revisions do not increment it. */
   requirementsRevision?: number;
@@ -228,6 +231,13 @@ function isWorkOrigin(text: string): boolean {
 /** An actual user-authored work request, not conversational or attachment-derived text. */
 export function isUserWorkAssignment(text: string): boolean {
   if (isWorkOrigin(text)) return true;
+  // Genuine requests do not always begin with imperative verbs. Recognize
+  // a user explicitly commissioning a tangible work product without promoting
+  // casual conversation, reflections or photo-only turns into projects.
+  const request = /^(?:i(?:'d| would) like (?:us|you) to|we(?:'d| would) like (?:us|you) to|we need to|can we|could we|let'?s|we should|help (?:me|us) (?:to|with))\b/i;
+  const work = /\b(?:build|create|prepare|draft|write|develop|design|fix|review|start|plan|implement|work on|set up|put together|help (?:me|us) with)\b/i;
+  const deliverable = /\b(?:dashboard|report|budget|forecast|financial model|plan|document|spreadsheet|presentation|website|application|project|analysis|workflow|automation|proposal)\b/i;
+  if (request.test(text.trim()) && work.test(text) && deliverable.test(text)) return true;
   // Structured briefs may begin with a title instead of an imperative. Require
   // task sections AND an action in their body, not a particular title/phrase.
   const sections = [...text.matchAll(/(?:^|\n)\s*#{1,4}\s+[^\n]+/g)];
@@ -610,6 +620,8 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
       objective: recent.objective ?? previous.objective,
       workProduct: changedProject ? recent.workProduct : previous.workProduct,
       projectContext,
+      // Preserve source-linked contracts and verified project authority across a trimmed history.
+      documentContract: changedProject ? undefined : previous.documentContract,
       projectAuthority: changedProject ? recent.projectAuthority : previous.projectAuthority,
       requirementsRevision: changedProject ? (recent.requirementsRevision ?? 1) : (previous.requirementsRevision ?? 1),
       pending: recent.pending.map(recoverProjectBinding),

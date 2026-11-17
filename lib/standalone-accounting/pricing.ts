@@ -1,12 +1,14 @@
 /** Reviewed first-party global standard rates. Never derive money from model discovery. */
-export const PRICING_VERSION = "standalone-pricing-2026-10-28-v3";
+export const PRICING_VERSION = "standalone-pricing-2026-11-05-v4";
 export type AccountingProvider = "openai" | "anthropic" | "google" | "grok";
 export type PriceTier = { aboveInputTokens: number; inclusive?: boolean; inputNanoUsd: string; outputNanoUsd: string; cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string;cacheWriteNanoUsd?:string;cacheWrite12hNanoUsd?:string };
 export type ModelPrice = {
   provider: AccountingProvider; model: string; inputNanoUsd: string; outputNanoUsd: string;
   cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string;cacheWriteNanoUsd?:string;cacheWrite12hNanoUsd?:string; maxContextTokens: number; maxOutputTokens: number;
   responsesOnly?: boolean; supportsStreaming?: boolean;
-  vision?: { kind: "tiles"; base: number; tile: number } | { kind: "claude"; maximum: number } | { kind: "gemini25" };
+  /** Reviewed Google 1K image-output rate; never infer this from text pricing. */
+  imageOutputNanoUsd?: string; imageOutputTokensPerImage?: number;
+  vision?: { kind: "tiles"; base: number; tile: number } | { kind: "claude"; maximum: number } | { kind: "gemini25" } | {kind:"geminiImage";maximum:number};
   tiers?: PriceTier[]; source: string;
 };
 export function deepFreeze<T>(value: T): T {
@@ -28,6 +30,10 @@ const models: ModelPrice[] = [
   ...["gpt-5.5-pro","gpt-5.5-pro-2026-04-23"].map((model):ModelPrice=>({provider:"openai",model,inputNanoUsd:"30000",outputNanoUsd:"180000",cachedInputNanoUsd:"30000",maxContextTokens:1050000,maxOutputTokens:128000,responsesOnly:true,supportsStreaming:false,source:openai+"gpt-5.5-pro"})),
   { provider:"openai", model:"o3-pro", inputNanoUsd:"20000",outputNanoUsd:"80000",maxContextTokens:200000,maxOutputTokens:100000,source:openai+"o3-pro" },
   ...([ ["claude-sonnet-4-5","3000","15000","300","3750"], ["claude-haiku-4-5","1000","5000","100","1250"], ["claude-sonnet-4-6","3000","15000","300","3750"], ["claude-opus-4-6","5000","25000","500","6250"], ["claude-sonnet-5-5","2000","10000","100","2500"], ["claude-opus-5-5","4000","20000","200","5000"] ]).map(([model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd]):ModelPrice => ({provider:"anthropic",model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd,maxContextTokens:model.endsWith("4-5")?200000:1000000,maxOutputTokens:64000,vision:{kind:"claude",maximum:model.endsWith("5-5")?4784:1568},source:claude})),
+  // First-party Google Standard prices, 1K image output only (2026-11-05).
+  // Image output is billed separately from text/thinking output.
+  {provider:"google",model:"gemini-3.1-flash-image",inputNanoUsd:"500",outputNanoUsd:"3000",imageOutputNanoUsd:"60000",imageOutputTokensPerImage:1120,vision:{kind:"geminiImage",maximum:1120},maxContextTokens:131072,maxOutputTokens:32768,source:google},
+  {provider:"google",model:"gemini-3.1-flash-lite-image",inputNanoUsd:"250",outputNanoUsd:"1500",imageOutputNanoUsd:"30000",imageOutputTokensPerImage:1120,vision:{kind:"geminiImage",maximum:1120},maxContextTokens:131072,maxOutputTokens:32768,source:google},
   {provider:"google",model:"gemini-2.5-pro",inputNanoUsd:"1250",outputNanoUsd:"10000",cachedInputNanoUsd:"125",maxContextTokens:1048576,maxOutputTokens:65536,vision:{kind:"gemini25"},tiers:[{aboveInputTokens:200000,inputNanoUsd:"2500",outputNanoUsd:"15000",cachedInputNanoUsd:"250"}],source:google},
   {provider:"google",model:"gemini-2.5-flash",inputNanoUsd:"300",outputNanoUsd:"2500",cachedInputNanoUsd:"30",maxContextTokens:1048576,maxOutputTokens:65536,vision:{kind:"gemini25"},source:google},
   ...["grok-4.7","grok-4.6"].map((model):ModelPrice=>({provider:"grok",model,inputNanoUsd:"2000",outputNanoUsd:"6000",cachedInputNanoUsd:"500",maxContextTokens:500000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"4000",outputNanoUsd:"12000",cachedInputNanoUsd:"1000"}],source:grok})),
@@ -54,13 +60,14 @@ export function selectPriceTier(price: ModelPrice, inputTokens: number): Pick<Mo
   return [...(price.tiers ?? [])].reverse().find(tier => tier.inclusive ? inputTokens >= tier.aboveInputTokens : inputTokens > tier.aboveInputTokens) ?? price;
 }
 /** Input is the total prompt: uncached + cache reads + verified five-minute writes. */
-export function priceTokenUsage(price: ModelPrice, inputTokens: number, outputTokens: number, cachedInputTokens = 0,cacheWriteInputTokens=0,cacheWriteTtl:string="5m"): string {
-  for (const count of [inputTokens,outputTokens,cachedInputTokens,cacheWriteInputTokens]) if (!Number.isSafeInteger(count)||count<0) throw new Error("Invalid token usage");
+export function priceTokenUsage(price: ModelPrice, inputTokens: number, outputTokens: number, cachedInputTokens = 0,cacheWriteInputTokens=0,cacheWriteTtl:string="5m",imageOutputTokens=0): string {
+  for (const count of [inputTokens,outputTokens,cachedInputTokens,cacheWriteInputTokens,imageOutputTokens]) if (!Number.isSafeInteger(count)||count<0) throw new Error("Invalid token usage");
   if (BigInt(cachedInputTokens)+BigInt(cacheWriteInputTokens)>BigInt(inputTokens)) throw new Error("Cache reads and writes exceed total input");
+  if(imageOutputTokens>outputTokens||imageOutputTokens>0&&!price.imageOutputNanoUsd)throw new Error("Unpriced or inconsistent image output");
   const tier=selectPriceTier(price,inputTokens);
   if (cachedInputTokens && !tier.cachedInputNanoUsd) throw new Error("Unpriced cache dimension");
   const writeRate=cacheWriteTtl==="5m"?tier.cacheWrite5mNanoUsd:cacheWriteTtl==="30m"?tier.cacheWriteNanoUsd:cacheWriteTtl==="12h"?tier.cacheWrite12hNanoUsd:undefined;
   if(cacheWriteInputTokens&&writeRate===undefined)throw new Error("Unpriced cache-write dimension");
-  const nano = (BigInt(inputTokens)-BigInt(cachedInputTokens)-BigInt(cacheWriteInputTokens))*BigInt(tier.inputNanoUsd)+BigInt(cachedInputTokens)*BigInt(tier.cachedInputNanoUsd??0)+BigInt(cacheWriteInputTokens)*BigInt(writeRate??0)+BigInt(outputTokens)*BigInt(tier.outputNanoUsd);
+  const nano = (BigInt(inputTokens)-BigInt(cachedInputTokens)-BigInt(cacheWriteInputTokens))*BigInt(tier.inputNanoUsd)+BigInt(cachedInputTokens)*BigInt(tier.cachedInputNanoUsd??0)+BigInt(cacheWriteInputTokens)*BigInt(writeRate??0)+(BigInt(outputTokens)-BigInt(imageOutputTokens))*BigInt(tier.outputNanoUsd)+BigInt(imageOutputTokens)*BigInt(price.imageOutputNanoUsd??0);
   return ((nano+999n)/1000n).toString();
 }

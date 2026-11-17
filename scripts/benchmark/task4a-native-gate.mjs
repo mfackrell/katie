@@ -8,9 +8,19 @@ import {pathToFileURL} from 'node:url';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
 
 export const TASK4A_ORIGINAL_PROJECT='6d1c29f1-b31e-47a5-aabb-cbcf1326f388';
+export const TASK4A_ORIGINAL_ISSUE=969;
 
-export function requireTask4aNativeGrant(request,project,manifest,key,now=Date.now()){
- if(project?.projectId!==TASK4A_ORIGINAL_PROJECT)return;
+export function requireTask4aNativeGrant(request,project,manifest,key,now=Date.now(),issueNumber=null){
+ // GitHub's trusted issue number still identifies original issue #969 if
+ // both project metadata and the native handoff are removed from its body.
+ const originalIssue=String(issueNumber??'')===String(TASK4A_ORIGINAL_ISSUE);
+ const originalProject=project?.projectId===TASK4A_ORIGINAL_PROJECT;
+ // A valid Task 4A signature is never portable to another issue, even when
+ // someone deletes its accompanying project marker.
+ const signedTask4a=manifest?.authorityKind==='task4a-developer';
+ if(!originalIssue&&!originalProject&&!signedTask4a)return;
+ if(!originalProject||(issueNumber!==null&&!originalIssue))
+  throw Error('TASK4A_NATIVE_ORIGINAL_ISSUE_BINDING_REQUIRED');
  if(manifest?.native!==true||manifest.authorityKind!=='task4a-developer')
   throw Error('TASK4A_NATIVE_AUTHORITY_REQUIRED');
  // Authenticate the actual request bytes, not a user-editable project marker
@@ -33,7 +43,7 @@ if(process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.u
   const request=readFileSync(process.argv[2],'utf8');
   const project=JSON.parse(readFileSync(process.argv[3],'utf8'));
   const manifest=JSON.parse(readFileSync(process.argv[4],'utf8'));
-  requireTask4aNativeGrant(request,project,manifest,process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY);
+  requireTask4aNativeGrant(request,project,manifest,process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY,Date.now(),process.env.ISSUE??null);
  }catch(error){
   console.error('TASK4A_NATIVE_DISPATCH_DENIED:',error?.message);
   process.exitCode=1;

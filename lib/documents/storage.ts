@@ -12,6 +12,7 @@ export const receiptSchema = z.object({ version: z.literal(1), id: z.string().re
   files: z.object({ docx: fileSchema, pdf: fileSchema }).strict(), pages: z.number().int().min(1).max(8),
   inspectedPageHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(8),
   correctionCount: z.number().int().min(0).max(3), createdAt: z.string(),
+  visualStatus: z.enum(['passed','technical-only']).optional(),
 }).strict();
 export type DocumentReceipt = z.infer<typeof receiptSchema>;
 type Storage = ReturnType<typeof createClient>['storage'];
@@ -38,7 +39,7 @@ export function createDocumentStore(storage: Storage) {
   return {
     async save(scopeInput: DocumentScope, files: { docx: Buffer; pdf: Buffer }, inspection: Inspection, correctionCount: number): Promise<DocumentReceipt> {
       const scope = scopeSchema.parse(scopeInput);
-      if (inspection.findings.length || inspection.visual !== 'passed' || inspection.pageHashes.length !== inspection.pageCount) throw new Error('Unvalidated documents cannot be delivered.');
+      if (inspection.findings.length || !['passed', 'technical-only'].includes(inspection.visual) || inspection.pageHashes.length !== inspection.pageCount) throw new Error('Unvalidated documents cannot be delivered.');
       if (files.docx.subarray(0, 2).toString() !== 'PK' || files.pdf.subarray(0, 5).toString() !== '%PDF-') throw new Error('Invalid artifact formats.');
       await privateBucket();
       const id = hash(Buffer.from(JSON.stringify([scope, hash(files.docx), hash(files.pdf)])));
@@ -54,7 +55,7 @@ export function createDocumentStore(storage: Storage) {
       }
       const receipt = receiptSchema.parse({ version: 1, id, scope,
         files: Object.fromEntries((['docx', 'pdf'] as const).map(ext => [ext, { filename: `document.${ext}`, mime: MIME[ext], sha256: hash(files[ext]), size: files[ext].length }])),
-        pages: inspection.pageCount, inspectedPageHashes: inspection.pageHashes, correctionCount, createdAt: new Date().toISOString(),
+        pages: inspection.pageCount, inspectedPageHashes: inspection.pageHashes, correctionCount, visualStatus: inspection.visual, createdAt: new Date().toISOString(),
       });
       for (const ext of ['docx', 'pdf'] as const) await writeVerified(path(scope.chatId, id, ext), files[ext], MIME[ext]);
       await writeVerified(path(scope.chatId, id, 'json'), Buffer.from(JSON.stringify(receipt)), 'application/json');
@@ -83,5 +84,9 @@ export function documentStore() {
 }
 export function documentLinks(receipt: DocumentReceipt): string {
   const base = `/api/documents/download?actorId=${receipt.scope.actorId}&chatId=${receipt.scope.chatId}&id=${receipt.id}`;
-  return `Created and inspected ${receipt.pages} page${receipt.pages === 1 ? '' : 's'}.\n\n[Download Word document](${base}&format=docx) · [Download PDF](${base}&format=pdf)`;
+  const count = `${receipt.pages} page${receipt.pages === 1 ? '' : 's'}`;
+  const status = receipt.visualStatus === 'passed'
+    ? `Created and inspected ${count}. Professional design review passed.`
+    : `Created ${count}. Technical validation passed; professional design review remains unresolved.`;
+  return `${status}\n\n[Download Word document](${base}&format=docx) · [Download PDF](${base}&format=pdf)`;
 }

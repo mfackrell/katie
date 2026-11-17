@@ -1,6 +1,7 @@
 import {verifyProjectLifecyclePostgres} from './helpers/project-lifecycle-postgres.mjs';
 import {verifyTask4aContinuationPostgres} from './helpers/task4a-continuation-postgres.mjs';
 import {verifyTask4aNativePostgres} from './helpers/task4a-native-postgres.mjs';
+import {verifyTask4aPregrantRecoveryPostgres} from './helpers/task4a-pregrant-recovery-postgres.mjs';
 import {verifyPostMigrationResearchAdmission} from './helpers/task4a-post-migration-research-admission.mjs';
 import {verifyTask4aSavedSpecificationPostgres} from './helpers/task4a-saved-specification-postgres.mjs';
 import {verifyDevelopmentDispatchRecoverySql} from './helpers/development-dispatch-recovery-sql.mjs';
@@ -144,13 +145,57 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query(readFileSync('tests/fixtures/task4a-native-bridge-sql.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261102211800_task4a_native_developer_bridge.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261103162000_task4a_reviewed_specification_recovery.sql','utf8'));
+  // Phase 1 production origin RPCs are qualified in ordinary authority fixtures;
+  // this project fixture intentionally does not create those ordinary RPCs.
+  await db.query(readFileSync('supabase/migrations/20261103181500_task4a_pregrant_recovery.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261103225000_task4a_successor_continuation.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261105144000_task4a_failed_dispatch_one_shot.sql','utf8'));
   await db.query('set role service_role');
+  if(process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_RACE==='1'||
+     process.env.KATIE_TEST_ONLY_TASK4A_POSTPAID_VALIDATE==='1'||
+     process.env.KATIE_TEST_ONLY_TASK4A_WATCHDOG_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{
+    successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
+    ownerGovernedPaidMode:true,postpaidMode:true,
+    watchdogMode:process.env.KATIE_TEST_ONLY_TASK4A_WATCHDOG_RACE==='1',connect
+   });
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_TWO_CONSENT_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{
+    successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
+    ownerGovernedPaidMode:true,failedDispatchConcurrent:true,connect
+   });
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_BLOCKED_OWNER_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{
+    successorMode:true,failedDispatchMode:true,ownerGovernedMode:true,
+    ownerGovernedConcurrent:true,connect
+   });
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_FAILED_DISPATCH_RACE==='1'){
+   await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true,failedDispatchMode:true,failedDispatchConcurrent:true,connect});
+   return;
+  }
+  if(process.env.KATIE_TEST_ONLY_TASK4A_RACE==='1'){
+   // A separate disposable PostgreSQL cluster per invocation ensures the
+   // concurrent original-identity fixture cannot collide with the existing
+   // native gateway fixture, which intentionally commits its own synthetic task.
+   await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true,concurrentMode:true,connect});
+   return;
+  }
   await verifyTask4aSavedSpecificationPostgres(db);
+  await verifyTask4aPregrantRecoveryPostgres(db);
+  await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true});
+  await verifyTask4aPregrantRecoveryPostgres(db,{successorMode:true,failedDispatchMode:true});
   await verifyTask4aNativePostgres(db,connect);
   await verifyPostMigrationResearchAdmission(db);
   await verifyProjectLifecyclePostgres(db);
   await assert.rejects(db.query("set role anon;select recover_project_development_dispatch('44444444-4444-4444-8444-444444444444');"),/permission denied/);
   await db.query('reset role');await db.query('set role service_role');
   await db.query('reset role');await db.query('set role anon');for(const table of ['work_projects','project_agents','project_runs','project_events'])await assert.rejects(db.query('select * from '+table),/permission denied/);await assert.rejects(db.query('select claim_work_project()'),/permission denied/);await assert.rejects(db.query("select retry_project_review('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222')"),/permission denied/);
+
  }finally{await Promise.allSettled(clients.map(c=>c.end()));if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);rmSync(root,{recursive:true,force:true});}
 });

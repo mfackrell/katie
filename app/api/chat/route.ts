@@ -1,14 +1,21 @@
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
-import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
+import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
+import { resolveDurableDocumentRequest } from '@/lib/documents/continuity';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { imageGenerationCapableModel, containsGeneratedImage, filterPricedImageFallbacks } from "@/lib/chat/image-generation-contract";
+import { generatedImageService } from "@/lib/uploads/generated-image-service";
+import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
+import { resolveImageFollowup, imageEditSourceUnavailable } from "@/lib/chat/image-source-followup";
+import { observeGeneratedImage } from "@/lib/uploads/generated-image-observation";
 import { verifiedFileOnlyPdfReceipt } from "@/lib/chat/file-only-pdf-receipt";
 import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { loadStandalonePricing } from "@/lib/standalone-accounting/pricing-intake";
+import { getModelPrice, PRICING_SNAPSHOT } from "@/lib/standalone-accounting/pricing";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
@@ -37,6 +44,7 @@ import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode"
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { recalledKatieVisualMemoryContext } from "@/lib/chat/visual-memory";
 import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest, currentTurnImageGroundingContext } from "@/lib/uploads/still-image-observations";
@@ -44,7 +52,7 @@ import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
-import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
+import { selectStoredAttachments, recentVerifiedVisualCorrection, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
 import { buildAttachmentSelectionAudit } from "@/lib/chat/attachment-selection-audit";
 import { loadSavedVideoFollowUp, retrieveSavedEvidence } from "@/lib/agents/media";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
@@ -74,6 +82,7 @@ import { getAvailableProviders } from "@/lib/providers";
 import { selectVideoReplyTarget, generateContextualVideoReply, buildContextualVideoReplyPrompt } from "@/lib/chat/video-response";
 import { validateManualOverrideWithRecovery } from "@/lib/chat/manual-override-recovery";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
+import { auditRoutingDelivery } from "@/lib/router/routing-delivery-audit";
 import {
   detectWebSearchSignals,
   inferRequestClassification,
@@ -92,9 +101,10 @@ import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects, verifyTaskPr
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
-import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
+import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
 import {
   isCreativeNarrativeTurn,
+  shouldApplyCreativeNarrativeContinuity,
   preferredClaudeCreativeModel,
   CREATIVE_CONTINUITY_INSTRUCTIONS,
   CREATIVE_REWRITE_INSTRUCTIONS,
@@ -183,6 +193,7 @@ const requestSchema = z.object({
   chatId: z.string().min(1),
   message: z.string().min(1),
   documentSourceMessageId: z.string().uuid().optional(),
+  imageSource: z.object({messageId:z.string().uuid(),assetIndex:z.number().int().min(0).max(4)}).strict().optional(),
   images: z.array(z.string()).optional(),
   fileReferences: z.array(fileReferenceSchema).optional(),
   attachmentManifest: attachmentManifestSchema.optional(),
@@ -859,6 +870,25 @@ async function executeChat(request: NextRequest) {
       }
       return files;
     }));
+    const imageFollowup = benchmarkRelay || currentAgentTask() ? null : await cachedWorkflowValue("image-source-followup", async () => {
+      let imageHistory = attachmentHistory;
+      if (payload.imageSource && !imageHistory.some(turn=>turn.id===payload.imageSource!.messageId)) {
+        const selected = await getMessageById(chatId,payload.imageSource.messageId);
+        if (selected) imageHistory = [...imageHistory,selected];
+      }
+      return resolveImageFollowup({message,history:imageHistory,catalog,actorId,chatId,
+        freshCount:newAttachments.length,pin:payload.imageSource}, {
+        registerLegacy:(source,index)=>generatedImageService().registerLegacy(actorId,chatId,source,index),
+        read:async source=>source.generatedSource
+          ? (await readGeneratedImage(actorId,chatId,source.id)).descriptor : source,
+      });
+    });
+    // Catalog snapshots may predate on-demand legacy registration. Add only
+    // exact server-verified current-chat sources, not provider URLs or guesses.
+    for (const selected of imageFollowup?.selections ?? []) {
+      const at=catalog.findIndex(file=>file.id===selected.attachment.id && file.chatId===chatId);
+      if (at<0) catalog.push(selected.attachment); else catalog[at]=selected.attachment;
+    }
     const temporalIntent = timelineIntent(message);
     const freshVideoReferences = newAttachments.filter(file => file.mimeType.startsWith("video/"));
     const timelineSelection = temporalIntent
@@ -897,13 +927,30 @@ async function executeChat(request: NextRequest) {
     const identitySourceAllowed = (file: (typeof newAttachments)[number]) => file.mimeType !== "application/pdf" ||
       Boolean(taskIdentityPdfSelection?.fileIds.has(file.fileId));
     const freshTaskDescriptions = new Map<string, Awaited<ReturnType<typeof describeAttachmentEvidence>>>();
-    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && !isStillImageCreationRequest(message);
+    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && imageFollowup?.operation !== 'edit' && !isStillImageCreationRequest(message);
     const imageObservationStages:string[]=[];
     const observeImages = async (files:typeof newAttachments,final=false) => {
       const images=files.filter(file=>file.mimeType.startsWith('image/'));
       if(!standaloneImageObservation || !images.length)return;
-      const descriptions=await observeStandaloneStillImages(images,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
-      for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+      const ordinary:typeof images=[];
+      for (const reference of images) {
+        const saved=catalog.find(file=>file.id===reference.fileId && file.generatedSource && file.actorId===actorId && file.chatId===chatId);
+        if (!saved) {ordinary.push(reference);continue;}
+        if (freshTaskDescriptions.has(reference.fileId)) continue;
+        // Observation runs during preparation, before the later chat receipt is
+        // claimed. Use the already leased workflow ID, never an uninitialized
+        // downstream requestId or a newly generated request identifier.
+        const observationRequestId=verifiedWorkflow?.workflow.request_id;
+        if (!observationRequestId) throw new Error('Generated-image inspection requires its durable request identity.');
+        const inspected=await observeGeneratedImage({actorId,chatId,requestId:observationRequestId,attachment:saved,reference,question:message,
+          onStatus:stage=>imageObservationStages.push(stage)});
+        freshTaskDescriptions.set(reference.fileId,inspected.observation);
+        const at=catalog.findIndex(file=>file.id===saved.id);catalog[at]=inspected.descriptor;
+      }
+      if (ordinary.length) {
+        const descriptions=await observeStandaloneStillImages(ordinary,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
+        for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+      }
     };
     await observeImages(newAttachments);
     const retainedImageDescriptors=standaloneImageObservation
@@ -959,7 +1006,7 @@ async function executeChat(request: NextRequest) {
       projectRelation: contextClassification?.projectRelation,
       projectTransition: contextClassification?.projectTransition,
     });
-    const pdfReviewContinuation = await getPendingReviewClarification(actorId, chatId, {
+    const pdfReviewContinuation = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: pdfProgress, history: attachmentHistory,
     });
     const pdfTaskContext = pdfReviewContinuation &&
@@ -1023,9 +1070,29 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
-    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
+    // Exact source IDs let a saved media-search excerpt recover Katie's own
+    // recorded visual episode without falsely treating an arbitrary description
+    // as first-hand vision or reopening unrelated actor-owned attachments.
+    if (mediaMemory) {
+      const recalledEpisodes = recalledKatieVisualMemoryContext(
+        actorId, catalog, mediaMemory.hits, Boolean(mediaMemory.decision.clarification)
+      );
+      if (recalledEpisodes) mediaMemory = {
+        ...mediaMemory,
+        context: mediaMemory.context + "\n" + recalledEpisodes,
+      };
+    }
+    // A correction of the immediately preceding image assessment is already
+    // bound to an exact, verified current-chat upload. Do not let a broad
+    // media search or an ambiguous Gemini selector override that evidence.
+    const verifiedVisualCorrection = !benchmarkRelay && !newAttachments.length &&
+      !timelineActive && !pdfMemoryDecision && !savedVideoFollowUp && !explicitSavedProjectReference
+      ? recentVerifiedVisualCorrection(message,catalog,attachmentHistory,chatId)
+      : null;
+    if (verifiedVisualCorrection) mediaMemory = null;
+    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : imageFollowup ?? (pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
-      : pdfMemoryDecision ?? (timelineActive
+      : pdfMemoryDecision ?? verifiedVisualCorrection ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
       : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
@@ -1034,7 +1101,7 @@ async function executeChat(request: NextRequest) {
           newAttachments.map(file => file.fileName),
           { currentChatId: chatId, activeProject: pdfProgress.projectContext
             ? { id: pdfProgress.projectContext.userMessageId, text: pdfProgress.projectContext.text } : null },
-        ));
+        )));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
     // The selector is advisory. An unrelated current request must NEVER
@@ -1067,8 +1134,13 @@ async function executeChat(request: NextRequest) {
     const restored = await loadSelectedAttachmentSources(attachmentDecision, async saved => {
       const owner = await getChatById(saved.chatId ?? chatId);
       if (!owner || owner.actorId !== actorId) throw new Error("Source conversation is unavailable to this actor.");
+      // Cached source selection does not prove that original bytes still exist.
+      // Revalidate generated sources even for edit/recovery paths that skip Qwen.
+      if (saved.generatedSource) return (await readGeneratedImage(actorId,owner.id,saved.id)).reference;
       return restoreConversationAttachment(owner.id, saved, actorId);
     });
+    // Fail closed if a previously checkpointed edit cannot restore its pixels.
+    const imageEditUnavailable = imageEditSourceUnavailable(imageFollowup, restored.sourceIds);
     // Index the exact selected source by trusted fileId, never filename. Source
     // selection already checked that the owning chat belongs to this actor.
     const selectedSourceDescriptors = attachmentDecision.selections
@@ -1097,6 +1169,11 @@ async function executeChat(request: NextRequest) {
       if(standaloneImageObservation)for(const file of restored.references.filter(file=>file.mimeType.startsWith('image/'))){
         const original=savedVideoSourceByFileId.get(file.fileId);
         const descriptor=original?(updatedSavedImageDescriptors.get(original.id)??original):undefined;
+        if (descriptor?.generatedSource) {
+          const latest=catalog.find(saved=>saved.id===descriptor.id && saved.chatId===descriptor.chatId);
+          if (latest) updatedSavedImageDescriptors.set(descriptor.id,latest);
+          continue; // The source-claimed generated-image observer already committed this evidence.
+        }
         const description=freshTaskDescriptions.get(file.fileId);
         if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage||
           description.observationAgreement!==descriptor.observationAgreement||
@@ -1137,7 +1214,6 @@ async function executeChat(request: NextRequest) {
       ? currentTurnImageGroundingContext(requestAttachments,freshTaskDescriptions,new Set(newAttachments.map(ref=>ref.fileId)))
       : '';
     const selectionContext = () => currentImageGrounding + '\n' + timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
-      + (standaloneImageObservation&&requestAttachments.some(file=>file.mimeType.startsWith('image/'))?'\nImage source retained privately; the current response model receives labelled textual visual observations. It has not directly inspected raw pixels.':'')
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -1253,6 +1329,7 @@ async function executeChat(request: NextRequest) {
           }),
           JSON.stringify({
             type: "content",
+            messageId: idempotencyClaim.record.assistantMessageId,
             text: idempotencyClaim.record.assistantContent ?? "",
             ...(replayPresentation ? { presentation: replayPresentation } : {}),
             assets: idempotencyClaim.record.assistantAssets,
@@ -1370,7 +1447,11 @@ async function executeChat(request: NextRequest) {
       !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
       ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
       : null;
-    const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = imageEditUnavailable
+      ? {reason:"image-source" as const,text:"The selected image original cannot be reopened. I cannot edit missing pixels or substitute another image."}
+      : imageFollowup?.clarification
+      ? {reason:"image-source" as const,text:imageFollowup.clarification}
+      : !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
@@ -1388,8 +1469,8 @@ async function executeChat(request: NextRequest) {
         chatId,
       });
 
-      const localUserMessageId = pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();
-      const localAssistantMessageId = pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();
+      const localUserMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressUserMessageId : crypto.randomUUID();
+      const localAssistantMessageId = imageFollowup || pdfProgress.projectClarification || fileOnlyPdfReceipt ? taskProgressAssistantMessageId : crypto.randomUUID();
       const clarificationAttachments: ConversationAttachment[] = [];
       if (pdfProgress.projectClarification || fileOnlyPdfReceipt) {
         for (const [index, attachment] of newAttachments.entries()) {
@@ -1444,6 +1525,7 @@ async function executeChat(request: NextRequest) {
         }),
         JSON.stringify({
           type: "content",
+          messageId: localAssistantMessageId,
           text: localResponseText,
           assets: [],
           provider: "local",
@@ -1557,7 +1639,7 @@ async function executeChat(request: NextRequest) {
     }
     // Current uploads are authoritative. Historical website pixels must never
     // replace them or inflate an ordinary photo request into a screenshot batch.
-    if(!newAttachments.length)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
+    if(!newAttachments.length && !imageFollowup)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
     if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
     const activeRepoContext = effectiveRepoId ? await loadActiveRepoContext(effectiveRepoId) : null;
     const sessionContext: ChatSessionContext = {
@@ -1696,7 +1778,7 @@ async function executeChat(request: NextRequest) {
           requestId
         }
       );
-      const overrideIntent = overrideClassification.intent;
+      const overrideIntent = imageFollowup?.operation === "edit" ? "image-generation" as const : overrideClassification.intent;
       responsePurposeHint = overrideClassification.responsePurpose;
       projectRelationHint = overrideClassification.projectRelation;
       const { decision: validatedOverride, recoveredIntent } = validateManualOverrideWithRecovery({
@@ -1710,6 +1792,7 @@ async function executeChat(request: NextRequest) {
       if (validatedOverride.changed) {
         return await rejectTracked(`Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`);
       }
+      if (imageFollowup?.operation === "edit") resolvedRequestIntent = "image-generation";
       if (recoveredIntent) {
         // Recovery only: the request contains no visual input, so retrying its
         // incompatible vision classification as text is safe and non-fatal.
@@ -1790,6 +1873,7 @@ async function executeChat(request: NextRequest) {
         `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=none intentSource=router-fallback`
       );
       const routingDecision = await chooseProvider(message, routingContext, providers, {
+        ...(imageFollowup?.operation==='edit' && imageFollowup.selections.length ? {requestIntent:'image-generation' as const} : {}),
         hasImages: hasVisualInput,
         hasVideoInput,
         actorId,
@@ -1822,12 +1906,78 @@ async function executeChat(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
+    // The router's capability heuristics may select an image model with only
+    // unreviewed text pricing. Auto-route exclusively to an actually available
+    // Google model with a first-party, immutable image-output tariff.
+    if(resolvedRequestIntent==="image-generation" && !overrideModel && !overrideProvider) {
+      const googleImage=providers.find(candidate=>candidate.name==="google");
+      if(googleImage){
+        const available=new Set((await googleImage.listModels()).map(model=>model.replace(/^models[/]/,"").toLowerCase()));
+        const eligible=["gemini-3.1-flash-image","gemini-3.1-flash-lite-image"].filter(id=>
+          available.has(id) && Boolean(getModelPrice("google",id,PRICING_SNAPSHOT)?.imageOutputNanoUsd));
+        if(eligible.length){
+          const previousProvider=provider.name,previousModel=modelId;
+          const selected=eligible.includes(modelId)&&provider.name==="google"?modelId:eligible[0];
+          provider=googleImage;
+          modelId=selected;
+          fallbackChain=eligible.filter(id=>id!==selected).map((id,index)=>({provider:googleImage,modelId:id,score:1-index}));
+          if(previousProvider!==provider.name||previousModel!==modelId){
+            selectionExplainer={...selectionExplainer,selected_provider:"google",selected_model:modelId,
+              selected_source:"deterministic-fallback",fallback_used:true,
+              fallback_reason:"Original image model had no reviewed image-output tariff"};
+            console.info("[Image Routing] Selected reviewed, available image generation model",{
+              requestId,previousProvider,previousModel,provider:provider.name,model:modelId});
+          }
+        }else console.warn("[Image Routing] No available model with reviewed image-output pricing",{requestId});
+      }
+    }
+
+    // Persist the accepted execution choice before any provider execution.
+    // This complements private classifier/reranker response checkpoints and
+    // remains available even when generation fails before saving an answer.
+    try {
+      await cachedWorkflowValue("routing-execution-decision:v1", async () => ({
+        version: "routing-execution-v1",
+        requestId,
+        classifiedIntent: resolvedRequestIntent,
+        intentAuthority,
+        intentResolutionReason,
+        objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+        chosenProvider: provider.name,
+        chosenModel: modelId,
+        routerChosenProvider: selectionExplainer?.selected_provider ?? null,
+        routerChosenModel: selectionExplainer?.selected_model ?? null,
+        selectedSource: selectionExplainer?.selected_source ?? null,
+        justification: selectionExplainer?.selection_justification ?? null,
+        candidateScore: selectionExplainer?.top_candidate_score ?? null,
+        topFactors: selectionExplainer?.top_factors ?? [],
+        topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+        deterministicOverride: selectionExplainer?.override ?? null,
+        fallbackUsed: selectionExplainer?.fallback_used ?? false,
+        fallbackReason: selectionExplainer?.fallback_reason ?? null,
+        productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+      }));
+    } catch (error) {
+      console.warn("[Routing Execution Audit] checkpoint_unavailable", {
+        requestId, cause: error instanceof Error ? error.name : "unknown"
+      });
+    }
+
+    // Output modality wins over text-narrative styling. An earlier fictional scene
+    // must not replace a requested image with a Claude writing specialist.
+    if (resolvedRequestIntent === "image-generation") {
+      fallbackChain = filterPricedImageFallbacks(fallbackChain, candidate =>
+        Boolean(getModelPrice(candidate.provider.name, candidate.modelId, PRICING_SNAPSHOT)?.imageOutputNanoUsd));
+    }
+    const creativeTextNarrativeRequest = shouldApplyCreativeNarrativeContinuity(
+      creativeNarrativeRequest, resolvedRequestIntent);
+
     // Select continuity only after classifying the literal current turn. The
     // existence of an unresolved audit in this chat is never enough to resume it.
     // Routing selects execution capabilities, not a different parent task.
     taskProgress = pdfProgress;
     projectRelationHint = contextClassification?.projectRelation;
-    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId, {
+    const pendingReviewClarification = imageFollowup ? null : await getPendingReviewClarification(actorId, chatId, {
       message, progress: taskProgress, history, projectRelation: projectRelationHint,
     });
     const verifyingSavedDraft = Boolean(pendingReviewClarification &&
@@ -1837,6 +1987,27 @@ async function executeChat(request: NextRequest) {
     documentProduction ??= pendingReviewClarification ? documentRequest(savedDraftReviewTask(pendingReviewClarification.pending) ?? '') : null;
     documentProduction ??= answeredDocumentRequest(taskProgress, taskProgressUserMessageId);
     documentProduction = inheritDocumentPageConstraint(message, documentProduction, attachmentHistory);
+    // Legacy isolated route test harnesses evaluate function bodies without module
+    // imports; production bundles always supply the typed continuity module.
+    const documentBinding = typeof resolveDurableDocumentRequest === 'function'
+      ? resolveDurableDocumentRequest(message, documentProduction,
+          taskProgress.documentContract, documentSourceMessageId)
+      : { request: documentProduction, contract: undefined };
+    documentProduction = documentBinding.request;
+    if (documentBinding.contract) {
+      // Preserve the original firsthand user-message identifier. A missing
+      // provenance source may not be silently relabeled as the current user.
+      const inheritedSource = documentBinding.contract.provenance === 'inherited-user'
+        ? [...attachmentHistory].reverse().find(turn => turn.role === 'user' &&
+            documentRequest(turn.content)?.pages === documentBinding.request?.pages)?.id
+        : undefined;
+      const originalUserId = documentBinding.contract.sourceUserMessageId ||
+        inheritedSource ||
+        (documentBinding.contract.provenance === 'current-user' ? taskProgressUserMessageId : undefined);
+      if (originalUserId) taskProgress = { ...taskProgress,
+        documentContract: { ...documentBinding.contract, sourceUserMessageId: originalUserId },
+      };
+    }
     const reviewTaskProgress = savedDraftOriginalTask ? {
       ...taskProgress,
       lastUserIntent: "continuation" as const,
@@ -1879,7 +2050,7 @@ async function executeChat(request: NextRequest) {
       pendingReviewContinuation: Boolean(pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing),
       projectRelation: contextClassification?.projectRelation ?? resolvedRoutingIntentForReroute?.projectRelation,
     });
-    const taskProgressContext = taskProgressPrompt.text;
+    const taskProgressContext = imageFollowup ? "" : taskProgressPrompt.text;
     console.info("[TaskProgress] Prompt scope", {
       requestId, included: Boolean(taskProgressContext), reason: taskProgressPrompt.reason,
       historyTurnCount: history.length,
@@ -1898,7 +2069,7 @@ async function executeChat(request: NextRequest) {
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
     // and unrelated factual questions retain the router's original decision.
-    if (creativeNarrativeRequest && !storedWebsite.fresh) {
+    if (creativeTextNarrativeRequest && !storedWebsite.fresh) {
       const claude = providers.find(candidate => candidate.name === "anthropic");
       if (claude) {
         try {
@@ -2306,15 +2477,17 @@ ${savedProjectSourceWarning.retainedObjective}`;
       subjects: visualContinuity?.references.map(item => item.key) ?? [],
     });
 
+    const imageGenerationRequested = resolvedRequestIntent === "image-generation";
     let streamCancelled = false;
+    let answerStreamFinalized = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
           const requestStartedAtMs = Date.now();
-          let firstReasoningUpdateAtMs: number | null = null;
-          let reasoningUpdateCount = 0;
-          const reasoningState = new ReasoningStateAccumulator(requestId, [...DEFAULT_REASONING_CATEGORIES]);
-          let lastSnapshotEmitAt = Date.now();
+          let firstAnswerDeltaAtMs: number | null = null;
+          let answerDeltaCount = 0;
+          const reasoningState = new ReasoningStateAccumulator(requestId, []);
+          
           const emitChunk = (chunk: Record<string, unknown>) => {
             if (streamCancelled) {
               return;
@@ -2357,6 +2530,11 @@ ${savedProjectSourceWarning.retainedObjective}`;
 
             const startEvent = reasoningState.start();
             emitChunk(startEvent);
+            // This is observable workflow activity, never answer text or a
+            // fabricated account of the model's hidden internal reasoning.
+            const progress = (stage: string, message: string) =>
+              emitChunk({ type: "processing_update", stage, message });
+            progress("context", "Context prepared; saving the conversation turn.");
             for(const stage of [...new Set(imageObservationStages)])emitChunk({type:'metadata',imageObservation:stage,detail:stage});
             console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
@@ -2406,6 +2584,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             });
 
             await saveTaskProgress(actorId, chatId, taskProgress);
+            progress("generation", "Conversation saved. Generating the response with the selected model.");
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask() && !documentProduction;
             if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
@@ -2414,7 +2593,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
-              if (reviewMode === "always" || documentProduction) return;
+              if (reviewMode === "always" || documentProduction || imageGenerationRequested) return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -2423,19 +2602,9 @@ ${savedProjectSourceWarning.retainedObjective}`;
               const visibleDelta = presentationFilter ? presentationFilter.write(screenedDelta) : screenedDelta;
               if (!visibleDelta) return;
               emitChunk({ type: "delta", text: visibleDelta });
-              const reasoningUpdate = reasoningState.addDelta(visibleDelta);
-              if (reasoningUpdate) {
-                reasoningUpdateCount += 1;
-                if (firstReasoningUpdateAtMs === null) {
-                  firstReasoningUpdateAtMs = Date.now();
-                }
-                emitChunk(reasoningUpdate);
-
-                if (Date.now() - lastSnapshotEmitAt > 900 || reasoningUpdateCount % 6 === 0) {
-                  emitChunk(reasoningState.snapshot());
-                  lastSnapshotEmitAt = Date.now();
-                }
-              }
+              answerDeltaCount += 1;
+              if (firstAnswerDeltaAtMs === null) firstAnswerDeltaAtMs = Date.now();
+              // Answer tokens are NEVER republished as reasoning or progress.
             };
 
             let pendingVideoAssistantMessageId: string | null = null;
@@ -2487,7 +2656,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
                   ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
-                  ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+                  ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
                 message: forReview ? message : visualContinuity
@@ -2564,6 +2733,7 @@ ${chunkWorkflowSummary}`;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
             const stillImageVisionRequest = resolvedRequestIntent === "vision-analysis" && rerouteHasVisualInput && !hasVideoInput;
+            // Image-generation intent remains bound to the original request through reroutes.
             const rerouteRoutingContext = [
               controlPlaneConversationContext,
               `Refusal reroute has visual input: ${rerouteHasVisualInput}`
@@ -2726,6 +2896,12 @@ ${chunkWorkflowSummary}`;
                       throw new Error("Gemini and Qwen video analysis failed. Grok cannot inspect the saved video: " + reason);
                     }
                   }
+                }
+                if (imageGenerationRequested && !candidate.runpodImageFallback &&
+                    !imageGenerationCapableModel(candidate.provider.name, candidate.modelId)) {
+                  throw Object.assign(new Error("The proposed fallback cannot generate images. No text model was dispatched."), {
+                    code: "standalone_unsupported_image_capability", terminal: true,
+                  });
                 }
                 provider = candidate.provider;
                 modelId = candidate.modelId;
@@ -2927,7 +3103,7 @@ ${chunkWorkflowSummary}`;
                             },
                           });
                         },
-                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
+                        onFinalTextDelta: suppressCalculationScaffolding || creativeTextNarrativeRequest || hasVideoInput
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
                         maxDelegations: collaborationConfig.maxDelegations,
@@ -2959,7 +3135,7 @@ ${chunkWorkflowSummary}`;
                         // not an opportunity to launch helper orchestration.
                         const direct = provider.generateStream
                           ? await provider.generateStream(finalParams, {
-                              onTextDelta: async delta => enqueueDelta(delta),
+                              onTextDelta: async delta => { if (!imageGenerationRequested) enqueueDelta(delta); },
                             })
                           : await provider.generate(finalParams);
                         return { result: direct, streamedText: direct.text };
@@ -3051,7 +3227,7 @@ ${chunkWorkflowSummary}`;
                               },
                             });
                           },
-                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
+                          onFinalTextDelta: suppressCalculationScaffolding || creativeTextNarrativeRequest || hasVideoInput
                             ? async () => {}
                             : async (delta) => enqueueDelta(delta),
                           maxEscalations: 2,
@@ -3083,7 +3259,7 @@ ${chunkWorkflowSummary}`;
                 // Inspect the complete draft *before* streaming or saving it.
                 // If it substantially duplicates recent narrative text, request
                 // at most one original continuation from the same model.
-                if (creativeNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
+                if (creativeTextNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
                     generation.result.provider === provider.name &&
                     generation.result.model === modelId &&
                     Date.now() + 45_000 < executionDeadlineMs) {
@@ -3161,9 +3337,11 @@ ${chunkWorkflowSummary}`;
                     generationResult.provider === videoReplyTarget.provider &&
                     generationResult.model === videoReplyTarget.model
                     ? false // Video conversational model decisions remain final.
-                    : (Boolean(documentProduction) && isDocumentCapabilityDenial(generationResult.text ?? '')) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
+                    : (Boolean(documentProduction) && (isDocumentCapabilityDenial(generationResult.text ?? '') || isDocumentDeliveryNarrative(generationResult.text ?? ''))) || isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt, attemptedAttempts }) => {
                 if (hasVideoInput) return null;
+                // Image refusals retain only prequalified, priced image fallbacks.
+                if (imageGenerationRequested) return null;
                 // Standalone photo analysis: prefer a real Grok vision model when
                 // the first model returns a generic inability instead of a description.
                 // Never send an uploaded photo to RunPod FLUX (generation-only).
@@ -3326,7 +3504,7 @@ ${chunkWorkflowSummary}`;
                       .filter(item => item.provider.name === attempt.provider.name)
                       .map(item => item.modelId.toLowerCase())),
                   });
-                  if (!upgrade) {
+                  if (!upgrade || imageGenerationRequested && !imageGenerationCapableModel(attempt.provider.name, upgrade)) {
                     console.warn('[Context Upgrade] No reviewed capability-preserving model fits the unchanged request', {
                       requestId, provider: attempt.provider.name, model: attempt.modelId,
                       inputTokens: accounting.inputTokens, outputAllowance: accounting.outputAllowance,
@@ -3372,6 +3550,7 @@ ${chunkWorkflowSummary}`;
                     routingSource: "deterministic-fallback" as const,
                   };
                 }
+                if (resolvedRequestIntent === "image-generation") return null; // Keep prequalified priceable fallback chain authoritative.
                 if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
                     !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
@@ -3522,8 +3701,23 @@ ${chunkWorkflowSummary}`;
             modelId = generationAttempt.attempt.runpodImageFallback || generationAttempt.attempt.runpodStillVisionFallback
               ? generationAttempt.result.model : generationAttempt.attempt.modelId;
 
+            // Image generation succeeds only when the provider returned real image
+            // media. A text clarification or refusal cannot silently satisfy it.
+            if (imageGenerationRequested && !containsGeneratedImage(result)) {
+              throw new Error("Image generation returned no image. Katie did not substitute a text-only answer.");
+            }
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
+
+            // Final document output must be source content, not a fabricated
+            // "files ready" notice. Reject before any paid content review.
+            if (documentProduction && !selectedDocumentSource &&
+                isDocumentDeliveryNarrative(result.text ?? "")) {
+              console.warn("[DocumentDraft] delivery notice rejected before review and rendering", {
+                requestId, provider: result.provider, model: result.model,
+              });
+              throw new Error("The model returned a delivery notice instead of document content. No Word or PDF files were created.");
             }
 
             // On-demand capability escalation also returns live evidence. Save
@@ -3699,11 +3893,12 @@ ${chunkWorkflowSummary}`;
               const { deliverDocument } = await import('@/lib/documents/service');
               result = await deliverDocument({ result, provider: providers.find(p => p.name === result!.provider) ?? provider,
                 params: createParams(result.model), actorId, chatId, requestId,
-                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs });
+                targetPages: documentProduction.pages, deadlineMs: executionDeadlineMs,
+                requireProfessionalAcceptance: /\\b(?:professionally (?:acceptable|polished|designed)|professional (?:quality|design)|visually approved|design must pass)\\b/i.test(message) });
               streamedText = result.text;
             }
 
-            const imageAssets =
+            let imageAssets:import("@/lib/images/generated-source").ImageAsset[] =
               result.content
                 ?.map((part) => {
                   const partType = typeof part.type === "string" ? part.type.toLowerCase() : "";
@@ -3750,18 +3945,84 @@ ${chunkWorkflowSummary}`;
               const tail = presentationFilter.finish();
               if (tail) emitChunk({ type: "delta", text: tail });
             }
+            progress("save", "Response generated; saving the final answer.");
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
+            const generatedImages = imageAssets.length && imageGenerationRequested
+              ? await cachedWorkflowValue(`generated-images:${assistantMessageId}`,()=>generatedImageService().retainResult({
+                  actorId,chatId,messageId:assistantMessageId,requestId,createdAt:workflowTimestamp(),
+                  provider:result!.provider,model:result!.model,assets:imageAssets,
+                  parents:imageFollowup?.operation==='edit' ? savedAttachments.filter(file=>attachmentSourceIds.has(file.id)).map(file=>({
+                    attachmentId:file.id,sourceChatId:file.chatId??chatId,
+                    ...(file.generatedSource?.sourceHash?{sourceHash:file.generatedSource.sourceHash}:{}),
+                  })) : [],
+                })) : null;
+            if (generatedImages) {
+              // A checkpoint proves prior persistence, not that an original
+              // remains present now. Do not republish a stale retention claim.
+              for (const source of generatedImages.attachments)
+                await readGeneratedImage(actorId,chatId,source.id);
+              imageAssets = generatedImages.assets;
+            }
             if (!currentStandaloneWorkflow()?.resumed || !await getMessageById(chatId, assistantMessageId)) await saveMessage(chatId, {
               id: assistantMessageId,
               role: "assistant",
               model: result.model,
               content: assistantText,
               assets: imageAssets,
+              ...(generatedImages ? {attachments:generatedImages.attachments} : {}),
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
+            // Objective fulfillment is audited independently of the model's
+            // claim to have succeeded. Never block a valid response because
+            // diagnostics storage is unavailable, and never trigger a retry.
+            try {
+              const deliveryAudit = await cachedWorkflowValue("routing-delivery-audit:v1", async () => ({
+                ...auditRoutingDelivery({
+                  userMessage: message,
+                  selectedIntent: resolvedRequestIntent,
+                  answer: assistantText,
+                  imageCount: imageAssets.length
+                }),
+                requestId,
+                classifiedIntent: resolvedRequestIntent,
+                objectiveGuardReason: resolvedRoutingIntentForReroute?.objectiveGuardReason ?? null,
+                provider: result!.provider,
+                model: result!.model,
+                routingSelection: {
+                  initialProvider: selectionExplainer?.selected_provider ?? null,
+                  initialModel: selectionExplainer?.selected_model ?? null,
+                  finalProvider: result!.provider,
+                  finalModel: result!.model,
+                  selectedSource: selectionExplainer?.selected_source ?? null,
+                  selectionJustification: selectionExplainer?.selection_justification ?? null,
+                  score: selectionExplainer?.top_candidate_score ?? null,
+                  topFactors: selectionExplainer?.top_factors ?? [],
+                  topCandidates: selectionExplainer?.top_candidates?.slice(0, 3) ?? [],
+                  deterministicOverride: selectionExplainer?.override ?? null,
+                  fallbackUsed: selectionExplainer?.fallback_used ?? false,
+                  fallbackReason: selectionExplainer?.fallback_reason ?? null
+                },
+                productionCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null
+              }));
+              if (deliveryAudit.status === "fail") {
+                console.warn("[Routing Delivery Audit] primary_objective_not_fulfilled", {
+                  requestId,
+                  status: deliveryAudit.status,
+                  reason: deliveryAudit.reason,
+                  classifiedIntent: resolvedRequestIntent,
+                  auditVersion: deliveryAudit.version
+                });
+              }
+            } catch (error) {
+              console.warn("[Routing Delivery Audit] checkpoint_unavailable", {
+                requestId,
+                cause: error instanceof Error ? error.name : "unknown"
+              });
+            }
             emitChunk({
               type: "content",
+              messageId: assistantMessageId,
               text: assistantText,
               ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
               assets: imageAssets,
@@ -3771,6 +4032,9 @@ ${chunkWorkflowSummary}`;
             const finalAnswerEvent = reasoningState.finalize(assistantText);
             emitChunk(reasoningState.snapshot());
             emitChunk(finalAnswerEvent);
+            // Final answer is durably saved and may be shown immediately, even
+            // while the rest of the request continues through accounting.
+            progress("post_answer", "Answer saved. Finalizing request records and memory.");
             if (visualContinuity && imageAssets.length) {
               // Group images never become identity anchors; an explicit portrait correction may replace one.
               try {
@@ -3816,31 +4080,33 @@ ${chunkWorkflowSummary}`;
 
             // Keep standalone memory charges within the durable parent workflow.
             // Managed-agent responses retain their existing deferred memory work.
-            console.log("[Chat API] reasoning stream metrics", {
+            console.log("[Chat API] answer stream metrics", {
               requestId,
-              reasoningUpdateCount,
-              timeToFirstReasoningUpdateMs: firstReasoningUpdateAtMs === null ? null : firstReasoningUpdateAtMs - requestStartedAtMs,
+              answerDeltaCount,
+              timeToFirstAnswerDeltaMs: firstAnswerDeltaAtMs === null ? null : firstAnswerDeltaAtMs - requestStartedAtMs,
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            // Each standalone job checkpoints independently; a spending pause
-            // remains resumable even when the answer is already saved.
+            // Memory maintenance is separate infrastructure and must never depend
+            // on the completed chat workflow's spending lease.
             const persistAccountedMemory = async () => {
-              console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
+              console.log("[Chat API] Post-answer memory persistence start", { actorId, chatId, requestId });
               try {
-                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateRelevantLongTermMemory(actorId, chatId, message));
+                // Post-answer memory is independently metered infrastructure. Never
+                // bind it to a completed chat workflow lease or spending approval.
+                const retention = maybeUpdateRelevantLongTermMemory(actorId, chatId, message);
                 const cleanup = retention.then(
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
-                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunHundredUserMessageReview(actorId)),
+                  () => maybeRunHundredUserMessageReview(actorId),
+                  () => maybeRunHundredUserMessageReview(actorId),
                 );
                 const memoryResults = await Promise.allSettled([
                   retention,
-                  cachedWorkflowValue("memory-summary", () => maybeUpdateSummary(chatId)),
+                  maybeUpdateSummary(chatId),
                   cleanup,
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
-                    if (isStandaloneAccountingError(memoryResult.reason)) throw memoryResult.reason;
+                    // Memory task errors are logged, never escalated into a chat spending pause.
                     console.error(
                       index === 0
                         ? "[Chat API] Long-Term Memory Update Error:"
@@ -3859,15 +4125,17 @@ ${chunkWorkflowSummary}`;
                   intermediateStatus: summaryResult.status === "fulfilled" ? summaryResult.value : "error",
                 });
               } catch (error) {
-                if (isStandaloneAccountingError(error)) throw error;
+
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)
                 });
               }
             };
-            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
+            // The assistant answer is durably saved and final_answer has already
+            // been emitted. End the user-facing stream before memory maintenance.
+            answerStreamFinalized = true;
             if (!streamCancelled) {
               controller.close();
             } else {
@@ -3879,12 +4147,19 @@ ${chunkWorkflowSummary}`;
                 responseLength: assistantText.length
               });
             }
+            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
           } catch (error: unknown) {
+            if (answerStreamFinalized) {
+              console.error("[Chat API] Post-answer workflow settlement error", {
+                requestId, reason: error instanceof Error ? error.message : String(error),
+              });
+              return;
+            }
             if (isStandaloneAccountingError(error)) {
               const cause = standaloneAccountingCause(error) ?? error;
               const code = standaloneAccountingCause(error)?.code ?? "standalone_approval_or_accounting_required";
-              if (standaloneTechnicalBlocker(code)) {
+              if (standaloneTechnicalBlocker(code) || resolvedRequestIntent === "image-generation" && code === "standalone_unsupported_billing") {
                 const message = cause instanceof Error ? cause.message : String(cause);
                 // A context window is a physical model constraint, not an
                 // approvable charge. Persist an actionable terminal outcome and

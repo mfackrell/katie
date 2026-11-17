@@ -24,7 +24,15 @@ export async function countNativePreparedInput(
     countPayload = Object.fromEntries(fields.filter(key => payload[key] !== undefined).map(key => [key, payload[key]])) as JsonObject;
   } else if (prepared.provider === 'google' && /^\/v1(?:beta)?\/models\/[^/]+:(?:generateContent|streamGenerateContent)$/.test(prepared.endpoint)) {
     url = 'https://generativelanguage.googleapis.com' + prepared.endpoint.replace(/:(?:generateContent|streamGenerateContent)$/, ':countTokens');
-    countPayload = { generateContentRequest: payload };
+    // The count endpoint prices only immutable input content. Image generation
+    // output-only settings (responseModalities / imageConfig / output cap) can
+    // make countTokens reject an otherwise countable image prompt with HTTP 400.
+    // Keep the exact model and input evidence; do not mutate the paid payload.
+    const inputFields = ['contents', 'systemInstruction', 'tools', 'toolConfig'];
+    const input = Object.fromEntries(
+      inputFields.filter(key => payload[key] !== undefined).map(key => [key, payload[key]]),
+    );
+    countPayload = { generateContentRequest: { model: 'models/' + prepared.model, ...input } };
   } else {
     return null; // Never invent provider-specific counts.
   }
