@@ -78,6 +78,12 @@ export const ChatComposerInput = memo(function ChatComposerInput(props: Props) {
     scheduleResize();
     if (commitTimer.current) clearTimeout(commitTimer.current);
     commitTimer.current = setTimeout(() => {
+      // Send and programmatic reset clear currentValueRef synchronously, before
+      // React's reset effect runs. Never re-save a pre-send draft afterward.
+      if (props.currentValueRef.current !== next) {
+        commitTimer.current = null;
+        return;
+      }
       lastCommitted.current = next;
       props.onDraftChange(next);
       commitTimer.current = null;
