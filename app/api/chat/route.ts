@@ -8,6 +8,7 @@ import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, curren
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { chooseCrossProviderContextRecovery } from "@/lib/chat/context-capacity-recovery";
 import { imageGenerationCapableModel, containsGeneratedImage, filterPricedImageFallbacks } from "@/lib/chat/image-generation-contract";
 import { generatedImageService } from "@/lib/uploads/generated-image-service";
 import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
@@ -3545,6 +3546,7 @@ ${chunkWorkflowSummary}`;
                   // capability; its own exact prepared request still faces the
                   // normal accounting and owner-approval gate.
                   if (hasVideoInput || rerouteHasVisualInput ||
+                      Boolean(visualContinuity?.references.length) ||
                       accounting.provider !== attempt.provider.name ||
                       accounting.model !== attempt.modelId ||
                       !Number.isSafeInteger(accounting.inputTokens) ||
@@ -3565,13 +3567,63 @@ ${chunkWorkflowSummary}`;
                       .map(item => item.modelId.toLowerCase())),
                   });
                   if (!upgrade || imageGenerationRequested && !imageGenerationCapableModel(attempt.provider.name, upgrade)) {
-                    console.warn('[Context Upgrade] No reviewed capability-preserving model fits the unchanged request', {
+                    console.warn('[Context Upgrade] No reviewed same-provider upgrade fits the unchanged request', {
                       requestId, provider: attempt.provider.name, model: attempt.modelId,
                       inputTokens: accounting.inputTokens, outputAllowance: accounting.outputAllowance,
                       maxContextTokens: accounting.maxContextTokens,
                       inputCountSource: accounting.inputCountSource,
                     });
-                    return null;
+                    // Keep manual model locks and specialized tool/image paths intact.
+                    // This reroute handles only pre-dispatch context admission failures.
+                    if (imageGenerationRequested || (overrideProvider && overrideModel) ||
+                        (selfToolsEnabled && selfInspectionRequest) ||
+                        !resolvedRoutingIntentForReroute ||
+                        errorRerouteCount >= maxErrorReroutes) return null;
+                    errorRerouteCount += 1;
+                    const rerouteDecision = await chooseCrossProviderContextRecovery({
+                      message,
+                      conversationContext: rerouteRoutingContext,
+                      providers,
+                      failedProviderNames,
+                      previousAttempts: attemptedAttempts.map(item => ({
+                        providerName: item.provider.name, modelId: item.modelId,
+                      })),
+                      otherExcluded: [...refusedCandidates, ...failedGenerationCandidates],
+                      pricing,
+                      inputTokens: accounting.inputTokens!,
+                      outputAllowance: accounting.outputAllowance!,
+                      attachments,
+                      resolvedIntent: resolvedRoutingIntentForReroute,
+                      routingMode,
+                      routingRequestParams: async classification => prepareCandidateRequest(
+                        "", await prepareGenerationContext(classification), classification),
+                      routingRequestId: `${requestId}:capacity-reroute-${errorRerouteCount}`,
+                      actorId,
+                      actorRoutingProfile,
+                      routingHints,
+                      routingTraceEnabled,
+                    });
+                    if (!rerouteDecision) {
+                      console.warn("[Context Upgrade] No LLM-qualified cross-provider recovery", {
+                        requestId, rejectedModel: attempt.modelId,
+                      });
+                      return null;
+                    }
+                    console.info("[Context Upgrade] LLM selected reviewed recovery model", {
+                      requestId,
+                      failedProvider: attempt.provider.name,
+                      failedModel: attempt.modelId,
+                      replacementProvider: rerouteDecision.provider.name,
+                      replacementModel: rerouteDecision.modelId,
+                      inputTokens: accounting.inputTokens,
+                      outputAllowance: accounting.outputAllowance,
+                    });
+                    return {
+                      provider: rerouteDecision.provider,
+                      modelId: rerouteDecision.modelId,
+                      explainer: rerouteDecision.explainer,
+                      routingSource: "ai-reroute" as const,
+                    };
                   }
                   console.info('[Context Upgrade] Reviewed higher-capacity model selected', {
                     requestId, previousModel: attempt.modelId, selectedModel: upgrade,

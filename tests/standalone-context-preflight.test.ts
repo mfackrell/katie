@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { countNativePreparedInput } from '../lib/standalone-accounting/native-token-count';
-import { selectContextCapacityUpgrade } from '../lib/standalone-accounting/context-upgrade';
+import { selectContextCapacityUpgrade, isReviewedCrossProviderContextCandidate } from '../lib/standalone-accounting/context-upgrade';
+import { chooseCrossProviderContextRecovery } from '../lib/chat/context-capacity-recovery';
+import type { LlmProvider } from '../lib/providers/types';
+import { readFileSync } from 'node:fs';
 import { estimatePreparedRequest, freezePreparedRequest, PROVIDER_COUNT_ESTIMATOR_VERSION } from '../lib/standalone-accounting/estimate';
 import { getModelPrice, PRICING_SNAPSHOT } from '../lib/standalone-accounting/pricing';
 import { runWithRefusalFallback } from '../lib/router/refusal-detection';
@@ -195,4 +198,134 @@ test('image context escalation rejects larger text models and permits only revie
     'gemini-3.2-pro-image','a genuinely image-priced, larger-capacity model can be selected');
   assert.equal(selectContextCapacityUpgrade({...original,availableModels:['gemini-3.2-pro-image'],inputTokens:259000}),null,
     'a genuine image model must still fit full context');
+});
+
+
+test('Nov 17 GPT-4o-mini overflow is eligible for another reviewed provider, not another cheap model', () => {
+  const inputTokens=130000,outputAllowance=16384;
+  assert.equal(selectContextCapacityUpgrade({
+    provider:'openai',model:'gpt-4o-mini',availableModels:['gpt-4o-mini','gpt-4o'],
+    pricing:PRICING_SNAPSHOT,inputTokens,outputAllowance,
+  }),null,'existing same-provider lineage upgrade is unavailable');
+  const candidate=(provider:'openai'|'anthropic'|'google'|'grok',model:string) =>
+    isReviewedCrossProviderContextCandidate({provider,model,pricing:PRICING_SNAPSHOT,inputTokens,outputAllowance});
+  assert.equal(candidate('openai','gpt-4o-mini'),false,'the failed 128K-window model is ineligible');
+  assert.equal(candidate('openai','gpt-4o'),false,'same limited 128K context is ineligible');
+  assert.equal(candidate('anthropic','claude-sonnet-5-5'),true,'reviewed 1M-window Claude can fit');
+  assert.equal(candidate('google','gemini-2.5-flash'),true,'reviewed 1M-window Gemini can fit');
+  assert.equal(candidate('openai','unreviewed-super-model'),false,'no aliases or unreviewed pricing');
+  assert.equal(candidate('google','gemini-3.1-flash-image'),false,'an image-output model is not a text recovery');
+  assert.equal(isReviewedCrossProviderContextCandidate({
+    provider:'anthropic',model:'claude-sonnet-5-5',pricing:PRICING_SNAPSHOT,
+    inputTokens:1000000,outputAllowance,
+  }),false,'the full unchanged request must fit');
+  assert.equal(isReviewedCrossProviderContextCandidate({
+    provider:'anthropic',model:'claude-sonnet-5-5',pricing:PRICING_SNAPSHOT,
+    inputTokens:130000,outputAllowance:70000,
+  }),false,'do not silently reduce the output allowance');
+});
+
+test('Nov 17 exact capacity failure flows through recovery and an LLM-picked other provider', async () => {
+  const inputTokens=130000,outputAllowance=16384;
+  const user='not a seafood fan. i usually have my special smoothie for lunch and some grilled chicken for dinner';
+  const unchanged={
+    name:'Katie',persona:'The same original actor and policy instructions.',
+    summary:'Original memory remains unchanged.',
+    user,history:[{role:'assistant' as const,content:'What is for lunch?'}],
+  };
+  const original=JSON.stringify(unchanged);
+  const providerCalls:string[]=[];
+  let routerCalls=0;
+  const openai:LlmProvider={
+    name:'openai',async listModels(){return ['gpt-4o-mini'];},
+    async generate(){throw Error('Original provider should be rejected before paid dispatch');},
+  };
+  const claude:LlmProvider={
+    name:'anthropic',async listModels(){return ['claude-sonnet-5-5'];},
+    async generate(){throw Error('Mocked responder must not be used as the control-plane selector');},
+  };
+  // A control-plane model need not be the provider selected to answer.
+  // Gemini 2.5 Pro is on the verified decision-model list; Sonnet 5.5 is
+  // an eligible response model but is not on that decision-model list.
+  const google:LlmProvider={
+    name:'google',async listModels(){return ['gemini-2.5-pro'];},
+    async generate({modelId}) {
+      routerCalls++;
+      return {provider:'google',model:modelId??'gemini-2.5-pro',
+        text:JSON.stringify({selected:{provider:'anthropic',model:'claude-sonnet-5-5'},
+          selection_justification:'Reviewed capacity and full-context fit for this conversation.'})};
+    },
+  };
+  const intent={
+    intent:'social-emotional' as const,preferredProvider:null,intentSource:'upstream' as const,
+    responsePurpose:'conversation' as const,secondaryIntents:[] as [],
+    decisionEvidence:{classification_model:'claude-sonnet-5-5'},
+  };
+  const result=await runWithRefusalFallback({
+    attempts:[{provider:openai,modelId:'gpt-4o-mini'}],
+    shouldRetryRefusal:false,detectRefusal:()=>false,
+    runAttempt:async attempt=>{
+      providerCalls.push(attempt.provider.name+':'+attempt.modelId);
+      assert.equal(JSON.stringify(unchanged),original,'never drop memories, history, or user message');
+      if(attempt.provider.name==='openai'){
+        throw Object.assign(new Error('Capacity unverified before paid dispatch'),{
+          code:'standalone_context_capacity_unverified',
+        });
+      }
+      return {provider:'anthropic',model:attempt.modelId,
+        text:'A smoothie and grilled chicken? You have your lunch routine figured out.'};
+    },
+    rerouteOnError:async ({attempt,attemptedAttempts,error})=>{
+      assert.equal((error as {code?:string}).code,'standalone_context_capacity_unverified');
+      assert.equal(attempt.provider.name,'openai');
+      assert.equal(selectContextCapacityUpgrade({
+        provider:'openai',model:attempt.modelId,pricing:PRICING_SNAPSHOT,
+        availableModels:await openai.listModels(),inputTokens,outputAllowance,
+      }),null);
+      const selection=await chooseCrossProviderContextRecovery({
+        message:user,conversationContext:'Continuing ordinary conversation, not asking for a new task.',
+        providers:[openai,claude,google],failedProviderNames:new Set(),
+        previousAttempts:attemptedAttempts.map(item=>({
+          providerName:item.provider.name,modelId:item.modelId,
+        })),otherExcluded:[],pricing:PRICING_SNAPSHOT,inputTokens,outputAllowance,
+        attachments:[],resolvedIntent:intent,routingMode:'best_answer',
+        routingRequestParams:async()=>({...unchanged,requestIntent:'social-emotional'}),
+        routingRequestId:'fixture-nov17-cross-provider',actorId:'actor-test',
+        routingHints:[],routingTraceEnabled:false,
+      });
+      assert.ok(selection,'a reviewed cross-provider replacement is available');
+      assert.equal(selection.explainer?.selected_source,'llm-primary',
+        'the LLM, not deterministic routing, chooses the fallback');
+      assert.deepEqual(selection.resolvedIntent.secondaryIntents,[]);
+      assert.equal(selection.resolvedIntent.responsePurpose,'conversation');
+      return {provider:selection.provider,modelId:selection.modelId};
+    },
+  });
+  assert.ok(routerCalls>=1,'recovery invoked the existing LLM router');
+  assert.deepEqual(providerCalls,['openai:gpt-4o-mini','anthropic:claude-sonnet-5-5']);
+  assert.equal(result.attempt.provider.name,'anthropic');
+  assert.match(result.result.text,/smoothie/);
+  assert.equal(JSON.stringify(unchanged),original,'the original full context was never altered');
+});
+
+test('cross-provider capacity recovery is bounded and never bypasses pricing or failed-provider exclusions',async()=>{
+  const openai:LlmProvider={name:'openai',async listModels(){return ['gpt-4o-mini'];},
+    async generate(){throw Error('No recovered provider should run');}};
+  const result=await chooseCrossProviderContextRecovery({
+    message:'Lunch?',conversationContext:'',providers:[openai],failedProviderNames:new Set(),
+    previousAttempts:[{providerName:'openai',modelId:'gpt-4o-mini'}],otherExcluded:[],
+    pricing:PRICING_SNAPSHOT,inputTokens:130000,outputAllowance:16384,attachments:[],
+    resolvedIntent:{intent:'general-text',preferredProvider:null,intentSource:'upstream'},
+    routingMode:'best_value',routingRequestParams:async()=>({
+      name:'Katie',persona:'unchanged',summary:'',user:'Lunch?',history:[],
+    }),routingRequestId:'fixture-no-recovery',actorId:'actor-test',routingHints:[],
+  });
+  assert.equal(result,null);
+  const code=readFileSync('app/api/chat/route.ts','utf8');
+  assert.match(code,/chooseCrossProviderContextRecovery\(\{/);
+  assert.match(code,/!resolvedRoutingIntentForReroute \|\|\s*errorRerouteCount >= maxErrorReroutes/);
+  assert.match(code,/if \(accounting && \['standalone_context_capacity_unverified','standalone_context_window_exceeded'\]/);
+  assert.match(code,/if \(imageGenerationRequested \|\| \(overrideProvider && overrideModel\)/);
+  assert.match(code,/Boolean\(visualContinuity\?\.references\.length\)/,
+    'saved visual references must not enter text-only recovery');
 });

@@ -68,7 +68,10 @@ jobs:
           if-no-files-found: warn
       - name: Install office rendering
         run: |
-          command -v soffice >/dev/null || sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+          if ! command -v soffice >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+          fi
           command -v soffice
       - name: Cross-render geometry and continuity
         run: node scripts/document-phase1-word-acceptance.mjs

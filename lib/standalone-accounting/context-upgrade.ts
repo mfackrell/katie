@@ -77,3 +77,25 @@ export function selectContextCapacityUpgrade(input: {
     a.price.maxContextTokens-b.price.maxContextTokens || a.model.localeCompare(b.model));
   return candidates[0]?.model??null;
 }
+
+/** A cross-provider fallback is eligible only when its own exact reviewed
+ * pricing row admits the unchanged conservative input AND output allowance.
+ * Normal provider dispatch independently validates its fully prepared body. */
+export function isReviewedCrossProviderContextCandidate(input: {
+  provider: AccountingProvider;
+  model: string;
+  pricing: PricingSnapshot;
+  inputTokens: number;
+  outputAllowance: number;
+}): boolean {
+  const {provider, model, pricing, inputTokens, outputAllowance} = input;
+  const price = getModelPrice(provider, model, pricing);
+  return Boolean(price &&
+    Number.isSafeInteger(inputTokens) && inputTokens >= 0 &&
+    Number.isSafeInteger(outputAllowance) && outputAllowance > 0 &&
+    Number.isSafeInteger(inputTokens + outputAllowance) &&
+    price.maxContextTokens >= inputTokens + outputAllowance &&
+    price.maxOutputTokens >= outputAllowance &&
+    price.supportsStreaming !== false &&
+    !price.imageOutputNanoUsd);
+}
