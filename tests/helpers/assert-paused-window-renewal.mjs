@@ -172,6 +172,12 @@ export async function assertPausedWindowRenewal(db,x){
   assert.deepEqual((await db.query('select to_jsonb(m) r from agent_missions m where project_id=$1 order by to_jsonb(m)::text',[project])).rows,before.agent_missions,'resume preserves every historical mission exactly');
   assert.equal((await db.query('select project_provider_continued($1) ok',[project])).rows[0].ok,true);
   assert.equal((await db.query('select project_org_management_resume_release($1,$2) ok',[args[9],newRelease])).rows[0].ok,true);
+  if(process.env.KATIE_TEST_BLOCKED_OWNER_RECOVERY==='1'){
+   await (await import('./assert-blocked-owner-recovery.mjs')).assertBlockedOwnerRecovery(db,{
+    project,owner,scopeHash,source,originalWindow,renewedWindow:args[9],
+    activeRelease:newRelease,rival,actor,chat,
+   });
+  }
   // Full ordinary scheduler/claim path after the original blocked pointer.
   let scheduled;
   for(let i=0;i<3;i++){

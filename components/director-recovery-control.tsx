@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 import type {ManagementActivationOffer} from "@/lib/projects/management-activation";
+import type {BlockedOwnerOffer} from "@/lib/projects/blocked-owner-recovery";
 
 export type DirectorRecoveryReceipt = {
   projectId: string;
@@ -21,6 +22,7 @@ export type DirectorRecoveryOffer = {
   receipt: DirectorRecoveryReceipt | null;
   continuation?: {decisionId:string;admittedAt:string|null;maxCutoff?:string;authorizationId?:string;authorizedAt?:string};
   managementActivation?:ManagementActivationOffer;
+  blockedOwnerRecovery?:BlockedOwnerOffer;
   managementActivationError?:string;
   hierarchyRecovery?: {decisionId:string;priorCutoff:string;directorCutoff:string;stateHash:string;
     nodeCount:number;maxHours:number;activeMissionId:string|null};
@@ -179,6 +181,9 @@ export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;on
   <p role="alert">{props.recovery.managementActivationError}</p>
   <button type="button" className="min-h-11 rounded border px-3 py-2" onClick={props.onRefresh}>Refresh project status</button>
  </aside>;
+ if(props.recovery.blockedOwnerRecovery)
+  return <BlockedOwnerRecoveryControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
+   initial={props.recovery.blockedOwnerRecovery} onRefresh={props.onRefresh}/>;
  return props.recovery.managementActivation
   ?<ManagementActivationControl key={props.recovery.projectId+':'+props.recovery.releaseSha} initial={props.recovery.managementActivation} onRefresh={props.onRefresh}/>
   :<LegacyDirectorRecoveryControl {...props}/>;
@@ -258,5 +263,102 @@ function ManagementActivationControl({initial,onRefresh}:{initial:ManagementActi
    <button type="button" className="min-h-11 rounded border px-3 py-2" disabled={pending} onClick={()=>void act('refresh')}>{pending?'Checking recovery…':'Refresh recovery status'}</button>
   </div>
   {error&&<p role="alert">{error} {offer.stage==='resume'?'The renewal is retained; the project remains paused.':''}</p>}
+ </aside>;
+}
+
+function BlockedOwnerRecoveryControl({initial,onRefresh}:{initial:BlockedOwnerOffer;onRefresh:()=>void}){
+ const [offer,setOffer]=useState(initial),[cutoffInput,setCutoffInput]=useState('');
+ const [pending,setPending]=useState(false),[error,setError]=useState<string|null>(null);
+ const [notice,setNotice]=useState<string|null>(null);
+ const submitting=useRef(false);
+ const expired=offer.stage==='expired'||(offer.stage==='resume'&&(!offer.cutoff||Date.parse(offer.cutoff)<=Date.now()+300000));
+ async function refresh(bearer:string){
+  const response=await fetch('/api/projects/organization?projectId='+encodeURIComponent(initial.projectId),{
+   headers:{Authorization:'Bearer '+bearer},cache:'no-store',
+  });
+  const body=await response.json();
+  const next=body.blockedOwnerRecovery as BlockedOwnerOffer|undefined;
+  if(!response.ok||!next||next.projectId!==initial.projectId||next.releaseSha!==initial.releaseSha
+   ||next.scopeHash!==initial.scopeHash||next.priorWindowId!==initial.priorWindowId
+   ||next.historicalMissions!==76||next.nodeCount!==13
+   ||!['authorize','resume','resumed','expired'].includes(next.stage))
+   throw Error(body.error??'Blocked recovery status could not be verified. Refresh project status.');
+  setOffer(next);return next;
+ }
+ async function act(action:'refresh'|'authorize'|'resume'){
+  if(submitting.current||(action!=='refresh'&&(offer.stage==='resumed'||expired)))return;
+  submitting.current=true;setPending(true);setError(null);setNotice(null);
+  let bearer:string|null=null;
+  try{
+   bearer=await ownerSessionBearer();
+   if(!bearer)throw Error('Sign in as the existing Katie owner to authorize recovery.');
+   if(action==='refresh'){await refresh(bearer);return;}
+   if((action==='authorize'&&offer.stage!=='authorize')||(action==='resume'&&offer.stage!=='resume'))
+    throw Error('Refresh the exact project state before continuing.');
+   let authorizationId:string,cutoff:string;
+   if(action==='authorize'){
+    if(!cutoffInput)throw Error('Choose a future cutoff explicitly; none is preselected.');
+    const target=new Date(cutoffInput).getTime();
+    if(!Number.isFinite(target)||target<=Date.now()+300000||target>Date.now()+86400000)
+     throw Error('Choose a cutoff more than five minutes and at most 24 hours from now.');
+    cutoff=new Date(target).toISOString();authorizationId=crypto.randomUUID();
+   }else{
+    if(!offer.authorizationId||!offer.cutoff)throw Error('A verified unexpired owner renewal receipt is required.');
+    authorizationId=offer.authorizationId;cutoff=offer.cutoff;
+   }
+   const body=action==='authorize'?{
+    trialAction:'authorize_blocked_window',projectId:offer.projectId,releaseSha:offer.releaseSha,
+    priorWindowId:offer.priorWindowId,priorCutoff:offer.priorCutoff,cutoff,authorizationId,stateHash:offer.stateHash,
+   }:{
+    trialAction:'resume_blocked_management',projectId:offer.projectId,releaseSha:offer.releaseSha,
+    authorizationId,cutoff,stateHash:offer.stateHash,
+   };
+   const response=await fetch('/api/projects/organization',{
+    method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},body:JSON.stringify(body),
+   });
+   const receipt=await response.json();
+   if(!response.ok)throw Error(receipt.error??'Authenticated recovery transition was rejected.');
+   if(receipt.projectId!==offer.projectId||receipt.releaseSha!==offer.releaseSha
+    ||receipt.authorizationId!==authorizationId||Date.parse(receipt.cutoff)!==Date.parse(cutoff)
+    ||receipt.stage!==(action==='authorize'?'resume':'resumed')
+    ||receipt.status!==(action==='authorize'?'blocked':'running')
+    ||receipt.existing!==false)
+    throw Error('Owner transition receipt could not be verified. Refresh the durable state.');
+   const verified=await refresh(bearer);
+   if(verified.authorizationId!==authorizationId||verified.stage!==receipt.stage)
+    throw Error('Durable transition mismatch. Refresh project status; do not resubmit automatically.');
+   setNotice(action==='authorize'?'Cutoff recorded; the project remains blocked until a separate owner resume.':
+    'Management resume recorded; this action commissioned no workers.');
+   onRefresh();
+  }catch(failure){
+   if(bearer){try{await refresh(bearer);}catch{ /* Owner must explicitly retry status, not a write. */ }}
+   setError(failure instanceof Error?failure.message:'Owner recovery could not be confirmed.');
+  }finally{submitting.current=false;setPending(false);}
+ }
+ return <aside className="mx-3 my-2 min-w-0 rounded-xl border border-white/20 p-3" aria-label="Blocked project owner recovery">
+  <p className="font-semibold">Original tic-tac-toe project — owner recovery</p>
+  <p>The November 16 noon Central cutoff expired. The original 76/96 missions,
+   600,000-token allowance, approved scope and 13 contracts remain unchanged.</p>
+  <div role="status" aria-live="polite">
+   {offer.stage==='authorize'?<p>Project blocked. No new cutoff or resume is authorized.</p>
+    :offer.stage==='resume'&&!expired?<p>Owner cutoff recorded: {new Date(offer.cutoff!).toLocaleString()}. Project still blocked.</p>
+    :offer.stage==='resumed'?<p>Management resumed under the recorded owner window.</p>
+    :<p>Previously authorized window expired; no resume is available.</p>}
+   {notice&&<p>{notice}</p>}
+  </div>
+  {offer.stage==='authorize'&&<div>
+   <label>Explicit new cutoff (local time)
+    <input type="datetime-local" aria-label="Explicit new cutoff (local time)"
+     value={cutoffInput} onChange={event=>setCutoffInput(event.target.value)} disabled={pending}/>
+   </label>
+   <p>At most 24 hours; window authorization does not resume work or increase allowances.</p>
+   <button type="button" className="min-h-11 rounded border px-3 py-2 font-semibold" disabled={pending||!cutoffInput}
+    onClick={()=>void act('authorize')}>{pending?'Authorizing window…':'Authorize new cutoff only'}</button>
+  </div>}
+  {offer.stage==='resume'&&!expired&&<button type="button" className="min-h-11 rounded border px-3 py-2 font-semibold"
+   disabled={pending} onClick={()=>void act('resume')}>{pending?'Confirming resume…':'Resume original management separately'}</button>}
+  <button type="button" className="min-h-11 rounded border px-3 py-2" disabled={pending}
+   onClick={()=>void act('refresh')}>{pending?'Checking state…':'Refresh owner recovery status'}</button>
+  {error&&<p role="alert">{error}</p>}
  </aside>;
 }
