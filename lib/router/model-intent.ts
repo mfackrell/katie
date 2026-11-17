@@ -850,6 +850,13 @@ function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string
   return Boolean(supportsText) && !supportsImageGen && isControlPlaneJsonInstructionCompatible(providerName, modelId);
 }
 
+/** A standalone routing helper gets a bounded chance to finish its existing paid
+ * attempt after the nominal decision deadline. This extends the same in-flight
+ * promise; it never retries a provider or changes the LLM's selection. */
+export function controlPlaneAttemptTimeoutMs(timeoutMs: number, standalone: boolean): number {
+  return timeoutMs + (standalone ? Math.min(5_000, Math.max(0, Math.floor(timeoutMs / 2))) : 0);
+}
+
 async function executeControlPlaneJsonTask<T>(args: {
   taskName: "intent-classification" | "routing-rerank" | "project-resolution";
   decisionProviders: DecisionProviderCandidate[];
@@ -882,7 +889,7 @@ async function executeControlPlaneJsonTask<T>(args: {
           modelId: candidate.modelId,
           signal,
         })),
-        args.timeoutMs,
+        controlPlaneAttemptTimeoutMs(args.timeoutMs, getAccountingScope()?.kind === "standalone"),
         `${args.taskName}:${sourceLabel}`
       );
       let parsed: T | null = null;
