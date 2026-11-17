@@ -242,9 +242,16 @@ test('Nov 17 exact capacity failure flows through recovery and an LLM-picked oth
   };
   const claude:LlmProvider={
     name:'anthropic',async listModels(){return ['claude-sonnet-5-5'];},
+    async generate(){throw Error('Mocked responder must not be used as the control-plane selector');},
+  };
+  // A control-plane model need not be the provider selected to answer.
+  // Gemini 2.5 Pro is on the verified decision-model list; Sonnet 5.5 is
+  // an eligible response model but is not on that decision-model list.
+  const google:LlmProvider={
+    name:'google',async listModels(){return ['gemini-2.5-pro'];},
     async generate({modelId}) {
       routerCalls++;
-      return {provider:'anthropic',model:modelId??'claude-sonnet-5-5',
+      return {provider:'google',model:modelId??'gemini-2.5-pro',
         text:JSON.stringify({selected:{provider:'anthropic',model:'claude-sonnet-5-5'},
           selection_justification:'Reviewed capacity and full-context fit for this conversation.'})};
     },
@@ -277,7 +284,7 @@ test('Nov 17 exact capacity failure flows through recovery and an LLM-picked oth
       }),null);
       const selection=await chooseCrossProviderContextRecovery({
         message:user,conversationContext:'Continuing ordinary conversation, not asking for a new task.',
-        providers:[openai,claude],failedProviderNames:new Set(),
+        providers:[openai,claude,google],failedProviderNames:new Set(),
         previousAttempts:attemptedAttempts.map(item=>({
           providerName:item.provider.name,modelId:item.modelId,
         })),otherExcluded:[],pricing:PRICING_SNAPSHOT,inputTokens,outputAllowance,
