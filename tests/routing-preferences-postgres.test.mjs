@@ -130,6 +130,7 @@ test('native preference migration denies browser roles and enforces durable scop
     await assert.rejects(client.query(rpc,['44444444-4444-4444-8444-444444444444',actor,chat,'current','rewrite']),/STANDALONE_SCOPE_DENIED/);
     await client.query('reset role');
     // Remove private ledger references before checking preference FK cascades.
+    await client.query('delete from standalone_attempt_events');
     await client.query('delete from standalone_provider_attempts');
     await client.query('delete from standalone_workflows');
     await client.query('delete from standalone_owner_bindings');

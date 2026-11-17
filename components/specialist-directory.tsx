@@ -33,26 +33,29 @@ const button =
   "inline-flex min-h-11 items-center justify-center rounded-lg border border-white/15 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-40";
 const field =
   "mt-2 w-full rounded-lg border border-white/15 bg-zinc-900 p-3 text-sm";
-async function change(url: string, method: string, body?: unknown) {
+async function change(url: string, method: string, body?: unknown, requestId?: string) {
   const response = await fetch(url, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(requestId ? {"x-request-id":requestId} : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const data = await response.json();
-  if (!response.ok) throw Error(data.error ?? "The change could not be saved.");
+  const text = await response.text();
+  let data: Record<string,unknown>;
+  try {data=JSON.parse(text) as Record<string,unknown>;} catch {throw Error("Katie returned an invalid server response.");}
+  if (!response.ok || response.status===202) throw Error(String(data.error ?? data.status ?? "The change could not be saved."));
   return data;
 }
 
 type CalibrationGroup={type:"redundancy"|"irrelevant";keys:string[];reason:string};
 type CalibrationResult={hash:string;proof:string;groups:CalibrationGroup[];conflicts:Array<{keys:string[];question:string}>;entries:Array<{key:string;value:string}>};
-function MemoryCalibration({actor}:{actor:Actor}) {
+function MemoryCalibration({actor,chatId}:{actor:Actor;chatId?:string}) {
  const [busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
  const [report,setReport]=useState<CalibrationResult|null>(null),[selected,setSelected]=useState<number[]>([]);
  async function preview(){
    setBusy(true);setError("");setNotice("");setSelected([]);
    try {
-     const result=await change("/api/actors","POST",{calibration:"preview",actorId:actor.id}) as CalibrationResult;
+     if(!chatId) throw Error("Start a conversation with this specialist before calibrating memory.");
+     const result=await change("/api/actors","POST",{calibration:"preview",actorId:actor.id,chatId},crypto.randomUUID()) as CalibrationResult;
      setReport(result);
      setNotice("Review the proposed changes below. No memory has been modified.");
    }catch(e){setError(e instanceof Error?e.message:"Calibration failed");}
@@ -341,7 +344,7 @@ function AgentCard({
           </Link>
         )}
       </div>
-      <MemoryCalibration actor={card.actor} />
+      <MemoryCalibration actor={card.actor} chatId={active[0]?.id} />
       {detail && !!card.registry?.capabilities.length && (
         <p className="mt-4 text-sm text-zinc-400">
           Capabilities:{" "}
