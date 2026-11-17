@@ -221,11 +221,31 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       await ensureBucket();
       const path = useSubChunk ? subChunkPath(ticket, index, subIndex!) : chunkPath(ticket, index);
-      const { error } = await objects.upload(path, bytes, {
-        contentType: "application/octet-stream",
-        upsert: true, // Retry after a mobile network interruption without duplicating bytes.
-      });
-      if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
+      if (ticket.type.startsWith("image/")) {
+        // First image write is immutable. Only byte-for-byte identical retries
+        // are accepted after an ambiguous acknowledgment; a conflicting retry
+        // cannot overwrite a previously accepted private chunk.
+        const saved = await objects.upload(path, bytes, {
+          contentType: "application/octet-stream", upsert: false,
+        });
+        if (saved.error) {
+          const prior = await objects.download(path);
+          if (prior.error || !prior.data)
+            throw new Error(`Unable to store attachment chunk ${index + 1}: ${saved.error.message}`);
+          const priorBytes = new Uint8Array(await prior.data.arrayBuffer());
+          const priorHash = createHash("sha256").update(priorBytes).digest("hex");
+          const incomingHash = createHash("sha256").update(bytes).digest("hex");
+          if (priorBytes.byteLength !== bytes.byteLength || priorHash !== incomingHash)
+            throw new UploadInputError("Conflicting image upload chunk cannot replace saved bytes.");
+        }
+      } else {
+        // Preserve legacy video resumability and non-image semantics unchanged.
+        const { error } = await objects.upload(path, bytes, {
+          contentType: "application/octet-stream",
+          upsert: true,
+        });
+        if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
+      }
       console.info("[Upload API] stored chunk", {
         uploadId: ticket.id, index, ...(useSubChunk ? { subIndex } : {}), chunkCount,
         bytes: bytes.byteLength, transport: ticket.transport ?? "binary-v1",

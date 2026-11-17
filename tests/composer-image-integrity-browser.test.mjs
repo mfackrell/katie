@@ -57,9 +57,46 @@ test('composer images preserve selection identity through picker, paste, restore
   if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/fixture-storage/'))return route.continue();
   const body=req.postData()&&req.headers()['content-type']?.includes('application/json')?req.postDataJSON():null;
   const reply=(value,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(value)});
-  if(url.pathname==='/api/upload/prepare'){events.push('prepare');if(mode==='failed')return reply({error:'Fixture upload refused'},503);const token=`image-${++sequence}`;uploads.set(token,body);return reply({uploadToken:token,uploadUrl:`${origin}/fixture-storage/${token}`});}
-  if(url.pathname.startsWith('/fixture-storage/')){events.push('storage');assert.deepEqual(req.postDataBuffer(),Buffer.from(png,'base64'),'private upload bytes match the visible PNG, including legacy recovery');return reply({});}
-  if(url.pathname==='/api/upload/complete'){events.push('complete');const file=uploads.get(body.uploadToken);return reply({fileReference:{fileId:body.uploadToken,fileName:mode==='mismatch'?'wrong.png':file.name,mimeType:file.type,attachmentKind:'image',preview:'Image fixture',storageToken:`fixture-private-ref-${body.uploadToken}`}});}
+  if(url.pathname==='/api/upload/prepare'){
+   events.push('prepare');
+   if(mode==='failed')return reply({error:'Fixture upload refused'},503);
+   assert.equal(body?.transport,'json-base64-v3','Images must request signed 512 KiB transport');
+   assert.ok(Number.isSafeInteger(body.size)&&body.size>0);
+   const token=`image-${++sequence}`,uploadId=`11111111-1111-4111-8111-${String(sequence).padStart(12,'0')}`;
+   uploads.set(token,{...body,uploadId,chunks:new Map()});
+   return reply({uploadToken:token,uploadId,uploadUrl:`${origin}/fixture-storage/${token}`});
+  }
+  if(url.pathname==='/api/upload/chunk'){
+   const headers=req.headers(),token=headers['x-katie-upload-token'],stored=uploads.get(token);
+   assert.ok(stored,'Image chunk must carry a valid prepared upload token');
+   assert.ok((headers['content-type']??'').startsWith('application/octet-stream'),'Image chunks must be binary');
+   const index=Number(headers['x-katie-chunk-index']),total=Math.ceil(stored.size/(512*1024));
+   assert.ok(Number.isSafeInteger(index)&&index>=0&&index<total,'Signed chunk index must be in range');
+   const bytes=req.postDataBuffer(),expected=Math.min(512*1024,stored.size-index*512*1024);
+   assert.equal(bytes.length,expected,'Image chunk must preserve exact original byte boundaries');
+   if(stored.chunks.has(index))assert.deepEqual(bytes,stored.chunks.get(index),'Retry cannot rewrite a different chunk');
+   stored.chunks.set(index,Buffer.from(bytes));events.push('chunk');
+   return reply({index,chunkCount:total,uploadedBytes:index*512*1024+bytes.length});
+  }
+  if(url.pathname==='/api/upload/status'){
+   const stored=uploads.get(body?.uploadToken);
+   if(!stored)return reply({error:'Unknown upload ticket'},403);
+   const chunkCount=Math.ceil(stored.size/(512*1024));
+   return reply({uploadId:stored.uploadId,chunkCount,chunkBytes:512*1024,transport:'json-base64-v3',uploadedIndexes:[...stored.chunks.keys()].sort((a,b)=>a-b),uploadedSubIndexes:[],complete:stored.chunks.size===chunkCount});
+  }
+  if(url.pathname.startsWith('/fixture-storage/')){events.push('storage');return reply({error:'Image bypassed the required same-origin chunk relay'},409);}
+  if(url.pathname==='/api/upload/complete'){
+   const file=uploads.get(body?.uploadToken);
+   if(!file)return reply({error:'Unknown signed upload'},403);
+   const chunkCount=Math.ceil(file.size/(512*1024));
+   if(file.chunks.size!==chunkCount || Array.from({length:chunkCount},(_,index)=>file.chunks.has(index)).includes(false))
+     return reply({error:'Incomplete image cannot finalize'},400);
+   const original=Buffer.concat(Array.from({length:chunkCount},(_,index)=>file.chunks.get(index)));
+   assert.equal(original.length,file.size,'Assembled image must match the signed original size');
+   assert.deepEqual(original,Buffer.from(png,'base64'),'Private image bytes must be identical after chunk assembly');
+   events.push('complete');
+   return reply({fileReference:{fileId:body.uploadToken,fileName:mode==='mismatch'?'wrong.png':file.name,mimeType:file.type,attachmentKind:'image',preview:'Image fixture',storageToken:`fixture-private-ref-${body.uploadToken}`}});
+  }
   if(url.pathname==='/api/chat'){events.push('chat');const counts=validateAttachmentManifest(body.attachmentManifest,body.fileReferences,body.images);receivedCounts.set(body,counts.imageCount+counts.videoCount+counts.fileCount);chats.push(body);return route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({type:'content',messageId:'55555555-5555-4555-8555-'+String(++savedAssistantSequence).padStart(12,'0'),text:'Fixture image response.'})+'\n'});}
   if(url.pathname==='/api/actors')return reply({actors:[{id:actorId,name:'Fixture Katie',purpose:'Composer verification',actorKind:'standard'}]});
   if(url.pathname==='/api/chats')return reply({chats:[{id:chatId,actorId,title:'Composer fixture',createdAt:'2026-10-29T00:00:00Z',updatedAt:'2026-10-29T00:00:00Z'}]});
@@ -98,7 +135,7 @@ test('composer images preserve selection identity through picker, paste, restore
  await send();await waitChats(2);verify(chats[1],1);assert.equal(chats[1].fileReferences[0].fileName,'pending-read.png');await preview().waitFor({state:'detached'});
  chats.length=0;events.length=0;
  // File picker creates a visible selection; private storage receipt precedes chat.
- await page.locator('input[type=file]').setInputFiles(file('picker.png'));await preview().waitFor();await send();await waitChats(1);verify(chats[0],1);assert.deepEqual(events.slice(0,4),['prepare','storage','complete','chat']);await preview().waitFor({state:'detached'});
+ await page.locator('input[type=file]').setInputFiles(file('picker.png'));await preview().waitFor();await send();await waitChats(1);verify(chats[0],1);assert.deepEqual(events.slice(0,4),['prepare','chunk','complete','chat']);await preview().waitFor({state:'detached'});
  // Real paste event follows the same upload path, including after a browser reload.
  await page.locator('main textarea').last().evaluate((el,png)=>{const data=new DataTransfer();data.items.add(new File([Uint8Array.from(atob(png),c=>c.charCodeAt(0))],'pasted.png',{type:'image/png'}));el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},png);
  await preview().waitFor();await page.reload({waitUntil:'domcontentloaded'});await preview().waitFor();await send();await waitChats(2);verify(chats[1],1);assert.equal(chats[1].fileReferences[0].fileName,'pasted.png');await preview().waitFor({state:'detached'});
