@@ -1,4 +1,5 @@
 import type { ProviderResponse } from "./types";
+import { isTimestampOnlyResponse } from "@/lib/chat/reasoning-stream";
 
 export class ProviderResponseError extends Error {
   constructor(message: string, public readonly retryable: boolean, public readonly code: string) {
@@ -6,6 +7,10 @@ export class ProviderResponseError extends Error {
   }
 }
 export function assertProviderOutput(result: ProviderResponse): void {
+  if (isTimestampOnlyResponse(result.text ?? "") &&
+      !result.content?.some(part => /image|video|audio/i.test(String(part.type)))) {
+    throw new ProviderResponseError("The AI provider returned only internal timestamp metadata.", true, "METADATA_ONLY_RESPONSE");
+  }
   if (!result.text?.trim() && !result.content?.length) {
     throw new ProviderResponseError("The AI provider returned no answer. Please try again.", true, "EMPTY_RESPONSE");
   }

@@ -282,7 +282,24 @@ export class ReasoningStateAccumulator {
  */
 const EDITORIAL_OPENING = /^\s*\d{1,3}(?:\.\d{1,3})?s[ \t]*\r?\n[ \t]*\r?\n[ \t]*The user is\b/i;
 
+const MESSAGE_TIMESTAMP_PREFIX = "[Message timestamp:";
+const MESSAGE_TIMESTAMP_ONLY =
+  /^\[Message timestamp:\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\]$/;
+
+/** Only a bare internal history marker is invalid, never a reply that mentions one. */
+export function isTimestampOnlyResponse(raw: string): boolean {
+  return MESSAGE_TIMESTAMP_ONLY.test(raw.trim());
+}
+
+function couldBeTimestampOnlyResponse(raw: string): boolean {
+  const pending = raw.trimStart();
+  if (MESSAGE_TIMESTAMP_PREFIX.startsWith(pending)) return true;
+  if (!pending.startsWith(MESSAGE_TIMESTAMP_PREFIX) || pending.length > 110) return false;
+  return !pending.includes("]") || isTimestampOnlyResponse(pending);
+}
+
 export function resolveChatAnswer(raw: string): string | null {
+  if (isTimestampOnlyResponse(raw)) return null;
   if (!EDITORIAL_OPENING.test(raw)) return raw;
 
   const explicit = /(?:^|\n)\s*(?:FINAL ANSWER|RESPONSE TO USER)\s*:\s*/gi;
@@ -344,15 +361,25 @@ export class ChatAnswerStreamBoundary {
       this.state = "held";
       return "";
     }
-    if (couldBeginEditorialOpening(this.pending)) return "";
+    if (couldBeginEditorialOpening(this.pending) || couldBeTimestampOnlyResponse(this.pending)) return "";
     const released = this.pending;
     this.pending = "";
     this.state = "ordinary";
     return released;
   }
 
+  reset(): void {
+    this.pending = "";
+    this.state = "checking";
+  }
+
   flushAccepted(): string {
     if (this.state !== "checking") return "";
+    if (isTimestampOnlyResponse(this.pending)) {
+      this.pending = "";
+      this.state = "held";
+      return "";
+    }
     this.state = "ordinary";
     const released = this.pending;
     this.pending = "";
