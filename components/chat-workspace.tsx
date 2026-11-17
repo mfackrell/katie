@@ -23,6 +23,15 @@ export default function ChatWorkspace({
   const [railReady, setRailReady] = useState(false);
   useEffect(() => { try { const stored = window.localStorage.getItem("katie.statusRail.open"); setRailOpen(stored === null ? window.matchMedia("(min-width: 1024px)").matches : stored === "true"); } catch {} setRailReady(true); }, []);
   function toggleRail() { const next = !railOpen; setRailOpen(next); try { window.localStorage.setItem("katie.statusRail.open", String(next)); } catch {} }
+  useEffect(() => {
+    const open = (event: Event) => {
+      if ((event as CustomEvent<{chatId:string}>).detail?.chatId !== conversationId) return;
+      setRailOpen(true);
+      try { window.localStorage.setItem("katie.statusRail.open","true"); } catch {}
+    };
+    window.addEventListener("katie:open-model-controls",open);
+    return () => window.removeEventListener("katie:open-model-controls",open);
+  },[conversationId]);
   const [deleted, setDeleted] = useState(false);
   const actors = useResource<{ actors: Actor[] }>("/api/actors"),
     chats = useResource<{ chats: ChatThread[] }>("/api/chats"),
@@ -253,10 +262,11 @@ export default function ChatWorkspace({
         </div>
         {railOpen && <><div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={toggleRail} aria-hidden="true" />
         <aside id="katie-status-rail" aria-label="Katie status rail" className="fixed inset-y-0 right-0 z-50 flex w-[min(370px,90vw)] min-w-0 flex-col border-l border-white/10 bg-zinc-950 lg:static lg:z-10 lg:w-[350px] lg:shrink-0">
-          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3"><strong className="text-sm">Status & usage</strong><button type="button" className="text-xs underline" onClick={toggleRail}>Hide</button></div>
-          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-4">
-            <section className="space-y-2"><h3 className="text-sm font-semibold">Live status</h3><div id="katie-live-status" className="min-w-0 break-words text-xs text-zinc-300" /></section>
-            {!actor.managedAgentId && actor.actorKind !== "executive" && <StandaloneUsage rail actorId={actor.id} chatId={chat.id} />}
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3"><strong className="text-sm">Controls & usage</strong><button type="button" className="text-xs underline" onClick={toggleRail}>Hide</button></div>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-3 sm:p-4">
+            <div id="katie-model-controls" className="min-w-0" />
+            <section className="space-y-2 rounded-xl border border-white/10 p-3"><h3 className="text-sm font-semibold">Live status</h3><div id="katie-live-status" className="min-w-0 break-words text-xs text-zinc-300" /></section>
+            {!actor.managedAgentId && actor.actorKind !== "executive" && <details open className="min-w-0 rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm font-semibold">Usage & costs</summary><div className="mt-3"><StandaloneUsage rail actorId={actor.id} chatId={chat.id} /></div></details>}
           </div>
         </aside></>}
       </div>
