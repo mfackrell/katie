@@ -218,7 +218,7 @@ test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () =>
   assert.ok(h.events.some(x => x.name === "accounting" && x.provider === "grok" && x.activity === "memory-summary" &&
     x.timeoutCode === "memory_timeout" && x.timeoutMsType === "function"));
   assert.match(source, /claude-sonnet-5-5/);
-  assert.match(source, /SUMMARY_TIMEOUT_MS = 90_000/);
+  assert.match(source, /SUMMARY_TIMEOUT_MS = 180_000/);
 });
 
 test("ITM preserves factual narrative, Katie ownership, original quote and timestamp", async () => {
