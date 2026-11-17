@@ -41,7 +41,7 @@ test("composer recalculates height after the local value commits and on conversa
 
 test("local typing still resizes independently of debounced draft persistence", () => {
   assert.match(composer, /setValue\(next\);\s*scheduleResize\(\);/);
-  assert.match(composer, /setTimeout\(\(\) => \{\s*lastCommitted\.current = next/);
+  assert.match(composer, /setTimeout\(\(\) => \{[\s\S]*?props\.currentValueRef\.current !== next[\s\S]*?lastCommitted\.current = next/);
 });
 
 async function mount(viewport, source = composer) {
