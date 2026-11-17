@@ -14,6 +14,17 @@ const cookieOptions=(request:NextRequest,maxAge:number)=>({
 });
 const noStore={'Cache-Control':'no-store, private'};
 
+/** Read-only identity for the UI. A guest session is valid, but cannot see
+ * another browser's private owner conversation history. */
+export async function GET(request: NextRequest) {
+  try {
+    const principal = await authenticateStandalonePrincipal(request);
+    return NextResponse.json({ guest: principal.isAnonymous }, { headers: noStore });
+  } catch {
+    return NextResponse.json({ error: "Session required." }, { status: 403, headers: noStore });
+  }
+}
+
 /** Bootstrap a browser automatically. No user email or login action is required.
  * Existing verified owner sessions take priority; guests never inherit owner data. */
 export async function POST(request:NextRequest){
