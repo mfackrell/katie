@@ -17,15 +17,6 @@ const CONVERSATION_INSTRUCTION_LINES = [
 ];
 const CONVERSATION_INSTRUCTION = CONVERSATION_INSTRUCTION_LINES.join("\n");
 
-// Personal exchanges should not be handled like work clarifications. Preserve
-// the same task boundaries, but allow reciprocal conversation without a
-// mandatory acknowledgment-and-stop pattern.
-const PERSONAL_CONVERSATION_INSTRUCTION = [
-  "NEXT RESPONSE: a natural personal conversation; match its depth and pace.",
-  "Engage naturally rather than simply acknowledging or summarizing what the user says. Contribute your own perspective, curiosity, or humor when appropriate, and let conversations develop organically.",
-  ...CONVERSATION_INSTRUCTION_LINES.slice(2),
-].join("\n");
-
 // Detect direct production instructions before accepting a conversational
 // classifier result. Message length and low complexity cannot waive review.
 function explicitlyRequestsDeliverable(message: string): boolean {
@@ -77,8 +68,10 @@ function policy(purpose: ResponsePurpose, reason: string, personalConversation =
     purpose,
     requiresSubstantiveProcessing: purpose === "deliverable",
     reason,
-    generationInstruction: purpose === "conversation"
-      ? (personalConversation ? PERSONAL_CONVERSATION_INSTRUCTION : CONVERSATION_INSTRUCTION)
+    // Personal chat uses Katie's existing actor personality without additional
+    // turn-level style instructions. Work clarifications retain their safeguards.
+    generationInstruction: purpose === "conversation" && !personalConversation
+      ? CONVERSATION_INSTRUCTION
       : null,
   };
 }
