@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { estimatePreparedRequest, type FrozenPreparedRequest } from '@/lib/standalone-accounting/estimate';
-import { getAccountingScope } from '@/lib/standalone-accounting/context';
+import { getAccountingScope, nextStandaloneAttempt, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
 import { createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { loadStandalonePricing } from '@/lib/standalone-accounting/pricing-intake';
 import type { PricingSnapshot } from '@/lib/standalone-accounting/pricing';
@@ -30,13 +30,35 @@ export async function rankControlPlaneByActualCost(
   if (scope?.kind !== 'standalone') return candidates;
   if (activity && !snapshot) {
     const ledger = createStandaloneLedger();
-    const saved = await ledger.lookupAttempt(scope.context.userId, scope.context.requestId, `${activity}:${scope.counter.get(activity) ?? 0}`);
-    if (saved) {
+    // A prior provider may have become unhealthy before a durable resume.
+    // Only an already-settled, verified nonbillable rejection may be stepped
+    // past. Never skip an approved, paused, dispatched, uncertain, or successful
+    // attempt: those must retain their exact provider/payload and replay gate.
+    const maxRejectedReplays = 32;
+    for (let skipped = 0; skipped <= maxRejectedReplays; skipped++) {
+      const saved = await ledger.lookupAttempt(scope.context.userId, scope.context.requestId, `${activity}:${scope.counter.get(activity) ?? 0}`);
+      if (!saved) break;
       const candidate = candidates.find(c => c.provider.name === saved.provider && c.modelId === saved.model);
-      if (!candidate) throw Object.assign(new Error('The saved control-plane provider/model is no longer available for exact resume.'), {code:'standalone_saved_helper_unavailable',terminal:true});
-      // Do not select a new economical model over approved or completed work.
-      // Transport replays the saved response or dispatches its exact preparation.
-      return [candidate, ...candidates.filter(c => c !== candidate)];
+      if (candidate) {
+        // Do not select a new economical model over approved or completed work.
+        // Transport replays the saved response or dispatches its exact preparation.
+        return [candidate, ...candidates.filter(c => c !== candidate)];
+      }
+      const verifiedNonbillableRejection =
+        saved.state === 'settled' &&
+        saved.actual_microusd === '0' &&
+        saved.usage?.nonbillableRejected === true &&
+        saved.evidence?.kind === 'provider_rejection' &&
+        saved.evidence?.rejectionReason === 'insufficient_prepaid_balance' &&
+        saved.evidence?.httpStatus === 400 &&
+        saved.response_checkpoint?.status === 400;
+      if (!verifiedNonbillableRejection || skipped === maxRejectedReplays) {
+        throw Object.assign(new Error('The saved control-plane provider/model is no longer available for exact resume.'), {code:'standalone_saved_helper_unavailable',terminal:true});
+      }
+      // This attempt has conclusively finished without billing or output.
+      // Consume its original ordinal, then restore the next saved attempt;
+      // never assign a replacement model to the same attempt key.
+      runWithStandaloneActivity(activity, () => nextStandaloneAttempt());
     }
   }
   const pricing = snapshot ?? await loadStandalonePricing(createStandaloneLedger());
