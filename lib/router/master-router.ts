@@ -734,6 +734,7 @@ export async function chooseProvider(
   let deterministicFallbackUsed = false;
   let fallbackReason: string | null = null;
   let llmSelectionJustification: string | null = null;
+  let llmSelectionComparisons: NonNullable<SelectionExplainer["top_candidates"]> = [];
   let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
 
@@ -1285,6 +1286,11 @@ export async function chooseProvider(
         } else {
           llmPrimaryUsed = true;
           llmSelectionJustification = llmRouting.selectionJustification ?? null;
+          llmSelectionComparisons = (llmRouting.selectionComparisons ?? []).map(item => ({
+            provider: item.providerName,
+            model: item.modelId,
+            why_not_selected: item.whyNotSelected
+          }));
           console.info(`[LLM Router] selected=${validated.provider.name}:${validated.modelId}`);
           selected = {
             provider: validated.provider,
@@ -1344,6 +1350,14 @@ export async function chooseProvider(
   const finalDecision = applyPolicyGuardrail(selected);
   if (llmSelectionJustification && finalDecision.explainer) {
     finalDecision.explainer.selection_justification = llmSelectionJustification;
+  }
+  if (llmPrimaryUsed && getAccountingScope()?.kind === "standalone" &&
+      finalDecision.explainer?.selected_source === "llm-primary") {
+    // The LLM supplied these comparative reasons. Do not misrepresent legacy
+    // intent heuristics, provider bonuses or zero scores as its evidence.
+    finalDecision.explainer.top_candidates = llmSelectionComparisons;
+    finalDecision.explainer.top_factors = [];
+    finalDecision.explainer.top_candidate_score = null;
   }
   return finalDecision;
 }
