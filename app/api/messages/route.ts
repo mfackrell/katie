@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
-import { deleteSingleMessage, getChatById, getMessages } from "@/lib/data/persistence-store";
+import { deleteSingleMessage, getChatById, getMessages, getRecentMessagePage } from "@/lib/data/persistence-store";
 import {
   authenticateStandaloneOwner,
   authenticateStandalonePrincipal,
@@ -28,7 +28,13 @@ export async function GET(request: NextRequest) {
     if(!chat)return NextResponse.json({error:"Conversation not found."},{status:404});
     if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
       await authorizeStandaloneCaller(request,chat.actorId,chatId);
-    const messages = await getMessages(chatId);
+    const recent = request.nextUrl.searchParams.get("recent") === "1";
+    const beforeId = request.nextUrl.searchParams.get("before") ?? undefined;
+    if (recent && beforeId && !/^[0-9a-f-]{36}$/i.test(beforeId)) {
+      return NextResponse.json({ error: "Invalid history cursor." }, { status: 400 });
+    }
+    const page = recent ? await getRecentMessagePage(chatId, beforeId, 50) : null;
+    const messages = page?.messages ?? await getMessages(chatId);
 
     const pendingRequests = [...new Set(messages
       .filter(message => message.role === "assistant")
@@ -103,9 +109,12 @@ export async function GET(request: NextRequest) {
         console.warn("[Video Progress] Status unavailable; video jobs continue independently", error);
       }
     }
-    return NextResponse.json({ messages, videoProgress }, { headers: { "Cache-Control": "no-store" } });
-  } catch {
-    return NextResponse.json({ error: "Invalid chat id" }, { status: 400 });
+    return NextResponse.json({ messages, ...(page ? { hasOlder: page.hasOlder } : {}), videoProgress }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    if (error instanceof z.ZodError) return NextResponse.json({ error: "Invalid chat id." }, { status: 400 });
+    if (error instanceof StandaloneAuthorizationError) return NextResponse.json({ error: "Session required." }, { status: 403 });
+    console.error("[Messages] Saved conversation read failed", error);
+    return NextResponse.json({ error: "Saved messages could not be loaded. Try again." }, { status: 503 });
   }
 }
 
