@@ -115,17 +115,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   // Two distinct PostgreSQL backends invoke the ACTUAL new write RPC while
   // the first transaction still holds its advisory lock. This is not a
   // synthetic advisory lock probe or a sequential replay.
-  const secondPid=(await observer.query('select pg_backend_pid() observer')).rows[0].observer;
-  assert.ok(secondPid>0);
+  // Capture the actual rival backend identity BEFORE issuing the pending
+  // RPC. A second query on that client would queue behind the contender.
+  const contenderPid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+  assert.ok(Number.isInteger(contenderPid)&&contenderPid>0);
   const competing=second.query(
    'select project_org_resume_blocked_management_once($1,$2,$3,$4,$5,$6,$7) r',call
   ).then(result=>({ok:true,result:result.rows[0].r}),error=>({ok:false,error}));
-  const contenderPid=(await observer.query(
-   "select pid from pg_stat_activity where datname=current_database() and pid <> pg_backend_pid() and state='active' and query like '%project_org_resume_blocked_management_once%' order by pid limit 1"
-  )).rows[0]?.pid;
-  // Derive the actual second backend PID using that client, rather than
-  // assuming a queued query's activity row belongs to the correct session.
-  // A dedicated previous query on second is safe: run it before the RPC.
   let sawAdvisory=false;
   for(let i=0;i<24;i++){
    const locks=await observer.query(
