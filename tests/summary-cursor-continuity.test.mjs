@@ -19,7 +19,10 @@ test("failed source batches preserve the checkpoint and only a later request may
   assert.match(code,/if \(remaining < SUMMARY_BATCH_MESSAGES\)/);
   assert.match(code,/if \(claim\.data === "blocked"\)/);
   assert.match(code,/Provider attempt already blocked; checking next safe provider/);
-  assert.match(code,/SUMMARY_TIMEOUT_MS = 90_000/);
+  assert.match(code,/SUMMARY_TIMEOUT_MS = 180_000/);
+  const chatRoute = readFileSync("app/api/chat/route.ts", "utf8");
+  const routeMaxSeconds = Number(chatRoute.match(/export const maxDuration = ([0-9]+);/)?.[1]);
+  assert.ok(routeMaxSeconds > 180, "Chat runtime must exceed the entire ITM summarization deadline");
   assert.match(code,/timeoutMs:\(\)=>Math\.max\(1,deadline-Date\.now\(\)\)/);
   assert.match(code,/timeoutCode:"memory_timeout"/);
   assert.doesNotMatch(code,/withinSummaryDeadline/);
