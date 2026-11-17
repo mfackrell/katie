@@ -46,11 +46,15 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
      'detail',$6::text))).*
     from agent_missions m where m.id=$1`,
     [exemplar,id,node.id,windowId,priorRelease,detail]);
+   // Model the real scheduler's exact temporary active-mission binding so
+   // the existing management execution trigger remains ENFORCED in this fixture.
+   await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,id]);
    await first.query(`insert into mission_assignments
-    (id,mission_id,job_key,role,agent_id,instruction,status,result)
-    values($1,$2,'plan','work',$3,'Make bounded management decisions','failed',
+    (id,mission_id,job_key,role,agent_id,instruction,payload,status,result)
+    values($1,$2,'plan','work',$3,'Make bounded management decisions',
+      jsonb_build_object('organizationNodeId',$5::uuid),'failed',
       jsonb_build_object('detail',$4::text))`,
-    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail]);
+    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id]);
   }
   await first.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,root.id]);
   await first.query(`update work_projects set status='blocked',
