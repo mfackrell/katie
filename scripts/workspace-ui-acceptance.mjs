@@ -326,13 +326,17 @@ try {
   await page.getByText("Operations analysis", { exact: true }).click();
   await page.getByPlaceholder("Ask Executive Orchestrator…").waitFor();
   const composer = page.getByPlaceholder("Ask Executive Orchestrator…");
-  const modelSettings = page.getByRole("button", { name: "Hide answering models", exact: true });
-  assert.equal(await modelSettings.getAttribute("aria-expanded"), "true");
-  await page.getByLabel("Answering model for openai", { exact: true }).selectOption("gpt-example");
-  assert.equal(await page.getByLabel("Answering model for openai", { exact: true }).inputValue(), "gpt-example");
-  await modelSettings.click();
-  await page.getByRole("button", { name: "Answering model: gpt-example", exact: true }).click();
-  await page.getByLabel("Answering model for openai", { exact: true }).selectOption("");
+  await page.getByRole("button", {name:"Open model selection settings",exact:true}).click();
+  const modelPanel = page.getByRole("region", {name:"Model selection and display settings"});
+  await modelPanel.waitFor();
+  assert.equal(await modelPanel.getByRole("button", {name:"Collapse",exact:true}).getAttribute("aria-expanded"),"true");
+  await modelPanel.getByRole("radio", {name:"Select a model manually"}).check();
+  await modelPanel.getByLabel("Model provider", {exact:true}).selectOption("openai");
+  await modelPanel.getByLabel("Answering model for openai", {exact:true}).selectOption("gpt-example");
+  assert.equal(await modelPanel.getByLabel("Answering model for openai", {exact:true}).inputValue(),"gpt-example");
+  await modelPanel.getByRole("radio", {name:"Choose automatically"}).check();
+  await modelPanel.getByRole("button", {name:"Collapse",exact:true}).click();
+  await modelPanel.getByRole("button", {name:"Expand",exact:true}).click();
   await composer.fill("Keep this draft without executing.");
   await page.getByText("Draft saved", { exact: true }).waitFor();
   assert.equal(
