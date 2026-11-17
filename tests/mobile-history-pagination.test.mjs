@@ -41,7 +41,7 @@ test("bounded message pages retrieve all saved messages with stable tie-breaks a
         assert.equal(state.size, 51);
         let filtered = rows.filter(item => item.chat_id === chatId).sort(sortDescending);
         if (state.cursor) {
-          const match = /^created_at\\.lt\\.(.*),and\\(created_at\\.eq\\.(.*),id\\.lt\\.([0-9a-f-]+)\\)$/.exec(state.cursor);
+          const match = /^created_at\.lt\.(.*),and\(created_at\.eq\.(.*),id\.lt\.([0-9a-f-]+)\)$/.exec(state.cursor);
           assert.ok(match, "Composite cursor must match created_at then id");
           assert.equal(match[1], match[2]);
           filtered = filtered.filter(item => item.created_at < match[1] ||
@@ -128,13 +128,13 @@ test("mobile screens offer owner sign-in and never download the entire thread by
   const chat = readFileSync("components/chat-panel.tsx", "utf8");
   const screens = readFileSync("components/workspace-screens.tsx", "utf8");
   const session = readFileSync("app/api/session/route.ts", "utf8");
-  assert.match(chat, /visibleMessages\\.map\\(\\(message\\)/);
+  assert.match(chat, /visibleMessages\.map\(\(message\)/);
   assert.match(chat, /Load earlier messages/);
   assert.match(chat, /&recent=1&before=/);
   assert.match(chat, /hasOlderMessages/);
   assert.match(chat, /Retry loading conversation/);
   assert.match(screens, /This browser is in guest mode/);
-  assert.match(screens, /<SelfToolsOwnerSession \\/>/);
-  assert.match(screens, /GuestHistoryNotice guest=\\{session\\.data\\?\\.guest\\}/);
-  assert.match(session, /export async function GET\\(request: NextRequest\\)/);
+  assert.match(screens, /<SelfToolsOwnerSession \/>/);
+  assert.match(screens, /GuestHistoryNotice guest=\{session\.data\?\.guest\}/);
+  assert.match(session, /export async function GET\(request: NextRequest\)/);
 });
