@@ -43,13 +43,13 @@ async function calibrationPreview(actorId:string) {
         "Preserve all useful details. Merge only if every fact and original evidence can be preserved.",
         "Prefer no cleanup to unsafe cleanup. For contradictions ask a clear user question and do not prescribe removal.",
         "Output JSON with groups:[{type:'redundancy'|'irrelevant',keys:[original keys],reason:string}], conflicts:[{keys:[original keys],question:string}].",
-        "Keys may appear only once across all proposals. Do not propose a rewritten fact.",
+        "Keys may appear only once across all proposals. Do not propose a rewritten fact. Always include both groups and conflicts arrays, using [] if empty.",
       ].join("\n")},
       {role:"user",content:JSON.stringify({actor:{name:actor.name,purpose:actor.purpose},entries:entries.map(e=>({key:e.key,value:e.value,source:e.source,category:e.category}))})}
     ]
   });
   const parsed=JSON.parse(answer.choices[0]?.message?.content||"{}") as {groups?:CalibrationGroup[];conflicts?:Array<{keys:string[];question:string}>};
-  if(!parsed||!Array.isArray(parsed.groups)||!Array.isArray(parsed.conflicts))throw new Error("Invalid calibration report structure");
+  if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)||!Array.isArray(parsed.groups??[])||!Array.isArray(parsed.conflicts??[]))throw new Error("Invalid calibration report structure");
   const keyset=new Set(entries.map(e=>e.key)),used=new Set<string>();
   const conflicts:Array<{keys:string[];question:string}>=[];
   for(const item of parsed.conflicts||[]){
