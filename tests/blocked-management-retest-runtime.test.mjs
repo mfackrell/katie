@@ -75,10 +75,17 @@ test('real Chromium one-time retest control requires owner click and shows a rec
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
  try{
   for(const scenario of ['success','no-owner','409','admitted']){
+   console.log('RETEST_CHROMIUM_SCENARIO_START: '+scenario);
    const page=await browser.newPage();let posts=0,releaseResponse,requestObserved;
    const errors=[];page.on('pageerror',e=>errors.push(e.message));
    const requestSeen=new Promise(resolve=>{requestObserved=resolve;});
-   const gate=new Promise(resolve=>{releaseResponse=resolve;});
+   // Fail-closed watchdog: a failing browser assertion must never leave a held
+   // intercepted POST keeping Chromium and the test process alive indefinitely.
+   const gate=new Promise(resolve=>{
+    let released=false;
+    releaseResponse=()=>{if(!released){released=true;resolve();}};
+    setTimeout(releaseResponse,15000).unref();
+   });
    const body={projectId,releaseSha,cutoff,priorCutoff:cutoff,receipt:null,
     managementRetest:scenario==='admitted'?{...admitted,admittedReleaseSha:releaseSha}:offered};
    const script='const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:{ownerSessionBearer:async()=>'+
@@ -132,6 +139,7 @@ test('real Chromium one-time retest control requires owner click and shows a rec
    }
    assert.equal(posts,scenario==='success'||scenario==='409'?1:0);
    await page.close();
+   console.log('RETEST_CHROMIUM_SCENARIO_PASS: '+scenario);
   }
  }finally{await browser.close();}
 });
