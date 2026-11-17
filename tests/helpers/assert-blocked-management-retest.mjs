@@ -8,6 +8,7 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
  const source='911d15bd-be5f-416e-bbac-fbe86ca6fa90';
  const repairedRelease='c'.repeat(40);
  const migration='supabase/migrations/20261117162000_one_time_blocked_management_retest.sql';
+ await observer.query('reset role'); // DDL belongs to the disposable fixture's postgres owner, never service_role.
  const installed=(await observer.query("select to_regprocedure('public.project_org_resume_blocked_management_once(uuid,uuid,text,uuid,uuid,timestamptz,text)') sig")).rows[0].sig;
  if(!installed)await observer.query(readFileSync(migration,'utf8'));
  const definitions=(await observer.query(
