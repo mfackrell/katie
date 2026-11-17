@@ -166,8 +166,23 @@ function WorkRow({ item }: { item: WorkItem }) {
     </Link>
   );
 }
+function GuestHistoryNotice({ guest }: { guest?: boolean }) {
+  if (!guest) return null;
+  return (
+    <section className="mb-6 rounded-xl border border-white/15 p-4 text-sm text-zinc-200">
+      <p className="font-semibold">This browser is in guest mode.</p>
+      <p className="my-2 text-zinc-400">
+        Your saved owner conversations are private and will not appear until you
+        sign in on this browser. Guest conversations are kept separate.
+      </p>
+      <SelfToolsOwnerSession />
+    </section>
+  );
+}
+
 export function HomeScreen() {
   const preferences = useUIIndex();
+  const session = useResource<{ guest: boolean }>("/api/session");
   const work = useResource<WorkResponse>("/api/work"),
     chats = useResource<{ chats: ChatThread[] }>("/api/chats"),
     actors = useResource<{ actors: Actor[] }>("/api/actors");
@@ -199,6 +214,7 @@ export function HomeScreen() {
         title="Welcome back"
         description="Continue your work or ask Katie for something new."
       />
+      <GuestHistoryNotice guest={session.data?.guest} />
       <Link
         href="/conversations/new"
         className="mb-10 flex items-center justify-between rounded-2xl border border-white/15 bg-zinc-900 p-6"
@@ -310,6 +326,7 @@ export function HomeScreen() {
 }
 export function ConversationsScreen() {
   const preferences = useUIIndex();
+  const session = useResource<{ guest: boolean }>("/api/session");
   const chats = useResource<{ chats: ChatThread[] }>("/api/chats"),
     actors = useResource<{ actors: Actor[] }>("/api/actors"),
     params = useSearchParams(),
@@ -346,6 +363,7 @@ export function ConversationsScreen() {
           + New conversation
         </Link>
       </Heading>
+      <GuestHistoryNotice guest={session.data?.guest} />
       <input
         className={input}
         aria-label="Search conversations"
@@ -395,7 +413,9 @@ export function ConversationsScreen() {
       )}
       {!list.length && !chats.loading && (
         <p className="py-8 text-zinc-400">
-          No matching conversations. Start a conversation or change your search.
+          {session.data?.guest
+            ? "No guest conversations match. Sign in above to see your owner history."
+            : "No matching conversations. Start a conversation or change your search."}
         </p>
       )}
       <div className="mt-6 flex items-center gap-3">
