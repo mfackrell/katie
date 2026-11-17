@@ -199,6 +199,7 @@ const requestSchema = z.object({
   attachmentManifest: attachmentManifestSchema.optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
+  routing_mode: z.enum(["best_answer", "best_value"]).optional(),
   routingTraceEnabled: z.boolean().optional(),
   providerPayloadCapture: z.literal(true).optional(),
   activeRepoId: z.string().min(1).optional(),
@@ -1706,6 +1707,7 @@ async function executeChat(request: NextRequest) {
       hasManualOverride: Boolean(overrideProvider || overrideModel),
     });
     const controlPlaneConversationContext = [
+      ...(getAccountingScope()?.kind === "standalone" ? [`Actor/persona and memory supplied for response requirements (bounded excerpt): ${persona.length <= 3000 ? persona : persona.slice(0, 1500) + "\n[Actor context excerpt truncated]\n" + persona.slice(-1500)}`] : []),
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4).map(({role,content,createdAt,attachments})=>({
         role,content,createdAt,
@@ -1879,6 +1881,7 @@ async function executeChat(request: NextRequest) {
         actorId,
         actorRoutingProfile,
         routingHints,
+        routing_mode: payload.routing_mode,
         routingTraceEnabled,
         routingRequestId: requestId
       });
@@ -2069,7 +2072,8 @@ async function executeChat(request: NextRequest) {
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
     // and unrelated factual questions retain the router's original decision.
-    if (creativeTextNarrativeRequest && !storedWebsite.fresh) {
+    // Standalone selection belongs to the LLM; keep the legacy orchestration path isolated.
+    if (getAccountingScope()?.kind !== "standalone" && creativeTextNarrativeRequest && !storedWebsite.fresh) {
       const claude = providers.find(candidate => candidate.name === "anthropic");
       if (claude) {
         try {
@@ -3387,6 +3391,7 @@ ${chunkWorkflowSummary}`;
                   actorId,
                   actorRoutingProfile,
                   routingHints,
+                  routing_mode: payload.routing_mode,
                   routingTraceEnabled,
                   routingRequestId: `${requestId}:refusal-reroute-${refusalRerouteCount}`,
                   resolvedIntent: {
@@ -3599,6 +3604,7 @@ ${chunkWorkflowSummary}`;
                     actorId,
                     actorRoutingProfile,
                     routingHints,
+                    routing_mode: payload.routing_mode,
                     routingTraceEnabled,
                     routingRequestId: `${requestId}:error-reroute-${errorRerouteCount}`,
                     resolvedIntent: {
