@@ -684,6 +684,7 @@ async function recoverOwnerApprovedCrossProviderStages(input:{
               stage2Key,raw,ITM_PROCESSOR_VERSION+":owner-approved-grok-to-claude-stage2"+(complete?"":":incomplete"),
             );
         },
+        input.batch, // Stage 2 semantically checks the source of the saved Grok episodes.
       );
     }catch(error){
       // A consumed grant is irreversible. Preserve uncertainty if no

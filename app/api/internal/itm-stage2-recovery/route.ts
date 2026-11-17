@@ -8,9 +8,9 @@ export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=180;
 const CHAT="6e6a5c19-b747-4974-9dc7-890dacd13e03";
-const END="f936a6e5-e7ed-5454-a914-bd6ce862924e";
-const CURSOR="9fcca5dc-b304-5ea5-a118-0e2d0b645621";
-const SOURCE_SHA="0d29ffce148463eb1f9bdc945901476b77b84402c2bcae6491de9058c65b2eb9";
+const END="271b0d79-203f-59a7-a00f-76f888d66ecc";
+const CURSOR="94df59b1-7104-559f-a2df-3f70a7ed38fa";
+const SOURCE_SHA="356cee3a87c4eba204b538bcc53e037b882f45d30428ce54d69cae5fffa99e08";
 
 // Vercel's CRON_SECRET is mandatory; no public or conversational dispatch.
 // A pending exact-batch one-shot grant is required before touching memory.
@@ -44,9 +44,9 @@ export async function GET(request:NextRequest){
       .select("content").eq("actor_id",grant.actor_id).eq("chat_id",CHAT)
       .maybeSingle<{content:{sourceMessageCount?:number;summarizedThroughMessageId?:string}}>();
     if(stateError)throw new Error("ITM_ONE_SHOT_CHECKPOINT_READ_UNAVAILABLE");
-    if(!state||state.content.sourceMessageCount!==928||
+    if(!state||state.content.sourceMessageCount!==1258||
       state.content.summarizedThroughMessageId!==CURSOR)
-      return NextResponse.json({status:"checkpoint_not_928"});
+      return NextResponse.json({status:"checkpoint_not_expected_batch"});
     // Bind memory usage to the original authenticated owner/actor/chat.
     // This scope is for telemetry ONLY; memory-summary transport bypasses
     // standalone workflow and request budget admission entirely.

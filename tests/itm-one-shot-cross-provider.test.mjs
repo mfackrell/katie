@@ -32,6 +32,9 @@ test("one-shot recovery never calls Claude before source-bound Grok validation a
   assert.match(helper,/SUMMARY_TIMEOUT_MS/);
   assert.match(helper,/if\(permission\.data!==true\)return null/);
   assert.doesNotMatch(helper,/summarizeNewBatch\(/);
+  assert.match(helper,/input\.batch, \/\/ Stage 2 semantically checks the source of the saved Grok episodes/);
+  assert.match(source,/parseSemanticRejections\(raw,newExcerpts\.length,Boolean\(sourceMessages\)\)/);
+  assert.match(source,/ROLE-ATTRIBUTED SOURCE TRANSCRIPT/);
   assert.match(source,/maxRetries:0/);
   assert.match(source,/const rawFromResponse=\(response\.content\?\?\[\]\)/);
   assert.match(source,/if\(capture\)await capture\(rawFromResponse,response\.stop_reason==="end_turn",response\)/);
