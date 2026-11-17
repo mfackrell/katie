@@ -24,7 +24,7 @@ export async function chooseCrossProviderContextRecovery(input: {
   outputAllowance: number;
   attachments: FileReference[];
   resolvedIntent: ResolvedRoutingIntent;
-  routingMode: RoutingMode;
+  routingMode?: RoutingMode;
   routingRequestParams: (intent: ResolvedRoutingIntent) => Promise<Omit<ChatGenerateParams, "modelId">>;
   routingRequestId: string;
   actorId: string;
