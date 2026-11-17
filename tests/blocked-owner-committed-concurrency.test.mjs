@@ -290,10 +290,11 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    console.log('BLOCKED_OWNER_COMMITTED_NEXT_SCHEDULER_PASS: one bounded lawful management mission in rollback-only lease');
 
    // Exercise the exact subsequent 78-mission root failure after the original
-   // owner resume. The helper uses an isolated transaction and rolls back all
-   // synthetic failed missions and owner actions before this fixture is released.
+   // owner resume. The helper commits synthetic state only to this disposable
+   // fixture, proves REAL competing RPC contention, and tests mission 79
+   // through a rolled-back normal scheduler turn. No production writes.
    await (await import('./helpers/assert-blocked-management-retest.mjs')).assertBlockedManagementRetest(
-    first,observer,{project:PROJECT,owner:fixture.owner,priorRelease:fixture.release,
+    first,second,observer,{project:PROJECT,owner:fixture.owner,priorRelease:fixture.release,
      windowId:winningWindow,scopeHash:SCOPE});
    console.log('BLOCKED_OWNER_REAL_TWO_CONNECTION_RPCS_PASS: COMMITTED schema, two actual concurrent authorize RPCs, two actual concurrent resume RPCs, single receipts, replay and rollback, 76/96 missions, 600000 allowance, 13 contracts, history and QA protections; zero live dispatch/inference');
   }catch(error){

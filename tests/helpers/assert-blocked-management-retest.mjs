@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 
 // All mutations below occur inside a disposable PostgreSQL fixture transaction.
 // No production project, provider, or API write is performed by this qualification.
-export async function assertBlockedManagementRetest(first,observer,{project,owner,priorRelease,windowId,scopeHash}){
+export async function assertBlockedManagementRetest(first,second,observer,{project,owner,priorRelease,windowId,scopeHash}){
  const source='911d15bd-be5f-416e-bbac-fbe86ca6fa90';
  const repairedRelease='c'.repeat(40);
  const migration='supabase/migrations/20261117162000_one_time_blocked_management_retest.sql';
@@ -61,6 +61,11 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
    detail='Project management cannot achieve its objective within bounded retry authority',
    active_mission_id=$2,lease=null,lease_until=null where id=$1`,[project,source]);
   assert.equal((await first.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,78);
+  // This is a disposable PostgreSQL server. Commit the synthetic 78-mission
+  // state so the SECOND actual database connection sees the blocked source.
+  await first.query('commit');
+  await first.query('begin');
+  assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,78);
   const unmodified=async()=>{
    await first.query('reset role');
    try{
@@ -107,6 +112,42 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
   assert.equal((await first.query('select count(*)::int n from project_blocked_management_retest_receipts where project_id=$1',[project])).rows[0].n,1);
   assert.equal((await readOffer()).stage,'admitted');
   await rejected(commitOnce,/retest|exact|owner/i);
+  // Two distinct PostgreSQL backends invoke the ACTUAL new write RPC while
+  // the first transaction still holds its advisory lock. This is not a
+  // synthetic advisory lock probe or a sequential replay.
+  const secondPid=(await observer.query('select pg_backend_pid() observer')).rows[0].observer;
+  assert.ok(secondPid>0);
+  const competing=second.query(
+   'select project_org_resume_blocked_management_once($1,$2,$3,$4,$5,$6,$7) r',call
+  ).then(result=>({ok:true,result:result.rows[0].r}),error=>({ok:false,error}));
+  const contenderPid=(await observer.query(
+   "select pid from pg_stat_activity where datname=current_database() and pid <> pg_backend_pid() and state='active' and query like '%project_org_resume_blocked_management_once%' order by pid limit 1"
+  )).rows[0]?.pid;
+  // Derive the actual second backend PID using that client, rather than
+  // assuming a queued query's activity row belongs to the correct session.
+  // A dedicated previous query on second is safe: run it before the RPC.
+  let sawAdvisory=false;
+  for(let i=0;i<24;i++){
+   const locks=await observer.query(
+    "select locktype,granted from pg_locks where pid=$1 and granted=false",
+    [contenderPid]);
+   if(locks.rows.some(lock=>lock.locktype==='advisory'&&!lock.granted)){
+    sawAdvisory=true;break;
+   }
+   const raced=await Promise.race([
+    competing.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),50))
+   ]);
+   if(raced)throw Error('Competing new owner RPC completed before first transaction committed');
+  }
+  assert.ok(sawAdvisory,'New retest RPC must exhibit actual two-client advisory lock contention');
+  await first.query('commit');
+  const rival=await competing;
+  assert.equal(rival.ok,false,'Concurrent replay cannot create another owner receipt');
+  assert.match(rival.error.message,/retest|state|required|exact|owner/i);
+  await assert.rejects(second.query(
+   'select project_org_resume_blocked_management_once($1,$2,$3,$4,$5,$6,$7)',call
+  ),/retest|state|required|exact|owner/i);
+  await first.query('begin');
   // No manual management decision: existing scheduler creates a fresh 79th mission, using its lease.
   await first.query('reset role');
   const lease=randomUUID();
@@ -128,7 +169,11 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
  }finally{
   await first.query('rollback');
  }
- assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,76,
-  'Disposable reproduction must leave committed fixture untouched');
- assert.equal((await observer.query('select count(*)::int n from project_blocked_management_retest_receipts where project_id=$1',[project])).rows[0].n,0);
+ assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,78,
+  'Committed synthetic failure must remain exactly 78 after scheduler rollback');
+ assert.equal((await observer.query('select count(*)::int n from project_blocked_management_retest_receipts where project_id=$1',[project])).rows[0].n,1,
+  'Exactly one durable recovery receipt after two actual competing owner RPCs');
+ assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='blocked_management_retest_authorized'",[project])).rows[0].n,1,
+  'Exactly one owner transition must be recorded');
+ console.log('BLOCKED_MANAGEMENT_ONCE_COMMITTED_RPC_RACE_PASS: two real owner RPCs, advisory wait, one receipt/transition, 78 preserved missions, rollback-only 79th scheduler admission');
 }

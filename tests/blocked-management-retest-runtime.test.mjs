@@ -75,7 +75,9 @@ test('real Chromium one-time retest control requires owner click and shows a rec
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundled.executablePath(),args:bundled.args,headless:true});
  try{
   for(const scenario of ['success','no-owner','409','admitted']){
-   const page=await browser.newPage();let posts=0,releaseResponse;
+   const page=await browser.newPage();let posts=0,releaseResponse,requestObserved;
+   const errors=[];page.on('pageerror',e=>errors.push(e.message));
+   const requestSeen=new Promise(resolve=>{requestObserved=resolve;});
    const gate=new Promise(resolve=>{releaseResponse=resolve;});
    const body={projectId,releaseSha,cutoff,priorCutoff:cutoff,receipt:null,
     managementRetest:scenario==='admitted'?{...admitted,admittedReleaseSha:releaseSha}:offered};
@@ -87,9 +89,10 @@ test('real Chromium one-time retest control requires owner click and shows a rec
     if(new URL(route.request().url()).pathname==='/control')
      return route.fulfill({contentType:'text/html',body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
     posts++;
-    assert.equal(route.request().method(),'POST');
-    assert.equal(route.request().headers().authorization,'Bearer synthetic-owner');
-    assert.deepEqual(route.request().postDataJSON(),input);
+    // A failed assertion inside the route callback aborts fetch before React
+    // can expose its pending state. Keep the request held; assert outside.
+    const sent={method:route.request().method(),headers:route.request().headers(),data:route.request().postDataJSON()};
+    requestObserved(sent);
     await gate;
     return route.fulfill({status:scenario==='409'?409:200,json:scenario==='409'?{error:'Stale state'}:admitted});
    });
@@ -103,7 +106,20 @@ test('real Chromium one-time retest control requires owner click and shows a rec
     await button.evaluate(el=>{el.click();el.click();});
     if(scenario==='no-owner')await page.getByRole('alert').waitFor();
     else{
-     await page.getByRole('button',{name:'Authorizing one retest…'}).waitFor();
+     let sent;
+     try{
+      sent=await Promise.race([requestSeen,new Promise((_,reject)=>setTimeout(()=>reject(Error('Owner POST not observed')),12000))]);
+      await page.getByRole('button',{name:'Authorizing one retest…'}).waitFor({timeout:12000});
+     }catch(error){
+      releaseResponse();
+      throw Error('Owner pending-state verification failed: '+error.message+
+       '; buttons='+JSON.stringify(await page.getByRole('button').allTextContents())+
+       '; alerts='+JSON.stringify(await page.getByRole('alert').allTextContents())+
+       '; browserErrors='+JSON.stringify(errors));
+     }
+     assert.equal(sent.method,'POST');
+     assert.equal(sent.headers.authorization,'Bearer synthetic-owner');
+     assert.deepEqual(sent.data,input);
      assert.equal(posts,1,'Double-click cannot authorize more than one retry');
      releaseResponse();
      if(scenario==='409')await page.getByRole('alert').filter({hasText:'Stale state'}).waitFor();
