@@ -2,7 +2,71 @@
 
 Status: working code integrated locally; **not release-qualified**. No commit, push, draft PR, merge, production access or paid inference was performed. The enclosing orchestration owns the commit and independent review. This candidate supersedes the source branches for qualification; neither source PR is accepted.
 
-## Repair follow-up (2026-11-17)
+## Fresh-context repair verification (2026-11-17)
+
+Reviewed `AGENT_REQUEST.md`, `AGENT_REPAIR_CONTEXT.md`, `agent-test.log` and
+`agent-review.json` against checkout `5d8b885aae80afe7c884aec64c90e16b1e9b14a1`.
+**All three reviewer blockers remain unresolved.** This follow-up changes only
+this evidence record; it supplies no application fix or qualification verdict.
+
+The cost finding is an implementation gap: `buildNeutralDecisionEvidence` still
+uses characters/4, 1024 output tokens, zero cache hits and one attempt. The real
+`createParams` in the chat route is assembled after initial routing and includes
+persona, history, response-policy instructions, document guidance, restored
+website evidence and media. The existing preparation-only accounting mechanism
+in `lib/router/control-plane-economics.ts` prices helper requests, not those final
+generation requests. Reusing its helper quote would not satisfy full-request
+cost evidence. Candidate-specific final request preparation, cache/retry
+scenarios and choice-changing regressions remain required implementation work.
+
+The quality finding also remains: no comparative observations enter stage two.
+The checked-in objective-first synthetic evaluation describes same-model prompt
+comparisons, expressly without a statistical quality claim; it is not a
+cross-model task-quality corpus. A supported offline historical corpus with
+provenance and independent assessments is needed, together with its evidence
+path and replay tests. Neither mock-selected winners nor registry tiers were
+substituted for this requirement. No paid evaluation or production access was
+performed.
+
+Fresh local checks used Node `22.23.4` (the shell defaults to `24.22.2`):
+
+- Typecheck passed in the Node 22 gate attempt; test TypeScript compilation also
+  completed.
+- Direct compiled routing/preference suites passed **197 tests**, zero failures,
+  skips, cancellations or todos: neutral-two-stage-routing, routing-preferences,
+  creative-continuity, google-routing, model-intent-routing,
+  control-plane-economics, standalone-model-routing, routing-decision-audit and
+  chat-video-routing. These verify contracts and mocked behavior only.
+- Browser acceptance: both viewport tests failed before assertions at Chromium
+  launch, `sandbox_host_linux.cc:41`, `shutdown: Operation not permitted (1)`.
+  This does not diagnose or resolve the original qualified-runner timeout.
+- All three required native PostgreSQL files were invoked with
+  `KATIE_TEST_PG_BIN=/usr/lib/postgresql/16/bin`: 2 source checks passed, 4 native
+  checks failed, zero skipped. PostgreSQL is installed and initialization works;
+  the preference fixture records `could not bind Unix address ... Operation not
+  permitted` and `FATAL: could not create any Unix-domain sockets`.
+- The unmodified full gate repeatedly reported `spawnSync .../node EPERM`.
+  Interrupted at file 64/414 with exit 130. This is an incomplete failing attempt,
+  not a full-gate result; its URL/build/smoke stages were not reached.
+- A separate URL guard attempt failed at `spawnSync /bin/sh EPERM` while running
+  `git ls-files`.
+- The separate production build passed, including compilation, lint/type checks,
+  static generation and normal postbuild. It reported the existing
+  `components/chat-workspace.tsx` effect-dependency warning. The normal Storage
+  probe declined production access. An initial smoke attempt lacked
+  `.next/BUILD_ID`; rerunning after the successful build still failed when the
+  runtime exited before the smoke check completed. No smoke pass is claimed.
+- `bwrap` is absent. No replacement isolation mechanism, launcher changes,
+  workflow edits, relaxed checks or skip allowances were introduced.
+
+Diagnostic logs: `/tmp/repair-{gate,browser,pg,targeted,url,build,smoke}-node22.log`.
+The post-build smoke log is `/tmp/repair-smoke-after-build-node22.log`.
+These temporary logs are not durable CI artifacts. Exact-tree complete CI,
+native security/browser execution and independent review remain blocked. Live
+remote heads and GitHub workflow authorization were not verified in this
+restricted environment. No push, merge, deployment or PR publication occurred.
+
+## Previous repair follow-up (2026-11-17)
 
 Repair base: `21dafd31d76bee8825454cc107d3b587ee5de466`. Read the request,
 repair context, supplied full-gate log and reviewer findings before editing.
