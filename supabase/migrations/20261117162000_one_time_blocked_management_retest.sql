@@ -79,7 +79,7 @@ begin
   or (select count(*) from project_organization_nodes n where n.project_id=p.id and n.status='active' and n.deadline=p.deadline)<>13
   or a.deadline is distinct from p.deadline or a.approved_scope is distinct from p.approved_hash
   or a.window_id is distinct from w.authorization_id
-  or a.continuation_release_sha is null or a.continuation_release_sha !~ '^[0-9a-f]{40}
+  or a.continuation_release_sha is null or a.continuation_release_sha !~ '^[0-9a-f]{40}$'
   or a.continued_at is null or not project_provider_continued(p.id)
   or w.owner_id is distinct from p_owner or w.cutoff is distinct from p.deadline
   or w.resume_release_sha is distinct from a.continuation_release_sha
