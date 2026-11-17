@@ -58,6 +58,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const body = request.postData() ? request.postDataJSON() : null;
       const reply = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+      if (url.pathname === '/api/routing-preferences') {
+        assert.equal(request.method(), 'GET');
+        assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
+        assert.equal(url.searchParams.get('actorId'), actorId);
+        assert.equal(url.searchParams.get('chatId'), chatId);
+        return reply({ global: 'best_value', conversation: null, effective: 'best_value' });
+      }
       if (url.pathname === '/api/projects/lifecycle-approval') {
         assert.equal(request.method(), 'GET');
         assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');

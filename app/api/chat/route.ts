@@ -1,3 +1,4 @@
+import { resolveChatRoutingMode } from '@/lib/routing-preferences/server';
 import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
 import { documentRequest, inheritDocumentPageConstraint, answeredDocumentRequest, isDocumentCapabilityDenial, isDocumentDeliveryNarrative, retainedPdfExportFileId as resolveRetainedPdfExportFileId, retainedPdfDualFormatFileId as resolveRetainedPdfDualFormatFileId, requiresProfessionalDocumentAcceptance, SAVED_DOCUMENT_EXPORT_PROMPT, DOCUMENT_DRAFT_GUIDANCE, DOCUMENT_REVIEW_GUIDANCE } from '@/lib/documents/intent';
 import { savedDocumentContent } from '@/lib/documents/saved-source';
@@ -200,6 +201,7 @@ const requestSchema = z.object({
   attachmentManifest: attachmentManifestSchema.optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
+  routing_mode: z.enum(["best_answer", "best_value"]).optional(),
   routingTraceEnabled: z.boolean().optional(),
   providerPayloadCapture: z.literal(true).optional(),
   activeRepoId: z.string().min(1).optional(),
@@ -773,6 +775,11 @@ async function executeChat(request: NextRequest) {
     const overrideModel = captureCommand ? "claude-sonnet-5" : suppliedOverrideModel;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    // Admission already bound the durable owner/actor/chat. UI mode is only a hint.
+    const routingMode = verifiedWorkflow
+      ? await cachedWorkflowValue('routing-preference-mode', () => resolveChatRoutingMode(
+          {actorId, chatId}, Boolean(overrideProvider || overrideModel)))
+      : undefined;
     let selectedDocumentSource: string | null = null;
     if (documentSourceMessageId) {
       // Explicit selection only. Never pick old documents heuristically from STM
@@ -1707,6 +1714,7 @@ async function executeChat(request: NextRequest) {
       hasManualOverride: Boolean(overrideProvider || overrideModel),
     });
     const controlPlaneConversationContext = [
+      ...(getAccountingScope()?.kind === "standalone" ? [`Actor/persona and memory supplied for response requirements (bounded excerpt): ${persona.length <= 3000 ? persona : persona.slice(0, 1500) + "\n[Actor context excerpt truncated]\n" + persona.slice(-1500)}`] : []),
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4).map(({role,content,createdAt,attachments})=>({
         role,content,createdAt,
@@ -1880,6 +1888,10 @@ async function executeChat(request: NextRequest) {
         actorId,
         actorRoutingProfile,
         routingHints,
+        routing_mode: routingMode,
+        routingRequestParams: {cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId),
+          ...buildGenerationParams({name, persona: [personaForGeneration, storedWebsite.context].filter(Boolean).join("\n\n"), summary, history: historyForProvider,
+            message: messageForGeneration, images, attachments, modelId: "", requestIntent: resolvedRequestIntent})},
         routingTraceEnabled,
         routingRequestId: requestId
       });
@@ -2070,7 +2082,8 @@ async function executeChat(request: NextRequest) {
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
     // and unrelated factual questions retain the router's original decision.
-    if (creativeTextNarrativeRequest && !storedWebsite.fresh) {
+    // Standalone selection belongs to the LLM; keep the legacy orchestration path isolated.
+    if (getAccountingScope()?.kind !== "standalone" && creativeTextNarrativeRequest && !storedWebsite.fresh) {
       const claude = providers.find(candidate => candidate.name === "anthropic");
       if (claude) {
         try {
@@ -3411,6 +3424,10 @@ ${chunkWorkflowSummary}`;
                   actorId,
                   actorRoutingProfile,
                   routingHints,
+                  routing_mode: routingMode,
+                  routingRequestParams: {cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId),
+                    ...buildGenerationParams({name, persona: [personaForGeneration, storedWebsite.context].filter(Boolean).join("\n\n"), summary, history: historyForProvider,
+                      message: messageForGeneration, images, attachments, modelId: "", requestIntent: resolvedRequestIntent})},
                   routingTraceEnabled,
                   routingRequestId: `${requestId}:refusal-reroute-${refusalRerouteCount}`,
                   resolvedIntent: {
@@ -3623,6 +3640,10 @@ ${chunkWorkflowSummary}`;
                     actorId,
                     actorRoutingProfile,
                     routingHints,
+                    routing_mode: routingMode,
+                  routingRequestParams: {cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId),
+                    ...buildGenerationParams({name, persona: [personaForGeneration, storedWebsite.context].filter(Boolean).join("\n\n"), summary, history: historyForProvider,
+                      message: messageForGeneration, images, attachments, modelId: "", requestIntent: resolvedRequestIntent})},
                     routingTraceEnabled,
                     routingRequestId: `${requestId}:error-reroute-${errorRerouteCount}`,
                     resolvedIntent: {

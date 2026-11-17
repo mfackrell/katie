@@ -115,6 +115,7 @@ test("chat route wires creative routing, continuity context, and originality che
   const chatRoute = readFileSync("app/api/chat/route.ts", "utf8");
   assert.match(chatRoute, /isCreativeNarrativeTurn\(/);
   assert.match(chatRoute, /preferredClaudeCreativeModel\(/);
+  assert.match(chatRoute, /if \(getAccountingScope\(\)\?\.kind !== "standalone" && creativeTextNarrativeRequest && !storedWebsite\.fresh\)/, "standalone LLM selection cannot be replaced by the legacy writing specialist");
   assert.match(chatRoute, /CREATIVE_CONTINUITY_INSTRUCTIONS/);
   assert.match(chatRoute, /improveCreativeOriginality\(/);
   assert.match(chatRoute, /CREATIVE_REWRITE_INSTRUCTIONS/);
