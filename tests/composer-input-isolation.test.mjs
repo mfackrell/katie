@@ -11,7 +11,7 @@ test("per-keystroke state belongs to an isolated composer rather than ChatPanel"
   assert.match(composer, /const \[value, setValue\] = useState\(props\.externalValue\)/);
   assert.match(composer, /props\.currentValueRef\.current = next;\s*setValue\(next\)/);
   assert.doesNotMatch(composer, /props\.onDraftChange\(next\);\s*setValue\(next\)/);
-  assert.match(composer, /setTimeout\(\(\) => \{\s*lastCommitted\.current = next;\s*props\.onDraftChange\(next\)/);
+  assert.match(composer, /setTimeout\(\(\) => \{[\s\S]*?props\.currentValueRef\.current !== next[\s\S]*?lastCommitted\.current = next;\s*props\.onDraftChange\(next\)/);
   assert.doesNotMatch(panel, /function handleInputChange\(/);
   assert.match(panel, /<ChatComposerInput[\s\S]*?currentValueRef=\{composerValueRef\}/);
   assert.match(panel, /const latestComposerText = composerValueRef\.current\.trim\(\)/);
