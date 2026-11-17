@@ -351,22 +351,37 @@ test("numbered answer splitter keeps embedded punctuation and exact user stateme
 
 // The database adapter is mocked through the existing Supabase admin injection seam.
 test("persistent task progress is actor/chat scoped and can be loaded after a new request", async () => {
+  const actorId="f94eeb41-9bcd-4eb8-9896-bb92e5e3b5c0";
+  const otherActor="04e99fd2-44a2-4fe3-8d6a-edf5e2be19cb";
+  const chatId="6e6a5c19-b747-4974-9dc7-890dacd13e03";
+  const otherChat="17e296dd-8f23-4b36-8c46-df6806d497af";
+  const sourceId="74bc900c-60fd-4b61-9825-8c9a95eff54b";
+  const sources=[{id:sourceId,chat_id:chatId,actor_id:actorId,role:"user",content:originalTask}];
   const global = globalThis as Record<string, unknown>;
   const old = global.__KATIE_SUPABASE_ADMIN_CLIENT__;
   const data = new Map<string,Record<string,unknown>>();
   global.__KATIE_SUPABASE_ADMIN_CLIENT__ = {
     from: (table:string) => {
-      assert.equal(table,"chat_task_progress");
-      const filters:Record<string,string>={};
+      assert.ok(["messages","chat_task_progress"].includes(table));
+      const filters:Record<string,unknown>={};
       const mock:any = {
         select(){return mock;},
-        eq(field:string,value:string){filters[field]=value;return mock;},
+        eq(field:string,value:unknown){filters[field]=value;return mock;},
+        in(field:string,values:string[]){filters[field]=values;return mock;},
+        then(onfulfilled:any,onrejected?:any){
+          assert.equal(table,"messages");
+          const result=sources.filter(source=>source.actor_id===filters.actor_id &&
+            Array.isArray(filters.id) && filters.id.includes(source.id));
+          return Promise.resolve({data:result,error:null}).then(onfulfilled,onrejected);
+        },
         async maybeSingle(){
+          assert.equal(table,"chat_task_progress");
           const row=data.get(filters.actor_id+"|"+filters.chat_id);
           return {data:row?{state:row.state}:null,error:null};
         },
         upsert(row:Record<string,unknown>){
-          assert.equal(row.actor_id,"actor-A");
+          assert.equal(table,"chat_task_progress");
+          assert.equal(row.actor_id,actorId);
           data.set(row.actor_id+"|"+row.chat_id,row);
           return Promise.resolve({data:null,error:null});
         }
@@ -375,11 +390,16 @@ test("persistent task progress is actor/chat scoped and can be loaded after a ne
     }
   };
   try {
-    const saved=applyUserToTaskProgress(rebuildTaskProgress(history),{messageId:"u2",text:answers});
-    assert.equal(await saveTaskProgress("actor-A","chat-A",saved),true);
-    assert.deepEqual(await loadTaskProgress("actor-A","chat-A"),saved);
-    assert.equal(await loadTaskProgress("actor-B","chat-A"),null);
-    assert.equal(await loadTaskProgress("actor-A","chat-B"),null);
+    // Use an actual persisted, actor-owned user UUID rather than an invented
+    // source key. Source verification is a required part of restoration.
+    const persistedHistory=history.map(item=>item.role==="user" ? {...item,id:sourceId} : item);
+    const saved=applyUserToTaskProgress(rebuildTaskProgress(persistedHistory),{messageId:"u2",text:answers});
+    assert.equal(saved.projectContext?.userMessageId,sourceId);
+    assert.equal(saved.answered.length,3,"The original numbered answers remain bound");
+    assert.equal(await saveTaskProgress(actorId,chatId,saved),true);
+    assert.deepEqual(await loadTaskProgress(actorId,chatId),saved);
+    assert.equal(await loadTaskProgress(otherActor,chatId),null);
+    assert.equal(await loadTaskProgress(actorId,otherChat),null);
   } finally {global.__KATIE_SUPABASE_ADMIN_CLIENT__=old;}
 });
 
