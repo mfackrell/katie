@@ -7,7 +7,8 @@ import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-sc
 import { executeStandaloneWorkflow, executeVerifiedReactionReplyWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, standaloneTechnicalBlocker, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
-import { selectContextCapacityUpgrade, isReviewedCrossProviderContextCandidate } from "@/lib/standalone-accounting/context-upgrade";
+import { selectContextCapacityUpgrade } from "@/lib/standalone-accounting/context-upgrade";
+import { chooseCrossProviderContextRecovery } from "@/lib/chat/context-capacity-recovery";
 import { imageGenerationCapableModel, containsGeneratedImage, filterPricedImageFallbacks } from "@/lib/chat/image-generation-contract";
 import { generatedImageService } from "@/lib/uploads/generated-image-service";
 import { readGeneratedImage } from "@/lib/uploads/stored-uploads";
@@ -3578,61 +3579,30 @@ ${chunkWorkflowSummary}`;
                         !resolvedRoutingIntentForReroute ||
                         errorRerouteCount >= maxErrorReroutes) return null;
                     errorRerouteCount += 1;
-                    const excludedCandidates = [
-                      ...attemptedAttempts.map(item => ({
+                    const rerouteDecision = await chooseCrossProviderContextRecovery({
+                      message,
+                      conversationContext: rerouteRoutingContext,
+                      providers,
+                      failedProviderNames,
+                      previousAttempts: attemptedAttempts.map(item => ({
                         providerName: item.provider.name, modelId: item.modelId,
                       })),
-                      ...refusedCandidates,
-                      ...failedGenerationCandidates,
-                    ];
-                    const excludedKeys = new Set(excludedCandidates.map(item =>
-                      `${item.providerName}:${item.modelId.trim().toLowerCase()}`));
-                    const candidateAllowed = (providerName: LlmProvider["name"], candidateModel: string) =>
-                      !excludedKeys.has(`${providerName}:${candidateModel.trim().toLowerCase()}`) &&
-                      getAttachmentSupportForProvider(providerName, attachments).supported &&
-                      isReviewedCrossProviderContextCandidate({
-                        provider: providerName, model: candidateModel, pricing,
-                        inputTokens: accounting.inputTokens!, outputAllowance: accounting.outputAllowance!,
-                      });
-                    // Let Katie's existing LLM router choose among eligible models.
-                    // Do not convert a model-capacity issue into a provider outage.
-                    const rerouteDecision = await chooseProvider(
-                      message,
-                      [
-                        rerouteRoutingContext,
-                        `Pre-dispatch context admission failed for ${attempt.provider.name}:${attempt.modelId}`,
-                        `Unchanged request requires at least ${accounting.inputTokens! + accounting.outputAllowance!} reviewed context tokens including output allowance.`,
-                      ].join("\n"),
-                      filterHealthyProviders(providers, failedProviderNames),
-                      {
-                        hasImages: rerouteHasVisualInput,
-                        hasVideoInput,
-                        actorId,
-                        actorRoutingProfile,
-                        routingHints,
-                        routing_mode: routingMode,
-                        routingRequestParams: async classification => prepareCandidateRequest(
-                          "", await prepareGenerationContext(classification), classification),
-                        routingTraceEnabled,
-                        routingRequestId: `${requestId}:capacity-reroute-${errorRerouteCount}`,
-                        resolvedIntent: {
-                          ...resolvedRoutingIntentForReroute,
-                          intentSource: "upstream",
-                        },
-                        excludedCandidates,
-                        candidateAllowed,
-                        rerouteContext: {
-                          reason: "provider-error",
-                          failed_candidates: excludedCandidates.map(item => ({
-                            provider: item.providerName, model: item.modelId,
-                          })),
-                        },
-                      },
-                    );
-                    // Deterministic router fallback cannot substitute for an
-                    // LLM selection on this cross-provider recovery path.
-                    if (rerouteDecision.explainer?.selected_source !== "llm-primary" ||
-                        !candidateAllowed(rerouteDecision.provider.name, rerouteDecision.modelId)) {
+                      otherExcluded: [...refusedCandidates, ...failedGenerationCandidates],
+                      pricing,
+                      inputTokens: accounting.inputTokens!,
+                      outputAllowance: accounting.outputAllowance!,
+                      attachments,
+                      resolvedIntent: resolvedRoutingIntentForReroute,
+                      routingMode,
+                      routingRequestParams: async classification => prepareCandidateRequest(
+                        "", await prepareGenerationContext(classification), classification),
+                      routingRequestId: `${requestId}:capacity-reroute-${errorRerouteCount}`,
+                      actorId,
+                      actorRoutingProfile,
+                      routingHints,
+                      routingTraceEnabled,
+                    });
+                    if (!rerouteDecision) {
                       console.warn("[Context Upgrade] No LLM-qualified cross-provider recovery", {
                         requestId, rejectedModel: attempt.modelId,
                       });
