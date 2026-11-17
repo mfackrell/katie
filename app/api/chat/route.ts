@@ -1717,10 +1717,15 @@ async function executeChat(request: NextRequest) {
     const controlPlaneConversationContext = [
       ...(getAccountingScope()?.kind === "standalone" ? [`Actor/persona and memory supplied for response requirements (bounded excerpt): ${persona.length <= 3000 ? persona : persona.slice(0, 1500) + "\n[Actor context excerpt truncated]\n" + persona.slice(-1500)}`] : []),
       summary ? `Conversation summary: ${summary}` : "",
-      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4).map(({role,content,createdAt,attachments})=>({
-        role,content,createdAt,
-        attachments:attachments?.map(file=>({id:file.id,fileName:file.fileName,observationSourceHash:file.observationSourceHash,observationAgreement:file.observationAgreement}))
-      })))}` : "",
+      // Provide up to five recent exchanges with producing-model attribution.
+      // Direct user feedback is preserved in those turns; do not add any DB/LLM calls.
+      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-10).map(({role,content,createdAt,attachments,model})=>({
+        role,
+        content: content.length > 650 ? content.slice(0, 250) + "\n[message excerpt truncated]\n" + content.slice(-350) : content,
+        createdAt,
+        ...(role === "assistant" && model ? { model } : {}),
+        attachments: attachments?.map(file=>({id:file.id,fileName:file.fileName,observationSourceHash:file.observationSourceHash,observationAgreement:file.observationAgreement}))
+      }))}` : "",
       `Active project (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null : null)}`,
       `Current requested deliverable (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.objective?.text ?? null : null)}`,
       `Outstanding questions: ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })) : [])}`,
