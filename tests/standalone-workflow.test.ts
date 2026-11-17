@@ -93,19 +93,16 @@ test('a generic preparation exception surfaces the database durable pause instea
 test('routing timeout pauses the durable workflow and clears only its processing chat receipt',async()=>{
  const updates:Array<{table:string;values:Record<string,unknown>;filters:Record<string,string>}>=[];
  const admin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ as unknown as Record<string,unknown>;
- admin.from=(table:string)=>({
-  update(values:Record<string,unknown>){
-   const filters:Record<string,string>={};
-   const q={
-    eq(key:string,value:string){filters[key]=value;return q;},
-    then(resolve:(value:{error:null})=>unknown){
-     updates.push({table,values,filters:{...filters}});
-     return Promise.resolve({error:null}).then(resolve);
-    },
-   };
-   return q;
-  },
- });
+ admin.from=(table:string)=>{
+  const filters:Record<string,string>={};
+  return {
+   eq(key:string,value:string){filters[key]=value;return this;},
+   async update(values:Record<string,unknown>){
+    updates.push({table,values,filters:{...filters}});
+    return {error:null};
+   },
+  };
+ };
  const timeout=Object.assign(Error('routing-rerank model timed out'),{code:'standalone_outcome_unknown'});
  await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw timeout}),error=>error===timeout);
  assert.equal(stored.status,'paused');
