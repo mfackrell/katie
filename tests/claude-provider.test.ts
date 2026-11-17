@@ -339,7 +339,7 @@ test("Claude requests only a final user-facing reply and no intermediate snippet
   } finally { globalThis.fetch = priorFetch; }
 });
 
-test("actual Anthropic system payload changes only the style for personal conversation", async () => {
+test("actual Anthropic system payload has no extra personal conversation instructions", async () => {
   const previousFetch = globalThis.fetch;
   const wirePayloads: Array<{ system: string | Array<{ text: string }>; messages: unknown[] }> = [];
   const auditSystems: string[] = [];
@@ -349,7 +349,7 @@ test("actual Anthropic system payload changes only the style for personal conver
   }) as typeof fetch;
   try {
     // The same actor + global professional instructions are present in both
-    // outgoing requests; only responsePolicy.generationInstruction differs.
+    // outgoing requests; only professional clarifications add a turn-level instruction.
     const actorAndGlobal = [
       "Katie actor personality (unchanged).",
       getDeliverableStandardInstruction(),
@@ -380,10 +380,9 @@ test("actual Anthropic system payload changes only the style for personal conver
     assert.match(systems[0], /KATIE_DELIVERABLE_COMPLETION_STANDARD/);
     assert.match(systems[1], /KATIE_DELIVERABLE_COMPLETION_STANDARD/);
     assert.match(systems[0], /NEXT RESPONSE: a brief conversational answer or clarification/);
-    assert.match(systems[1], /Engage naturally rather than simply acknowledging or summarizing/);
-    assert.doesNotMatch(systems[1], /normally under 150 words|ask at most one necessary follow-up/);
-    assert.equal(systems[1].replace(personal.generationInstruction!, work.generationInstruction!), systems[0],
-      "Only the personal-conversation instructions may differ in the actual provider system payload");
+    assert.equal(personal.generationInstruction, null);
+    assert.ok(systems[0].includes(work.generationInstruction!), "Work clarification keeps its guard");
+    assert.doesNotMatch(systems[1], /NEXT RESPONSE:|Engage naturally rather than simply acknowledging/);
     assert.deepEqual(wirePayloads[0].messages, wirePayloads[1].messages);
     const route = readFileSync("app/api/chat/route.ts", "utf8");
     assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
@@ -423,7 +422,7 @@ test("outbound provider system payload follows final personal response purpose, 
     assert.equal(sentSystems.length, cases.length);
     assert.deepEqual(auditedSystems, sentSystems, "Captured provider audit must match outgoing system messages");
     for (const i of [0, 1, 2]) {
-      assert.match(sentSystems[i], /Engage naturally rather than simply acknowledging/);
+      assert.doesNotMatch(sentSystems[i], /NEXT RESPONSE:|Engage naturally rather than simply acknowledging/);
       assert.doesNotMatch(sentSystems[i], /normally under 150 words/);
     }
     assert.match(sentSystems[3], /NEXT RESPONSE: a brief conversational answer or clarification/);
@@ -438,7 +437,7 @@ test("outbound provider system payload follows final personal response purpose, 
 });
 
 
-test("Nov 3 nine-turn production routing replay sends only personal guidance on the Anthropic wire", async () => {
+test("Nov 3 nine-turn production replay uses actor guidance without extra conversational prompt", async () => {
   // Message content is privacy-safe paraphrase. The ordering, primary intent
   // labels, Haiku handoffs, stale checkpoint, and observed instruction split
   // are recovered from the Nov 3 production audit.
@@ -524,6 +523,7 @@ test("Nov 3 nine-turn production routing replay sends only personal guidance on 
         hasPendingDeliverable: sourceLinkedPendingWork,
       });
       assert.equal(decision.purpose, "conversation", "Turn " + (index + 1));
+      assert.equal(decision.generationInstruction, null, "Turn " + (index + 1) + ": no turn-level style injection");
       assert.equal(decision.reason, fixture.intent === "general-text"
         ? "contextual_personal_conversation" : "personal_conversation", "Turn " + (index + 1));
       const result = await provider.generate({
@@ -544,7 +544,7 @@ test("Nov 3 nine-turn production routing replay sends only personal guidance on 
       "The wire payload must match the provider-system audit for every replayed turn.");
     assert.deepEqual(sentModels, turns.map(turn => turn.model));
     for (const [index, system] of sentSystems.entries()) {
-      assert.match(system, /NEXT RESPONSE: a natural personal conversation/, "Turn " + (index + 1));
+      assert.doesNotMatch(system, /NEXT RESPONSE: a natural personal conversation/, "Turn " + (index + 1));
       assert.doesNotMatch(system, /NEXT RESPONSE: a brief conversational answer or clarification/, "Turn " + (index + 1));
       assert.doesNotMatch(system, /normally under 150 words/, "Turn " + (index + 1));
       assert.doesNotMatch(system, /KATIE_DURABLE_TASK_PROGRESS/, "Turn " + (index + 1));

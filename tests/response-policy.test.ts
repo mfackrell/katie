@@ -199,7 +199,7 @@ const originalWorkConversationInstruction = [
   "Earlier saved drafts and task instructions are background; they do not override the current conversational question.",
 ].join("\n");
 
-test("social-emotional exchanges receive reciprocal guidance without dropping task boundaries", () => {
+test("social-emotional exchanges use the actor persona without extra chat instructions", () => {
   for (const message of [
     "I don't particularly like being alone. I discovered that after Lindsey.",
     "That is EXACTLY what it is.",
@@ -210,12 +210,7 @@ test("social-emotional exchanges receive reciprocal guidance without dropping ta
     });
     assert.equal(result.purpose, "conversation", message);
     assert.equal(result.requiresSubstantiveProcessing, false, message);
-    const instruction = result.generationInstruction ?? "";
-    assert.match(instruction, /Engage naturally rather than simply acknowledging or summarizing/);
-    assert.match(instruction, /Contribute your own perspective, curiosity, or humor/);
-    assert.doesNotMatch(instruction, /normally under 150 words|ask at most one necessary follow-up/);
-    assert.match(instruction, /Keep the active substantive task pending/);
-    assert.match(instruction, /Earlier saved drafts and task instructions are background/);
+    assert.equal(result.generationInstruction, null, message);
   }
 });
 
@@ -251,7 +246,7 @@ test("personal classification never overrides delivery, tools, or approvals", ()
   }
 });
 
-test("personal turns select reciprocal conversation even with inconsistent classifier purposes", () => {
+test("personal turns retain conversational purpose without extra prompt instructions", () => {
   const fixtures = [
     { message: "Hi Katie", intent: "general-text", responsePurpose: "conversation" },
     { message: "Thank you.", intent: "social-emotional", responsePurpose: "conversation" },
@@ -265,8 +260,7 @@ test("personal turns select reciprocal conversation even with inconsistent class
     const result = decideResponsePolicy(fixture);
     assert.equal(result.purpose, "conversation", fixture.message);
     assert.equal(result.requiresSubstantiveProcessing, false, fixture.message);
-    assert.match(result.generationInstruction ?? "", /Engage naturally rather than simply acknowledging/);
-    assert.doesNotMatch(result.generationInstruction ?? "", /normally under 150 words|ask at most one necessary follow-up/);
+    assert.equal(result.generationInstruction, null, fixture.message);
   }
 });
 
@@ -314,8 +308,22 @@ test("contextual personal purpose survives short answers, corrections and topic 
     });
     assert.equal(result.purpose, "conversation", fixture.message);
     assert.equal(result.reason, fixture.reason, fixture.message);
-    assert.match(result.generationInstruction ?? "", /NEXT RESPONSE: a natural personal conversation/);
-    assert.doesNotMatch(result.generationInstruction ?? "", /normally under 150 words|ask at most one necessary follow-up/);
+    assert.equal(result.generationInstruction, null, fixture.message);
+  }
+});
+
+
+test("ordinary café and weather conversation uses no extra prompt on the same response path", () => {
+  for (const fixture of [
+    { message: "The weather is pretty gross today.", intent: "general-text" },
+    { message: "There's someone attractive in the café today.", intent: "social-emotional" },
+    { message: "I only made eye contact once.", intent: "social-emotional" },
+    { message: "I'm having regular coffee as usual.", intent: "general-text" },
+  ] as const) {
+    const result = decideResponsePolicy({ ...fixture, responsePurpose: "conversation" });
+    assert.equal(result.purpose, "conversation", fixture.message);
+    assert.equal(result.requiresSubstantiveProcessing, false, fixture.message);
+    assert.equal(result.generationInstruction, null, fixture.message);
   }
 });
 
