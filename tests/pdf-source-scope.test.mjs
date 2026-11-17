@@ -19,6 +19,16 @@ function modules(){
 const load=modules(),scope=load('lib/chat/pdf-source-selection.ts');
 const documentIntent=load('lib/documents/intent.ts');
 const route=readFileSync('app/api/chat/route.ts','utf8');
+const routeAst=ts.createSourceFile('route.ts',route,ts.ScriptTarget.Latest,true);
+function declaration(name){
+ const matches=[];
+ const visit=node=>{
+  if(ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text===name)matches.push(node);
+  ts.forEachChild(node,visit);
+ };
+ visit(routeAst);assert.equal(matches.length,1,`Production route must have one ${name} declaration`);
+ return `const ${matches[0].getText(routeAst)};`;
+}
 const part=(from,to)=>{const a=route.indexOf(from),b=route.indexOf(to,a);assert.ok(a>=0 && b>a,from);return route.slice(a,b);};
 const code=source=>ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const pdf=(id,name)=>({fileId:id,id,chatId:'chat',fileName:name,mimeType:'application/pdf',preview:`TEXT-${id}`,extractedText:`TEXT-${id}`,pdfInventory:{version:1,pageCount:1,pages:[]},providerRef:{googleFileUri:`offline:${id}`}});
@@ -52,6 +62,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
   inspectSavedPdf:async(_chat,source,_actor,task,_owns,analysisTask)=>{inspected.push(source.fileId);inspectedTasks.push(task);analysisTasks.push(analysisTask);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
   getChatById:async()=>({actorId:'actor'}),
   cacheablePersona:'Base',name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,creativeTextNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
+  generationContext:{creativeTextNarrativeRequest:false,responsePolicy:{generationInstruction:null},taskProgressContext:'',resumptionContext:'',visualContinuity:null},
   providerPayloadCapture:false,visualContinuity:null,saveProviderSystemAudit:async()=>{},requestId:'same',console,
  };
  const result=await vm.runInNewContext(code(`(async()=>{
@@ -62,6 +73,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
  }
  ${part('    const requestAttachments =', '    console.log("[Chat API] received attachments"')}
  ${part('    const requestFingerprint =','    const idempotencyClaim =')}
+ ${declaration('prepareCandidateRequest')}
  ${part('            for (const [index, attachment] of newAttachments.entries()) {','            if (timelineActive && temporalIntent) {')}
  ${part('            personaForGeneration += `\\n\\n${selectionContext()}`;', '            if (!currentStandaloneWorkflow()?.resumed')}
  ${part('            for (const pdf of attachments.filter', '            if (!verifyingSavedDraft && shouldRunChunkedWorkflow(')}
