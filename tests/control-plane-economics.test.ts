@@ -98,3 +98,102 @@ test('resume restores each fallback ordinal after an invalid completed helper an
     if(originalKey===undefined)delete process.env.SUPABASE_SERVICE_ROLE_KEY;else process.env.SUPABASE_SERVICE_ROLE_KEY=originalKey;
   }
 });
+
+
+test('resume past an unavailable, settled zero-cost provider rejection preserves the next approved fallback ordinal', async () => {
+  const originalFetch=globalThis.fetch;
+  const originalUrl=process.env.NEXT_PUBLIC_SUPABASE_URL, originalKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL='https://accounting.test';process.env.SUPABASE_SERVICE_ROLE_KEY='test-only-key';
+  const prefix='control_plane_project-resolution:';
+  const rejected={
+    provider:'anthropic',model:'claude-haiku-5-5',state:'settled',actual_microusd:'0',
+    usage:{inputTokens:0,outputTokens:0,nonbillableRejected:true},
+    evidence:{kind:'provider_rejection',rejectionReason:'insufficient_prepaid_balance',httpStatus:400},
+    response_checkpoint:{status:400},
+  };
+  const fallback={provider:'openai',model:'gpt-5-mini',state:'paused'};
+  const attempts=new Map<string,Record<string,unknown>>([[prefix+'0',rejected],[prefix+'1',fallback]]);
+  const seen:string[]=[];
+  let transmissions=0;
+  globalThis.fetch=async (input,init) => {
+    const url=String(input),body=JSON.parse(String(init?.body));
+    if(url.endsWith('/standalone_lookup_attempt'))return Response.json(attempts.get(body.p_key)??null);
+    throw Error('Unexpected provider or ledger network request in recovery test');
+  };
+  const provider:LlmProvider={name:'openai',async listModels(){return ['gpt-5-mini'];},async generate(params){
+    const attempt=nextStandaloneAttempt()!;
+    seen.push(attempt.attemptKey);
+    assert.equal(attempt.attemptKey,prefix+'1','the saved fallback must keep its original ordinal');
+    assert.equal(params.modelId,fallback.model,'the approved model must be unchanged');
+    if(fallback.state==='paused')throw new StandaloneAccountingError('approval_required','Approve saved fallback');
+    transmissions++;
+    return {text:JSON.stringify({executionKind:'conversation',action:'same'}),provider:'openai',model:'gpt-5-mini'};
+  }};
+  const run=()=>resolveProjectTransition('review the routing for this project',
+    {activeProject:{userMessageId:'old',text:'Review routing'},savedProjects:[]},
+    {decisionProviders:[{provider,modelId:'gpt-5-mini'}]});
+  try {
+    await assert.rejects(runWithStandaloneAccounting({...owner,requestId:'rejected-resume',resumed:true},run),/Approve saved fallback/);
+    assert.equal(transmissions,0,'an unapproved saved fallback cannot transmit');
+    fallback.state='reserved';
+    const result=await runWithStandaloneAccounting({...owner,requestId:'rejected-resume',resumed:true},run);
+    assert.equal(result,undefined);
+    assert.equal(transmissions,1,'only the exact approved fallback transmits');
+    assert.deepEqual(seen,[prefix+'1',prefix+'1']);
+    assert.deepEqual([...attempts.keys()],[prefix+'0',prefix+'1'],'no attempt key was replaced or appended');
+  } finally {
+    globalThis.fetch=originalFetch;
+    if(originalUrl===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=originalUrl;
+    if(originalKey===undefined)delete process.env.SUPABASE_SERVICE_ROLE_KEY;else process.env.SUPABASE_SERVICE_ROLE_KEY=originalKey;
+  }
+});
+
+test('missing saved provider fails closed for completed output, pending, uncertain, and unverified rejection', async () => {
+  const originalFetch=globalThis.fetch;
+  const originalUrl=process.env.NEXT_PUBLIC_SUPABASE_URL, originalKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL='https://accounting.test';process.env.SUPABASE_SERVICE_ROLE_KEY='test-only-key';
+  const verified={
+    provider:'anthropic',model:'claude-haiku-5-5',state:'settled',actual_microusd:'0',
+    usage:{nonbillableRejected:true},evidence:{kind:'provider_rejection',rejectionReason:'insufficient_prepaid_balance',httpStatus:400},
+    response_checkpoint:{status:400},
+  };
+  let saved:Record<string,unknown>=verified;
+  let transmissions=0;
+  globalThis.fetch=async (input,init) => {
+    const url=String(input),body=JSON.parse(String(init?.body));
+    if(url.endsWith('/standalone_lookup_attempt')) {
+      assert.equal(body.p_key,'control_plane_intent-classification:0');
+      return Response.json(saved);
+    }
+    throw Error('Unexpected network request in fail-closed test');
+  };
+  const provider:LlmProvider={name:'openai',async listModels(){return ['gpt-5-mini'];},async generate(){
+    transmissions++;
+    throw Error('Must not quote or dispatch while saved attempt is unresolved');
+  }};
+  const invalid=[
+    {...verified,state:'reserved'},
+    {...verified,state:'paused'},
+    {...verified,state:'dispatched'},
+    {...verified,state:'uncertain'},
+    {...verified,state:'settled',usage:{nonbillableRejected:false}},
+    {...verified,state:'settled',actual_microusd:'1'},
+    {...verified,state:'settled',evidence:{kind:'provider_receipt'}},
+    {...verified,state:'settled',response_checkpoint:{status:200}},
+  ];
+  try {
+    for(const candidate of invalid) {
+      saved=candidate;
+      await assert.rejects(
+        runWithStandaloneAccounting({...owner,requestId:'strict-unavailable-resume',resumed:true},
+          () => rankControlPlaneByActualCost([{provider,modelId:'gpt-5-mini'}],params,undefined,'control_plane_intent-classification')),
+        (error:unknown) => error instanceof Error && error.message.includes('no longer available for exact resume')
+      );
+    }
+    assert.equal(transmissions,0,'no replacement dispatch or pricing probe was allowed');
+  } finally {
+    globalThis.fetch=originalFetch;
+    if(originalUrl===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=originalUrl;
+    if(originalKey===undefined)delete process.env.SUPABASE_SERVICE_ROLE_KEY;else process.env.SUPABASE_SERVICE_ROLE_KEY=originalKey;
+  }
+});
