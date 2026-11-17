@@ -126,8 +126,8 @@ test("receipt RLS, service-role-only insert, immutable trigger and response-size
 });
 
 test("source-bound stage evidence is not logged as prose or counted as new budgeted work",()=>{
-  assert.match(summary,/ITM_VALIDATION_EPISODE_SUMMARY_LENGTH/);
-  assert.match(summary,/ITM_VALIDATION_EPISODE_EVIDENCE_COUNT/);
+  assert.match(summary,/Skipped malformed individual ITM episode/);
+  assert.match(summary,/Skipped episode with invalid source IDs/);
   assert.match(summary,/recordItmStageReceipt/);
   assert.match(summary,/p_expected_cursor:input.expectedCursor/);
   assert.match(summary,/p_processor_version:claimVersion/);
