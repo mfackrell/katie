@@ -57,6 +57,8 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
    active_mission_id=$2,lease=null,lease_until=null where id=$1`,[project,source]);
   assert.equal((await first.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,78);
   const unmodified=async()=>{
+   await first.query('reset role');
+   try{
    const rows={};
    for(const [name,sql] of Object.entries({
     missions:'select md5(coalesce(jsonb_agg(to_jsonb(m) order by m.id)::text,\'[]\')) h from agent_missions m where project_id=$1',
@@ -68,6 +70,7 @@ export async function assertBlockedManagementRetest(first,observer,{project,owne
     packages:"select count(*)::text h from project_work_packages where project_id=$1",
    }))rows[name]=(await first.query(sql,[project])).rows[0].h;
    return rows;
+   }finally{await first.query('set role service_role');}
   };
   const history=await unmodified();
   await first.query('set role service_role');
