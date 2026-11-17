@@ -319,4 +319,6 @@ test('cross-provider capacity recovery is bounded and never bypasses pricing or 
   assert.match(code,/!resolvedRoutingIntentForReroute \|\|\s*errorRerouteCount >= maxErrorReroutes/);
   assert.match(code,/if \(accounting && \['standalone_context_capacity_unverified','standalone_context_window_exceeded'\]/);
   assert.match(code,/if \(imageGenerationRequested \|\| \(overrideProvider && overrideModel\)/);
+  assert.match(code,/Boolean\(visualContinuity\?\.references\.length\)/,
+    'saved visual references must not enter text-only recovery');
 });
