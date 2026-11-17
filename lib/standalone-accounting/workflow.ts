@@ -196,8 +196,8 @@ async function executeScopedStandaloneWorkflow(
         new URL(request.url).pathname === '/api/chat') {
       try {
         const {error: chatError}=await getSupabaseAdminClient().from('chat_requests')
-          .update({status:'failed',error_message:'The saved request paused after a provider timeout. Resume the original request once its provider receipt is available; do not send a new request.',updated_at:new Date().toISOString()})
-          .eq('request_id',requestId).eq('actor_id',actorId).eq('chat_id',chatId).eq('status','processing');
+          .eq('request_id',requestId).eq('actor_id',actorId).eq('chat_id',chatId).eq('status','processing')
+          .update({status:'failed',error_message:'The saved request paused after a provider timeout. Resume the original request once its provider receipt is available; do not send a new request.',updated_at:new Date().toISOString()});
         if(chatError) console.warn('[Standalone Workflow] Unable to finalize paused chat receipt',{requestId,reason:chatError.message});
       } catch (chatError) {
         console.warn('[Standalone Workflow] Unable to finalize paused chat receipt',{requestId,reason:chatError instanceof Error?chatError.message:String(chatError)});
