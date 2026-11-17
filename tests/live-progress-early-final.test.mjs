@@ -17,7 +17,8 @@ test('streamed answer tokens never masquerade as reasoning',()=>{
  assert.doesNotMatch(panel,/applyFallbackReasoningUpdate\(chunk\.text\)|applyFallbackReasoningFromDelta\(chunk\.text\)/);
  assert.match(route,/const reasoningState = new ReasoningStateAccumulator\(requestId, \[\]\)/);
  assert.doesNotMatch(panel,/<span>Live reasoning<\/span>/);
- assert.match(panel,/<span>Live activity<\/span>/);
+ assert.match(panel,/aria-label="Show live processing activity"/);
+ assert.match(panel,/>Live activity<\/label>/);
 });
 
 test('progress messages reflect observable actions rather than text-length scores',()=>{
