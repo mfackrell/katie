@@ -93,6 +93,14 @@ test("visual correction binding rejects forged, ambiguous, stale, and cross-chat
   assert.equal(recentVerifiedVisualCorrection("Compare both pictures",[saved],[turn([upload]),assistant],"chat-a"),null);
   assert.equal(recentVerifiedVisualCorrection("Look again at the image",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"source",
     "an explicit pixel reread must use the authorized source-observation path");
+  assert.equal(recentVerifiedVisualCorrection("You were wrong about the image receipt.png.",[saved,{...saved,id:"other-image",fileName:"receipt.png"}],[turn([upload]),assistant],"chat-a"),null,
+    "an explicitly named different image must not be replaced by the recent verified upload");
+  assert.equal(recentVerifiedVisualCorrection("You were wrong about the image; read the exact text on the sign.",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"source",
+    "precision requests must reopen the original pixels instead of relying on saved observations");
+  assert.equal(recentVerifiedVisualCorrection("Using the saved summary only, explain your assessment of the image; do not look again.",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"summary",
+    "summary-only instructions prohibit an extra source read even if the text also mentions looking again");
+  assert.equal(recentVerifiedVisualCorrection("You were wrong about the image; do not look again.",[saved],[turn([upload]),assistant],"chat-a")?.selections[0].mode,"summary",
+    "a negated reread must never trigger pixel reinspection");
 });
 
 test("a blocked Gemini attachment selector is not mistaken for invalid selection JSON", async () => {

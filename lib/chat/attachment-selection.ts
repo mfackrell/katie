@@ -131,7 +131,22 @@ export function recentVerifiedVisualCorrection(
       file.mimeType.startsWith("image/") &&
       (!original.actorId || !file.actorId || original.actorId===file.actorId));
     if (!matched || !verifiedKatieVisualEpisode(matched)) return null;
-    const sourceRequired=/\b(?:look again|look closer|re-?inspect|re-?examine|zoom|actual pixels|original pixels|check the (?:original|actual) (?:image|photo|picture))\b/i.test(text);
+    // Explicit filenames take precedence over recent-image continuity. The
+    // history anchor must never silently substitute a different file.
+    const otherNamedSource = catalog.some(file =>
+      file.id !== matched.id &&
+      Boolean(file.fileName?.trim()) &&
+      text.toLocaleLowerCase("en-US").includes(file.fileName.toLocaleLowerCase("en-US")));
+    if (otherNamedSource) return null;
+
+    // Saved observations are sufficient unless the user requests precise
+    // rereading. Explicit summary-only and no-reread instructions override
+    // incidental trigger words (including a negated "look again").
+    const noReread = SUMMARY_ONLY.test(text) || SUMMARY_ONLY_VISUAL.test(text) ||
+      /\b(?:do not|don't)\s+(?:look(?:\s+at\s+(?:it|the\s+(?:image|photo|picture)))?\s+again|re-?inspect|re-?examine|re-?read)\b/i.test(text);
+    const sourceRequired = !noReread &&
+      (PRECISION_REQUEST.test(text) ||
+       /\b(?:look again|look closer|re-?inspect|re-?examine|zoom|actual pixels|original pixels|check the (?:original|actual) (?:image|photo|picture))\b/i.test(text));
     return {
       method:"continuity",
       selections:[{attachment:matched,mode:sourceRequired?"source":"summary"}],
