@@ -21,6 +21,33 @@ interface AssembledContext {
   reviewMode: import("@/lib/collaboration/review-mode").ReviewMode;
 }
 
+type CompactLtmEntry = { key: string; value: string; source?: string; category?: string; confidence?: string };
+
+/** Send every durable fact, but retain evidence and maintenance metadata in Supabase. */
+export function formatLongTermMemoryForPrompt(memory: Record<string, unknown>): string {
+  const prefix = "LONG_TERM_MEMORY:\n";
+  const suffix = "\nEND_LONG_TERM_MEMORY";
+  if (!Object.keys(memory).length) return `${prefix}No durable long-term memory has been stored yet.${suffix}`;
+  const entries = memory.entries;
+  const knownRootFields = new Set(["entries", "purpose", "version"]);
+  const knownEntryFields = new Set(["key", "value", "source", "category", "confidence", "evidenceQuotes", "evidenceMessageIds", "lastConfirmedAt"]);
+  // Unknown data shapes retain the old lossless representation, never a partial list.
+  const compactable = Array.isArray(entries) &&
+    Object.keys(memory).every(key => knownRootFields.has(key)) &&
+    (memory.purpose === undefined || typeof memory.purpose === "string") &&
+    entries.every(entry => entry !== null && typeof entry === "object" && !Array.isArray(entry) &&
+      Object.keys(entry).every(key => knownEntryFields.has(key)) &&
+      typeof entry.key === "string" && typeof entry.value === "string" &&
+      ["source", "category", "confidence"].every(key => entry[key] === undefined || typeof entry[key] === "string"));
+  if (!compactable) return `${prefix}${JSON.stringify(memory)}${suffix}`;
+  const facts = (entries as CompactLtmEntry[]).map(entry =>
+    `${entry.key} [${entry.source ?? "unverified"}|${entry.category ?? "unspecified"}|${entry.confidence ?? "unspecified"}]: ${entry.value}`);
+  return `${prefix}${[
+    "Labels: source|category|confidence. Assistant inferences are not user-confirmed facts.",
+    ...(memory.purpose ? [`Purpose: ${memory.purpose}`] : []),
+    ...(facts.length ? facts : ["No durable long-term memory entries stored."]),
+  ].join("\n")}${suffix}`;
+}
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
   const { actor, recentMessages, shortTermMemory, intermediateMemory, longTermMemory } = await getChatContextState(
     actorId,
@@ -88,9 +115,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     "END_AUTHORITATIVE_ACTOR_MEMORY_CORRECTIONS",
   ].join("\n");
 
-  const longTermBlock = Object.keys(longTermMemory).length
-    ? `LONG_TERM_MEMORY:\n${JSON.stringify(longTermMemory)}\nEND_LONG_TERM_MEMORY`
-    : "LONG_TERM_MEMORY:\nNo durable long-term memory has been stored yet.\nEND_LONG_TERM_MEMORY";
+  const longTermBlock = formatLongTermMemoryForPrompt(longTermMemory);
 
   return {
     reviewMode: currentAgentTask()?.snapshot.reviewMode ?? actor.reviewMode ?? "adaptive",
