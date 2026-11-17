@@ -2,6 +2,78 @@
 
 Status: working code integrated locally; **not release-qualified**. No commit, push, draft PR, merge, production access or paid inference was performed. The enclosing orchestration owns the commit and independent review. This candidate supersedes the source branches for qualification; neither source PR is accepted.
 
+## Repair follow-up (2026-11-17)
+
+Repair base: `21dafd31d76bee8825454cc107d3b587ee5de466`. Read the request,
+repair context, supplied full-gate log and reviewer findings before editing.
+The supplied gate completed with four failing files; the intentionally failing
+fixtures printed by `test-runner.test.mjs` are not additional gate failures.
+
+Changed only the preference browser harness and this handoff. Desktop and mobile
+now run as separately named tests, each with its own Chromium lifecycle, a
+75-second test deadline, 10-second browser-operation deadlines and a browser
+JavaScript-error assertion. This avoids reopening a context after closing the
+last context of bundled Chromium's `--single-process` instance. All original
+persistence, reload, conversation-switch, clear-override and overflow assertions
+remain. This is a lifecycle/diagnostic repair, **not a verified resolution of the
+reported CI timeout**: this environment cannot launch the browser. The fixture's
+scope resets on reload as intended; no preference-scope application defect was
+established.
+
+Local verification used Node `22.23.4` explicitly (the shell defaults to Node 24):
+
+- Typecheck and `tsc -p tsconfig.tests.json`: passed.
+- Compiled `neutral-two-stage-routing`: 34 passed; compiled
+  `routing-preferences`: 11 passed; zero skipped in both. These verify routing
+  contracts and mocked behavior, not measured comparative model quality.
+- Browser test syntax and `git diff --check`: passed.
+- Both repaired browser cases fail at launch, before application assertions:
+  `sandbox_host_linux.cc:41`, `shutdown: Operation not permitted (1)`.
+- All three required native PostgreSQL files were explicitly invoked with
+  `KATIE_TEST_PG_BIN=/usr/lib/postgresql/16/bin`. None skipped. Preference
+  migration: one failure; ITM one-shot: two source checks pass, one native failure;
+  ITM recovery exposure: two native failures. Servers cannot start. The preference
+  fixture captures `could not bind Unix address ... Operation not permitted`,
+  `FATAL: could not create any Unix-domain sockets` and `pg_ctl EPERM`.
+- `npm run check:url`: fails at `spawnSync /bin/sh EPERM` for `git ls-files`.
+- `npm run ci:gate` was attempted with the same Node and PostgreSQL settings.
+  Typecheck passed; the test phase encountered repeated subprocess/browser
+  permission failures. Interrupted at file 31/414 (exit 130) after collecting
+  those failures. This is an incomplete, failing gate attempt; build and smoke
+  were not reached or rerun in this repair. No exact-tree full-gate pass exists.
+- `bwrap` is absent in this repair environment (`command not found`). No
+  isolation control, workflow, skip policy or browser launch flags were changed.
+
+Diagnostic logs for this session are under `/tmp/routing-repair-{targeted,
+preferences,browser,postgres,exposure,preferences-pg,gate}.log`; these temporary
+files are not durable CI artifacts.
+
+All three reviewer findings remain blocking. Cost and quality are **unfinished
+implementation requirements**, separately from runner restrictions:
+
+- `buildNeutralDecisionEvidence` still prices a character/4, 1024-output-token
+  illustration, not the actual final request. The existing
+  `estimatePreparedRequest` supports frozen provider payloads, tools/media and
+  cache-write allowances; `rankControlPlaneByActualCost` captures real helper
+  payloads. Neither supplies the reply candidates' final payloads to Stage 2.
+  Chat calls `chooseProvider` before constructing final reply parameters.
+  Connecting candidate-specific preparation, output limits and cache/retry
+  scenarios remains necessary. Pricing helper requests alone cannot satisfy it.
+- `RegistryRoutingModel` exposes capabilities and reasoning/speed tiers, but no
+  comparative task-outcome observations or their provenance. No supported
+  comparative observation corpus was found in this repair. Empty observations
+  remain explicitly unknown. Approved offline historical outputs and independent
+  quality assessments, followed by an implemented evidence path and meaningful
+  replay regressions, are still needed. Mock-selected winners and registry tiers
+  cannot substitute for them; no observations or savings were fabricated.
+- Native browser/security execution, complete exact-SHA CI and independent
+  reviewer PASS remain required on a qualified isolated runner. Live remote
+  heads and the precise GitHub `action_required` reason remain unverified.
+
+No application behavior was substituted for these missing requirements. The
+candidate remains **BLOCKED**, and this repair does not authorize release,
+publication, production access, paid inference or changes to protective CI.
+
 Source provenance:
 
 - Workspace HEAD and cached origin/main: `dddb1c1f404b7d8c21d2ba4902d54bf83c2d554c`, preserving #1068.
