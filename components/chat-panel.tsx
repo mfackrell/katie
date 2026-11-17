@@ -16,6 +16,7 @@ import {
   KeyboardEvent,
   MouseEvent as ReactMouseEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   memo,
   useCallback,
@@ -481,7 +482,7 @@ async function pollForPersistedAssistant(
       }
 
       const response = await fetch(
-        `/api/messages?chatId=${encodeURIComponent(chatId)}`,
+        `/api/messages?chatId=${encodeURIComponent(chatId)}&recent=1`,
         { cache: "no-store" },
       );
 
@@ -823,6 +824,17 @@ export function ChatPanel({
   const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
+  const [historyRetry, setHistoryRetry] = useState(0);
+  const [messagesLoadError, setMessagesLoadError] = useState("");
+  const [olderMessages, setOlderMessages] = useState<Message[]>([]);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [olderMessagesError, setOlderMessagesError] = useState("");
+  const historyScrollSnapshot = useRef<{ top: number; height: number } | null>(null);
+  const visibleMessages = useMemo(() => {
+    const recentIds = new Set(messages.map(message => message.id));
+    return [...olderMessages.filter(message => !recentIds.has(message.id)), ...messages];
+  }, [olderMessages, messages]);
   const [input, setInput] = useState("");
   const composerValueRef = useRef("");
   const [composerResetVersion, resetComposerInput] = useState(0);
@@ -881,7 +893,7 @@ export function ChatPanel({
           const state=chunks[0];
           throw Error(state?.error??state?.message??`Saved request is ${state?.status??"paused or already running"}. Review Usage for its current state.`);
         }
-        const messagesResponse=await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,{cache:"no-store"});
+        const messagesResponse=await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&recent=1`,{cache:"no-store"});
         const body=await messagesResponse.json() as {messages?:Message[]};
         if(!messagesResponse.ok||!body.messages)throw Error("Saved work returned, but its messages could not be loaded. Refresh the conversation before resuming again.");
         setMessages(body.messages);setMessagesByChatId(current=>({...current,[chatId]:body.messages!}));
@@ -1135,6 +1147,53 @@ export function ChatPanel({
     if (distanceFromBottom < 260) container.scrollTop = container.scrollHeight;
   }, [loading, streamingAnswer]);
 
+  useLayoutEffect(() => {
+    const snapshot = historyScrollSnapshot.current;
+    const container = messagesContainerRef.current;
+    if (snapshot && container) {
+      container.scrollTop = snapshot.top + container.scrollHeight - snapshot.height;
+    }
+    historyScrollSnapshot.current = null;
+  }, [olderMessages]);
+
+  async function loadOlderMessages() {
+    if (loadingOlderMessages || isHydratingMessages || !hasOlderMessages) return;
+    const oldest = visibleMessages[0];
+    if (!oldest) return;
+    const loadingChatId = chatId;
+    const container = messagesContainerRef.current;
+    const snapshot = container ? { top: container.scrollTop, height: container.scrollHeight } : null;
+    setLoadingOlderMessages(true);
+    setOlderMessagesError("");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(
+        `/api/messages?chatId=${encodeURIComponent(loadingChatId)}&recent=1&before=${encodeURIComponent(oldest.id)}`,
+        { cache: "no-store", signal: controller.signal },
+      );
+      const payload = await response.json() as { messages?: Message[]; hasOlder?: boolean; error?: string };
+      if (!response.ok || !Array.isArray(payload.messages)) {
+        throw Error(payload.error || "Earlier messages could not be loaded.");
+      }
+      if (composerChatRef.current !== loadingChatId) return;
+      const existing = new Set(visibleMessages.map(message => message.id));
+      const unique = payload.messages.filter(message => !existing.has(message.id));
+      historyScrollSnapshot.current = snapshot;
+      setOlderMessages(current => [...unique, ...current]);
+      setHasOlderMessages(Boolean(payload.hasOlder));
+    } catch (error) {
+      if (composerChatRef.current === loadingChatId) {
+        setOlderMessagesError(error instanceof Error && error.name === "AbortError"
+          ? "Loading older messages timed out. Please retry."
+          : error instanceof Error ? error.message : "Earlier messages could not be loaded.");
+      }
+    } finally {
+      window.clearTimeout(timer);
+      if (composerChatRef.current === loadingChatId) setLoadingOlderMessages(false);
+    }
+  }
+
   const messagesByChatIdRef = useRef<Record<string, Message[]>>({});
 
   useEffect(() => {
@@ -1143,6 +1202,12 @@ export function ChatPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    setOlderMessages([]);
+    setHasOlderMessages(false);
+    setLoadingOlderMessages(false);
+    setOlderMessagesError("");
+    setMessagesLoadError("");
 
     async function fetchMessages() {
       abortControllerRef.current?.abort();
@@ -1177,11 +1242,13 @@ export function ChatPanel({
         setIsHydratingMessages(true);
       }
 
+      const timer = window.setTimeout(() => controller.abort(), 15000);
       try {
-        const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`, {
+        const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&recent=1`, {
           cache: "no-store",
+          signal: controller.signal,
         });
-        const payload = (await response.json()) as { messages?: Message[]; error?: string };
+        const payload = (await response.json()) as { messages?: Message[]; hasOlder?: boolean; error?: string };
 
         if (!response.ok) {
           throw new Error(payload.error ?? "Failed to load messages.");
@@ -1191,13 +1258,21 @@ export function ChatPanel({
           const nextMessages = payload.messages ?? [];
           setMessages(nextMessages);
           setMessagesByChatId((current) => ({ ...current, [chatId]: nextMessages }));
+          setHasOlderMessages(Boolean(payload.hasOlder));
+          setMessagesLoadError("");
           setIsHydratingMessages(false);
         }
       } catch (error: unknown) {
         if (!cancelled) {
-          setStatusMessage(error instanceof Error ? error.message : "Failed to load messages.");
+          const message = error instanceof Error && error.name === "AbortError"
+            ? "Conversation loading timed out. Please retry."
+            : error instanceof Error ? error.message : "Failed to load messages.";
+          setMessagesLoadError(message);
+          setStatusMessage(message);
           setIsHydratingMessages(false);
         }
+      } finally {
+        window.clearTimeout(timer);
       }
     }
 
@@ -1205,8 +1280,9 @@ export function ChatPanel({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [chatId]);
+  }, [chatId, historyRetry]);
 
   const projectProgressSignature = useMemo(() => messages.filter(m=>m.role==='assistant'&&m.content.includes('<!-- katie-project-status:')).map(m=>m.id+':'+m.content.match(/<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/)?.[1]).join('|'),[messages]);
   useEffect(()=>{
@@ -1342,7 +1418,7 @@ export function ChatPanel({
           (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
       inFlight = true;
       try {
-        const response = await fetch("/api/messages?chatId=" + encodeURIComponent(chatId), {
+        const response = await fetch("/api/messages?chatId=" + encodeURIComponent(chatId) + "&recent=1", {
           cache: "no-store",
         });
         if (!response.ok) return;
@@ -1639,7 +1715,7 @@ export function ChatPanel({
       if((event as CustomEvent<{chatId:string}>).detail?.chatId!==chatId)return;
       const refresh=async()=>{
         try{
-          const response=await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,{cache:"no-store"});
+          const response=await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&recent=1`,{cache:"no-store"});
           if(!response.ok)return;
           const payload=await response.json() as {messages?:Message[]};
           if(!Array.isArray(payload.messages))return;
@@ -1889,7 +1965,7 @@ export function ChatPanel({
               status?: string; assistantMessageId?: string | null; workflowStatus?: string | null;
             };
             if (savedStatus.status !== "completed" || !savedStatus.assistantMessageId) return;
-            const messagesResponse = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,
+            const messagesResponse = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&recent=1`,
               {headers,cache:"no-store"});
             if (!messagesResponse.ok) return;
             const saved = await messagesResponse.json() as {messages?: Message[]};
@@ -3170,12 +3246,29 @@ export function ChatPanel({
         onScroll={event=>{try{window.sessionStorage.setItem(`katie.scroll.v1.${chatId}`,String(event.currentTarget.scrollTop));}catch{}}}
         className="relative min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 pb-5 overscroll-contain sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
+        {messagesLoadError && (
+          <div role="alert" className="rounded-lg border border-amber-400/30 p-3 text-sm text-amber-200">
+            <p>{messagesLoadError}</p>
+            <button type="button" className="mt-2 min-h-10 underline" onClick={() => setHistoryRetry(value => value + 1)}>
+              Retry loading conversation
+            </button>
+          </div>
+        )}
+        {hasOlderMessages && !isHydratingMessages && (
+          <div className="flex flex-col items-center gap-2 py-2">
+            <button type="button" disabled={loadingOlderMessages} onClick={() => void loadOlderMessages()}
+              className="min-h-11 rounded-xl border border-white/20 px-4 py-2 text-sm text-zinc-200 disabled:opacity-50">
+              {loadingOlderMessages ? "Loading earlier messages…" : "Load earlier messages"}
+            </button>
+            {olderMessagesError && <p role="alert" className="text-sm text-amber-200">{olderMessagesError}</p>}
+          </div>
+        )}
         {isHydratingMessages ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
             <p className="text-sm font-medium text-zinc-200">Loading saved thread…</p>
             <p className="mt-2 text-sm leading-6 text-zinc-500">Restoring this conversation.</p>
           </div>
-        ) : messages.length === 0 ? (
+        ) : !messagesLoadError && visibleMessages.length === 0 ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
             <p className="text-sm font-medium text-zinc-200">What would you like to get done?</p>
             <p className="mt-2 text-sm leading-6 text-zinc-500">
@@ -3183,7 +3276,7 @@ export function ChatPanel({
             </p>
           </div>
         ) : null}
-        {messages.map((message) => (
+        {visibleMessages.map((message) => (
           <div
             key={message.id} id={`message-${message.id}`}
             className={[
