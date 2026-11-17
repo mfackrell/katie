@@ -141,6 +141,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     const usage = page.getByRole('region', { name: 'Standalone daily usage' });
     const rail = page.getByRole('complementary', { name: 'Katie status rail' });
     await rail.waitFor();
+    // On mobile the status rail intentionally starts collapsed after navigation.
+    // Reopen it explicitly before testing the usage and approval controls.
+    const reloadWithOpenMobileRail = async () => {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByRole('button', { name: 'Status / Usage', exact: true }).click();
+      await rail.waitFor();
+    };
     const assertDesktopLayout = async () => {
       const railBox = await rail.boundingBox();
       const chatBox = await page.locator('main').last().boundingBox();
@@ -255,7 +262,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     // Simulate approval having committed before a disconnected tab could emit resume.
     running = [{ ...pending('reconnect'), requestId: 'original-approved-reconnect', state: 'reserved' }];
     const approvalCountBeforeReconnect = decisions.filter(body => body.action === 'approve_once').length;
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await reloadWithOpenMobileRail();
     // All approvals remain visible in the rail.
     await usage.getByText('Reduction tradeoffs:', { exact: false }).waitFor();
     assert.equal(resumes.length, 1, 'reload cannot replay approval or start a model');
@@ -300,7 +307,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(running[0].state, 'uncertain'); assert.equal(running[0].reservedMicrousd, '3584');
     assert.equal(decisions.filter(body => body.action === 'accept_exposure').at(-1).budgetRevision, 2);
     assert.equal(resumes.length, 3);
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await reloadWithOpenMobileRail();
     // All approvals remain visible in the rail.
     await active.getByText('Uncertain exposure accepted · $0.003584 retained', { exact: true }).waitFor();
     assert.equal(resumes.length, 3, 'reconnect must not automatically resume uncertain work');
@@ -355,7 +362,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.match(infraText,/Includes estimated infrastructure cost; actual RunPod cost unconfirmed/);
     assert.match(infraText,/RunPod estimated infrastructure cost \$0\.02/);
     assert.doesNotMatch(infraText,/RunPod actual cost \$0.02/);
-    await page.reload({waitUntil:'domcontentloaded'});
+    await reloadWithOpenMobileRail();
     await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
     await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
@@ -402,7 +409,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('button',{name:'Refresh',exact:true}).click();
     assert.equal(resumes.length,beforeAuto+1,'polling does not resume the same original request twice');
     running=[{...running[0],parentStatus:'completed'}];
-    await page.reload({waitUntil:'domcontentloaded'});
+    await reloadWithOpenMobileRail();
     await active.getByText(/auto-authorized within owner limits/).waitFor();
     assert.equal(resumes.length,beforeAuto+1,'completed parent never resumes after refresh');
     running=[{...running[0],id:'auto-transient',requestId:'auto-transient',parentStatus:'paused'}];resumeMode='failed';
@@ -430,7 +437,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       });
     },chatId);
     for(let refresh=0;refresh<2;refresh++){
-      await page.reload({waitUntil:'domcontentloaded'});
+      await reloadWithOpenMobileRail();
       await page.waitForFunction(async id=>{
         return new Promise(resolve=>{const req=indexedDB.open('katie-pending-input-v1',1);req.onsuccess=()=>{const db=req.result,get=db.transaction('conversations').objectStore('conversations').get(id);get.onsuccess=()=>{resolve(!get.result?.references?.length);db.close();};};});
       },chatId);

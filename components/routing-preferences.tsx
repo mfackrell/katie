@@ -39,16 +39,16 @@ export function RoutingPreferenceControls({preferences}: {preferences: ReturnTyp
   const {value, pending, error, save} = preferences;
   const [target, setTarget] = useState<'global' | 'conversation'>('conversation');
   const mode = target === 'global' ? value?.global : value?.effective;
-  return <fieldset className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-white/10 px-2 py-1 text-xs text-zinc-300">
-    <legend className="px-1">Automatic routing</legend>
-    <label>Apply to <select aria-label="Routing preference scope" value={target} onChange={e => setTarget(e.target.value as typeof target)} className="max-w-full bg-zinc-950 p-1">
+  return <fieldset className="min-w-0 space-y-2 rounded-xl border border-white/10 p-3 text-xs text-zinc-300">
+    <legend className="px-1 font-semibold">Automatic routing</legend>
+    <label className="block space-y-1"><span className="block text-zinc-400">Apply to</span><select aria-label="Routing preference scope" value={target} onChange={e => setTarget(e.target.value as typeof target)} className="min-h-10 w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-2 text-sm">
       <option value="conversation">This conversation</option><option value="global">Default for all conversations</option>
     </select></label>
-    <label>Preference <select aria-label="Routing preference" disabled={pending || !value} value={mode ?? 'best_value'} onChange={e => {if (isRoutingMode(e.target.value)) void save({target, mode: e.target.value});}} className="bg-zinc-950 p-1">
+    <label className="block space-y-1"><span className="block text-zinc-400">Preference</span><select aria-label="Routing preference" disabled={pending || !value} value={mode ?? 'best_value'} onChange={e => {if (isRoutingMode(e.target.value)) void save({target,mode:e.target.value});}} className="min-h-10 w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-2 text-sm">
       <option value="best_answer">Best Answer</option><option value="best_value">Best Value</option>
     </select></label>
-    {target === 'conversation' && value?.conversation !== null && value && <button type="button" disabled={pending} onClick={() => void save({target: 'conversation', mode: null})}>Use global default</button>}
-    <span role="status">{pending ? 'Saving or loading…' : value ? value.conversation === null ? 'Using global default. Manual model selection takes priority.' : 'Conversation override saved. Manual model selection takes priority.' : ''}</span>
-    {error && <span role="alert">{error} <button type="button" disabled={pending} onClick={() => void save()}>Reload preferences</button></span>}
+    {target === 'conversation' && value?.conversation !== null && value && <button type="button" className="min-h-9 text-left text-emerald-300 underline" disabled={pending} onClick={() => void save({target:'conversation',mode:null})}>Use global default</button>}
+    <p role="status" className="text-[11px] leading-4 text-zinc-500">{pending ? 'Saving or loading…' : value ? value.conversation === null ? 'Using global default. Manual model selection takes priority.' : 'Conversation override saved. Manual model selection takes priority.' : ''}</p>
+    {error && <p role="alert" className="text-amber-200">{error} <button type="button" disabled={pending} onClick={() => void save()}>Reload preferences</button></p>}
   </fieldset>;
 }

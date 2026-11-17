@@ -106,13 +106,17 @@ test("owner cannot change guest actors, and managed actors still reject ordinary
   assert.equal(managed.calls.some(call => call.type === "write"), false);
 });
 
-test("review selector stays visible in the top header next to the model controls", () => {
-  const chatPanel = readFileSync("components/chat-panel.tsx", "utf8");
-  const control = readFileSync("components/review-mode-control.tsx", "utf8");
+test("review selector stays in the header while model controls move to the right sidebar", () => {
+  const chatPanel = readFileSync("components/chat-panel.tsx","utf8");
+  const workspace = readFileSync("components/chat-workspace.tsx","utf8");
+  const control = readFileSync("components/review-mode-control.tsx","utf8");
   const selector = chatPanel.indexOf("<ReviewModeControl");
-  const modelButton = chatPanel.indexOf("onClick={() => setShowModelControls");
-  const collapsibleModels = chatPanel.indexOf('id="model-controls"');
-  assert.ok(selector >= 0 && selector < modelButton && modelButton < collapsibleModels);
+  const settingsButton = chatPanel.indexOf('aria-label="Open model selection settings"');
+  const sidebarModels = chatPanel.indexOf('id="model-controls"');
+  assert.ok(selector >= 0 && selector < settingsButton && settingsButton < sidebarModels);
+  assert.match(chatPanel,/createPortal\([\s\S]*modelControlsMount/);
+  assert.match(workspace,/id="katie-model-controls"/);
+  assert.match(workspace,/katie:open-model-controls/);
   assert.match(control, /aria-label=\{\`Review mode for/);
   assert.match(control, /<option value="adaptive">Adaptive<\/option>/);
   assert.match(control, /<option value="always">Always<\/option>/);

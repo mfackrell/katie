@@ -809,6 +809,8 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [statusMount, setStatusMount] = useState<HTMLElement | null>(null);
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
+  const [modelControlsMount,setModelControlsMount] = useState<HTMLElement|null>(null);
+  useEffect(() => { setModelControlsMount(statusRailOpen ? document.getElementById("katie-model-controls") : null); }, [statusRailOpen,chatId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
@@ -904,6 +906,8 @@ export function ChatPanel({
   const [availableModels, setAvailableModels] = useState<AvailableModels>({});
   const [selectedOverride, setSelectedOverride] =
     useState<SelectedOverride>(null);
+  const [manualMode,setManualMode] = useState(false);
+  const [manualProvider,setManualProvider] = useState<ProviderName>("openai");
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const [streamingAnswer, setStreamingAnswer] = useState("");
   const [selectedImages, setSelectedImages] = useState<ComposerImage[]>([]);
@@ -2764,7 +2768,7 @@ export function ChatPanel({
       });
   }
 
-  const providerNames = Object.keys(availableModels) as ProviderName[];
+  const providerNames: ProviderName[] = ["openai","anthropic","google","grok"];
   const showExplainer = !modelExplainerHidden && (isRoutingSelectionInFlight || hasExplainerData(selectionExplainer));
   const showExplainerPanel = isRoutingSelectionInFlight || explainerOpen;
   const overrideReason =
@@ -2853,12 +2857,6 @@ export function ChatPanel({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              {meta ? (
-                <p className="hidden max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400 sm:inline-flex">
-                  <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
-                  <span className="truncate">Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}</span>
-                </p>
-              ) : null}
               {showExplainer ? (
                 <div
                   ref={explainerContainerRef}
@@ -3005,93 +3003,70 @@ export function ChatPanel({
                 actorName={activeActorName}
                 managed={Boolean(managedAgentId)}
               />
-              <button
-                type="button"
-                onClick={() => setShowModelControls((current) => !current)}
-                className="inline-flex h-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-3 text-[11px] font-medium text-zinc-200 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                aria-expanded={showModelControls}
-                aria-controls="model-controls"
-              >
-                {showModelControls ? "Hide answering models" : selectedOverride ? `Answering model: ${selectedOverride.modelId}` : "Choose answering model"}
+              <button type="button"
+                aria-label="Open model selection settings" aria-controls="katie-status-rail"
+                onClick={() => window.dispatchEvent(new CustomEvent("katie:open-model-controls",{detail:{chatId}}))}
+                className="inline-flex h-9 max-w-[min(100%,260px)] items-center gap-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] px-3 text-[11px] font-medium text-emerald-100 hover:bg-emerald-500/10 focus-visible:ring-2 focus-visible:ring-emerald-500">
+                <span className="truncate">{selectedOverride
+                  ? `Manual · ${selectedOverride.providerName} / ${selectedOverride.modelId}`
+                  : `Auto · ${routingPreferences.value?.effective === "best_answer" ? "Best Answer" : "Best Value"}`}</span>
+                <span aria-hidden="true" className="text-emerald-400">⚙</span>
               </button>
             </div>
           </div>
 
-          <div
-            id="model-controls"
-            className={[
-              "grid gap-2 overflow-hidden transition-all",
-              showModelControls ? "grid-rows-[1fr] opacity-100" : "hidden",
-            ].join(" ")}
-          >
-            <div className="min-h-0">
-              <div className="max-h-[45dvh] overflow-y-auto rounded-xl bg-black/10 p-1.5 md:flex md:max-h-none md:flex-row md:flex-wrap md:items-center md:gap-2 md:overflow-auto md:bg-transparent md:p-0">
-                <label
-                  className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
-                  title="Show model selection explainer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={!modelExplainerHidden}
-                    onChange={(event) => handleModelExplainerVisibility(!event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
-                    aria-label="Show model selection explainer"
-                  />
-                  <span>Model explainer</span>
-                </label>
-                <label
-                  className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
-                  title="Show live reasoning explainer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={showLiveReasoningExplainer}
-                    onChange={(event) => handleLiveReasoningVisibility(event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
-                    aria-label="Show live processing activity"
-                  />
-                  <span>Live activity</span>
-                </label>
-                <RoutingPreferenceControls preferences={routingPreferences} />
-                {providerNames.map((providerName) => {
-                  const options = availableModels[providerName] ?? [];
-                  const selectedValue =
-                    selectedOverride?.providerName === providerName
-                      ? selectedOverride.modelId
-                      : "";
-
-                  return (
-                    <label
-                      key={providerName}
-                      className="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2 py-1.5 text-[10px] text-zinc-300"
-                    >
-                      <span className="shrink-0 capitalize text-zinc-500">{providerName}</span>
-                      <select
-                        aria-label={`Answering model for ${providerName}`}
-                        value={selectedValue}
-                        onChange={(event) => {
-                          const nextModel = event.target.value;
-                          setSelectedOverride(
-                            nextModel ? { providerName, modelId: nextModel } : null,
-                          );
-                        }}
-                        className="min-w-0 flex-1 rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1.5 text-[11px] text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
-                      >
-                        <option value="">Automatic</option>
-                        {options.map((modelId) => (
-                          <option key={modelId} value={modelId}>
-                            {modelId}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
         </div>
       </header>
+
+      {modelControlsMount ? createPortal(
+        <section id="model-controls" aria-label="Model selection and display settings" className="space-y-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs text-zinc-300">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-zinc-100">Model selection</h3>
+            <button type="button" aria-expanded={showModelControls} aria-controls="model-selection-fields"
+              onClick={() => setShowModelControls(value => !value)}
+              className="min-h-9 rounded-lg px-2 text-xs text-zinc-300 underline focus-visible:ring-2 focus-visible:ring-emerald-500">{showModelControls ? "Collapse" : "Expand"}</button>
+          </div>
+          {showModelControls ? <div id="model-selection-fields" className="space-y-3">
+            <fieldset className="space-y-1">
+              <legend className="mb-1 font-semibold">Routing</legend>
+              <label className="flex min-h-9 items-center gap-2"><input type="radio" name={`routing-choice-${chatId}`} checked={!manualMode}
+                onChange={() => {setManualMode(false);setSelectedOverride(null);}} />Choose automatically</label>
+              <label className="flex min-h-9 items-center gap-2"><input type="radio" name={`routing-choice-${chatId}`} checked={manualMode}
+                onChange={() => setManualMode(true)} />Select a model manually</label>
+            </fieldset>
+            {!manualMode ? <RoutingPreferenceControls preferences={routingPreferences} /> : <div className="space-y-3">
+              <label className="block space-y-1">
+                <span className="block text-zinc-400">Provider</span>
+                <select aria-label="Model provider" value={manualProvider}
+                  onChange={event => {setManualProvider(event.target.value as ProviderName);setSelectedOverride(null);}}
+                  className="min-h-10 w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-2 text-sm text-zinc-100">
+                  {providerNames.map(name => <option key={name} value={name}>{name === "openai" ? "OpenAI" : name === "anthropic" ? "Anthropic" : name === "google" ? "Google" : "Grok"}</option>)}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="block text-zinc-400">Model</span>
+                <select aria-label={`Answering model for ${manualProvider}`}
+                  value={selectedOverride?.providerName === manualProvider ? selectedOverride.modelId : ""}
+                  onChange={event => setSelectedOverride(event.target.value ? {providerName: manualProvider,modelId:event.target.value} : null)}
+                  className="min-h-10 w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-2 text-sm text-zinc-100">
+                  <option value="">Select a model</option>
+                  {(availableModels[manualProvider] ?? []).map(modelId => <option key={modelId} value={modelId}>{modelId}</option>)}
+                </select>
+              </label>
+              <p className="text-[11px] leading-4 text-zinc-500">{selectedOverride ? "Manual selection takes priority for the next response." : "Select a model to activate the override; Katie routes automatically until then."}</p>
+            </div>}
+            <details className="rounded-lg border border-white/10 p-2.5">
+              <summary className="cursor-pointer font-semibold">Display options</summary>
+              <div className="mt-2 space-y-2">
+                <label className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={!modelExplainerHidden}
+                  onChange={event => handleModelExplainerVisibility(!event.target.checked)} aria-label="Show model selection explainer" />Model explainer</label>
+                <label className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={showLiveReasoningExplainer}
+                  onChange={event => handleLiveReasoningVisibility(event.target.checked)} aria-label="Show live processing activity" />Live activity</label>
+              </div>
+            </details>
+          </div> : null}
+        </section>,modelControlsMount
+      ) : null}
 
       {attachmentSaveError&&<p role="alert" className="px-5 text-xs text-amber-200">Attachments are retained for this session; browser storage could not save them for refresh.</p>}
       {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
