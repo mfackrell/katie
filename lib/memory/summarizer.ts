@@ -18,7 +18,7 @@ const SUMMARY_MODELS: Record<SummaryProvider,string> = {
   grok: "grok-4.7",
   anthropic: "claude-sonnet-5-5",
 };
-const SUMMARY_TIMEOUT_MS = 90_000;
+const SUMMARY_TIMEOUT_MS = 180_000;
 const SUMMARY_BATCH_MESSAGES = 30; // Fifteen complete user-assistant exchanges.
 // Character count, including spaces/punctuation, is the ITM size contract.
 const ITM_TARGET_CHARACTERS = 6500;
@@ -63,7 +63,7 @@ function providerClient(provider:SummaryProvider,deadline:number):OpenAI {
   const apiKey=provider==="grok" ? grokApiKey : anthropicApiKey;
   if(!apiKey) throw new Error(`Intermediate memory ${provider} provider unavailable`);
   const fetch=createActivityAccountingFetch(provider,"memory-summary",{
-    // Resolve the remaining single 90-second ITM budget at the actual paid
+    // Resolve the remaining single 180-second ITM budget at the actual paid
     // transmission boundary. Stage two therefore cannot start a fresh timeout.
     timeoutMs:()=>Math.max(1,deadline-Date.now()),
     timeoutCode:"memory_timeout",
