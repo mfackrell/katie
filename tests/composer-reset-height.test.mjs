@@ -162,6 +162,9 @@ for (const viewport of [
       await page.screenshot({ path: `${artifacts}/${viewport.name}-expanded.png` });
       await page.getByRole("button", { name: "Send", exact: true }).click();
       await assertEmpty(page, emptyHeight, "send");
+      // A pending 250ms draft-save callback must not put sent text back.
+      await page.waitForTimeout(350);
+      await assertEmpty(page, emptyHeight, "send after delayed draft window");
       assert.equal(await page.evaluate(() => fixture.submissions.at(-1)), longText);
       await page.screenshot({ path: `${artifacts}/${viewport.name}-after-send.png` });
       checks.push("long draft -> send -> empty height; full current text submitted");
