@@ -87,7 +87,7 @@ test('real Chromium one-time retest control requires owner click and shows a rec
     ';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.DirectorRecoveryControl,{recovery:'+JSON.stringify(body)+',onRefresh:()=>window.refreshes++}));';
    await page.route('http://localhost/**',async route=>{
     if(new URL(route.request().url()).pathname==='/control')
-     return route.fulfill({contentType:'text/html',body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
+     return route.fulfill({contentType:'text/html; charset=utf-8',body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
     posts++;
     // A failed assertion inside the route callback aborts fetch before React
     // can expose its pending state. Keep the request held; assert outside.
