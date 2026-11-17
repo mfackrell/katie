@@ -860,7 +860,8 @@ async function executeControlPlaneJsonTask<T>(args: {
     summary: "", history: [], user: args.userPrompt,
   };
   const remaining = [...args.decisionProviders];
-  let correctionAvailable = args.taskName === "routing-rerank" && getAccountingScope()?.kind === "standalone";
+  let correctionAvailable = (args.taskName === "routing-rerank" || args.taskName === "intent-classification")
+    && getAccountingScope()?.kind === "standalone";
   let correction = "";
   while (remaining.length) {
     // Each failed/invalid helper consumes an activity ordinal. Resolve that
@@ -888,7 +889,9 @@ async function executeControlPlaneJsonTask<T>(args: {
       }
       if (correctionAvailable) {
         correctionAvailable = false;
-        correction = "\nCORRECTION: Previous output was invalid JSON or selected an ineligible candidate. Return the required JSON schema with exactly one supplied eligible candidate.";
+        correction = args.taskName === "intent-classification"
+          ? "\nCORRECTION: Previous output failed structured understanding validation. Return the full required JSON schema, including complexity, response_purpose, provider_refusal_risk, primary_objective, nonempty objective_evidence quoting the CURRENT_USER_MESSAGE exactly, context_influence (state explicitly if none), and selection_justification."
+          : "\nCORRECTION: Previous output was invalid JSON or selected an ineligible candidate. Return the required JSON schema with exactly one supplied eligible candidate.";
         remaining.unshift(candidate);
       }
       console.warn(`[ControlPlane:${args.taskName}] rejected_response provider=${sourceLabel}`);
@@ -1076,7 +1079,13 @@ async function classifyIntentWithLLMProviders(
         provider_refusal_risk: example.provider_refusal_risk ?? "low",
         preferred_provider: example.preferred_provider ?? null,
         response_purpose: example.response_purpose ?? (example.intent === "social-emotional" ? "conversation" : "deliverable"),
-        project_relation: example.project_relation ?? null
+        project_relation: example.project_relation ?? null,
+        ...(getAccountingScope()?.kind === "standalone" ? {
+          primary_objective: `Respond to: ${example.user}`,
+          objective_evidence: [example.user],
+          context_influence: example.context ?? "No preceding context supplied.",
+          selection_justification: `The supplied request calls for ${example.intent} at ${example.complexity ?? "low"} complexity.`
+        } : {})
       })}`
     ])
     .join("\n");
@@ -1101,7 +1110,15 @@ async function classifyIntentWithLLMProviders(
     userPrompt: decisionPayload,
     parse: (raw, sourceLabel) => {
       const parsed = parseIntentClassifierResponse(raw, intents, sourceLabel);
-      return parsed.intent || getAccountingScope()?.kind !== "standalone" ? parsed : null;
+      if (getAccountingScope()?.kind !== "standalone") return parsed;
+      const evidence = parsed.decision_evidence;
+      // A category alone is not a validated assessment of the required quality.
+      // Missing/invalid fields must trigger correction or disclosed fallback.
+      return parsed.intent && parsed.complexity && parsed.response_purpose && parsed.provider_refusal_risk
+        && evidence?.primary_objective && evidence.context_influence && evidence.selection_justification
+        && evidence.objective_evidence?.length
+        && evidence.objective_evidence.every(quote => prompt.includes(quote))
+        ? parsed : null;
     },
     timeoutMs: options?.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
   });

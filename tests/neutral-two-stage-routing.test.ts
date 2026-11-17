@@ -19,6 +19,12 @@ function registry(): Map<LlmProvider['name'], RegistryRoutingModel[]> {
     reasoning_tier:'high', speed_tier:'fast', cost_tier:'low', pricing_input_per_1m:null, pricing_output_per_1m:null,
   } as RegistryRoutingModel))]));
 }
+function understanding(message:string, intent:RequestIntent = 'general-text', complexity:'low'|'high' = 'low') {
+  return {intent, complexity, response_purpose:'deliverable', provider_refusal_risk:'low',
+    primary_objective:'Respond to the supplied request', objective_evidence:[message],
+    context_influence:'Consider supplied context when relevant; otherwise none.',
+    selection_justification:'Task-specific assessment of the supplied request.'};
+}
 const fixtures: Array<{message:string; intent:RequestIntent; complexity:'low'|'high'; context?:string}> = [
   {message:'Hello Katie',intent:'general-text',complexity:'low'},
   {message:'Rewrite this for the board after verifying the finance model and covenant math',intent:'general-text',complexity:'high'},
@@ -35,7 +41,7 @@ for (const mode of ['best_value','best_answer'] as const) {
     const calls:string[]=[];
     const providers = Object.entries(models).map(([name, ids]) => ({name, listModels:async()=>[...ids], generate:async(params) => {
       calls.push(params.user);
-      if (params.user.includes('CURRENT_USER_MESSAGE:')) return {text:JSON.stringify({intent:fixture.intent, complexity:fixture.complexity, primary_objective:'fixture objective', objective_evidence:[fixture.message], context_influence:'supplied memory'}),provider:name,model:params.modelId!};
+      if (params.user.includes('CURRENT_USER_MESSAGE:')) return {text:JSON.stringify(understanding(fixture.message, fixture.intent, fixture.complexity)),provider:name,model:params.modelId!};
       const payload=JSON.parse(params.user.slice(params.user.indexOf('\n\n')+2));
       assert.equal(payload.routing_mode, mode);
       assert.equal(payload.understanding.intent, fixture.intent);
@@ -65,7 +71,7 @@ test('invalid selection is corrected once; unavailable decision models disclose 
   const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
   let selections=0;
   const provider:LlmProvider={name:'openai',listModels:async()=>[...models.openai],generate:async p=>{
-    if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:'{"intent":"general-text"}',provider:'openai',model:p.modelId!};
+    if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:JSON.stringify(understanding('Hi')),provider:'openai',model:p.modelId!};
     assert.match(p.user, /"routing_mode":"best_value"/);
     selections++;
     if(selections===1)return {text:'{"selected":{"provider":"anthropic","model":"not-eligible"}}',provider:'openai',model:p.modelId!};
@@ -84,7 +90,7 @@ test('invalid selection is corrected once; unavailable decision models disclose 
 
 test('multimedia classification remains LLM-owned despite chart keyword',async()=>{
   const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
-  const provider:LlmProvider={name:'openai',listModels:async()=>['gpt-5.4'],generate:async p=>({text:'{"intent":"vision-analysis","complexity":"low"}',provider:'openai',model:p.modelId!})};
+  const provider:LlmProvider={name:'openai',listModels:async()=>['gpt-5.4'],generate:async p=>({text:JSON.stringify(understanding('Describe the chart colors','vision-analysis')),provider:'openai',model:p.modelId!})};
   try {for(const input of [{hasImages:true},{hasImages:false,hasVideoInput:true}]) {
     const result=await runWithStandaloneAccounting(owner,()=>inferRequestClassificationWithSource('Describe the chart colors',input,{decisionProviders:[{provider,modelId:'gpt-5.4'}]}));
     assert.equal(result.source,'llm');assert.equal(result.classification.intent,'vision-analysis');
@@ -106,7 +112,7 @@ test('reviewed price estimates use tiered input/output rates and disclose cache,
 for(const video of [false,true]) test(`${video?'video':'image'} compatibility constrains LLM candidates independently of classification`,async()=>{
   const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
   const providers=Object.entries(models).map(([name,ids])=>({name,listModels:async()=>[...ids],generate:async p=>{
-    if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:'{"intent":"general-text"}',provider:name,model:p.modelId!};
+    if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:JSON.stringify(understanding('Describe this')),provider:name,model:p.modelId!};
     const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
     assert.ok(payload.candidates.every((c:{capabilities:{vision:boolean;video:boolean}})=>video?c.capabilities.video:c.capabilities.vision));
     if(video)assert.deepEqual(payload.candidates.map((c:{provider:string})=>c.provider),['google']);
@@ -125,7 +131,7 @@ test('terminal accounting denial cannot become a correction or local routing fal
   let calls=0;
   const provider:LlmProvider={name:'openai',listModels:async()=>[...models.openai],generate:async p=>{
     calls++;
-    if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:'{"intent":"general-text"}',provider:'openai',model:p.modelId!};
+    if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:JSON.stringify(understanding('Hi')),provider:'openai',model:p.modelId!};
     throw terminal;
   }};
   try {
@@ -138,7 +144,7 @@ test('every eligible provider can win without a family or provider override',asy
   const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
   let selected='';
   const providers=Object.entries(models).map(([name,ids])=>({name,listModels:async()=>[...ids],generate:async p=>({
-    text:p.user.includes('CURRENT_USER_MESSAGE:')?'{"intent":"rewrite","complexity":"high"}':JSON.stringify({selected:{provider:selected,model:models[selected as keyof typeof models][0]}}),
+    text:p.user.includes('CURRENT_USER_MESSAGE:')?JSON.stringify(understanding('Continue the scene in my voice','rewrite','high')):JSON.stringify({selected:{provider:selected,model:models[selected as keyof typeof models][0]}}),
     provider:name,model:p.modelId!,
   })} as LlmProvider));
   try {
@@ -148,5 +154,47 @@ test('every eligible provider can win without a family or provider override',asy
       assert.equal(result.provider.name,name);
       assert.equal(result.explainer?.selected_source,'llm-primary');
     }
+  }finally{rank.mock.restore();}
+});
+
+for (const field of ['complexity','response_purpose','provider_refusal_risk','primary_objective','objective_evidence','context_influence','selection_justification','intent-only','unquoted-evidence']) {
+  test(`incomplete understanding (${field}) is corrected before stage two`,async()=>{
+    const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
+    let analyses=0;let selections=0;
+    const provider:LlmProvider={name:'openai',listModels:async()=>[...models.openai],generate:async p=>{
+      if(p.user.includes('CURRENT_USER_MESSAGE:')) {
+        analyses++;
+        const analysis:Record<string,unknown>=understanding('Hi');
+        if(analyses===1) {
+          if(field==='intent-only')for(const key of Object.keys(analysis)){if(key!=='intent')delete analysis[key];}
+          else if(field==='unquoted-evidence')analysis.objective_evidence=['invented user request'];
+          else delete analysis[field];
+        }else assert.match(p.user,/CORRECTION:/);
+        return {text:JSON.stringify(analysis),provider:'openai',model:p.modelId!};
+      }
+      selections++;
+      const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
+      assert.equal(analyses,2);
+      assert.equal(payload.understanding.complexity,'low');
+      assert.equal(payload.understanding.decisionEvidence.primary_objective,understanding('Hi').primary_objective);
+      return {text:'{"selected":{"provider":"openai","model":"gpt-5-mini"}}',provider:'openai',model:p.modelId!};
+    }};
+    try {
+      const result=await runWithStandaloneAccounting(owner,()=>chooseProvider('Hi','',[provider],{modelRegistrySnapshot:registry()}));
+      assert.equal(result.authority,'llm');assert.equal(analyses,2);assert.equal(selections,1);
+    }finally{rank.mock.restore();}
+  });
+}
+
+test('persistently incomplete understanding exhausts bounded correction and discloses fallback',async()=>{
+  const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
+  let calls=0;
+  const provider:LlmProvider={name:'openai',listModels:async()=>['gpt-5.4'],generate:async p=>{
+    calls++;return {text:'{"intent":"general-text"}',provider:'openai',model:p.modelId!};
+  }};
+  try {
+    const result=await runWithStandaloneAccounting(owner,()=>inferRequestClassificationWithSource('Hi',false,{decisionProviders:[{provider,modelId:'gpt-5.4'}]}));
+    assert.equal(calls,2);assert.equal(result.source,'router-fallback');
+    assert.equal(result.classification.decisionEvidence,undefined);
   }finally{rank.mock.restore();}
 });
