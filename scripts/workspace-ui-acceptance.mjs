@@ -437,6 +437,14 @@ try {
     .click();
   await page.getByText("Operations analysis", { exact: true }).click();
   await composer.waitFor();
+  // Desktop sidebar preference must not cover the conversation on mobile navigation.
+  const mobileRail = page.locator("#katie-status-rail");
+  await mobileRail.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Open model selection settings", exact: true }).click();
+  await mobileRail.waitFor({ state: "visible" });
+  await mobileRail.getByRole("region", { name: "Model selection and display settings" }).waitFor();
+  await mobileRail.getByRole("button", { name: "Hide", exact: true }).click();
+  await mobileRail.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Delete chat: Operations analysis", exact: true }).click();
   const mobileDeleteDialog = page.getByRole("alertdialog", { name: "Delete conversation?" });
   await mobileDeleteDialog.waitFor();
