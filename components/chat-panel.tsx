@@ -2857,12 +2857,6 @@ export function ChatPanel({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              {meta ? (
-                <p className="hidden max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400 sm:inline-flex">
-                  <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
-                  <span className="truncate">Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}</span>
-                </p>
-              ) : null}
               {showExplainer ? (
                 <div
                   ref={explainerContainerRef}
