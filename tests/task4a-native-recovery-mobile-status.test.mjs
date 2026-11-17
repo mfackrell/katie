@@ -44,6 +44,9 @@ test("Task 4A native approval keeps its success visible after the proposal disap
   await page.goto("http://localhost/");
   const button=page.getByRole("button",{name:"Approve exact bounded Task 4A native recovery"});await button.waitFor();await button.click();
   const message=page.getByRole("status");await message.waitFor();
+  // The immediate POST confirmation is transient; qualify the saved-status GET
+  // after React replaces it with the historical revoked receipt.
+  await page.waitForFunction(()=>document.querySelector('[role="status"]')?.textContent?.includes('recorded, then revoked'));
   assert.match(await message.innerText(),/Historical native recovery for issue #969 was recorded, then revoked/);
   assert.match(await message.innerText(),/No active recovery or paid execution is authorized/);
   assert.equal(await button.count(),0,"approval button disappears after consent saved");
