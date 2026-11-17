@@ -400,7 +400,7 @@ async function reconcileEpisodePlan(prior: string[], newExcerpts: string[], prov
       "The complete stored ITM remains capped at 6,500 characters, with new excerpts given priority.",
     ].join("\n") },
     { role: "user" as const, content: "EXISTING ITM EPISODES:\n" + JSON.stringify(indexed) +
-        "\n\nNEW SOURCE-CITED FACTUAL EPISODES (always included):\n" + JSON.stringify(newExcerpts) +
+        "\n\nNEW FACTUAL EPISODES FOR SEMANTIC REVIEW:\n" + JSON.stringify(newExcerpts) +
         "\n\nROLE-ATTRIBUTED SOURCE TRANSCRIPT (for meaning and attribution, not exact quote matching):\n" + (sourceMessages ? formatTranscript(sourceMessages) : "Historical owner-granted recovery; no new source review") +
         "\n\nReturn old indexes to keep and new episode indexes to reject when materially unsupported." },
   ];

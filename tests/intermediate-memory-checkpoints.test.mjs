@@ -13,7 +13,7 @@ test("two bounded model stages process 30 older conversational messages",()=>{
   assert.match(summary,/olderMessages\.slice\(after, after \+ SUMMARY_BATCH_MESSAGES\)/);
   assert.match(summary,/summarizeNewBatch\(batch,provider,client,/);
   assert.match(summary,/reconcileEpisodePlan\(episodes,newSummary,provider,client,/);
-  assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, decision\.keep, newSummary,decision\.rejectNew\)/);
   assert.doesNotMatch(summary,/reconcileIntermediateMemory\(/);
 });
 
@@ -58,7 +58,7 @@ test("30-exchange STM is preserved; pending older context is recoverable",()=>{
 
 
 test("v11 uses Grok Responses API with bounded factual episodes and index-only retention",()=>{
-  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v14-strict-stage-receipts"/);
+  assert.match(summary,/ITM_PROCESSOR_VERSION = "two-stage-30-messages-v15-semantic-episode-review"/);
   assert.match(summary,/SUMMARY_MAX_TOKENS = 2300/);
   assert.match(summary,/RECONCILE_MAX_TOKENS = 2800/);
   assert.equal((summary.match(/client\.post\("\/responses"/g)||[]).length,1);
@@ -69,10 +69,10 @@ test("v11 uses Grok Responses API with bounded factual episodes and index-only r
   assert.match(summary,/p_processor_version: processorVersion\(provider\)/);
   assert.match(summary,/p_state: "blocked"/);
   assert.match(summary,/reconcileEpisodePlan\(episodes,newSummary,provider,client,/);
-  assert.match(summary,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
+  assert.match(summary,/assembleEpisodePlan\(episodes, decision\.keep, newSummary,decision\.rejectNew\)/);
   assert.match(summary,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
   assert.match(summary,/parseGroundedEpisodes\(raw,messages\)/);
-  assert.match(summary,/!message\.content\.includes\(quote\)/);
+  assert.doesNotMatch(summary,/!message\.content\.includes\(quote\)/);
   assert.match(summary,/getMessages\(chatId\)/);
   assert.doesNotMatch(summary,/getRecentMessages\(chatId, Number\.MAX_SAFE_INTEGER\)/);
   assert.match(summary,/When a new episode corrects/);

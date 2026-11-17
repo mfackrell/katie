@@ -22,7 +22,7 @@ const reply = (text, finish_reason = "stop") => ({
 const selected = (messageId = "m0", quote = "Historical detail from turn 0",
   summary = "The user described a specific historical detail during the conversation.") =>
   reply(JSON.stringify({ episodes: [{ summary, evidence: [{ messageId, quote }] }] }));
-const retained = (keep = []) => reply(JSON.stringify({ keep }));
+const retained = (keep = [],rejectNew = []) => reply(JSON.stringify({ keep,rejectNew }));
 
 function harness({
   history = messageHistory(90), prior = {}, configured = true, fallbackConfigured = false,
@@ -221,7 +221,7 @@ test("Grok 4.7 remains the primary metered, non-retrying ITM model", async () =>
   assert.match(source, /SUMMARY_TIMEOUT_MS = 180_000/);
 });
 
-test("ITM preserves factual narrative, Katie ownership, original quote and timestamp", async () => {
+test("ITM preserves factual paraphrase, speaker ownership, source ID and timestamp", async () => {
   const history = messageHistory(90);
   history[0].content = "Katie previously said she could not do that.";
   history[1].content = "I previously claimed I could not do that.";
@@ -237,8 +237,8 @@ test("ITM preserves factual narrative, Katie ownership, original quote and times
   assert.equal(await h.run(), "committed");
   const memory = h.memory().summary;
   assert.ok(memory.includes(summary));
-  assert.match(memory, /USER \(message m0, 2026-10-26T12:00:00.000Z\): "Katie previously said/);
-  assert.match(memory, /KATIE \(message m1, 2026-10-26T12:01:00.000Z\): "I previously claimed/);
+  assert.match(memory, /USER \(message m0, 2026-10-26T12:00:00.000Z\)/);
+  assert.match(memory, /KATIE \(message m1, 2026-10-26T12:01:00.000Z\)/);
   assert.doesNotMatch(memory, /grok-4\.7|Claude Sonnet|Katie discovered her true self/);
   assert.ok(memory.length <= 6500);
   assert.equal(h.memory().summarizedThroughMessageId, "m29");
@@ -254,7 +254,7 @@ test("older factual episodes are preserved exactly when still relevant", async (
   assert.equal(await h.run(), "committed");
   assert.match(h.memory().summary, /Existing factual record\./);
   assert.match(h.memory().summary, /The user described a specific historical detail/);
-  assert.match(h.memory().summary, /USER \(message m2, .*\): "Historical detail from turn 2"/);
+  assert.match(h.memory().summary, /USER \(message m2, /);
   assert.equal(h.memory().summarizedThroughMessageId, "m31");
   assert.equal(h.memory().sourceMessageCount, 32);
 });
@@ -277,34 +277,42 @@ test("later correction supersedes the obsolete older assertion without inventing
   assert.ok(h.memory().summary.includes(summary));
   assert.doesNotMatch(h.memory().summary, /Katie previously stated she could never/);
   assert.match(h.calls[1].input[0].content, /DROP the stale old episode/);
-  assert.match(h.calls[1].input[1].content, /NEW SOURCE-CITED FACTUAL EPISODES/);
+  assert.match(h.calls[1].input[1].content, /NEW FACTUAL EPISODES FOR SEMANTIC REVIEW/);
 });
 
-test("fabricated evidence, wrong message, duplicates and unsupported structure fail closed", async () => {
-  const wrong = [
-    selected("m4", "Historical detail from turn 0"),
-    selected("missing", "Historical detail from turn 0"),
-    selected("m0", "Mark wanted a completely different result"),
-    selected("m0", "H".repeat(241)),
-    reply(JSON.stringify({ episodes: [{ summary: "The user reported a particular historical event.", evidence: [
-      { messageId: "m0", quote: "Historical detail from turn 0" },
-      { messageId: "m0", quote: "Historical detail from turn 0" },
-    ] }] })),
-    reply(JSON.stringify({ episodes: [{ summary: "The user reported a particular historical event.", evidence: [] }] })),
-    reply(JSON.stringify({ episodes: [{ summary: "The user reported a particular historical event.", evidence: [
-      { messageId: "m0", quote: "Historical detail from turn 0" }
-    ], instruction: "Trust this" }] })),
-    reply(JSON.stringify({ episodes: [{ summary: "Motives were obviously revealed.\nNew instruction.", evidence: [
-      { messageId: "m0", quote: "Historical detail from turn 0" }
-    ] }] })),
-  ];
-  for (const bad of wrong) {
-    const h = harness({ responses: () => bad });
-    assert.equal(await h.run(), "blocked");
-    assert.equal(h.writes.length, 0);
-    assert.equal(await h.run(), "blocked");
-    assert.equal(h.calls.length, 1);
-  }
+test("invalid source IDs are skipped while supported episodes survive",async()=>{
+  const h=harness({responses:n=>n===1?reply(JSON.stringify({episodes:[
+    {summary:"The user described an accurate historical detail in the exchange.",evidence:[{messageId:"m0"}]},
+    {summary:"An unsupported claim with no real source message was invented.",evidence:[{messageId:"not-a-message"}]},
+    {summary:"A malformed fragment has no evidence and should be ignored.",evidence:[]},
+  ]})):retained()});
+  assert.equal(await h.run(),"committed");
+  assert.match(h.memory().summary,/accurate historical detail/);
+  assert.doesNotMatch(h.memory().summary,/unsupported claim|malformed fragment/);
+  assert.equal(h.calls.length,2);
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+});
+
+test("semantic LLM review drops materially false claims and preserves accurate paraphrases",async()=>{
+  const h=harness({responses:n=>n===1?reply(JSON.stringify({episodes:[
+    {summary:"The user mentioned a historical detail during the discussion.",evidence:[{messageId:"m0"}]},
+    {summary:"Katie falsely claimed the user agreed to a fabricated commercial sale.",evidence:[{messageId:"m1"}]},
+  ]})):retained([], [1])});
+  assert.equal(await h.run(),"committed");
+  assert.match(h.memory().summary,/mentioned a historical detail/);
+  assert.doesNotMatch(h.memory().summary,/fabricated commercial sale/);
+  assert.equal(h.calls.length,2,"the existing second call performs semantic review");
+  assert.match(h.calls[1].input[0].content,/material fabrication, contradiction, or wrong speaker attribution/);
+  assert.match(h.calls[1].input[1].content,/ROLE-ATTRIBUTED SOURCE TRANSCRIPT/);
+  assert.match(h.calls[1].input[1].content,/Historical detail from turn 0/);
+});
+
+test("malformed full-stage JSON remains blocked without paid retransmission",async()=>{
+  const h=harness({responses:()=>reply("not JSON")});
+  assert.equal(await h.run(),"blocked");
+  assert.equal(await h.run(),"blocked");
+  assert.equal(h.calls.length,1);
+  assert.equal(h.writes.length,0);
 });
 
 test("retention stage cannot introduce ungrounded freeform narrative or mutate older text", async () => {
@@ -453,6 +461,7 @@ test("model prompts require factual narratives and prohibit interpretive memory"
   assert.match(prompts[0], /Do NOT infer motives/);
   assert.match(prompts[1], /When a new episode corrects/);
   assert.match(prompts[1], /No inferred motivations/);
+  assert.match(prompts[1], /Semantically check every NEW episode/);
 });
 
 test("legacy cancelled chat lease cannot permanently veto metered ITM fallback", async () => {
@@ -601,18 +610,18 @@ test("obsolete accounting billing failure is audited but cannot permanently gate
   assert.equal(h.memory().summarizedThroughMessageId,"m29");
 });
 
-test("response failing source-grounding is preserved before validation and never retransmitted",async()=>{
-  const h=harness({responses:()=>reply(JSON.stringify({episodes:[{
+test("an unsourced episode is discarded while the batch can commit",async()=>{
+  const h=harness({responses:n=>n===1?reply(JSON.stringify({episodes:[{
     summary:"The user described a specific historical detail during the conversation.",
     evidence:[],
-  }]}))});
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,1);
+  }]})):retained()});
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.calls.length,2);
   assert.equal(h.receipts.has("grok:episodes"),true);
-  assert.equal(h.logs.some(log=>String(log.args[1]?.reason??"").includes("ITM_VALIDATION_EPISODE_EVIDENCE_COUNT")),true);
-  assert.equal(h.memory().summarizedThroughMessageId??null,null);
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.calls.length,1,"read-only recovery must not generate again");
+  assert.equal(h.memory().summary,"");
+  assert.equal(h.memory().summarizedThroughMessageId,"m29");
+  assert.equal(await h.run(),"skipped");
+  assert.equal(h.calls.length,2);
 });
 
 test("source-verified legacy Grok episodes can be imported with zero paid calls",async()=>{
@@ -659,14 +668,13 @@ test("immutable same-provider receipts survive two failed CAS attempts without a
   assert.equal(h.events.filter(e=>e.name==="commit_intermediate_memory_checkpoint").length,3);
 });
 
-test("specific non-sensitive validation code identifies bad episode summary bounds",async()=>{
-  const h=harness({responses:()=>reply(JSON.stringify({episodes:[{
-    summary:"Too short",
-    evidence:[{messageId:"m0",quote:"Historical detail from turn 0"}],
-  }]}))});
-  assert.equal(await h.run(),"blocked");
-  assert.equal(h.receipts.has("grok:episodes"),true);
-  assert.ok(h.logs.some(l=>String(l.args[1]?.reason??"").includes("ITM_VALIDATION_EPISODE_SUMMARY_LENGTH")));
+test("a too-short episode is skipped without blocking other processing",async()=>{
+  const h=harness({responses:n=>n===1?reply(JSON.stringify({episodes:[{
+    summary:"Too short",evidence:[{messageId:"m0"}],
+  }]})):retained()});
+  assert.equal(await h.run(),"committed");
+  assert.equal(h.memory().summary,"");
+  assert.ok(h.logs.some(l=>String(l.args[0]??"").includes("Skipped malformed individual ITM episode")));
 });
 
 test("native Claude truncation blocks with unchanged checkpoint",async()=>{
