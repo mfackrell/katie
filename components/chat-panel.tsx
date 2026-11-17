@@ -831,6 +831,7 @@ export function ChatPanel({
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [olderMessagesError, setOlderMessagesError] = useState("");
   const historyScrollSnapshot = useRef<{ top: number; height: number } | null>(null);
+  const olderLoadInFlight = useRef(false);
   const visibleMessages = useMemo(() => {
     const recentIds = new Set(messages.map(message => message.id));
     return [...olderMessages.filter(message => !recentIds.has(message.id)), ...messages];
@@ -1157,9 +1158,10 @@ export function ChatPanel({
   }, [olderMessages]);
 
   async function loadOlderMessages() {
-    if (loadingOlderMessages || isHydratingMessages || !hasOlderMessages) return;
+    if (olderLoadInFlight.current || loadingOlderMessages || isHydratingMessages || !hasOlderMessages) return;
     const oldest = visibleMessages[0];
     if (!oldest) return;
+    olderLoadInFlight.current = true;
     const loadingChatId = chatId;
     const container = messagesContainerRef.current;
     const snapshot = container ? { top: container.scrollTop, height: container.scrollHeight } : null;
@@ -1177,10 +1179,12 @@ export function ChatPanel({
         throw Error(payload.error || "Earlier messages could not be loaded.");
       }
       if (composerChatRef.current !== loadingChatId) return;
-      const existing = new Set(visibleMessages.map(message => message.id));
-      const unique = payload.messages.filter(message => !existing.has(message.id));
       historyScrollSnapshot.current = snapshot;
-      setOlderMessages(current => [...unique, ...current]);
+      setOlderMessages(current => {
+        const existing = new Set([...current, ...messages].map(message => message.id));
+        const unique = payload.messages!.filter(message => !existing.has(message.id));
+        return unique.length ? [...unique, ...current] : current;
+      });
       setHasOlderMessages(Boolean(payload.hasOlder));
     } catch (error) {
       if (composerChatRef.current === loadingChatId) {
@@ -1190,6 +1194,7 @@ export function ChatPanel({
       }
     } finally {
       window.clearTimeout(timer);
+      olderLoadInFlight.current = false;
       if (composerChatRef.current === loadingChatId) setLoadingOlderMessages(false);
     }
   }
@@ -1239,6 +1244,7 @@ export function ChatPanel({
         setMessages(cachedMessages);
         setIsHydratingMessages(false);
       } else {
+        setMessages([]);
         setIsHydratingMessages(true);
       }
 
