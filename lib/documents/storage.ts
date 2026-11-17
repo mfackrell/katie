@@ -9,12 +9,15 @@ export type DocumentScope = z.infer<typeof scopeSchema>;
 export const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 const fileSchema = z.object({ filename: z.string().regex(/^[a-zA-Z0-9_-]+\.(docx|pdf)$/), mime: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.number().int().positive().max(8_000_000) }).strict();
 export const receiptSchema = z.object({ version: z.literal(1), id: z.string().regex(/^[a-f0-9]{64}$/), scope: scopeSchema,
-  files: z.object({ docx: fileSchema, pdf: fileSchema }).strict(), pages: z.number().int().min(1).max(8),
+  files: z.object({ docx: fileSchema.optional(), pdf: fileSchema }).strict(), pages: z.number().int().min(1).max(8),
   inspectedPageHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(8),
   correctionCount: z.number().int().min(0).max(3), createdAt: z.string(),
-  visualStatus: z.enum(['passed','technical-only']).optional(),
+  visualStatus: z.enum(['passed','technical-only','source-preserved']).optional(),
 }).strict();
 export type DocumentReceipt = z.infer<typeof receiptSchema>;
+type CompleteDocumentReceipt = DocumentReceipt & {
+  files: DocumentReceipt['files'] & { docx: NonNullable<DocumentReceipt['files']['docx']> };
+};
 type Storage = ReturnType<typeof createClient>['storage'];
 const MIME = { docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pdf: 'application/pdf' };
 
@@ -37,7 +40,7 @@ export function createDocumentStore(storage: Storage) {
       throw new Error(saved.error ? 'Document upload failed; no download was delivered.' : 'Stored document failed read-back validation.');
   }
   return {
-    async save(scopeInput: DocumentScope, files: { docx: Buffer; pdf: Buffer }, inspection: Inspection, correctionCount: number): Promise<DocumentReceipt> {
+    async save(scopeInput: DocumentScope, files: { docx: Buffer; pdf: Buffer }, inspection: Inspection, correctionCount: number): Promise<CompleteDocumentReceipt> {
       const scope = scopeSchema.parse(scopeInput);
       if (inspection.findings.length || !['passed', 'technical-only'].includes(inspection.visual) || inspection.pageHashes.length !== inspection.pageCount) throw new Error('Unvalidated documents cannot be delivered.');
       if (files.docx.subarray(0, 2).toString() !== 'PK' || files.pdf.subarray(0, 5).toString() !== '%PDF-') throw new Error('Invalid artifact formats.');
@@ -47,17 +50,48 @@ export function createDocumentStore(storage: Storage) {
       if (prior.data) {
         const existing = receiptSchema.parse(JSON.parse(await prior.data.text()));
         if (existing.id !== id || JSON.stringify(existing.scope) !== JSON.stringify(scope)) throw new Error('Document receipt scope mismatch.');
+        if (!existing.files.docx) throw new Error('Document receipt integrity mismatch.');
         for (const ext of ['docx', 'pdf'] as const) {
-          if (existing.files[ext].sha256 !== hash(files[ext])) throw new Error('Document receipt integrity mismatch.');
+          if (existing.files[ext]!.sha256 !== hash(files[ext])) throw new Error('Document receipt integrity mismatch.');
           await writeVerified(path(scope.chatId, id, ext), files[ext], MIME[ext]);
         }
-        return existing;
+        return existing as CompleteDocumentReceipt;
       }
       const receipt = receiptSchema.parse({ version: 1, id, scope,
         files: Object.fromEntries((['docx', 'pdf'] as const).map(ext => [ext, { filename: `document.${ext}`, mime: MIME[ext], sha256: hash(files[ext]), size: files[ext].length }])),
         pages: inspection.pageCount, inspectedPageHashes: inspection.pageHashes, correctionCount, visualStatus: inspection.visual, createdAt: new Date().toISOString(),
       });
       for (const ext of ['docx', 'pdf'] as const) await writeVerified(path(scope.chatId, id, ext), files[ext], MIME[ext]);
+      await writeVerified(path(scope.chatId, id, 'json'), Buffer.from(JSON.stringify(receipt)), 'application/json');
+      return receipt as CompleteDocumentReceipt;
+    },
+    async savePdfSource(scopeInput: DocumentScope, pdf: Buffer, inspection: Inspection): Promise<DocumentReceipt> {
+      const scope = scopeSchema.parse(scopeInput);
+      // Source-preserved delivery validates identity, bytes, rasterization and page hashes,
+      // but deliberately does not reinterpret pre-existing design findings (for example
+      // a 9pt source font) as defects introduced by Katie. Generated documents still
+      // use save(), where the 11pt floor and all other acceptance findings fail closed.
+      if (inspection.pageCount < 1 || inspection.pageHashes.length !== inspection.pageCount)
+        throw new Error('Unvalidated source PDFs cannot be delivered.');
+      if (pdf.subarray(0, 5).toString() !== '%PDF-' || pdf.length > 8_000_000)
+        throw new Error('Invalid source PDF.');
+      await privateBucket();
+      const id = hash(Buffer.from(JSON.stringify([scope, 'source-pdf', hash(pdf)])));
+      const prior = await objects.download(path(scope.chatId, id, 'json'));
+      if (prior.data) {
+        const existing = receiptSchema.parse(JSON.parse(await prior.data.text()));
+        if (existing.id !== id || JSON.stringify(existing.scope) !== JSON.stringify(scope) ||
+            existing.files.docx || existing.files.pdf.sha256 !== hash(pdf) || existing.visualStatus !== 'source-preserved')
+          throw new Error('Source PDF receipt integrity mismatch.');
+        await writeVerified(path(scope.chatId, id, 'pdf'), pdf, MIME.pdf);
+        return existing;
+      }
+      const receipt = receiptSchema.parse({ version: 1, id, scope,
+        files: { pdf: { filename: 'document.pdf', mime: MIME.pdf, sha256: hash(pdf), size: pdf.length } },
+        pages: inspection.pageCount, inspectedPageHashes: inspection.pageHashes, correctionCount: 0,
+        visualStatus: 'source-preserved', createdAt: new Date().toISOString(),
+      });
+      await writeVerified(path(scope.chatId, id, 'pdf'), pdf, MIME.pdf);
       await writeVerified(path(scope.chatId, id, 'json'), Buffer.from(JSON.stringify(receipt)), 'application/json');
       return receipt;
     },
@@ -68,7 +102,7 @@ export function createDocumentStore(storage: Storage) {
       const receipt = receiptSchema.parse(JSON.parse(await metadata.data.text()));
       if (receipt.id !== id || receipt.scope.ownerId !== scope.ownerId || receipt.scope.actorId !== scope.actorId || receipt.scope.chatId !== scope.chatId) throw new Error('Document access denied.');
       const file = receipt.files[format];
-      if (file.mime !== MIME[format]) throw new Error('Invalid artifact type.');
+      if (!file || file.mime !== MIME[format]) throw new Error('Invalid artifact type.');
       const stored = await objects.download(path(scope.chatId, id, format));
       if (stored.error || !stored.data || stored.data.size !== file.size) throw new Error('Stored document is unavailable.');
       const bytes = Buffer.from(await stored.data.arrayBuffer());
@@ -85,8 +119,11 @@ export function documentStore() {
 export function documentLinks(receipt: DocumentReceipt): string {
   const base = `/api/documents/download?actorId=${receipt.scope.actorId}&chatId=${receipt.scope.chatId}&id=${receipt.id}`;
   const count = `${receipt.pages} page${receipt.pages === 1 ? '' : 's'}`;
+  if (receipt.visualStatus === 'source-preserved')
+    return `Returned the selected ${count} PDF unchanged; no document content was regenerated.\n\n[Download PDF](${base}&format=pdf)`;
   const status = receipt.visualStatus === 'passed'
     ? `Created and inspected ${count}. Professional design review passed.`
     : `Created ${count}. Technical validation passed; professional design review remains unresolved.`;
-  return `${status}\n\n[Download Word document](${base}&format=docx) · [Download PDF](${base}&format=pdf)`;
+  const word = receipt.files.docx ? `[Download Word document](${base}&format=docx) · ` : '';
+  return `${status}\n\n${word}[Download PDF](${base}&format=pdf)`;
 }
