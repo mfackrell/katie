@@ -23,3 +23,10 @@ test("calibration binds the actor's existing chat, uses a request ID, and handle
   assert.match(ui,/try \{data=JSON\.parse\(text\)/);
   assert.match(ui,/response\.status===202/);
 });
+
+test("calibration accepts omitted empty suggestion arrays but retains structural checks",()=>{
+  assert.match(api,/Array\.isArray\(parsed\.groups\?\?\[\]\)/);
+  assert.match(api,/Array\.isArray\(parsed\.conflicts\?\?\[\]\)/);
+  assert.match(api,/typeof parsed!=="object"\|\|Array\.isArray\(parsed\)/);
+  assert.match(api,/if\(!\["redundancy","irrelevant"\]\.includes\(item\.type\)\)continue/);
+});
