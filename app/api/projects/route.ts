@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from '@/lib/projects/management-activation';
+import {blockedOwnerRecoveryOffer} from '@/lib/projects/blocked-owner-recovery';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -57,8 +58,14 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
             return {projectId:p.id,releaseSha:releaseSha!,cutoff:activation.cutoff,priorCutoff:activation.priorCutoff,
                 receipt:null,managementActivation:activation};
         }catch{
-            return {projectId:p.id,releaseSha:releaseSha!,cutoff:APPROVED_TTT_CUTOFF,priorCutoff:p.deadline,receipt:null,
-                managementActivationError:'Recovery state is unavailable or changed. Refresh project status before continuing.'};
+            try{
+                const blocked=await blockedOwnerRecoveryOffer(p.id);
+                return {projectId:p.id,releaseSha:releaseSha!,cutoff:blocked.cutoff??blocked.priorCutoff,
+                    priorCutoff:blocked.priorCutoff,receipt:null,blockedOwnerRecovery:blocked};
+            }catch{
+                return {projectId:p.id,releaseSha:releaseSha!,cutoff:APPROVED_TTT_CUTOFF,priorCutoff:p.deadline,receipt:null,
+                    managementActivationError:'Recovery state is unavailable or changed. Refresh project status before continuing.'};
+            }
         }
     }
     const cutoff = '2026-11-12T00:00:00Z';
