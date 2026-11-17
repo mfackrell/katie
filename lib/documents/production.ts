@@ -43,7 +43,7 @@ export async function chooseInitialComposition(
     {pages:[indices],spacing:2},
     {pages:[indices],spacing:2,compact:true},
   ];
-  const viable: Array<{layout:Layout;pages:number;order:number}>=[];
+  const viable: Array<{layout:Layout;pages:number;order:number;heights:number[]}>=[];
   for(let i=0;i<candidates.length;i++){
     if(Date.now()>=deadlineMs-1000)break;
     try {
@@ -52,12 +52,28 @@ export async function chooseInitialComposition(
       const hard=actual.inspection.findings.filter(f=>
         !(f.rule==='whitespace'&&f.detail==='Page uses less than one quarter of its content area.'));
       if(hard.length===0 && (!spec.targetPages || actual.inspection.pageCount===spec.targetPages))
-        viable.push({layout:candidates[i],pages:actual.inspection.pageCount,order:i});
+        viable.push({layout:candidates[i],pages:actual.inspection.pageCount,order:i,heights:actual.heights});
     } catch { /* A candidate is never approved without a valid rendered artifact. */ }
   }
   if(!viable.length) return candidates[0]; // Existing measured recovery remains mandatory.
   viable.sort((a,b)=>a.pages-b.pages||a.order-b.order);
-  return viable[0].layout;
+  const selected=viable[0];
+  // Preserve the naturally measured page count, but when several physical pages
+  // are required, verify one semantic partition before accepting incidental Word
+  // page breaks. paginate() keeps feasible heading/engagement groups together.
+  if(selected.pages>1 && Date.now()<deadlineMs-3000){
+    try {
+      const grouped=paginate(spec,selected.heights,selected.pages,selected.layout.spacing,selected.layout.compact,selected.layout.design);
+      if(JSON.stringify(grouped.pages)!==JSON.stringify(selected.layout.pages)){
+        const docx=await generateDocx(spec,grouped);
+        const actual=await renderDocument(browser,docx,spec,grouped);
+        const hard=actual.inspection.findings.filter(f=>
+          !(f.rule==='whitespace'&&f.detail==='Page uses less than one quarter of its content area.'));
+        if(!hard.length&&actual.inspection.pageCount===selected.pages)return grouped;
+      }
+    } catch { /* Natural winner remains available when semantic partition cannot fit. */ }
+  }
+  return selected.layout;
 }
 
 /** 
@@ -234,7 +250,7 @@ export async function produceDocument(input: {
     // violations or unchecked reflow. Stop trying when a safe action is absent.
     if (designCorrections >= 2 || attempt >= 3) return accept(lastValid);
     if (visual.design?.verdict === 'repair') {
-      const next = proposeDesignLayout(layout, spec, rendered.heights, visual.design);
+      const next = proposeDesignLayout(layout, spec, rendered.heights, visual.design, rendered.images.length);
       if (!next) return accept(lastValid);
       previousDesign = rendered;
       layout = next;

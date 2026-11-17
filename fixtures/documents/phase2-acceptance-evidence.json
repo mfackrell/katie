@@ -73,5 +73,33 @@
     "owner_direction": "Incorporate this assessment into PR #997, reconcile latest main, and requalify; do not merge yet.",
     "cryptographic_signature": false,
     "human_professional_review": false
+  },
+  "pr1040_requalification": {
+    "date": "2026-11-12",
+    "production_incident_request_id": "70d5fb38-5a41-4aa0-8346-6b39ddd20676",
+    "fresh_mechanical_evidence": "fixtures/documents/phase2-mechanical-evidence.json",
+    "changed_engine_hashes": {
+      "lib/documents/production.ts": {
+        "prior": "52f1bd0508205e1038f0c42b7c2a6955cd6ee76cbd8681848585dd17e1edd680",
+        "current": "a795dc47dc23363533557cfdfe28e98274ebd71126492d769f6623e0e9b63660"
+      },
+      "lib/documents/design.ts": {
+        "prior": "d0d9b8bf981738f5346cd573f0b78d99f6e17430b5497fb665e07474afb59c33",
+        "current": "2c62e0833183b23f5f1a92b56bd23e14dc8a67cd213ae60927dfa632e98d3caa"
+      },
+      "lib/documents/service.ts": {
+        "prior": "a853612843743e958f051e6a189e08020269c8b33bf35b0782729c0f50c000ea",
+        "current": "3f9bb709530f78b942fb7b8217eb9123a77da0f90c5eba3bf9d5646404557ac3"
+      },
+      "lib/documents/storage.ts": {
+        "prior": "824815cbd94ce83a72f6893e57b93460dd4f2b1fb739623f8d59439205fe9131",
+        "current": "b11a30772ccb77fb93be35c1b41fd6086b183ccede98b4e599cda709951014da"
+      }
+    },
+    "unchanged_review_binding": "Fresh Chromium, LibreOffice 24.2.7.2, and LibreOffice 26.2.6.3 reruns reproduced all 12 page-image SHA-256 values in the immutable PR #997 independent review exactly. The review is reused only for those identical artifact bytes.",
+    "private_source_sha256": "b466561895813598f7b5b0f9f09cda5ca6e0f130e85f96c2369577e839900aa3",
+    "private_source_in_public_history": false,
+    "paid_inference_used": false,
+    "release_authorized": false
   }
 }

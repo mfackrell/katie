@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PAGE, documentPageStyle, type Layout, type DesignControls } from './generate';
+import { PAGE, documentPageStyle, paginate, type Layout, type DesignControls } from './generate';
 import type { DocumentSpec } from './model';
 
 /** A document-wide critique, independent of PDF text and geometry checks.
@@ -65,7 +65,7 @@ export function validDesign(layout: Layout): boolean {
  * provider code. Every proposal must be re-rendered and re-inspected. */
 export function proposeDesignLayout(
   layout: Layout, spec: DocumentSpec, heights: readonly number[],
-  assessment: DesignAssessment,
+  assessment: DesignAssessment, renderedPageCount = layout.pages.length,
 ): Layout | null {
   if (assessment.verdict !== 'repair' ||
       !assessment.issues.some(issue => issue.severity === 'material') ||
@@ -79,8 +79,12 @@ export function proposeDesignLayout(
     return { ...layout, pages: [spec.blocks.map((_,i)=>i)] };
   if (assessment.actions.includes('compact-layout') && !layout.compact)
     return { ...layout, pages: [spec.blocks.map((_,i)=>i)], spacing: 2, compact: true };
-  if (assessment.actions.includes('group-continuity') && layout.pages.length > 1)
-    return { ...layout, pages: [spec.blocks.map((_,i)=>i)] };
+  if (assessment.actions.includes('group-continuity') && renderedPageCount > 1) {
+    try {
+      const grouped = paginate(spec, Array.from(heights), renderedPageCount, layout.spacing, layout.compact, layout.design);
+      if (JSON.stringify(grouped.pages) !== JSON.stringify(layout.pages)) return grouped;
+    } catch { /* The renderer remains authoritative; fall through to other bounded actions. */ }
+  }
   const capacity = (PAGE.height - 2 * documentPageStyle(layout).margin - 12) * 96 / 72;
   // A global style change must fit the most crowded page; sum-of-pages slack
   // would incorrectly spend empty space on page 2 to overflow page 1.
