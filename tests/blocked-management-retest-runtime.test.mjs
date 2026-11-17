@@ -110,9 +110,20 @@ test('real Chromium one-time retest control requires owner click and shows a rec
    }else{
     const button=page.getByRole('button',{name:'Authorize one management retest'});
     await button.waitFor();
-    await button.evaluate(el=>{el.click();el.click();});
-    if(scenario==='no-owner')await page.getByRole('alert').waitFor();
-    else{
+    // Successful/stale-owner cases verify a double-click cannot duplicate an
+    // authenticated POST. An unauthenticated request needs one click only.
+    await button.evaluate((el,doubleClick)=>{el.click();if(doubleClick)el.click();},scenario!=='no-owner');
+    if(scenario==='no-owner'){
+     try{
+      await page.getByRole('alert').filter({hasText:'Sign in as Katie owner'}).waitFor({timeout:8000});
+      console.log('RETEST_CHROMIUM_NO_OWNER_DENIAL_PASS: no authenticated POST');
+     }catch(error){
+      throw Error('No-owner denial was not rendered: '+error.message+
+       '; buttons='+JSON.stringify(await page.getByRole('button').allTextContents())+
+       '; alerts='+JSON.stringify(await page.getByRole('alert').allTextContents())+
+       '; browserErrors='+JSON.stringify(errors));
+     }
+    }else{
      let sent;
      try{
       sent=await Promise.race([requestSeen,new Promise((_,reject)=>setTimeout(()=>reject(Error('Owner POST not observed')),12000))]);
