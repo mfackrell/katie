@@ -1,5 +1,6 @@
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
+import { executeStandaloneWorkflow } from "@/lib/standalone-accounting/workflow";
 import OpenAI from "openai";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { managedActor } from "@/lib/agents/store";
@@ -188,7 +189,16 @@ export async function GET(request:NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const raw = await request.json();
-    if(raw?.calibration === "preview") return calibrationPreview(z.string().uuid().parse(raw.actorId));
+    if(raw?.calibration === "preview") {
+      const actorId=z.string().uuid().parse(raw.actorId);
+      const chatId=z.string().uuid().parse(raw.chatId);
+      try {
+        return await executeStandaloneWorkflow(request,{calibration:"preview",actorId,chatId},
+          async()=>calibrationPreview(actorId));
+      }catch(error){
+        return NextResponse.json({error:error instanceof Error?error.message:"Calibration unavailable"},{status:503});
+      }
+    }
     const payload = createActorSchema.parse(raw);
     const { name, parentId } = payload;
 
