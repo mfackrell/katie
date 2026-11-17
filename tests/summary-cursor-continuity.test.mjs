@@ -9,7 +9,7 @@ test("ITM source cursor advances only after source-cited Grok factual episodes a
   assert.match(code,/parseGroundedEpisodes\(raw,messages\)/);
   assert.match(code,/response\.status !== "completed"/);
   assert.match(code,/client\.post\("\/responses"/);
-  assert.match(code,/assembleEpisodePlan\(episodes, keep, newSummary\)/);
+  assert.match(code,/assembleEpisodePlan\(episodes, decision\.keep, newSummary,decision\.rejectNew\)/);
   assert.match(code,/getMessages\(chatId\)/);
   assert.match(code,/summarizedThroughMessageId: checkpoint\.id/);
   assert.match(code,/sourceMessageCount: after \+ SUMMARY_BATCH_MESSAGES/);
