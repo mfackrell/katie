@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from '@/lib/projects/management-activation';
 import {blockedOwnerRecoveryOffer} from '@/lib/projects/blocked-owner-recovery';
+import {blockedManagementRetestOffer} from '@/lib/projects/blocked-management-retest';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -53,6 +54,11 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        try{
+            const retest=await blockedManagementRetestOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:retest.cutoff,priorCutoff:retest.cutoff,
+                receipt:null,managementRetest:retest};
+        }catch{ /* Retest is not applicable to the current saved state; check original recovery. */ }
         try{
             const activation=await managementActivationOffer(p.id);
             return {projectId:p.id,releaseSha:releaseSha!,cutoff:activation.cutoff,priorCutoff:activation.priorCutoff,
