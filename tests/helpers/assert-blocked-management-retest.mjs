@@ -532,26 +532,47 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.ok(approvedProjectRecord?.spec?.milestones?.length>0,
    'Offline management context must use the saved approved project milestone');
   const {modules}=await import('./load-project-modules.mjs');
-  const rows={
-   project_organization_nodes:[{id:root.id,agent_id:root.agent_id,kind:'project_director',status:'active'}],
-   project_organization_exceptions:[],
-   project_organization_assignments:[],
-   project_organization_scope_grants:[],
-   project_organization_plans:[{node_id:root.id,purpose:'Existing approved delivery',direction:'Delegate to functional director'}],
-   project_organization_dependencies:[],
-  };
-  const fakeDb={from(table){const q={
-   select(){return q;},eq(){return q;},in(){return q;},order(){return q;},range(){return q;},
-   single:async()=>({data:approvedProjectRecord,error:null}),
-   then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}
-  };return q;}};
+  // Read the REAL approved organization, decisions, grants and milestones from
+  // the native PostgreSQL fixture. No fabricated management topology.
+  const adapter={from(table){
+   assert.match(table,/^[a-z_]+$/);let columns='*',where=[],values=[],orders=[],single=false,range;
+   const q={select(c){assert.match(c,/^[a-z_,*]+$/);columns=c;return q;},
+    eq(k,v){values.push(v);where.push(k+'=$'+values.length);return q;},
+    in(k,v){values.push(v);where.push(k+'=any($'+values.length+')');return q;},
+    order(k,o){orders.push(k+(o.ascending?' asc':' desc'));return q;},
+    range(a,b){range=[a,b];return q;},single(){single=true;return q;},
+    then(ok,bad){
+     const sql='select '+columns+' from '+table+
+      (where.length?' where '+where.join(' and '):'')+
+      (orders.length?' order by '+orders.join(','):'')+
+      (range?' limit '+(range[1]-range[0]+1)+' offset '+range[0]:'');
+     return first.query(sql,values).then(r=>({
+      data:JSON.parse(JSON.stringify(single?r.rows[0]:r.rows)),error:null
+     })).then(ok,bad);
+    }};return q;
+  }};
+  const originalPlan=(await first.query(
+   'select purpose,direction,outcomes,milestones,organizations from project_organization_plans where node_id=$1',
+   [root.id])).rows[0];
+  assert.ok(originalPlan?.purpose&&Array.isArray(originalPlan.organizations)&&originalPlan.organizations.length>0);
+  const commands=[{action:'plan',purpose:originalPlan.purpose,
+   direction:originalPlan.direction+' Continue the approved development and independent QA objectives under unchanged owner authority.',
+   outcomes:originalPlan.outcomes,milestones:originalPlan.milestones,
+   organizations:originalPlan.organizations},{action:'ready'}];
+  const decisionCountBefore=(await first.query(
+   'select count(*)::int n from project_organization_decisions where project_id=$1',[project])).rows[0].n;
   const controlledCalls=[];
   const loader=modules({
-   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>fakeDb},
+   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>adapter},
    '@/lib/missions/store':{rpc:async(name,args)=>{
     controlledCalls.push({name,args});
     if(name==='project_provider_mode')return true;
-    if(name==='project_org_decide')return true;
+    if(name==='project_org_decide'){
+     const result=await first.query('select project_org_decide($1,$2,$3::jsonb) accepted',
+      [args.p_job,args.p_lease,JSON.stringify(args.p_commands)]);
+     assert.equal(result.rows[0].accepted,true,'Saved original hierarchy must accept this offline model decision');
+     return true;
+    }
     throw Error('Controlled management unexpectedly called '+name);
    }},
   });
@@ -560,11 +581,16 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    modelCalls++;assert.equal(tools,'none');assert.equal(c.job.id,originalJob.id);
    assert.match(instruction,/Never write code/);
    assert.equal(JSON.parse(input).project.objective,approvedProjectRecord.objective);
-   return {text:'[{"action":"ready"}]',model:'deterministic-offline-fixture'};
+   assert.equal(JSON.parse(input).reporting.organizationNodeCount,13);
+   return {text:JSON.stringify(commands),model:'deterministic-offline-fixture'};
   });
   assert.equal(modelCalls,1);
   assert.deepEqual(controlledCalls.map(c=>c.name),['project_provider_mode','project_org_decide']);
   assert.equal(controlledCalls[1].args.p_lease,claimed.job.lease);
+  assert.equal((await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',[project])).rows[0].n,
+   decisionCountBefore+1,'Actual PostgreSQL must record one management decision under the real lease');
+  assert.equal((await first.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0,
+   'No downstream coding package is commissioned by the offline qualification');
   assert.equal((await first.query('select calls from agent_missions where id=$1',
    [scheduled.missionId])).rows[0].calls,0,'Controlled test cannot produce a charged model call');
   console.log('RETEST_MISSION79_RELEASE_CLAIM_PASS: exact bound SHA only, original 79/96 ledger, source evidence, normal worker lease, one offline LLM management route, no paid inference');
