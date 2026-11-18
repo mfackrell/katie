@@ -27,6 +27,7 @@ function understanding(message:string, intent:RequestIntent = 'general-text', co
     context_influence:'Consider supplied context when relevant; otherwise none.',
     selection_justification:'Task-specific assessment of the supplied request.'};
 }
+const mockBestValueQualification = {"required_quality":"Maintain the request's actual content, continuity, and task-specific rigor.","selected_fit":"Selected candidate can meet the fixture quality threshold using the reported capabilities.","evidence_basis_kind":"reasoned_inference","evidence_basis":"Offline fixture has no independently verified comparative outcomes; capabilities inform a provisional choice.","comparative_uncertainty":"Comparative response quality is unknown without direct evidence.","cost_after_qualification":"Among eligible candidates judged qualified for the fixture, use the lower expected cost only after meeting quality."};
 const fixtures: Array<{message:string; intent:RequestIntent; complexity:'low'|'high'; context?:string}> = [
   {message:'Hello Katie',intent:'general-text',complexity:'low'},
   {message:'Rewrite this for the board after verifying the finance model and covenant math',intent:'general-text',complexity:'high'},
@@ -46,6 +47,7 @@ for (const mode of ['best_value','best_answer'] as const) {
       if (params.user.includes('CURRENT_USER_MESSAGE:')) return {text:JSON.stringify(understanding(fixture.message, fixture.intent, fixture.complexity)),provider:name,model:params.modelId!};
       const payload=JSON.parse(params.user.slice(params.user.indexOf('\n\n')+2));
       assert.equal(payload.routing_mode, mode);
+      assert.equal(params.user.includes('BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:'),mode==='best_value');
       assert.equal(payload.understanding.intent, fixture.intent);
       assert.equal(payload.understanding.complexity, fixture.complexity);
       assert.equal(payload.understanding.decisionEvidence.classification_provider, name);
@@ -53,7 +55,7 @@ for (const mode of ['best_value','best_answer'] as const) {
       assert.deepEqual(new Set(payload.candidates.map((c:{provider:string})=>c.provider)),new Set(Object.keys(models)));
       assert.doesNotMatch(JSON.stringify(payload),/prior_score|score_breakdown|providerBoosts|specialization_tags|preference_profile/);
       if(fixture.context) assert.match(payload.conversation_context,/Memory|voice/);
-      return {text:JSON.stringify({selected:{provider:'grok',model:'grok-4.3'},selection_justification:'Mock evidence chooses a different provider from historical rankings',alternatives:[{provider:'openai',model:'gpt-4o-mini',why_not_selected:'Lower cost alone does not establish equivalent task-specific response quality.'}]}),provider:name,model:params.modelId!};
+      return {text:JSON.stringify({selected:{provider:'grok',model:'grok-4.3'},selection_justification:'Mock evidence chooses a different provider from historical rankings',quality_qualification:mockBestValueQualification,alternatives:[{provider:'openai',model:'gpt-4o-mini',why_not_selected:'Lower cost alone does not establish equivalent task-specific response quality.'}]}),provider:name,model:params.modelId!};
     }} as LlmProvider));
     const actor = createNeutralActorRoutingProfile();actor.providerBoosts.anthropic=3;
     try {
@@ -78,7 +80,7 @@ test('invalid selection is corrected once; unavailable decision models disclose 
     selections++;
     if(selections===1)return {text:'{"selected":{"provider":"anthropic","model":"not-eligible"}}',provider:'openai',model:p.modelId!};
     assert.match(p.user,/CORRECTION:/);
-    return {text:'{"selected":{"provider":"openai","model":"gpt-5-mini"},"selection_justification":"Meets the task quality requirements at the supplied estimated cost; comparative quality is uncertain.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Additional reasoning capacity is unnecessary given the task requirements."}]}',provider:'openai',model:p.modelId!};
+    return {text:'{"selected":{"provider":"openai","model":"gpt-5-mini"},"selection_justification":"Meets the task quality requirements at the supplied estimated cost; comparative quality is uncertain.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Additional reasoning capacity is unnecessary given the task requirements."}],"quality_qualification":{"required_quality":"Maintain the request's actual content, continuity, and task-specific rigor.","selected_fit":"Selected candidate can meet the fixture quality threshold using the reported capabilities.","evidence_basis_kind":"reasoned_inference","evidence_basis":"Offline fixture has no independently verified comparative outcomes; capabilities inform a provisional choice.","comparative_uncertainty":"Comparative response quality is unknown without direct evidence.","cost_after_qualification":"Among eligible candidates judged qualified for the fixture, use the lower expected cost only after meeting quality."}}',provider:'openai',model:p.modelId!};
   }};
   try {
     const result=await runWithStandaloneAccounting(owner,()=>chooseProvider('Hi','',[provider],{modelRegistrySnapshot:registry()}));
@@ -118,7 +120,7 @@ for(const video of [false,true]) test(`${video?'video':'image'} compatibility co
     const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
     assert.ok(payload.candidates.every((c:{capabilities:{vision:boolean;video:boolean}})=>video?c.capabilities.video:c.capabilities.vision));
     if(video)assert.deepEqual(payload.candidates.map((c:{provider:string})=>c.provider),['google']);
-    return {text:'{"selected":{"provider":"google","model":"gemini-2.5-flash"},"selection_justification":"Eligible multimedia capability meets the observed task requirements.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Alternative can handle images but is less economical for the current mocked task."}]}',provider:name,model:p.modelId!};
+    return {text:'{"selected":{"provider":"google","model":"gemini-2.5-flash"},"selection_justification":"Eligible multimedia capability meets the observed task requirements.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Alternative can handle images but is less economical for the current mocked task."}],"quality_qualification":{"required_quality":"Maintain the request's actual content, continuity, and task-specific rigor.","selected_fit":"Selected candidate can meet the fixture quality threshold using the reported capabilities.","evidence_basis_kind":"reasoned_inference","evidence_basis":"Offline fixture has no independently verified comparative outcomes; capabilities inform a provisional choice.","comparative_uncertainty":"Comparative response quality is unknown without direct evidence.","cost_after_qualification":"Among eligible candidates judged qualified for the fixture, use the lower expected cost only after meeting quality."}}',provider:name,model:p.modelId!};
   }} as LlmProvider));
   try {
     const result=await runWithStandaloneAccounting(owner,()=>chooseProvider('Describe this','',providers,{modelRegistrySnapshot:registry(),hasImages:!video,hasVideoInput:video}));
@@ -146,7 +148,7 @@ test('every eligible provider can win without a family or provider override',asy
   const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
   let selected='';
   const providers=Object.entries(models).map(([name,ids])=>({name,listModels:async()=>[...ids],generate:async p=>({
-    text:p.user.includes('CURRENT_USER_MESSAGE:')?JSON.stringify(understanding('Continue the scene in my voice','rewrite','high')):JSON.stringify({selected:{provider:selected,model:models[selected as keyof typeof models][0]},selection_justification:"Task-specific mock evidence supports this selection with uncertain comparative quality.",alternatives:[{provider:selected==='openai'?'anthropic':'openai',model:selected==='openai'?'claude-sonnet-4-6':'gpt-5.4',why_not_selected:'Alternative is eligible, but evidence for equivalent quality in this mocked task is uncertain.'}]}),
+    text:p.user.includes('CURRENT_USER_MESSAGE:')?JSON.stringify(understanding('Continue the scene in my voice','rewrite','high')):JSON.stringify({selected:{provider:selected,model:models[selected as keyof typeof models][0]},selection_justification:"Task-specific mock evidence supports this selection with uncertain comparative quality.",quality_qualification:mockBestValueQualification,alternatives:[{provider:selected==='openai'?'anthropic':'openai',model:selected==='openai'?'claude-sonnet-4-6':'gpt-5.4',why_not_selected:'Alternative is eligible, but evidence for equivalent quality in this mocked task is uncertain.'}]}),
     provider:name,model:p.modelId!,
   })} as LlmProvider));
   try {
@@ -179,7 +181,7 @@ for (const field of ['quality_requirements','complexity','response_purpose','pro
       assert.equal(analyses,2);
       assert.equal(payload.understanding.complexity,'low');
       assert.equal(payload.understanding.decisionEvidence.primary_objective,understanding('Hi').primary_objective);
-      return {text:'{"selected":{"provider":"openai","model":"gpt-5-mini"},"selection_justification":"Meets the task quality requirements at the supplied estimated cost; comparative quality is uncertain.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Additional reasoning capacity is unnecessary given the task requirements."}]}',provider:'openai',model:p.modelId!};
+      return {text:'{"selected":{"provider":"openai","model":"gpt-5-mini"},"selection_justification":"Meets the task quality requirements at the supplied estimated cost; comparative quality is uncertain.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Additional reasoning capacity is unnecessary given the task requirements."}],"quality_qualification":{"required_quality":"Maintain the request's actual content, continuity, and task-specific rigor.","selected_fit":"Selected candidate can meet the fixture quality threshold using the reported capabilities.","evidence_basis_kind":"reasoned_inference","evidence_basis":"Offline fixture has no independently verified comparative outcomes; capabilities inform a provisional choice.","comparative_uncertainty":"Comparative response quality is unknown without direct evidence.","cost_after_qualification":"Among eligible candidates judged qualified for the fixture, use the lower expected cost only after meeting quality."}}',provider:'openai',model:p.modelId!};
     }};
     try {
       const result=await runWithStandaloneAccounting(owner,()=>chooseProvider('Hi','',[provider],{modelRegistrySnapshot:registry()}));
@@ -264,6 +266,7 @@ test('user objective, constraints and model-specific outcome evidence reach the 
       .comparative_quality,{status:'unknown',observations:[]});
     return {text:JSON.stringify({selected:{provider:'grok',model:'grok-4.3'},
       selection_justification:'Task-specific direct user reaction favors Grok; price and reasoning metadata do not establish better quality for alternatives.',
+      quality_qualification:{...mockBestValueQualification,evidence_basis_kind:'attributed_feedback',evidence_basis:'Direct reaction reaction-1 reports satisfaction with Grok on this exact creative task.'},
       alternatives:[{provider:'openai',model:'gpt-5-mini',
         why_not_selected:'No comparable feedback for this model; not selected merely for lower expense.'}]}),
       provider:name,model:p.modelId!};
