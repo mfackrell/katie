@@ -90,10 +90,14 @@ export function modelAttributedFeedback(
     ...(possible.length ? {potentially_comparable: possible.map(row => ({
       ...event(row),source_intent:row.intent,
     }))} : {}),
-    uncertainty: 'Direct evidence is scoped to the current intent. Cross-intent events are only ' +
-      'potential comparisons; the selector must verify actual objective and quality-requirement similarity ' +
-      'before using them. Reactions and adjacent comments may be ambiguous. Internal reviews are ' +
-      'selection-biased. No evidence implies global model superiority.',
+    uncertainty: bestValueComparable
+      ? 'Direct evidence is scoped to the current intent. Cross-intent events are only ' +
+        'potential comparisons; the selector must verify actual objective and quality-requirement similarity ' +
+        'before using them. Reactions and adjacent comments may be ambiguous. Internal reviews are ' +
+        'selection-biased. No evidence implies global model superiority.'
+      : 'User reactions and context-attributed comments are task-specific and can be ambiguous. ' +
+        'Review verdicts are internal and selection-biased. No evidence implies global model superiority; ' +
+        'the same model alias can resolve to a dated version shown in the underlying provider receipt.',
   };
 }
 
