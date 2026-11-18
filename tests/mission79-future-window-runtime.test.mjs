@@ -74,7 +74,7 @@ test('expired original mission79 requires separately authenticated, owner-select
 });
 test('first-party owner panel has no default deadline and never binds release or dispatches workers',()=>{
  const component=readFileSync('components/mission79-future-window-control.tsx','utf8');
- assert.match(component,/useState\("+"""+"\)/);
+ assert.ok(component.includes('useState("")'),"No implicit deadline value may be preselected");
  assert.match(component,/type="datetime-local"/);
  assert.match(component,/authorizationId=crypto.randomUUID\(\)/);
  assert.match(component,/authorize_mission79_future_window/);
