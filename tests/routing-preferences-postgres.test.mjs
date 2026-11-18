@@ -150,7 +150,10 @@ test('native preference migration denies browser roles and enforces durable scop
         () => resolveRoutingEvidence([buildCandidateMetadata('openai','gpt-4o-mini','rewrite')],
           [new OpenAiProvider('test-only')],{name:'Katie',persona:'Actor voice',summary:'',history:[],user:'Rewrite my next email'},'rewrite'));
       const candidate = result.candidates['openai:gpt-4o-mini'];
-      assert.deepEqual(candidate.quality,{status:'unknown',observations:[]});
+      assert.equal(candidate.quality.observations.length,0,'unverified delivery remains unverified');
+      assert.equal(candidate.quality.feedback?.negative,2,'direct dislike and explicit correction are retained');
+      assert.equal(candidate.quality.feedback?.ambiguous,1,'internal review revision is not a user quality verdict');
+      assert.match(candidate.quality.status,/limited, model-attributed task feedback/);
       assert.equal(candidate.economics.expected_output_tokens,100);
       assert.equal(candidate.economics.expected_cache_hit_tokens,10);
       assert.equal(candidate.economics.expected_attempts,2);
