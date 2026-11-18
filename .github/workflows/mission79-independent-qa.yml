@@ -23,7 +23,7 @@ jobs:
       github.event.pull_request.head.ref == 'fix/1061-mission79-exact-release-claim' &&
       github.event.pull_request.number == 1111 &&
       github.event.pull_request.user.login == github.repository_owner
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
