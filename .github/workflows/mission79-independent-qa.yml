@@ -12,6 +12,7 @@ on:
       - 'app/api/projects/route.ts'
       - 'components/director-recovery-control.tsx'
       - 'tests/helpers/assert-blocked-management-retest.mjs'
+      - 'tests/helpers/assert-mission79-browser-postgres.mjs'
       - 'tests/blocked-owner-committed-concurrency.test.mjs'
       - 'tests/mission79-future-window-runtime.test.mjs'
       - '.github/workflows/mission79-independent-qa.yml'
