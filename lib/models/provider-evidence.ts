@@ -38,6 +38,7 @@ export type PublishedModelEvidence = {
   supportedEndpoints: readonly string[];
   contextWindowTokens: number;
   maxOutputTokens: number;
+  pricingMatchesApprovedSchedule: boolean;
   pricingTier: "standard_base_per_1m";
   hasVariableLongContextRates: boolean;
 };
@@ -76,8 +77,7 @@ export function parseOfficialModelEvidence(
   if (!pricingSection) return null;
   const input = priceFromSection(pricingSection, "Input");
   const output = priceFromSection(pricingSection, "Output");
-  if (input === null || output === null || input !== spec.expectedInputPer1m ||
-      output !== spec.expectedOutputPer1m) return null;
+  if (input === null || output === null) return null;
 
   const text = openai
     ? /^- Input modalities: text, image\s*$/m.test(sourceText) &&
@@ -85,7 +85,7 @@ export function parseOfficialModelEvidence(
       /^- Reasoning token support\s*$/m.test(sourceText)
     : /^Context window: 1M tokens\b/m.test(sourceText) &&
       /\|\s*Input → output\s*\|\s*Text and images → text\s*\|/m.test(sourceText) &&
-      /\|\s*Thinking[^\n|]*\|\s*Adaptive/m.test(sourceText);
+      /\|\s*(?:\[Thinking\]\([^|]+\)|Thinking)\s*\|\s*Adaptive/m.test(sourceText);
   if (!text) return null;
 
   const endpoints: string[] = [];
@@ -119,6 +119,7 @@ export function parseOfficialModelEvidence(
     supportsToolCalling: openai ? /^- function_calling\s*$/m.test(features) : true,
     supportedEndpoints: endpoints,
     contextWindowTokens: context, maxOutputTokens: maxOutput,
+    pricingMatchesApprovedSchedule: input === spec.expectedInputPer1m && output === spec.expectedOutputPer1m,
     pricingTier: "standard_base_per_1m",
     hasVariableLongContextRates: openai && /272K/i.test(pricingSection)
   };
