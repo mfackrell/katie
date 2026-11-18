@@ -149,9 +149,10 @@ begin
    w.checkpoints->'routing-delivery-audit:v1'->>'provider' as provider,
    w.checkpoints->'routing-delivery-audit:v1'->>'model' as model,
    w.checkpoints->'routing-delivery-audit:v1'->>'classifiedIntent' as intent,
-   'internal_review'::text as source,'review_verdict'::text as dimension,
-   case when cr.review_audit->>'status'='approved' then 'positive'
-        else 'ambiguous' end::text as outcome,
+   'internal_review'::text as source,
+   case when cr.review_audit->>'status'='approved' then 'review_approved'
+        else 'review_revised' end::text as dimension,
+   'ambiguous'::text as outcome,
    'internal_review_selection_biased'::text as confidence,
    cr.request_id::text as source_id,null::text as task_excerpt
   from (select * from chat_requests
