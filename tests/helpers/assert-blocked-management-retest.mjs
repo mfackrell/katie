@@ -308,7 +308,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
      calls:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.id)::text,'[]')) h from mission_calls c join mission_assignments j on j.id=c.job_id join agent_missions m on m.id=j.mission_id where m.project_id=$1",
      assignments:"select md5(coalesce(jsonb_agg(to_jsonb(j) order by j.id)::text,'[]')) h from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1",
      originalRetestReceipt:"select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.project_id)::text,'[]')) h from project_blocked_management_retest_receipts r where r.project_id=$1",
-     originalContracts:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.node_id)::text,'[]')) h from project_organization_contract_changes c where c.project_id=$1 and c.window_id=$3::uuid",
+     originalContracts:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.node_id)::text,'[]')) h from project_organization_contract_changes c where c.project_id=$1 and c.window_id=$2::uuid",
      grants:"select md5(coalesce(jsonb_agg(to_jsonb(g) order by g.node_id)::text,'[]')) h from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1",
      decisions:"select md5(coalesce(jsonb_agg(to_jsonb(d) order by d.id)::text,'[]')) h from project_organization_decisions d where d.project_id=$1",
      exceptions:"select md5(coalesce(jsonb_agg(to_jsonb(e) order by e.id)::text,'[]')) h from project_organization_exceptions e where e.project_id=$1",
@@ -318,8 +318,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     const hashes={};
     for(const [name,query] of Object.entries(sources))
      hashes[name]=(await first.query(query,
-      query.includes('$3')?[project,scheduled.missionId,windowId]:
-      query.includes('$2')?[project,scheduled.missionId]:[project])).rows[0].h;
+      name==='missions'?[project,scheduled.missionId]:
+      name==='originalContracts'?[project,windowId]:[project])).rows[0].h;
     return hashes;
    }finally{await first.query('set role service_role');}
   };
