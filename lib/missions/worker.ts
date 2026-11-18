@@ -377,6 +377,10 @@ export async function runMissionBatch(model=missionModel){
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  const release=process.env.VERCEL_ENV==='production'?process.env.VERCEL_GIT_COMMIT_SHA:null;
+ if(process.env.VERCEL_ENV==='production'&&(!release||!/^[0-9a-f]{40}$/.test(release))){
+  console.error('[Missions] Missing valid production release SHA; fail closed before any worker claim');
+  return {claimed:0,outcomes:[],releaseFence:'missing_production_release'};
+ }
  // Mission79's special release is valid only while the privileged release
  // coordinator has the matching SQL epoch OPEN and the canonical Vercel alias
  // still actually serves that SHA. This read-only preflight is NOT a
