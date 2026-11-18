@@ -58,6 +58,21 @@ begin
  then raise exception 'Only active exact deployment can be sealed before promotion';end if;
  if p_action='active' and g.project_id is not null and g.state<>'closed'
  then raise exception 'Prior release must be closed before a new SHA is activated';end if;
+ -- Closing a generation must NEVER race a paid worker that already holds a
+ -- source-bound lease. An expired lease can be cleared/requeued by the worker
+ -- scheduler while the original worker is still in-flight, so reject every
+ -- non-completed attempted assignment in the renewed mission lineage, even
+ -- when lease is null. Terminal completed jobs cannot start new inference.
+ -- The global state/claim advisory locks serialize this check with leasing.
+ if exists(
+  select 1 from agent_missions m
+  join mission_assignments j on j.mission_id=m.id
+  left join project_retest_future_window_receipts w on w.project_id=m.project_id
+  where m.project_id=p_project
+   and (m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+     or (w.project_id is not null and m.created_at>=w.authorized_at))
+   and j.attempts>0 and (j.status<>'completed' or j.lease is not null)
+ ) then raise exception 'Undrained owner-renewed worker attempt; release gate transition denied';end if;
  stamp:=clock_timestamp();
  if g.project_id is null then
   if p_action<>'active' then raise exception 'Initial release requires verified READY alias';end if;
