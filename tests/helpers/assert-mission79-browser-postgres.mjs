@@ -23,6 +23,32 @@ export async function assertMission79BrowserPostgres(first,{
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
  };
+ // Diagnostic is SELECT-only, scoped to the disposable original-project
+ // fixture. Do not relax source, assignment, or QA hierarchy requirements to
+ // make a synthetic test pass without identifying which historical fact differs.
+ const lineage=(await first.query(`select jsonb_build_object(
+  'valid',project_org_retest_original_owner_lineage($1),
+  'source',(select jsonb_build_object('status',m.status,'kind',m.project_kind,
+    'createdAt',m.created_at,'priorWindow',m.project_evidence->>'providerContinuationWindow',
+    'priorRelease',m.project_evidence->>'providerContinuationRelease',
+    'directorNode',m.project_evidence->>'organizationNodeId',
+    'previousMission',m.project_evidence->>'previousMissionId')
+   from agent_missions m where m.id='911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid),
+  'receipt',(select jsonb_build_object('authorizedAt',r.authorized_at,'priorRelease',r.prior_release_sha,
+    'windowId',r.window_id,'sourceMission',r.source_mission_id)
+   from project_blocked_management_retest_receipts r where r.project_id=$1),
+  'job',(select jsonb_build_object('status',j.status,'attempts',j.attempts,
+    'id',j.id,'role',j.role,'jobKey',j.job_key,'agent',j.agent_id,
+    'payloadNode',j.payload->>'organizationNodeId','detail',j.result->>'detail')
+   from mission_assignments j where j.mission_id='911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid limit 1),
+  'topology',(select jsonb_object_agg(label,qty) from (
+   select n.area||'|'||n.kind||'|'||n.management_level||'|'||n.depth::text
+    ||'|'||coalesce(parent.area,'ROOT')||'|'||coalesce(parent.management_level,'ROOT') label,
+    count(*) qty from project_organization_nodes n
+    left join project_organization_nodes parent on parent.id=n.parent_id and parent.project_id=n.project_id
+    where n.project_id=$1 and n.status='active' group by 1) signatures)
+ ) diagnostics`,[project])).rows[0].diagnostics;
+ console.log('MISSION79_LINEAGE_FIXTURE_PRECHECK:',JSON.stringify(lineage));
  const initial=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) r',
   [owner,project,release])).rows[0].r;
  assert.equal(initial.stage,stage);
