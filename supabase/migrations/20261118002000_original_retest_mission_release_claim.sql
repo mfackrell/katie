@@ -94,8 +94,7 @@ begin
  if p.organization_version<>1 or not project_provider_mode(p.id)
   or p.status<>'running' or p.phase<>'development'
   or p.lease is not null or p.lease_until is not null
-  or p.deadline<='2026-11-18T14:00:00Z'::timestamptz-interval '0 seconds'
-     and p.deadline is distinct from '2026-11-18T14:00:00Z'::timestamptz
+  or p.deadline is distinct from '2026-11-18T14:00:00Z'::timestamptz
   or p.deadline<=clock_timestamp()+interval '5 minutes'
   or p.approved_hash is distinct from '4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6'
   or p.approval_hash is distinct from p.approved_hash
