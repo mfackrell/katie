@@ -109,13 +109,20 @@ export async function POST(request:NextRequest){
    ||!Number.isFinite(next)||next<=Date.now()+300000||next>Date.now()+86400000
    ||next<=Date.parse(offer.priorCutoff))
    return NextResponse.json({error:'Explicit fresh future cutoff and original owner preflight are required'},{status:409});
+  const identity=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
+   p_project:p.projectId,p_release:p.releaseSha
+  });
+  if(!identity?.active||!Number.isSafeInteger(identity.generation)||identity.generation<=0
+   ||!identity.deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(identity.deploymentId)
+   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID)
+   return NextResponse.json({error:'Deployment identity or release epoch no longer matches the canonical owner window'},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact authorization release'},{status:409});
   return NextResponse.json(await rpc('project_org_authorize_retest_future_window',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
    p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
    p_authorization:p.authorizationId,p_cutoff:p.cutoff,
-   p_state_hash:p.stateHash,
+   p_state_hash:p.stateHash,p_epoch:identity.generation,p_deployment:identity.deploymentId,
   }),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='bind_mission79_release'){
@@ -135,11 +142,19 @@ export async function POST(request:NextRequest){
    ||Date.parse(offer.cutoff)!==Date.parse(owner.cutoff)
    ||Date.parse(offer.cutoff)<=Date.now()+300000)
    return NextResponse.json({error:'Exact source-bound release state changed; no worker was restarted'},{status:409});
+  const identity=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
+   p_project:p.projectId,p_release:p.releaseSha
+  });
+  if(!identity?.active||!Number.isSafeInteger(identity.generation)||identity.generation<=0
+   ||!identity.deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(identity.deploymentId)
+   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID)
+   return NextResponse.json({error:'Deployment identity or release epoch changed before owner binding'},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact binding release'},{status:409});
   return NextResponse.json(await rpc('project_org_bind_retest_claim_release',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
-   p_mission:p.missionId,p_assignment:p.assignmentId,p_state_hash:p.stateHash
+   p_mission:p.missionId,p_assignment:p.assignmentId,p_state_hash:p.stateHash,
+   p_epoch:identity.generation,p_deployment:identity.deploymentId
   }),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='retest_blocked_management'){
