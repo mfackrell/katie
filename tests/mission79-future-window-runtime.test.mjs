@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import ts from 'typescript';
+import {chromium} from 'playwright-core';
+import bundledChromium from '@sparticuz/chromium';
 import {modules} from './helpers/load-project-modules.mjs';
 
 const projectId='fe9d2658-41e3-44c1-ae8e-a0cba98371fe';
@@ -377,4 +380,107 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  const ordinary=await runMissionBatch(forbidden);
  assert.equal(ordinary.claimed,0);
  assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,previousClaims+1);
+});
+
+
+test('real Chromium original mission79 owner cutoff and separate exact-release binding',{timeout:100000},async()=>{
+ const source=ts.transpileModule(readFileSync('components/mission79-future-window-control.tsx','utf8'),{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}
+ }).outputText;
+ const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js']
+  .map(f=>readFileSync('node_modules/'+f,'utf8')).join('\n');
+ const browser=await chromium.launch({
+  executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),
+  args:bundledChromium.args,headless:true,
+ });
+ const context=await browser.newContext({timezoneId:'UTC'});
+ const page=await context.newPage();
+ const base={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
+  sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
+  scopeHash,priorCutoff,cutoff:null,authorizationId:null,
+  historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
+  stateHash,stage:'authorize'};
+ const approved={...base,stage:'authorized',authorizationId:approvalId,cutoff:futureCutoff,
+  authorizedAt:'2026-11-18T16:00:00Z'};
+ try{
+  for(const scenario of ['owner-window','no-owner','bind-release']){
+   await page.unroute('http://localhost/**');
+   const responseGate={};
+   let releaseResponse;
+   responseGate.promise=new Promise(resolve=>{releaseResponse=resolve;});
+   const posts=[],errors=[];
+   page.removeAllListeners('pageerror');page.on('pageerror',e=>errors.push(e.message));
+   const input=scenario==='bind-release'?approved:base;
+   const bearer=scenario==='no-owner'?'null':'"actual-ui-test-owner"';
+   const script='const exports={};const require=n=>n==="react"?React:'+
+    'n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:'+
+    '{ownerSessionBearer:async()=>'+bearer+'};'+
+    'Date.now=()=>'+Date.parse('2026-11-18T16:00:00Z')+';window.refreshCount=0;'+source+
+    ';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.Mission79FutureWindowControl,{initial:'+
+    JSON.stringify(input)+',onRefresh:()=>window.refreshCount++}));';
+   await page.route('http://localhost/**',async route=>{
+    if(new URL(route.request().url()).pathname==='/owner')
+     return route.fulfill({contentType:'text/html; charset=utf-8',
+      body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
+    const item={method:route.request().method(),headers:route.request().headers(),body:route.request().postDataJSON()};
+    posts.push(item);
+    await responseGate.promise;
+    const newReceipt=scenario==='bind-release'
+     ?{stage:'bound',projectId,releaseSha,missionId,assignmentId,scopeHash,
+       cutoff:futureCutoff,historicalMissions:79,maxMissions:96,tokenAllowance:600000,
+       boundAt:'2026-11-18T16:01:00Z'}
+     :{...approved,authorizationId:item.body.authorizationId,cutoff:item.body.cutoff,
+       stage:'authorized',existing:false};
+    return route.fulfill({status:200,json:newReceipt});
+   });
+   await page.goto('http://localhost/owner',{waitUntil:'domcontentloaded',timeout:12000});
+   if(scenario==='bind-release'){
+    const button=page.getByRole('button',{name:'Resume one owner-approved management decision'});
+    await button.waitFor({timeout:12000});
+    await button.evaluate(el=>{el.click();el.click();});
+    await page.waitForFunction(()=>window.refreshCount===0&&document.body.textContent.includes('Verifying exact released authority'),{timeout:12000});
+    assert.equal(posts.length,1,'Double click must not bind release twice');
+    assert.equal(posts[0].method,'POST');assert.equal(posts[0].headers.authorization,'Bearer actual-ui-test-owner');
+    assert.deepEqual(posts[0].body,{trialAction:'bind_mission79_release',projectId,releaseSha,
+     missionId,assignmentId,stateHash});
+    releaseResponse();
+    await page.getByText('Exact release binding is recorded.').waitFor({timeout:12000});
+    assert.equal(await page.evaluate(()=>window.refreshCount),1);
+   }else{
+    const cutoff=page.locator('#mission79-cutoff');
+    await cutoff.waitFor({timeout:12000});
+    assert.equal(await cutoff.inputValue(),'','No deadline may be preselected');
+    await cutoff.fill('2026-11-18T20:00');
+    const button=page.getByRole('button',{name:'Approve new execution window'});
+    await button.evaluate((el,double)=>{el.click();if(double)el.click();},scenario==='owner-window');
+    if(scenario==='no-owner'){
+     await page.getByRole('alert').filter({hasText:'Sign in as the existing Katie owner'}).waitFor({timeout:12000});
+     assert.equal(posts.length,0,'Unauthenticated UI must not POST');
+     releaseResponse();
+    }else{
+     await page.waitForFunction(()=>document.body.textContent.includes('Recording owner authorization'),{timeout:12000});
+     await page.waitForFunction(()=>window.fetch&&!document.body.textContent.includes('No execution'),{timeout:12000});
+     await page.waitForFunction(()=>document.body.textContent.includes('Recording owner authorization'),{timeout:12000});
+     // The first-party control owns the browser-selected time and fresh UUID;
+     // the actual response is tied back to both before it displays success.
+     await page.waitForFunction(()=>Boolean(document.querySelector('button:disabled')),{timeout:12000});
+     assert.equal(posts.length,1,'Double-click may submit only one owner authorization');
+     const sent=posts[0];assert.equal(sent.method,'POST');
+     assert.equal(sent.headers.authorization,'Bearer actual-ui-test-owner');
+     assert.equal(sent.body.trialAction,'authorize_mission79_future_window');
+     assert.equal(sent.body.projectId,projectId);assert.equal(sent.body.releaseSha,releaseSha);
+     assert.equal(sent.body.missionId,missionId);assert.equal(sent.body.assignmentId,assignmentId);
+     assert.equal(sent.body.stateHash,stateHash);
+     assert.equal(sent.body.cutoff,futureCutoff);
+     assert.match(sent.body.authorizationId,/^[a-f0-9-]{36}$/i);
+     releaseResponse();
+     await page.getByText('Owner window recorded.').waitFor({timeout:12000});
+     assert.equal(await page.evaluate(()=>window.refreshCount),1);
+     assert.equal(await button.count(),0,'Consumed UI action cannot be repeated');
+    }
+   }
+   assert.deepEqual(errors,[],'Real browser must not throw: '+errors.join('; '));
+   console.log('MISSION79_REAL_BROWSER_OWNER_'+scenario.toUpperCase().replaceAll('-','_')+'_PASS');
+  }
+ }finally{await page.close({runBeforeUnload:false});await context.close();await browser.close();}
 });
