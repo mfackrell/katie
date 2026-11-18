@@ -183,6 +183,15 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'select id,status,attempts,lease from mission_assignments where mission_id=$1',
    [scheduled.missionId])).rows[0];
   assert.equal(originalJob.status,'queued');assert.equal(originalJob.attempts,0);
+  // The shared native fixture has other legitimate runnable projects. This
+  // isolated test must inspect this one authorized mission's release fence,
+  // not whichever unrelated job globally queued first. Follow the existing
+  // continuation-qualification pattern: age ONLY the disposable assignment
+  // before its history baseline, then roll back the whole scheduler test.
+  await first.query('reset role');
+  await first.query("update mission_assignments set created_at='2000-01-01T00:00:00Z' where id=$1",
+   [originalJob.id]);
+  await first.query('set role service_role');
   const executionRelease='d'.repeat(40),unboundRelease='e'.repeat(40);
   // Negative release probes must not leave unrelated fixture workers leased:
   // doing so fills the unchanged three-worker global cap before mission 79.
