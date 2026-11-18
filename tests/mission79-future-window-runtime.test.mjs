@@ -192,3 +192,59 @@ test('canonical alias verification rejects superseded deployment, redirect and s
  assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>new Response('<html>login</html>',{status:401})),false);
  assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>{throw Error('unavailable');}),false);
 });
+
+test('real first-party owner auth and independently resolved production alias gate the actual window writer',async t=>{
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+  KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
+  NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY};
+ const oldFetch=globalThis.fetch,oldNow=Date.now;
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,
+  KATIE_OWNER_AUTH_USER_ID:ownerId,NEXT_PUBLIC_SUPABASE_URL:'https://auth.example.test',
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon'});
+ Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
+ t.after(()=>{globalThis.fetch=oldFetch;Date.now=oldNow;for(const [k,v] of Object.entries(env)){
+  if(v===undefined)delete process.env[k];else process.env[k]=v;
+ }});
+ let identity=ownerId,currentAlias=releaseSha,authCalls=0,aliasCalls=0,writeCalls=0;
+ globalThis.fetch=async(url,opts)=>{
+  const host=String(url);
+  if(host==='https://auth.example.test/auth/v1/user'){
+   authCalls++;assert.match(opts.headers.Authorization,/^Bearer /);
+   return new Response(JSON.stringify({id:identity}),{status:200});
+  }
+  if(host.startsWith('https://katie-mu.vercel.app/api/version?mission79_verify=')){
+   aliasCalls++;assert.equal(opts.cache,'no-store');
+   return new Response(JSON.stringify({version:currentAlias}),{status:200});
+  }
+  throw Error('Unexpected external request '+host);
+ };
+ const offer={projectId,stage:'authorize',status:'blocked',missionStatus:'blocked',
+  sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
+  authorizationId:null,releaseSha,scopeHash,priorCutoff,cutoff:null,
+  historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,stateHash};
+ const load=modules({
+  '@/lib/missions/store':{rpc:async(name,args)=>{
+   if(name==='project_org_retest_future_window_offer')return offer;
+   if(name==='project_org_authorize_retest_future_window'){
+    writeCalls++;return {...offer,stage:'authorized',authorizationId:approvalId,
+     cutoff:futureCutoff,authorizedAt:'2026-11-18T16:00:00Z',existing:false};
+   }
+   throw Error('Unexpected SQL call '+name);
+  }},
+  '@/lib/data/persistence-store':{getMessages:async()=>[]},
+ });
+ const {POST}=load('@/app/api/projects/organization/route');
+ const payload={trialAction:'authorize_mission79_future_window',projectId,releaseSha,
+  missionId,assignmentId,authorizationId:approvalId,cutoff:futureCutoff,stateHash};
+ const req=()=>new Request('https://katie.example.test/api/projects/organization',{
+  method:'POST',headers:{Origin:'https://katie.example.test','Content-Type':'application/json',
+   Authorization:'Bearer exact-test-owner'},body:JSON.stringify(payload)});
+ identity='22222222-2222-4222-8222-222222222222';
+ assert.equal((await POST(req())).status,403);assert.equal(writeCalls,0);assert.equal(aliasCalls,0);
+ identity=ownerId;currentAlias='f'.repeat(40);
+ assert.equal((await POST(req())).status,409);assert.equal(writeCalls,0);
+ currentAlias=releaseSha;
+ assert.equal((await POST(req())).status,200);assert.equal(writeCalls,1);
+ assert.equal(aliasCalls,2);assert.equal(authCalls,3);
+});
