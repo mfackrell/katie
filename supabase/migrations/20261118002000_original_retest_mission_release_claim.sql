@@ -349,6 +349,72 @@ create trigger project_retest_future_window_immutable before update or delete
  on public.project_retest_future_window_receipts for each row
  execute function public.project_org_change_immutable();
 
+-- The three original grants are a CLOSED historical set. Each live node
+-- must be the SAME identity carried by its append-only 13-node window
+-- contract; the paths come from the immutable owner-ratified proposal.
+-- A missing/extra grant, changed path, parent, permission or scope fails closed.
+create function public.project_org_retest_exact_scope_grants(p_project uuid)
+returns boolean language sql stable security definer set search_path=public,pg_temp as $fn$
+ select exists(
+  select 1 from work_projects p
+  join project_blocked_management_retest_receipts r on r.project_id=p.id
+  join project_scope_ratification_approvals approval on approval.project_id=p.id
+   and approval.owner_id=r.owner_id and approval.scope_hash=r.scope_hash
+  join project_scope_ratification_proposals proposal on proposal.id=approval.proposal_id
+   and proposal.project_id=p.id and proposal.scope_hash=r.scope_hash
+  join project_blocked_owner_windows original_window
+   on original_window.project_id=p.id and original_window.authorization_id=r.window_id
+  where p.id=p_project
+   and p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+   and p.approved_hash=r.scope_hash and p.approval_hash=r.scope_hash
+   and p.spec->'allowedPaths'=proposal.spec->'allowedPaths'
+   and proposal.spec->'allowedPaths'=to_jsonb(array[
+    'app/milestone-3-tic-tac-toe/',
+    'lib/milestone-3-tic-tac-toe/',
+    'tests/milestone-3-tic-tac-toe/']::text[])
+   and exists(select 1 from project_events ratified
+    where ratified.project_id=p.id and ratified.event='scope_ratified'
+     and ratified.data->>'proposalId'=proposal.id::text
+     and ratified.data->>'scopeHash'=r.scope_hash
+     and ratified.data->>'ownerId'=r.owner_id::text
+     and ratified.data->>'organizationHash'=proposal.organization_hash)
+   and (select count(*) from project_organization_scope_grants g
+    join project_organization_nodes n on n.id=g.node_id
+    where n.project_id=p.id)=3
+   and (select count(*) from (
+    values
+     ('general'::text,'project_director'::text,'project_director'::text,
+      0,null::text,null::text,
+      array['manage','analysis','research','development','repository_review']::text[]),
+     ('game_delivery','manager','functional_director',
+      1,'general','project_director',
+      array['analysis','development','manage','repository_review']::text[]),
+     ('delivery_management','manager','manager',
+      2,'game_delivery','functional_director',
+      array['analysis','development','manage','repository_review']::text[])
+    ) expected(area,kind,management_level,depth,parent_area,parent_level,tools)
+    join project_organization_nodes n on n.project_id=p.id
+     and n.area=expected.area and n.kind=expected.kind
+     and n.management_level=expected.management_level and n.depth=expected.depth
+     and n.status='active' and n.tools=expected.tools
+    left join project_organization_nodes parent on parent.id=n.parent_id
+     and parent.project_id=p.id
+    join project_organization_scope_grants g on g.node_id=n.id
+     and g.scope_hash=r.scope_hash
+     and g.parent_id is not distinct from n.parent_id
+     and g.paths=array(select jsonb_array_elements_text(proposal.spec->'allowedPaths'))
+    join project_organization_contract_changes history on history.node_id=n.id
+     and history.project_id=p.id and history.window_id=r.window_id
+     and history.prior_deadline=original_window.prior_cutoff
+     and history.deadline=original_window.cutoff
+     and history.tools=history.prior_tools and history.tools=n.tools
+    where (expected.parent_area is null and n.parent_id is null
+      or parent.area=expected.parent_area
+       and parent.management_level=expected.parent_level)
+   )=3
+ );
+$fn$;
+
 -- Verify immutable original owner/resume and 13 unchanged original
 -- contracts even after the live project moves to a newly approved window.
 create function public.project_org_retest_original_owner_lineage(
@@ -458,11 +524,7 @@ create function public.project_org_retest_original_owner_lineage(
      'delivery_repository_assessment|worker|worker|3|delivery_management|manager',1,
      'independent_qa_execution_coordination|manager|supervisor|3|independent_qa_execution|manager',2,
      'qa_planning|manager|supervisor|3|independent_qa_planning|manager',3)
-   and not exists(select 1 from project_organization_scope_grants grant_row
-     join project_organization_nodes grant_node on grant_node.id=grant_row.node_id
-     where grant_node.project_id=r.project_id
-       and (grant_row.parent_id is distinct from grant_node.parent_id
-         or grant_row.scope_hash is distinct from r.scope_hash))
+   and project_org_retest_exact_scope_grants(r.project_id)
  );
 $fn$;
 
@@ -717,6 +779,11 @@ begin
   or exists(select 1 from project_execution_windows where id=p_authorization)
  then raise exception 'Fresh authenticated owner future-window selection and unchanged state required';end if;
  perform 1 from project_organization_nodes where project_id=p.id order by depth,id for update;
+ perform 1 from project_organization_scope_grants g
+  join project_organization_nodes n on n.id=g.node_id
+  where n.project_id=p.id order by g.node_id for update of g;
+ if not project_org_retest_exact_scope_grants(p.id)
+ then raise exception 'Original three-grant authority changed under owner lock';end if;
  if project_org_hierarchy_recovery_state(p.id) is distinct from p_state_hash
  then raise exception 'Original owner approval state changed while acquiring organization locks';end if;
  select * into r from project_blocked_management_retest_receipts where project_id=p.id;
@@ -881,6 +948,12 @@ begin
   or g.generation is distinct from p_epoch
   or g.alias_name is distinct from 'katie-mu.vercel.app'
  then raise exception 'Observed canonical release epoch or deployment changed under binding lock';end if;
+ perform 1 from project_organization_nodes where project_id=p.id order by depth,id for update;
+ perform 1 from project_organization_scope_grants g
+  join project_organization_nodes n on n.id=g.node_id
+  where n.project_id=p.id order by g.node_id for update of g;
+ if not project_org_retest_exact_scope_grants(p.id)
+ then raise exception 'Original three-grant authority changed under binding lock';end if;
  offer:=project_org_retest_claim_release_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'bind'
   or p_mission is distinct from (offer->>'missionId')::uuid
@@ -985,12 +1058,14 @@ grant execute on function
  public.claim_mission_work_release_epoch(text,bigint,text) to service_role;
 
 revoke all on function
+ public.project_org_retest_exact_scope_grants(uuid),
  public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
  public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
  from public,anon,authenticated,service_role;
 grant execute on function
+ public.project_org_retest_exact_scope_grants(uuid),
  public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
  public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),

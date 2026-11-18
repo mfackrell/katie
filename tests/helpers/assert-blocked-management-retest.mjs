@@ -72,6 +72,25 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('update project_organization_contract_changes set tools=$2,prior_tools=$2 where project_id=$3 and window_id=$4 and node_id=$1',
     [node.id,tools,project,windowId]);
   }
+  // Reconstruct the exact THREE saved original grants (root, Game Delivery,
+  // delivery manager), using the original ratified paths; unrelated synthetic
+  // benchmark grants are not evidence of the live original organization.
+  for(const [node,tools] of [
+   [fixtureRoot,['manage','analysis','research','development','repository_review']],
+   [fixtureGame,['analysis','development','manage','repository_review']],
+  ]){
+   await first.query('update project_organization_nodes set tools=$2 where id=$1',[node.id,tools]);
+   await first.query('update project_organization_contract_changes set tools=$2,prior_tools=$2 where node_id=$1 and project_id=$3 and window_id=$4',
+    [node.id,tools,project,windowId]);
+  }
+  const exactPaths=(await first.query("select array(select jsonb_array_elements_text(spec->'allowedPaths')) paths from work_projects where id=$1",[project])).rows[0].paths;
+  assert.deepEqual(exactPaths,['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/']);
+  await first.query('delete from project_organization_scope_grants where node_id in (select id from project_organization_nodes where project_id=$1) and node_id<>all(array[$2::uuid,$3::uuid,$4::uuid])',
+   [project,fixtureRoot.id,fixtureGame.id,delivery.id]);
+  for(const [node,parent] of [[fixtureRoot,null],[fixtureGame,fixtureRoot.id],[delivery,fixtureGame.id]]){
+   await first.query('insert into project_organization_scope_grants(node_id,scope_hash,paths,parent_id) values($1,$2,$3,$4) on conflict(node_id,scope_hash) do update set paths=excluded.paths,parent_id=excluded.parent_id',
+    [node.id,scopeHash,exactPaths,parent]);
+  }
   await first.query('update project_organization_scope_grants g set parent_id=n.parent_id from project_organization_nodes n where g.node_id=n.id and n.project_id=$1',[project]);
   await first.query("set local session_replication_role = 'origin'");
   await first.query('commit');
@@ -79,6 +98,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  await first.query('set role service_role');
  assert.equal((await first.query('select count(*)::int n from project_organization_contract_changes where project_id=$1 and window_id=$2',[project,windowId])).rows[0].n,13,
   'All thirteen historical deadline contracts remain preserved');
+ assert.equal((await first.query('select project_org_retest_exact_scope_grants($1) valid',[project])).rows[0].valid,false,
+  'Original three-grant proof must fail until saved owner retest lineage exists');
  console.log('MISSION79_AUTHENTIC_ORIGINAL_13_NODE_TOPOLOGY_FIXTURE_PASS');
 
  await first.query('begin');
@@ -496,12 +517,57 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal((await first.query('select project_org_retest_original_owner_lineage($1) verified',[project])).rows[0].verified,true,
    'Untampered original source and QA hierarchy must remain valid');
   console.log('MISSION79_HISTORICAL_SOURCE_AND_QA_TOPOLOGY_NEGATIVES_PASS');
+  // Preserve the authentic original scope across owner offer AND locked write.
+  // These corruptions exist only inside rolled-back disposable transactions;
+  // the ordinary owner state hash intentionally does not contain grant rows.
+  const scopeGrantNegative=async(label,sqlStatement,params,offerStatement,writer,pattern)=>{
+   await first.query('savepoint mission79_scope_grant_negative');
+   try{
+    await first.query('reset role');
+    await first.query("set local session_replication_role = 'replica'");
+    await first.query(sqlStatement,params);
+    await first.query("set local session_replication_role = 'origin'");
+    await first.query('set role service_role');
+    assert.equal((await first.query('select project_org_retest_exact_scope_grants($1) valid',[project])).rows[0].valid,false,
+     label+' must invalidate exact original scope-grant attestation');
+    await rejected(()=>first.query(offerStatement,offerArgs),pattern);
+    if(writer)await rejected(writer,/grant|owner|original|historical|scope|state|window|source/i);
+   }finally{
+    await first.query('rollback to savepoint mission79_scope_grant_negative');
+    await first.query('release savepoint mission79_scope_grant_negative');
+    await first.query('set role service_role');
+   }
+  };
+  const originalGrantOffer='select project_org_retest_future_window_offer($1,$2,$3)';
+  await scopeGrantNegative('deleted delivery grant',
+   'delete from project_organization_scope_grants where node_id=$1',[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('broadened grant paths',
+   "update project_organization_scope_grants set paths=array['app/unapproved/'] where node_id=$1",[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('changed development permission',
+   "update project_organization_nodes set tools=array_remove(tools,'development') where id=$1",[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('changed grant parent',
+   'update project_organization_scope_grants set parent_id=null where node_id=$1',[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('extra QA grant',
+   'insert into project_organization_scope_grants(node_id,scope_hash,paths,parent_id) values($1,$2,$3,$4)',
+   [fixtureQa.id,scopeHash,['app/milestone-3-tic-tac-toe/'],fixtureRoot.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  console.log('MISSION79_THREE_ORIGINAL_SCOPE_GRANTS_READ_ONLY_NEGATIVES_PASS');
   const authorizationId=randomUUID();
   const explicitFutureCutoff=new Date(Date.now()+4*3600000).toISOString();
   assert.ok(Date.parse(explicitFutureCutoff)>Date.parse(futureOffer.priorCutoff));
   const approveArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
   const approve=()=>first.query(
    'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',approveArgs);
+  // The original preflight was valid; a grant-only change after it must still
+  // be rejected by the locked writer even with its unchanged offered hash.
+  await scopeGrantNegative('grant changed between offer and authorization',
+   "update project_organization_scope_grants set paths=array['app/changed-after-offer/'] where node_id=$1",
+   [delivery.id],originalGrantOffer,approve,/Original owner retest and project identity not eligible/i);
+  console.log('MISSION79_SCOPE_GRANT_OFFER_TO_OWNER_WRITE_DRIFT_REJECTED_PASS');
   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
    [randomUUID(),project,executionRelease]),/owner|auth|original/i);
   await rejected(()=>first.query(
@@ -592,6 +658,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const immutableBeforeBinding=await unmodified();
   const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
   const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
+  await scopeGrantNegative('grant changed between release offer and binding',
+   "update project_organization_scope_grants set paths=array['tests/changed-before-binding/'] where node_id=$1",
+   [delivery.id],'select project_org_retest_claim_release_offer($1,$2,$3)',bind,
+   /Historical mission 79 or approved renewed source changed|Fresh owner-selected future window|Original/i);
+  console.log('MISSION79_SCOPE_GRANT_RELEASE_BINDING_DRIFT_REJECTED_PASS');
   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',
    [randomUUID(),project,executionRelease]),/authenticated|owner|window/);
   await rejected(()=>first.query(
