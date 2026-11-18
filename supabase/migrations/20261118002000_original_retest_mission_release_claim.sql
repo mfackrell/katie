@@ -249,7 +249,8 @@ $fn$;
 -- SHA confirmed outside PostgreSQL against the ALREADY approved owner retest.
 -- This is not another owner window, new approval, model call or mission replay.
 create function public.project_org_bind_retest_claim_release(
- p_owner uuid,p_project uuid,p_release text,p_mission uuid,p_assignment uuid,p_state_hash text
+ p_owner uuid,p_project uuid,p_release text,p_mission uuid,p_assignment uuid,p_state_hash text,
+ p_epoch bigint,p_deployment text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 declare p work_projects;offer jsonb;stamp timestamptz;
 begin
@@ -648,10 +649,11 @@ $fn$;
 -- Exactly one owner-confirmed, future cutoff; no work begins at this stage.
 create function public.project_org_authorize_retest_future_window(
  p_owner uuid,p_project uuid,p_release text,p_mission uuid,p_assignment uuid,p_authorization uuid,
- p_cutoff timestamptz,p_state_hash text
+ p_cutoff timestamptz,p_state_hash text,p_epoch bigint,p_deployment text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 declare p work_projects;a project_provider_execution;m agent_missions;j mission_assignments;
  r project_blocked_management_retest_receipts;offer jsonb;n project_organization_nodes;stamp timestamptz;
+ g project_retest_production_release_gate;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
@@ -659,6 +661,13 @@ begin
  select * into a from project_provider_execution where project_id=p_project for update;
  select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
  select * into j from mission_assignments where mission_id=m.id and role='work' for update;
+ select * into g from project_retest_production_release_gate where project_id=p_project for update;
+ if g.project_id is null or g.state is distinct from 'active'
+  or g.release_sha is distinct from p_release
+  or g.deployment_id is distinct from p_deployment
+  or g.generation is distinct from p_epoch
+  or g.alias_name is distinct from 'katie-mu.vercel.app'
+ then raise exception 'Observed canonical release epoch or deployment changed under owner write lock';end if;
  offer:=project_org_retest_future_window_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'authorize'
   or p_mission is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
@@ -815,10 +824,12 @@ end
 $fn$;
 
 create or replace function public.project_org_bind_retest_claim_release(
- p_owner uuid,p_project uuid,p_release text,p_mission uuid,p_assignment uuid,p_state_hash text
+ p_owner uuid,p_project uuid,p_release text,p_mission uuid,p_assignment uuid,p_state_hash text,
+ p_epoch bigint,p_deployment text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 declare p work_projects;offer jsonb;q project_retest_future_window_receipts;
  r project_blocked_management_retest_receipts;stamp timestamptz;
+ g project_retest_production_release_gate;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
@@ -826,6 +837,13 @@ begin
  perform 1 from project_provider_execution where project_id=p_project for update;
  perform 1 from agent_missions where id=p_mission and project_id=p_project for update;
  perform 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;
+ select * into g from project_retest_production_release_gate where project_id=p_project for update;
+ if g.project_id is null or g.state is distinct from 'active'
+  or g.release_sha is distinct from p_release
+  or g.deployment_id is distinct from p_deployment
+  or g.generation is distinct from p_epoch
+  or g.alias_name is distinct from 'katie-mu.vercel.app'
+ then raise exception 'Observed canonical release epoch or deployment changed under binding lock';end if;
  offer:=project_org_retest_claim_release_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'bind'
   or p_mission is distinct from (offer->>'missionId')::uuid
@@ -875,11 +893,12 @@ create function public.project_org_retest_release_epoch(
  p_project uuid,p_release text
 ) returns jsonb language sql stable security definer set search_path=public,pg_temp as $fn$
  select coalesce((select jsonb_build_object('generation',g.generation,
+  'deploymentId',g.deployment_id,
   'active',g.state='active' and g.release_sha=p_release and
    g.alias_name='katie-mu.vercel.app')
   from project_retest_production_release_gate g
   where g.project_id=p_project),
-  jsonb_build_object('generation',0,'active',false));
+  jsonb_build_object('generation',0,'active',false,'deploymentId',null));
 $fn$;
 
 create function public.project_org_retest_claim_release_authorized_epoch(
@@ -931,24 +950,24 @@ grant execute on function
 revoke all on function
  public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
- public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text),
+ public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
  from public,anon,authenticated,service_role;
 grant execute on function
  public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
- public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text),
+ public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
  to service_role;
 
 revoke all on function
  public.project_org_retest_claim_release_authorized(uuid,text),
  public.project_org_retest_claim_release_offer(uuid,uuid,text),
- public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text)
+ public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)
  from public,anon,authenticated,service_role;
 grant execute on function
  public.project_org_retest_claim_release_authorized(uuid,text),
  public.project_org_retest_claim_release_offer(uuid,uuid,text),
- public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text)
+ public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)
  to service_role;
 commit;
