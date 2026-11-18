@@ -216,7 +216,7 @@ type RefreshedModelRecord = Omit<ReturnType<typeof enrichModelRecord>,
     "supports_text" | "supports_vision" | "supports_web_search" | "supports_image_generation" |
     "supports_video" | "reasoning_tier" | "speed_tier" | "cost_tier">;
 export function retainTrustedPricing(
-  fresh: ReturnType<typeof enrichModelRecord>, prior: TrustedPricingSnapshot | undefined, nowIso: string
+  fresh: RefreshedModelRecord, prior: TrustedPricingSnapshot | undefined, nowIso: string
 ): RefreshedModelRecord {
   const source=prior?.source_metadata?.pricing_verification_source;
   // Trusted model-specific first-party source only; never accept URL lookalikes.
