@@ -102,6 +102,24 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(offer.maxMissions,96);assert.equal(offer.tokenAllowance,600000);
   const call=[owner,project,repairedRelease,source,windowId,offer.cutoff,offer.stateHash];
   const commitOnce=()=>first.query('select project_org_resume_blocked_management_once($1,$2,$3,$4,$5,$6,$7) r',call);
+  const raceNewOwnerRpc=async(label,sql,args)=>{
+   const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const contender=second.query(sql,args).then(r=>({ok:true,result:r.rows[0].r}),error=>({ok:false,error}));
+   let waiting=false;
+   for(let i=0;i<30;i++){
+    const locks=await observer.query('select locktype,granted from pg_locks where pid=$1 and granted=false',[pid]);
+    if(locks.rows.some(l=>l.locktype==='advisory'&&!l.granted)){waiting=true;break;}
+    const done=await Promise.race([contender.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),50))]);
+    if(done)throw Error(label+' competing writer returned before first transaction committed');
+   }
+   assert.equal(waiting,true,label+' requires real two-client advisory-lock contention');
+   await first.query('commit');
+   const rival=await contender;
+   assert.equal(rival.ok,false,label+' competing RPC must reject a consumed receipt');
+   assert.match(rival.error.message,/window|owner|authorization|retest|state|already|recorded|bound|release|mission/i);
+   await first.query('begin');
+   console.log('MISSION79_NEW_'+label+'_TWO_CONNECTION_RACE_PASS: two real writer RPCs, one immutable receipt and rejected competing caller');
+  };
   const rejected=async(action,regex)=>{
    await first.query('savepoint negative');
    try{await assert.rejects(action(),regex);}
@@ -249,6 +267,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role service_role');
   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
   assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,'blocked');
+  // Only the disposable fixture commits the synthetic 79th management
+  // mission before concurrent owner writes; production is never touched.
+  await first.query('commit');
+  assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,79);
+  await first.query('begin');
 
   const futureOffer=(await first.query(
    'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
@@ -278,6 +301,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(ownerWindow.missionStatus,'blocked');assert.equal(ownerWindow.authorizationId,authorizationId);
   assert.equal(Date.parse(ownerWindow.cutoff),Date.parse(explicitFutureCutoff));
   assert.equal(ownerWindow.historicalMissions,79);
+  await raceNewOwnerRpc('OWNER_WINDOW',
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8) r',approveArgs);
+  assert.equal((await observer.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[project])).rows[0].n,1);
+  assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_future_window_owner_authorized'",[project])).rows[0].n,1);
   assert.equal((await first.query('select deadline,max_missions,token_allowance from work_projects where id=$1',
    [project])).rows[0].max_missions,96);
   assert.equal((await first.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',
@@ -320,6 +347,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role service_role');
   const receipt=(await bind()).rows[0].r;
   assert.equal(receipt.stage,'bound');assert.equal(receipt.releaseSha,executionRelease);
+  await raceNewOwnerRpc('RELEASE_BIND',
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
+  assert.equal((await observer.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,1);
+  assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_new_window_release_bound'",[project])).rows[0].n,1);
   const resumed=(await first.query('select status,progress_since,detail from work_projects where id=$1',[project])).rows[0];
   assert.equal(resumed.status,'running','One guarded bound-release action must re-admit only the exact watchdog state');
   assert.match(resumed.detail,/mission79 admitted/);
@@ -443,8 +474,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  }finally{
   await first.query('rollback');
  }
- assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,78,
-  'Committed synthetic failure must remain exactly 78 after scheduler rollback');
+ assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,79,
+  'Exactly the saved 79th synthetic management mission survives; worker claim remains rolled back');
  assert.equal((await observer.query('select count(*)::int n from project_blocked_management_retest_receipts where project_id=$1',[project])).rows[0].n,1,
   'Exactly one durable recovery receipt after two actual competing owner RPCs');
  assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='blocked_management_retest_authorized'",[project])).rows[0].n,1,
