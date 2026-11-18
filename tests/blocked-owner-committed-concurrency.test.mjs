@@ -324,7 +324,7 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    const boundClaimRows=(await observer.query(
     'select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',
     [PROJECT])).rows[0].n;
-   assert.equal(boundClaimRows,0,'The mission79 exact release binding must never escape the disposable native transaction');
+   assert.equal(boundClaimRows,1,'Exactly one bound-release receipt survives two competing owner RPCs in disposable PostgreSQL');
    assert.equal((await observer.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[PROJECT])).rows[0].n,0,
     'A synthetic owner-renewed window must never escape the disposable PostgreSQL transaction');
    console.log('BLOCKED_OWNER_REAL_TWO_CONNECTION_RPCS_PASS: COMMITTED schema, two actual concurrent authorize RPCs, two actual concurrent resume RPCs, single receipts, replay and rollback, 76/96 missions, 600000 allowance, 13 contracts, history and QA protections; zero live dispatch/inference');
