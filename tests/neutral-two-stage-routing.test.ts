@@ -45,7 +45,7 @@ for (const mode of ['best_value','best_answer'] as const) {
     const providers = Object.entries(models).map(([name, ids]) => ({name, listModels:async()=>[...ids], generate:async(params) => {
       calls.push(params.user);
       if (params.user.includes('CURRENT_USER_MESSAGE:')) return {text:JSON.stringify(understanding(fixture.message, fixture.intent, fixture.complexity)),provider:name,model:params.modelId!};
-      const payload=JSON.parse(params.user.slice(params.user.indexOf('\n\n')+2));
+      const payload=JSON.parse(params.user.slice(params.user.lastIndexOf('\n\n')+2));
       assert.equal(payload.routing_mode, mode);
       assert.equal(params.user.includes('BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:'),mode==='best_value');
       assert.equal(payload.understanding.intent, fixture.intent);
@@ -117,7 +117,7 @@ for(const video of [false,true]) test(`${video?'video':'image'} compatibility co
   const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
   const providers=Object.entries(models).map(([name,ids])=>({name,listModels:async()=>[...ids],generate:async p=>{
     if(p.user.includes('CURRENT_USER_MESSAGE:'))return {text:JSON.stringify(understanding('Describe this')),provider:name,model:p.modelId!};
-    const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
+    const payload=JSON.parse(p.user.slice(p.user.lastIndexOf('\n\n')+2));
     assert.ok(payload.candidates.every((c:{capabilities:{vision:boolean;video:boolean}})=>video?c.capabilities.video:c.capabilities.vision));
     if(video)assert.deepEqual(payload.candidates.map((c:{provider:string})=>c.provider),['google']);
     return {text:'{"selected":{"provider":"google","model":"gemini-2.5-flash"},"selection_justification":"Eligible multimedia capability meets the observed task requirements.","alternatives":[{"provider":"openai","model":"gpt-5.4","why_not_selected":"Alternative can handle images but is less economical for the current mocked task."}],"quality_qualification":{"required_quality":"Maintain the requested content, continuity, and task-specific rigor.","selected_fit":"Selected candidate can meet the fixture quality threshold using the reported capabilities.","evidence_basis_kind":"reasoned_inference","evidence_basis":"Offline fixture has no independently verified comparative outcomes; capabilities inform a provisional choice.","comparative_uncertainty":"Comparative response quality is unknown without direct evidence.","cost_after_qualification":"Among eligible candidates judged qualified for the fixture, use the lower expected cost only after meeting quality."}}',provider:name,model:p.modelId!};
@@ -177,7 +177,7 @@ for (const field of ['quality_requirements','complexity','response_purpose','pro
         return {text:JSON.stringify(analysis),provider:'openai',model:p.modelId!};
       }
       selections++;
-      const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
+      const payload=JSON.parse(p.user.slice(p.user.lastIndexOf('\n\n')+2));
       assert.equal(analyses,2);
       assert.equal(payload.understanding.complexity,'low');
       assert.equal(payload.understanding.decisionEvidence.primary_objective,understanding('Hi').primary_objective);
@@ -257,7 +257,7 @@ test('user objective, constraints and model-specific outcome evidence reach the 
       provider:name,model:p.modelId!,
     };
     selections++;
-    const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
+    const payload=JSON.parse(p.user.slice(p.user.lastIndexOf('\n\n')+2));
     assert.equal(payload.understanding.decisionEvidence.primary_objective,original);
     assert.match(payload.understanding.decisionEvidence.response_constraints,/policy and safety/);
     assert.equal(payload.candidates.find((c:{provider:string;model:string;comparative_quality:{feedback?:{positive:number}}})=>c.provider==='grok'&&c.model==='grok-4.3')
