@@ -66,6 +66,7 @@ test('expired original mission79 requires separately authenticated, owner-select
  assert.equal(writes.length,1);
  assert.deepEqual(JSON.parse(JSON.stringify(writes[0])),{
   p_owner:ownerId,p_project:projectId,p_release:releaseSha,
+  p_mission:missionId,p_assignment:assignmentId,
   p_authorization:approvalId,p_cutoff:futureCutoff,p_state_hash:stateHash,
  });
  assert.equal((await (await read()).json()).mission79FutureWindow.stage,'authorized');
@@ -79,4 +80,88 @@ test('first-party owner panel has no default deadline and never binds release or
  assert.match(component,/authorizationId=crypto.randomUUID\(\)/);
  assert.match(component,/authorize_mission79_future_window/);
  assert.doesNotMatch(component,/project_org_bind_retest_claim_release|claim_mission_work|project_org_decide/);
+});
+
+test('actual owner bearer, wrong identity and cross-origin boundary remain enforced',async t=>{
+ const savedEnv={VERCEL_ENV:process.env.VERCEL_ENV,NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID};
+ const oldFetch=globalThis.fetch;
+ process.env.VERCEL_ENV='production';
+ process.env.NEXT_PUBLIC_SUPABASE_URL='https://auth.example.test';
+ process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='test-public-anon';
+ process.env.KATIE_OWNER_AUTH_USER_ID=ownerId;
+ let identity=ownerId,requests=0;
+ globalThis.fetch=async(url,opts)=>{
+  requests++;
+  assert.equal(url,'https://auth.example.test/auth/v1/user');
+  assert.ok(opts?.headers?.Authorization?.startsWith('Bearer '));
+  return new Response(JSON.stringify({id:identity}),{status:200,headers:{'Content-Type':'application/json'}});
+ };
+ t.after(()=>{globalThis.fetch=oldFetch;for(const [key,v] of Object.entries(savedEnv)){
+  if(v===undefined)delete process.env[key];else process.env[key]=v;
+ }});
+ const {verifiedProjectOwnerSession}=modules()('@/lib/projects/owner-authorization');
+ const make=(origin,bearer)=>new Request('https://katie.example.test/api/projects/organization',{
+  method:'POST',headers:{origin,Authorization:bearer??''}
+ });
+ assert.equal(await verifiedProjectOwnerSession(make('https://attacker.example.test','Bearer owner-token')),false);
+ assert.equal(requests,0,'CSRF rejection must occur before external auth lookup');
+ assert.equal(await verifiedProjectOwnerSession(make('https://katie.example.test','')),false);
+ assert.equal(await verifiedProjectOwnerSession(make('https://katie.example.test','Bearer invalid!token')),false);
+ assert.equal(requests,0,'Malformed tokens must not reach identity provider');
+ identity='22222222-2222-4222-8222-222222222222';
+ assert.equal(await verifiedProjectOwnerSession(make('https://katie.example.test','Bearer other-token')),false);
+ assert.equal(requests,1);
+ identity=ownerId;
+ assert.equal(await verifiedProjectOwnerSession(make('https://katie.example.test','Bearer original-owner-token')),true);
+ assert.equal(requests,2);
+ process.env.VERCEL_ENV='preview';
+ assert.equal(await verifiedProjectOwnerSession(make('https://katie.example.test','Bearer original-owner-token')),false);
+ assert.equal(requests,2);
+});
+
+test('exact production release binding is a separate owner action after recorded future window',async t=>{
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+  KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID},oldNow=Date.now;
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,KATIE_OWNER_AUTH_USER_ID:ownerId});
+ Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
+ t.after(()=>{Date.now=oldNow;for(const [k,v] of Object.entries(env)){
+  if(v==null)delete process.env[k];else process.env[k]=v;
+ }});
+ let owner=true;const calls=[],bindHash='f'.repeat(64);
+ const record={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
+  sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
+  scopeHash,priorCutoff,cutoff:futureCutoff,authorizationId:approvalId,
+  historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
+  stateHash,stage:'authorized',authorizedAt:'2026-11-18T15:00:00Z'};
+ const mod=modules({
+  '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  '@/lib/missions/store':{rpc:async(name,args)=>{
+   calls.push({name,args});
+   if(name==='project_org_retest_future_window_offer')return record;
+   if(name==='project_org_retest_claim_release_offer')
+    return {stage:'bind',projectId,releaseSha,missionId,assignmentId,cutoff:futureCutoff,stateHash:bindHash};
+   if(name==='project_org_bind_retest_claim_release')return {
+    stage:'bound',projectId,releaseSha,missionId,assignmentId,scopeHash,cutoff:futureCutoff,
+    historicalMissions:79,maxMissions:96,tokenAllowance:600000,boundAt:'2026-11-18T16:00:01Z',existing:false};
+   throw Error('Unexpected RPC '+name);
+  }},
+  '@/lib/data/persistence-store':{getMessages:async()=>[]},
+ });
+ const {POST}=mod('@/app/api/projects/organization/route');
+ const request=data=>new Request('https://katie.example.test/api/projects/organization',
+  {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+ const payload={trialAction:'bind_mission79_release',projectId,releaseSha,missionId,assignmentId,stateHash:bindHash};
+ owner=false;assert.equal((await POST(request(payload))).status,403);owner=true;
+ assert.equal((await POST(request({...payload,releaseSha:'c'.repeat(40)}))).status,409);
+ assert.equal((await POST(request({...payload,stateHash:'0'.repeat(64)}))).status,409);
+ process.env.VERCEL_ENV='preview';
+ assert.equal((await POST(request(payload))).status,409);
+ process.env.VERCEL_ENV='production';
+ const result=await POST(request(payload));assert.equal(result.status,200);
+ const binds=calls.filter(x=>x.name==='project_org_bind_retest_claim_release');
+ assert.equal(binds.length,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(binds[0].args)),
+  {p_owner:ownerId,p_project:projectId,p_release:releaseSha,
+   p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash});
 });

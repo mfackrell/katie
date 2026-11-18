@@ -34,6 +34,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: npm ci
+      - name: Install isolated PostgreSQL fixture server
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Independent native and authenticated owner tests
+        id: native
+        continue-on-error: true
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+          KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          KATIE_TEST_PG_TCP: "1"
+          CI: "1"
+        run: |
+          set -o pipefail
+          node --test tests/blocked-owner-committed-concurrency.test.mjs 2>&1 | tee mission79-native-evidence.log
+          node --test tests/mission79-future-window-runtime.test.mjs 2>&1 | tee mission79-owner-auth-evidence.log
       - name: Pin reviewed source
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
@@ -51,6 +73,8 @@ jobs:
           prompt: |
             Independent read-only QA and security reviewer, NOT implementing agent.
             Review exact PR #1111 checkout, its entire source diff and tests.
+            Read mission79-native-evidence.log and mission79-owner-auth-evidence.log
+            from this exact checkout. If either did not pass, return changes_requested.
             Don't edit, deploy, invoke any provider, spend, or claim a worker.
             Original project id fe9d2658-41e3-44c1-ae8e-a0cba98371fe.
             Mission 79 must be preserved, not duplicated; original approval
@@ -75,9 +99,11 @@ jobs:
       - name: Validate exact-source independent verdict
         if: always()
         env:
+          NATIVE_SUCCESS: ${{ steps.native.outcome }}
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          test "$NATIVE_SUCCESS" = success
           test "$(cat reviewed-head.txt)" = "$EXPECTED_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           expected_tree="$(cat reviewed-tree.txt)"
@@ -91,4 +117,6 @@ jobs:
             mission79-independent-review.json
             reviewed-head.txt
             reviewed-tree.txt
+            mission79-native-evidence.log
+            mission79-owner-auth-evidence.log
           if-no-files-found: warn

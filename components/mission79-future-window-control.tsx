@@ -12,6 +12,7 @@ export function Mission79FutureWindowControl({
  const [error,setError]=useState<string|null>(null);
  const [confirmed,setConfirmed]=useState<{authorizationId:string;cutoff:string;authorizedAt:string}|null>(null);
  const submitting=useRef(false);
+ const [boundAt,setBoundAt]=useState<string|null>(null);
 
  async function authorize(){
   if(submitting.current||pending||confirmed||initial.stage!=='authorize'||!cutoffInput)return;
@@ -54,6 +55,32 @@ export function Mission79FutureWindowControl({
   }catch(e){setError(e instanceof Error?e.message:"Owner authorization could not be confirmed.");}
   finally{setPending(false);submitting.current=false;}
  }
+ async function bindReleased(){
+  if(submitting.current||pending||initial.stage!=='authorized'||boundAt)return;
+  submitting.current=true;setPending(true);setError(null);
+  try{
+   const bearer=await ownerSessionBearer();
+   if(!bearer)throw Error('Authenticated Katie owner session required to resume the saved mission');
+   const response=await fetch('/api/projects/organization',{
+    method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},
+    body:JSON.stringify({trialAction:'bind_mission79_release',projectId:initial.projectId,
+     releaseSha:initial.releaseSha,missionId:initial.missionId,
+     assignmentId:initial.assignmentId,stateHash:initial.stateHash})
+   });
+   const result=await response.json();
+   if(!response.ok)throw Error(result.error??'Exact released mission cannot be rebound');
+   if(result.stage!=='bound'||result.projectId!==initial.projectId
+    ||result.missionId!==initial.missionId||result.assignmentId!==initial.assignmentId
+    ||result.releaseSha!==initial.releaseSha||result.scopeHash!==initial.scopeHash
+    ||Date.parse(result.cutoff)!==Date.parse(initial.cutoff??'')
+    ||result.historicalMissions!==79||result.maxMissions!==96||result.tokenAllowance!==600000
+    ||typeof result.boundAt!=='string'||!Number.isFinite(Date.parse(result.boundAt)))
+    throw Error('Bound release receipt could not be independently verified; do not retry automatically.');
+   setBoundAt(result.boundAt);
+   onRefresh();
+  }catch(e){setError(e instanceof Error?e.message:'Release binding could not be verified');}
+  finally{setPending(false);submitting.current=false;}
+ }
  const approved=initial.stage!=="authorize"||!!confirmed;
  const effectiveCutoff=confirmed?.cutoff??initial.cutoff;
  return <aside className="mx-3 my-3 rounded-xl border border-white/20 p-4" aria-label="Original mission 79 future window">
@@ -79,6 +106,12 @@ export function Mission79FutureWindowControl({
       disabled={pending||!cutoffInput} onClick={()=>void authorize()}>
       {pending?"Recording owner authorization…":"Approve new execution window"}</button>
     </div>}
+  {initial.stage==='authorized'&&!boundAt&&<button type="button"
+   className="mt-3 min-h-11 rounded border px-3 py-2 font-semibold"
+   onClick={()=>void bindReleased()} disabled={pending}>
+   {pending?'Verifying exact released authority…':'Resume one owner-approved management decision'}</button>}
+  {(initial.stage==='bound'||boundAt)&&<p role="status" className="mt-2 text-sm">
+   Exact release binding is recorded. The existing worker scheduler controls the original assignment.</p>}
   <button type="button" className="mt-3 min-h-11 rounded border px-3 py-2 text-sm"
    onClick={onRefresh} disabled={pending}>Refresh saved project status</button>
   {error&&<p role="alert" className="mt-2 text-sm">{error}</p>}

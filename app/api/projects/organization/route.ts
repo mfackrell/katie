@@ -68,7 +68,13 @@ const futureMission79WindowInput=z.object({
  authorizationId:z.string().uuid(),cutoff:z.string().datetime({offset:true}),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput]);
+const bindMission79ReleaseInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('bind_mission79_release'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ missionId:z.literal(MISSION79_ID),assignmentId:z.literal(MISSION79_ASSIGNMENT),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
@@ -107,6 +113,28 @@ export async function POST(request:NextRequest){
    p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
    p_authorization:p.authorizationId,p_cutoff:p.cutoff,
    p_state_hash:p.stateHash,
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
+ if('trialAction' in p&&p.trialAction==='bind_mission79_release'){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Release binding requires the exact current deployed production SHA'},{status:409});
+  const owner=await mission79FutureWindowOffer(p.projectId);
+  if(owner.stage!=='authorized'||owner.releaseSha!==p.releaseSha
+    ||owner.missionId!==p.missionId||owner.assignmentId!==p.assignmentId
+    ||!owner.cutoff||Date.parse(owner.cutoff)<=Date.now()+300000)
+   return NextResponse.json({error:'An explicit unexpired original-owner execution window is required'},{status:409});
+  const offer=await rpc<{stage:string;projectId:string;releaseSha:string;missionId:string;assignmentId:string;cutoff:string;stateHash:string}>('project_org_retest_claim_release_offer',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha
+  });
+  if(!offer||offer.stage!=='bind'||offer.projectId!==p.projectId
+   ||offer.releaseSha!==p.releaseSha||offer.missionId!==p.missionId
+   ||offer.assignmentId!==p.assignmentId||offer.stateHash!==p.stateHash
+   ||Date.parse(offer.cutoff)!==Date.parse(owner.cutoff)
+   ||Date.parse(offer.cutoff)<=Date.now()+300000)
+   return NextResponse.json({error:'Exact source-bound release state changed; no worker was restarted'},{status:409});
+  return NextResponse.json(await rpc('project_org_bind_retest_claim_release',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
+   p_mission:p.missionId,p_assignment:p.assignmentId,p_state_hash:p.stateHash
   }),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='retest_blocked_management'){
@@ -207,7 +235,7 @@ export async function POST(request:NextRequest){
  }
  await rpc('project_org_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_objective_hash:p.objectiveHash,p_ceiling:p.ceilingMicrousd,p_per_call:p.perCallMicrousd,p_autonomous:p.autonomousExecution});
  return NextResponse.json({authorized:true});
- }catch{return NextResponse.json({error:'trialAction' in p&&['renew_paused_window','resume_management','retest_blocked_management','authorize_mission79_future_window'].includes(p.trialAction)
+ }catch{return NextResponse.json({error:'trialAction' in p&&['renew_paused_window','resume_management','retest_blocked_management','authorize_mission79_future_window','bind_mission79_release'].includes(p.trialAction)
   ?'Recovery state changed or the request could not be confirmed. Refresh recovery status before continuing.'
   :'Owner binding, project objective or execution authority changed'},{status:409});}
 }
