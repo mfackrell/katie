@@ -243,6 +243,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const isolatedNegativeClaim=async(release,observedGeneration)=>{
    await first.query('savepoint negative_release_claim');
    try{
+    if(observedGeneration==='legacy')
+     return (await first.query('select claim_mission_work_release($1) r',[release])).rows[0].r;
     const generation=observedGeneration??(await releaseEpoch(release)).generation;
     return (await first.query('select claim_mission_work_release_epoch($1,$2) r',
      [release,generation])).rows[0].r;
@@ -503,7 +505,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const staleEpochClaim=await isolatedNegativeClaim(executionRelease,activeEpoch.generation);
   assert.notEqual(staleEpochClaim?.job?.id,originalJob.id,
    'Old pre-promotion epoch must not claim the original job after reopening');
-  const legacyClaim=await isolatedNegativeClaim(executionRelease,-1);
+  const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
   assert.notEqual(legacyClaim?.job?.id,originalJob.id);
   const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2) r',
    [executionRelease,reopenedEpoch.generation])).rows[0].r;
