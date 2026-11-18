@@ -2098,6 +2098,14 @@ export function ChatPanel({
             ? serverMessage
             : `Server request failed (HTTP ${effectiveResponse.status}${effectiveResponse.statusText ? ` ${effectiveResponse.statusText}` : ""}): ${serverMessage}`;
 
+        // A proxy timeout or 5xx does not prove the accepted workflow
+        // terminated. Use the original request ID and the existing recovery
+        // path instead of manufacturing a failed assistant response.
+        if (effectiveResponse.status === 408 || effectiveResponse.status >= 500) {
+          requestStage = "reading response stream";
+          throw new Error(httpCause);
+        }
+
         const failureMessage: Message = {
           id: crypto.randomUUID(),
           chatId,
