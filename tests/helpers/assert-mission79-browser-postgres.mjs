@@ -77,6 +77,18 @@ export async function assertMission79BrowserPostgres(first,{
   ';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.Mission79FutureWindowControl,{initial:'+
   JSON.stringify(initial)+',onRefresh:()=>window.refreshes++}));';
  let baseUrl='',posts=0,authRequests=0;
+ const postResults=[];
+ const waitForSuccess=async message=>{
+  try{await page.getByText(message).waitFor({timeout:15000});}
+  catch(error){
+   const alerts=await page.locator('[role="alert"]').allTextContents().catch(()=>[]);
+   const bodyText=await page.locator('body').innerText().catch(()=>'');
+   throw new Error('MISSION79_BROWSER_POSTGRES_DIAGNOSTIC '+JSON.stringify({
+    stage,posts,authRequests,rpcCalls,postResults,alerts,
+    browserErrors:errors,bodyText:bodyText.slice(0,1200),
+   })+'; '+(error instanceof Error?error.message:String(error)));
+  }
+ };
  const server=createServer(async(req,res)=>{
   const fail=(status,body)=>{res.statusCode=status;res.setHeader('content-type','application/json');res.end(JSON.stringify(body));};
   try{
@@ -100,8 +112,10 @@ export async function assertMission79BrowserPostgres(first,{
      body:Buffer.concat(chunks),
     });
     const result=await POST(request);
+    const responseText=await result.text();
+    postResults.push({status:result.status,response:responseText.slice(0,800)});
     res.statusCode=result.status;res.setHeader('content-type','application/json');
-    res.end(await result.text());
+    res.end(responseText);
     return;
    }
    fail(404,{error:'unknown test route'});
@@ -135,7 +149,7 @@ export async function assertMission79BrowserPostgres(first,{
    assert.equal(await cutoff.inputValue(),'','UI must never preselect new authority');
    await cutoff.fill(selectedLocal);
    await page.getByRole('button',{name:'Approve new execution window'}).click();
-   await page.getByText('Owner window recorded.').waitFor({timeout:15000});
+   await waitForSuccess('Owner window recorded.');
    const recorded=(await first.query('select owner_id,cutoff from project_retest_future_window_receipts where project_id=$1',
     [project])).rows[0];
    assert.equal(recorded.owner_id,owner);
@@ -146,7 +160,7 @@ export async function assertMission79BrowserPostgres(first,{
     [project])).rows[0].n,beforeBind,'Browser owner cutoff must not bind release');
   }else{
    await page.getByRole('button',{name:'Resume one owner-approved management decision'}).click();
-   await page.getByText('Exact release binding is recorded.').waitFor({timeout:15000});
+   await waitForSuccess('Exact release binding is recorded.');
    const recorded=(await first.query('select owner_id,bound_release_sha,assignment_id from project_retest_claim_release_receipts where project_id=$1',
     [project])).rows[0];
    assert.equal(recorded.owner_id,owner);
