@@ -372,6 +372,38 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(futureOffer.missionId,scheduled.missionId);
   assert.equal(futureOffer.assignmentId,originalJob.id);
   assert.equal(futureOffer.historicalMissions,79);
+  // Neither an altered source lineage nor a QA supervisor reporting into
+  // delivery may be silently re-baselined by the fresh owner window.
+  await first.query('savepoint original_lineage_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update agent_missions set project_evidence=jsonb_set(project_evidence,'{providerContinuationRelease}',to_jsonb($2::text)) where id=$1",
+    [source,'f'.repeat(40)]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
+    offerArgs),/Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_lineage_negative');
+   await first.query('release savepoint original_lineage_negative');
+  }
+  await first.query('savepoint original_qa_topology_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update project_organization_nodes set parent_id=(select id from project_organization_nodes where project_id=$1 and area='delivery_management' limit 1) where id=(select id from project_organization_nodes where project_id=$1 and area='qa_planning' limit 1)",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
+    offerArgs),/Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_qa_topology_negative');
+   await first.query('release savepoint original_qa_topology_negative');
+  }
+  assert.equal((await first.query('select project_org_retest_original_owner_lineage($1) verified',[project])).rows[0].verified,true,
+   'Untampered original source and QA hierarchy must remain valid');
+  console.log('MISSION79_HISTORICAL_SOURCE_AND_QA_TOPOLOGY_NEGATIVES_PASS');
   const authorizationId=randomUUID();
   const explicitFutureCutoff=new Date(Date.now()+4*3600000).toISOString();
   assert.ok(Date.parse(explicitFutureCutoff)>Date.parse(futureOffer.priorCutoff));
