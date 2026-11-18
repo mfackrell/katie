@@ -205,6 +205,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(offer.stage,'bind');assert.equal(offer.missionId,scheduled.missionId);
   assert.equal(offer.assignmentId,originalJob.id);assert.equal(offer.historicalMissions,79);
   assert.equal(offer.maxMissions,96);assert.equal(offer.tokenAllowance,600000);
+  const immutableBeforeBinding=await unmodified();
   const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,offer.stateHash];
   const bind=()=>first.query(
    'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
@@ -225,6 +226,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.ok(new Date(resumed.progress_since).getTime()>Date.now()-60000,
    'Watchdog interval may renew only on actual auditable release binding');
   assert.equal(receipt.existing,false);assert.equal(receipt.historicalMissions,79);
+  assert.deepEqual(await unmodified(),immutableBeforeBinding,
+   'Source-bound release admission must retain every prior mission, assignment, decision, grant and package unchanged');
   await rejected(bind,/bound|changed|release/i);
   assert.equal((await first.query(
    'select project_org_retest_claim_release_authorized($1,$2) a',
