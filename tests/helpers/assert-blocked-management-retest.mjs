@@ -196,7 +196,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query(`insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb||jsonb_build_object('id',$2::uuid,'mission_id',$3::uuid))).*`,[JSON.stringify(srcJob),exactJob79,exactMission79]);
   const oldBindings=(await first.query('select to_jsonb(b) row from project_organization_assignments b where b.assignment_id=$1',[generatedJob])).rows.map(x=>x.row);
   for(const binding of oldBindings){
-   await first.query('insert into project_organization_assignments select (jsonb_populate_record(null::project_organization_assignments,$1::jsonb||jsonb_build_object('assignment_id',$2::uuid))).*',[JSON.stringify(binding),exactJob79]);
+   await first.query(`insert into project_organization_assignments select (jsonb_populate_record(null::project_organization_assignments,$1::jsonb||jsonb_build_object('assignment_id',$2::uuid))).*`,[JSON.stringify(binding),exactJob79]);
   }
   await first.query('delete from project_organization_assignments where assignment_id=$1',[generatedJob]);
   await first.query('delete from mission_assignments where id=$1',[generatedJob]);
