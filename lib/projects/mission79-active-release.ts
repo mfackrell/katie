@@ -7,9 +7,13 @@ export async function verifyMission79ActiveProductionSha(
  expectedSha:string,
  fetchVersion:typeof fetch=fetch
 ):Promise<boolean>{
+ // The alias must serve this exact Vercel deployment, not merely another
+ // deployment with the same commit SHA. Missing deployment identity fails closed.
+ const deploymentId=process.env.VERCEL_DEPLOYMENT_ID;
  if(process.env.VERCEL_ENV!=='production'
   ||!/^[a-f0-9]{40}$/.test(expectedSha)
-  ||process.env.VERCEL_GIT_COMMIT_SHA!==expectedSha)return false;
+  ||process.env.VERCEL_GIT_COMMIT_SHA!==expectedSha
+  ||!deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(deploymentId))return false;
  try{
   const response=await fetchVersion(ALIAS_VERSION_URL+'?mission79_verify='+encodeURIComponent(expectedSha),{
    method:'GET',cache:'no-store',redirect:'error',
@@ -20,6 +24,7 @@ export async function verifyMission79ActiveProductionSha(
    return false;
   const body:unknown=await response.json();
   return typeof body==='object'&&body!==null&&
-   'version' in body&&(body as {version:unknown}).version===expectedSha;
+   'version' in body&&(body as {version:unknown}).version===expectedSha&&
+   'deploymentId' in body&&(body as {deploymentId:unknown}).deploymentId===deploymentId;
  }catch{return false;}
 }
