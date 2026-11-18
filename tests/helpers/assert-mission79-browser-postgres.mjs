@@ -86,7 +86,14 @@ export async function assertMission79BrowserPostgres(first,{
   };
   const entry=queries[name];
   if(!entry)throw Error('Browser integration attempted unexpected database call '+name);
-  return (await first.query(entry[0],entry[1])).rows[0].r;
+  try{return (await first.query(entry[0],entry[1])).rows[0].r;}
+  catch(error){
+   // Native test-only diagnostic. The real owner route deliberately retains
+   // its generic 409 and never exposes database internals to the browser.
+   console.error('MISSION79_NATIVE_OWNER_SQL_REJECTION '+name+': '+
+    (error instanceof Error?error.message:String(error)));
+   throw error;
+  }
  };
  // Record whether the real owner verifier attempts its local auth fetch,
  // without logging bearer values or changing its security decision.
