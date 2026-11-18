@@ -163,9 +163,15 @@ export async function assertMission79BrowserPostgres(first,{
    NEXT_PUBLIC_SUPABASE_URL:baseUrl,
    NEXT_PUBLIC_SUPABASE_ANON_KEY:'native-owner-qa-key',
   });
+  // @sparticuz/chromium's serverless flags include --disable-web-security;
+  // that alters browser Origin semantics and invalidates this CSRF acceptance
+  // test. Keep required serverless flags but restore real first-party security.
+  const originSafeArgs=bundledChromium.args.filter(arg=>
+   arg!=='--disable-web-security'&&arg!=='--allow-running-insecure-content');
+  assert.ok(!originSafeArgs.includes('--disable-web-security'));
   browser=await chromium.launch({
    executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),
-   args:bundledChromium.args,headless:true,
+   args:originSafeArgs,headless:true,
   });
   context=await browser.newContext({timezoneId:'UTC'});
   page=await context.newPage();
