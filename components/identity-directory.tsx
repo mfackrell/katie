@@ -32,6 +32,14 @@ function IdentityProfile({ actor }: { actor: Actor }) {
         >
           Calibrate memory
         </Link>
+        {!actor.managedAgentId && actor.actorKind !== "executive" && (
+          <Link
+            className="inline-flex min-h-11 items-center rounded-lg border border-emerald-400/40 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-400/10"
+            href={`/specialists/${encodeURIComponent(`persona:${actor.id}`)}#operating-instruction-modules`}
+          >
+            Operating modules
+          </Link>
+        )}
       </div>
       <details className="mt-2">
       <summary className="cursor-pointer text-sm text-zinc-400">Manage actor profile · 

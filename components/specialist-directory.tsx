@@ -110,11 +110,13 @@ function AgentControls({
   actors,
   operatingModules,
   onChanged,
+  detail = false,
 }: {
   card: Card;
   actors: Actor[];
   operatingModules: OperatingInstructionChoice[];
   onChanged: () => void;
+  detail?: boolean;
 }) {
   const [instructions, setInstructions] = useState(
     card.managed?.config.instructions ?? card.actor.purpose,
@@ -216,7 +218,44 @@ function AgentControls({
     }
   }
   return (
-    <details className="mt-4 rounded-lg border border-white/15 p-3">
+    <>
+      {!card.managed && (detail ? (
+        <section id="operating-instruction-modules" className="mt-4 rounded-lg border border-emerald-400/30 p-4 text-sm">
+          <h3 className="font-semibold">Operating instruction modules</h3>
+          <p className="mt-1 text-xs text-zinc-400">Configure reusable instructions for this actor; its personality stays unchanged.</p>
+          <label className="mt-3 block">
+            Instruction assembly mode
+            <select className={field} value={instructionMode}
+              onChange={event => setInstructionMode(event.target.value as "legacy" | "modular")}
+              disabled={busy}>
+              <option value="legacy">Existing shared operating instructions</option>
+              <option value="modular">Universal foundation + assigned modules</option>
+            </select>
+          </label>
+          {instructionMode === "modular" && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-zinc-400">Assigned reusable modules (optional):</p>
+              {operatingModules.map(module => (
+                <label key={module.id} className="flex items-start gap-2">
+                  <input type="checkbox" checked={moduleIds.includes(module.id)} disabled={busy}
+                    onChange={event => setModuleIds(previous =>
+                      event.target.checked ? [...previous, module.id] : previous.filter(id => id !== module.id))}/>
+                  <span>{module.title}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <button type="button" className={button+" mt-3"} disabled={busy}
+            onClick={() => void saveModules()}>Save operating modules</button>
+          {error && <p role="alert" className="mt-2 text-red-300">{error}</p>}
+          {notice && <p role="status" className="mt-2 text-emerald-300">{notice}</p>}
+        </section>
+      ) : (
+        <Link className={button+" mt-3"} href={`/specialists/${encodeURIComponent(`persona:${card.actor.id}`)}#operating-instruction-modules`}>
+          Configure operating modules
+        </Link>
+      ))}
+      <details className="mt-4 rounded-lg border border-white/15 p-3">
       <summary className="cursor-pointer text-sm">
         System instructions & agent settings
       </summary>
@@ -282,39 +321,8 @@ function AgentControls({
           </p>
         )}
       </form>
-      {!card.managed && (
-        <section className="mt-5 border-t border-white/10 pt-4 text-sm">
-          <h4 className="font-medium">Operating instruction modules</h4>
-          <p className="mt-1 text-xs text-zinc-400">
-            Configure reusable operating instructions for this actor; its personality stays unchanged.
-          </p>
-          <label className="mt-3 block">
-            Instruction assembly mode
-            <select className={field} value={instructionMode}
-              onChange={event => setInstructionMode(event.target.value as "legacy" | "modular")}
-              disabled={busy}>
-              <option value="legacy">Existing shared operating instructions</option>
-              <option value="modular">Universal foundation + assigned modules</option>
-            </select>
-          </label>
-          {instructionMode === "modular" && (
-            <div className="mt-3 space-y-2">
-              <p className="text-xs text-zinc-400">Assigned reusable modules (optional):</p>
-              {operatingModules.map(module => (
-                <label key={module.id} className="flex items-start gap-2">
-                  <input type="checkbox" checked={moduleIds.includes(module.id)} disabled={busy}
-                    onChange={event => setModuleIds(previous =>
-                      event.target.checked ? [...previous, module.id] : previous.filter(id => id !== module.id))}/>
-                  <span>{module.title}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          <button type="button" className={button+" mt-3"} disabled={busy}
-            onClick={() => void saveModules()}>Save operating modules</button>
-        </section>
-      )}
-    </details>
+      </details>
+    </>
   );
 }
 
@@ -418,7 +426,7 @@ function AgentCard({
         <p className="mt-4 text-xs text-zinc-400">System identity. Management rules are enforced by the Executive runtime, not editable chatbot instructions.</p>
       ) : card.registry ? (
         <p className="mt-4 text-xs text-zinc-400">This specialist uses a versioned, independently verified mission contract. Review its capability and assignment settings in <Link href="/settings/advanced" className="underline">Advanced management</Link>; it does not share editable global Executive instructions.</p>
-      ) : <AgentControls card={card} actors={actors} operatingModules={operatingModules} onChanged={onChanged} />}
+      ) : <AgentControls card={card} actors={actors} operatingModules={operatingModules} onChanged={onChanged} detail={detail} />}
     </article>
   );
 }
