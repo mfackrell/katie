@@ -98,6 +98,9 @@ export function summarizeProviderOutcome(
   else if (incomplete === "content_filter" || finish === "content_filter" ||
     finish === "SAFETY" || finish === "PROHIBITED_CONTENT") failure = "PROVIDER_REFUSAL";
   else if (status === "failed") failure = "PROVIDER_FAILURE";
+  else if (status === "completed" && Array.isArray(terminal.output) &&
+    terminal.output.some(part => Array.isArray(record(part).content) &&
+      (record(part).content as unknown[]).some(content => record(content).type === "refusal"))) failure = "PROVIDER_REFUSAL";
   else if (status === "completed" && !visible) failure = "NO_VISIBLE_OUTPUT";
   return {providerResponseStatus: status, providerFinishReason: finish,
     providerIncompleteReason: incomplete, reasoningTokens: reasoning,

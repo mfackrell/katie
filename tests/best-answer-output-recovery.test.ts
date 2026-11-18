@@ -111,6 +111,15 @@ test("streaming final incomplete event preserves terminal metadata", () => {
   assert.equal(evidence.reasoningTokens,15);
 });
 
+test("provider-declared refusal is not mislogged as a generic invisible completion", () => {
+  const outcome=summarizeProviderOutcome(JSON.stringify({status:"completed",
+    output:[{type:"message",content:[{type:"refusal",refusal:"I cannot comply"}]}]}),
+    "openai","/v1/responses",false,200);
+  assert.equal(outcome.normalizedFailureReason,"PROVIDER_REFUSAL");
+  assert.equal(outcome.hasVisibleOutput,false);
+  assert.doesNotMatch(JSON.stringify(outcome),/cannot comply/);
+});
+
 test("other providers and HTTP rejection remain separately classified", () => {
   assert.equal(summarizeProviderOutcome(JSON.stringify({candidates:[{finishReason:"MAX_TOKENS"}]}),
     "google","/v1beta/models/gemini-2.5-pro:generateContent",false,200).normalizedFailureReason,"OUTPUT_TOKEN_EXHAUSTED");

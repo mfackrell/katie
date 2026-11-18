@@ -1,5 +1,6 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
 import { planBestAnswerOutputTokens } from "./output-planning";
+import { ProviderResponseError } from "./response-errors";
 import { openAiCacheSettings } from "./openai-cache";
 import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
@@ -431,16 +432,18 @@ export class OpenAiProvider implements LlmProvider {
         continue;
       }
 
-      if (event.type === "response.completed" || event.type === "response.incomplete") {
+      if (event.type === "response.completed" || event.type === "response.incomplete" ||
+          event.type === "response.failed") {
         completedResponse = getCompletedResponseFromEvent(event);
       }
     }
 
     if (!completedResponse) {
-      // The SDK exposes Responses streaming as raw SSE events. We can reliably build text from
-      // `response.output_text.delta`, but `content` and `usage` are only returned if the final
-      // `response.completed` event includes the full response object.
-      return toProviderResponse({ text: streamedText }, selectedModel, this.name);
+      // A missing terminal event is not a valid completion, even if some
+      // streamed text was received. Never publish an unverified partial answer.
+      throw new ProviderResponseError(
+        "OpenAI streaming ended without a provider terminal response. Billing evidence remains with the accounting ledger.",
+        false, "PROVIDER_TERMINAL_MISSING");
     }
 
     const contentItems = extractOutputItems(completedResponse);
