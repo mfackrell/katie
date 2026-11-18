@@ -21,7 +21,7 @@ test('expired original mission79 requires separately authenticated, owner-select
  t.after(()=>{Date.now=before;for(const [key,value] of Object.entries(env)){
   if(value==null)delete process.env[key];else process.env[key]=value;
  }});
- let owner=false,stage='authorize';const writes=[];
+ let owner=false,stage='authorize',aliasLive=true;const writes=[];
  const base={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   scopeHash,priorCutoff,cutoff:null,authorizationId:null,
@@ -30,6 +30,7 @@ test('expired original mission79 requires separately authenticated, owner-select
  const saved={...base,stage:'authorized',authorizationId:approvalId,cutoff:futureCutoff,authorizedAt:'2026-11-18T16:00:00Z'};
  const mock=modules({
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>aliasLive},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    if(name==='project_org_retest_future_window_offer')return stage==='authorize'?base:saved;
    if(name==='project_org_authorize_retest_future_window'){
@@ -62,6 +63,8 @@ test('expired original mission79 requires separately authenticated, owner-select
  process.env.VERCEL_ENV='preview';
  assert.equal((await POST(request(correct))).status,409,'Production-release check rejects preview even if test auth stub is true');
  process.env.VERCEL_ENV='production';
+ aliasLive=false;assert.equal((await POST(request(correct))).status,409,'Superseded production alias fails closed');
+ assert.equal(writes.length,0);aliasLive=true;
  assert.equal((await POST(request(correct))).status,200);
  assert.equal(writes.length,1);
  assert.deepEqual(JSON.parse(JSON.stringify(writes[0])),{
@@ -128,7 +131,7 @@ test('exact production release binding is a separate owner action after recorded
  t.after(()=>{Date.now=oldNow;for(const [k,v] of Object.entries(env)){
   if(v==null)delete process.env[k];else process.env[k]=v;
  }});
- let owner=true;const calls=[],bindHash='f'.repeat(64);
+ let owner=true,aliasLive=true;const calls=[],bindHash='f'.repeat(64);
  const record={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   scopeHash,priorCutoff,cutoff:futureCutoff,authorizationId:approvalId,
@@ -158,10 +161,34 @@ test('exact production release binding is a separate owner action after recorded
  process.env.VERCEL_ENV='preview';
  assert.equal((await POST(request(payload))).status,409);
  process.env.VERCEL_ENV='production';
+ aliasLive=false;assert.equal((await POST(request(payload))).status,409,'Superseded production alias cannot bind');
+ aliasLive=true;
  const result=await POST(request(payload));assert.equal(result.status,200);
  const binds=calls.filter(x=>x.name==='project_org_bind_retest_claim_release');
  assert.equal(binds.length,1);
  assert.deepEqual(JSON.parse(JSON.stringify(binds[0].args)),
   {p_owner:ownerId,p_project:projectId,p_release:releaseSha,
    p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash});
+});
+
+test('canonical alias verification rejects superseded deployment, redirect and spoofed version',async t=>{
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA};
+ process.env.VERCEL_ENV='production';process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;
+ t.after(()=>{for(const [k,v] of Object.entries(env)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
+ const {verifyMission79ActiveProductionSha}=modules()('@/lib/projects/mission79-active-release');
+ let checked=0;
+ const fake=async(url,options)=>{
+  checked++;
+  assert.equal(new URL(url).origin,'https://katie-mu.vercel.app');
+  assert.equal(new URL(url).pathname,'/api/version');
+  assert.equal(options.cache,'no-store');assert.equal(options.redirect,'error');
+  return new Response(JSON.stringify({version:releaseSha}),{status:200});
+ };
+ assert.equal(await verifyMission79ActiveProductionSha(releaseSha,fake),true);
+ assert.equal(checked,1);
+ assert.equal(await verifyMission79ActiveProductionSha('b'.repeat(40),fake),false);
+ assert.equal(checked,1,'Stale self-reported runtime SHA cannot even query the alias');
+ assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>new Response(JSON.stringify({version:'c'.repeat(40)}),{status:200})),false);
+ assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>new Response('<html>login</html>',{status:401})),false);
+ assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>{throw Error('unavailable');}),false);
 });
