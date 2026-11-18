@@ -237,11 +237,12 @@ function AgentControls({
               <p className="text-xs text-zinc-400">Assigned reusable modules (optional):</p>
               {operatingModules.map(module => (
                 <div key={module.id}>
-                  <input type="checkbox" checked={moduleIds.includes(module.id)} disabled={busy}
-                    onChange={event => setModuleIds(previous =>
-                      event.target.checked ? [...previous, module.id] : previous.filter(id => id !== module.id))}/>
-                  <span>{module.title}</span>
-                </label>
+                  <label className="flex items-start gap-2">
+                    <input type="checkbox" checked={moduleIds.includes(module.id)} disabled={busy}
+                      onChange={event => setModuleIds(previous =>
+                        event.target.checked ? [...previous, module.id] : previous.filter(id => id !== module.id))}/>
+                    <span>{module.title}</span>
+                  </label>
                 {typeof module.content === "string" && (
                   <details className="ml-6 rounded border border-white/10 p-2">
                     <summary className="cursor-pointer text-xs text-emerald-300">
