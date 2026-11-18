@@ -22,7 +22,9 @@ type Quality = {status: string; observations: Array<{source: string; provenance:
   feedback?: {
     positive: number; negative: number; ambiguous: number;
     evidence: Array<{source: string; source_id: string; observed_at: string; dimension: string;
-      outcome: string; confidence: string; task_excerpt: string | null}>;
+      outcome: string; confidence: string; task_excerpt: string | null; source_intent?: string}>;
+    potentially_comparable?: Array<{source: string; source_id: string; observed_at: string; dimension: string;
+      outcome: string; confidence: string; task_excerpt: string | null; source_intent: string}>;
     uncertainty: string;
   };
 };
@@ -50,28 +52,52 @@ export function qualityFromObservations(rows: ObservedRoutingRow[], provider: st
  * attributed next-turn feedback and internal reviews are distinct evidence,
  * never a numerical ranking or a guarantee about a different task. */
 export function modelAttributedFeedback(
-  rows: ObservedModelFeedback[], provider: string, model: string, intent: string, now = Date.now()
+  rows: ObservedModelFeedback[], provider: string, model: string, intent: string,
+  now = Date.now(), bestValueComparable = false
 ): Quality['feedback'] | undefined {
   const matchesModel = (observed: string) => observed === model ||
     (observed.startsWith(model + '-') && /^\d{4}-\d{2}-\d{2}$/.test(observed.slice(model.length+1)));
+  // Best Answer retains exact-intent matching. Best Value may surface
+  // nearby conversational labels only when the original task excerpt exists;
+  // the selector still must establish actual objective-level comparability.
+  // Never admit coding/financial evidence merely because the model is identical.
+  const conversational = new Set(['general-text','social-emotional','safety-sensitive-vision']);
+  const isRelated = (row: ObservedModelFeedback) => row.intent === intent ||
+    (bestValueComparable && conversational.has(intent) && conversational.has(row.intent) &&
+      Boolean(row.task_excerpt?.trim()));
   const relevant = rows.filter(row => row.provider === provider && matchesModel(row.model) &&
-    row.intent === intent && ['positive','negative','ambiguous'].includes(row.outcome) &&
+    isRelated(row) && ['positive','negative','ambiguous'].includes(row.outcome) &&
     Number.isFinite(Date.parse(row.observed_at)) &&
     Date.parse(row.observed_at) <= now && Date.parse(row.observed_at) >= now - 30 * 86400000)
     .sort((a,b) => Date.parse(b.observed_at) - Date.parse(a.observed_at)).slice(0,12);
   if (!relevant.length) return undefined;
+  // Different intent labels do not establish quality equivalence. Keep
+  // their raw events separate until the existing selection LLM compares
+  // original task excerpts and material response requirements.
+  const direct = relevant.filter(row => row.intent === intent);
+  const possible = bestValueComparable ? relevant.filter(row => row.intent !== intent) : [];
+  const event = (row: ObservedModelFeedback) => ({
+    source: row.source, source_id: row.source_id, observed_at: row.observed_at,
+    dimension: row.dimension, outcome: row.outcome, confidence: row.confidence,
+    task_excerpt: row.task_excerpt?.slice(0,160) ?? null,
+    ...(bestValueComparable ? {source_intent: row.intent} : {}),
+  });
   return {
-    positive: relevant.filter(row => row.outcome === 'positive').length,
-    negative: relevant.filter(row => row.outcome === 'negative').length,
-    ambiguous: relevant.filter(row => row.outcome === 'ambiguous').length,
-    evidence: relevant.map(row => ({
-      source: row.source, source_id: row.source_id, observed_at: row.observed_at,
-      dimension: row.dimension, outcome: row.outcome, confidence: row.confidence,
-      task_excerpt: row.task_excerpt?.slice(0,160) ?? null,
-    })),
-    uncertainty: 'User reactions and context-attributed comments are task-specific and can be ambiguous. ' +
-      'Review verdicts are internal and selection-biased. No evidence implies global model superiority; ' +
-      'the same model alias can resolve to a dated version shown in the underlying provider receipt.',
+    positive: direct.filter(row => row.outcome === 'positive').length,
+    negative: direct.filter(row => row.outcome === 'negative').length,
+    ambiguous: direct.filter(row => row.outcome === 'ambiguous').length,
+    evidence: direct.map(event),
+    ...(possible.length ? {potentially_comparable: possible.map(row => ({
+      ...event(row),source_intent:row.intent,
+    }))} : {}),
+    uncertainty: bestValueComparable
+      ? 'Direct evidence is scoped to the current intent. Cross-intent events are only ' +
+        'potential comparisons; the selector must verify actual objective and quality-requirement similarity ' +
+        'before using them. Reactions and adjacent comments may be ambiguous. Internal reviews are ' +
+        'selection-biased. No evidence implies global model superiority.'
+      : 'User reactions and context-attributed comments are task-specific and can be ambiguous. ' +
+        'Review verdicts are internal and selection-biased. No evidence implies global model superiority; ' +
+        'the same model alias can resolve to a dated version shown in the underlying provider receipt.',
   };
 }
 
@@ -114,7 +140,8 @@ export function expectedCost(provider: LlmProvider['name'], model: string,
 }
 
 export async function resolveRoutingEvidence(candidates: CandidateMetadata[], providers: LlmProvider[],
-  params: Omit<ChatGenerateParams, 'modelId'> | undefined, intent: string): Promise<RoutingEvidence> {
+  params: Omit<ChatGenerateParams, 'modelId'> | undefined, intent: string,
+  bestValueQuality = false): Promise<RoutingEvidence> {
   const scope = getAccountingScope();
   const result: RoutingEvidence = {overhead: {status: 'unknown'}, candidates: {}};
   if (scope?.kind !== 'standalone') return result;
@@ -126,6 +153,23 @@ export async function resolveRoutingEvidence(candidates: CandidateMetadata[], pr
         p_chat: scope.context.chatId, p_request: scope.context.requestId, p_intent: intent});
     if (!error && data) { rows = data.observations ?? []; overhead = data.overhead_micro_usd; feedbackRows = data.quality_feedback ?? []; }
   } catch { /* Missing/unavailable evidence must never invent quality or block chat. */ }
+  // Best Value alone receives broader, explicitly attributed conversational
+  // feedback. This private read-only RPC does not modify the legacy evidence
+  // payload or inputs used by Best Answer.
+  if (bestValueQuality) {
+    try {
+      const {data,error} = await getSupabaseAdminClient().rpc<ObservedModelFeedback[]>(
+        'standalone_best_value_quality_feedback', {p_owner:scope.context.userId,
+          p_actor:scope.context.actorId,p_chat:scope.context.chatId,p_request:scope.context.requestId});
+      if (!error && Array.isArray(data)) {
+        const keyed = new Map<string,ObservedModelFeedback>();
+        for (const row of [...feedbackRows,...data]) {
+          keyed.set(`${row.source}:${row.source_id}:${row.request_id}`, row);
+        }
+        feedbackRows=[...keyed.values()];
+      }
+    } catch { /* Unavailable quality feedback must not break routing. */ }
+  }
   result.overhead = {source: 'standalone_provider_attempts settled receipts for current scoped request',
     observed_micro_usd: overhead, remaining_overhead: 'unknown; stage two and later helpers have not completed'};
   for (const candidate of candidates) {
@@ -134,7 +178,8 @@ export async function resolveRoutingEvidence(candidates: CandidateMetadata[], pr
     result.candidates[`${candidate.providerName}:${candidate.modelId}`] = {
       quality: (() => {
         const delivery = qualityFromObservations(rows, candidate.providerName, candidate.modelId, intent);
-        const feedback = modelAttributedFeedback(feedbackRows, candidate.providerName, candidate.modelId, intent);
+        const feedback = modelAttributedFeedback(feedbackRows, candidate.providerName, candidate.modelId,
+          intent, Date.now(), bestValueQuality);
         return feedback ? {...delivery, status: 'limited, model-attributed task feedback; answer quality not independently verified', feedback} : delivery;
       })(),
       economics: quote ? expectedCost(candidate.providerName, candidate.modelId, quote, rows.filter(row => row.intent === intent), overhead)

@@ -84,8 +84,51 @@ test('model-attributed user feedback retains task, provenance, exact source and 
   assert.match(poor?.uncertainty??'',/No evidence implies global model superiority/i);
   assert.equal(modelAttributedFeedback(rows,'anthropic','claude-sonnet-5-5','social-emotional')?.positive,1);
   assert.equal(modelAttributedFeedback(rows,'openai','gpt-5-mini','rewrite'),undefined);
+  const bestValueOnly = modelAttributedFeedback(rows,'openai','gpt-5-mini','general-text',Date.now(),true);
+  assert.equal(bestValueOnly?.negative,0,'cross-intent feedback is not pre-accepted as task quality');
+  assert.equal(bestValueOnly?.positive,0,'unrelated code-generation feedback must not contaminate conversation');
+  assert.deepEqual(bestValueOnly?.evidence,[]);
+  assert.equal(bestValueOnly?.potentially_comparable?.length,1);
+  assert.equal(bestValueOnly?.potentially_comparable?.[0].source_intent,'social-emotional');
+  assert.equal(bestValueOnly?.potentially_comparable?.[0].outcome,'negative');
+  assert.equal(modelAttributedFeedback(rows,'openai','gpt-5-mini','general-text'),undefined,
+    'Best Answer retains exact-intent behavior');
   assert.equal(modelAttributedFeedback(rows,'openai','gpt-4o-mini','social-emotional'),undefined);
   assert.doesNotMatch(JSON.stringify(poor),/quality_score|provider_rank|preferred_provider/);
+});
+
+test('Best Value reads additional attributed feedback; Best Answer invokes only the original RPC',async()=>{
+  const calls: string[] = [];
+  const db = mock.method(admin,'getSupabaseAdminClient',() => ({rpc:async(name:string)=>{
+    calls.push(name);
+    if(name==='standalone_routing_observations')
+      return {data:{observations:[],overhead_micro_usd:null,quality_feedback:[]},error:null};
+    if(name==='standalone_best_value_quality_feedback')
+      return {data:[{request_id:'old-conversation',observed_at:new Date().toISOString(),
+        provider:'openai',model:'gpt-5-mini-2025-08-07',intent:'social-emotional',
+        source:'adjacent_user_feedback',dimension:'objective_fidelity',outcome:'negative',
+        confidence:'explicit_next_turn_comment_context_attributed',
+        source_id:'user-message',task_excerpt:'Continue the creative conversation in my voice'}],error:null};
+    throw Error('Unexpected evidence RPC');
+  }} as unknown as ReturnType<typeof admin.getSupabaseAdminClient>));
+  try {
+    const params = {name:'Katie',persona:'existing voice',summary:'',history:[],user:'Keep the conversation going'};
+    const candidates=[buildCandidateMetadata('openai','gpt-5-mini','general-text')];
+    const providers=[new OpenAiProvider('test-only')];
+    const answer=await runWithStandaloneAccounting(owner,()=>resolveRoutingEvidence(
+      candidates,providers,params,'general-text',false));
+    assert.deepEqual(calls,['standalone_routing_observations']);
+    assert.equal(answer.candidates['openai:gpt-5-mini'].quality.feedback,undefined);
+    calls.length=0;
+    const value=await runWithStandaloneAccounting(owner,()=>resolveRoutingEvidence(
+      candidates,providers,params,'general-text',true));
+    assert.deepEqual(calls,['standalone_routing_observations','standalone_best_value_quality_feedback']);
+    const feedback=value.candidates['openai:gpt-5-mini'].quality.feedback;
+    assert.equal(feedback?.negative,0,'different-intent observations are not scored before task review');
+    assert.equal(feedback?.potentially_comparable?.[0].outcome,'negative');
+    assert.equal(feedback?.potentially_comparable?.[0].source_intent,'social-emotional');
+    assert.match(feedback?.potentially_comparable?.[0].task_excerpt??'',/creative conversation/);
+  } finally {db.mock.restore();}
 });
 
 function quote(model: string, media = false, textLength = 10000) {

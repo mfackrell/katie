@@ -1230,7 +1230,7 @@ export async function chooseProvider(
     }
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
-      requestEvidence: neutral ? await resolveRoutingEvidence(llmCandidatesUsed, providers, typeof options?.routingRequestParams === "function" ? await options.routingRequestParams(resolvedIntent) : options?.routingRequestParams, intent) : undefined,
+      requestEvidence: neutral ? await resolveRoutingEvidence(llmCandidatesUsed, providers, typeof options?.routingRequestParams === "function" ? await options.routingRequestParams(resolvedIntent) : options?.routingRequestParams, intent, options?.routing_mode !== "best_answer") : undefined,
       routing_mode: options?.routing_mode,
       understanding: requestClassification ?? resolvedIntent,
       prompt,
