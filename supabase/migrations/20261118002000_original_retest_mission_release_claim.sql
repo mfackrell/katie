@@ -541,7 +541,7 @@ begin
   or project_provider_request_pending(p.id)
  then raise exception 'Original 79th management mission or immutable authority changed';end if;
  if q.project_id is not null then
-  if q.owner_id is distinct from p_owner or q.release_sha is distinct from p_release
+  if q.owner_id is distinct from p_owner
    or q.mission_id is distinct from m.id or q.assignment_id is distinct from j.id
    or q.prior_window_id is distinct from r.window_id
    or q.scope_hash is distinct from p.approved_hash
@@ -554,11 +554,12 @@ begin
    or not project_org_retest_renewed_assignment(m.id,j.id)
   then raise exception 'Recorded future window state or production SHA changed';end if;
   st:=case when b.project_id is not null then 'bound' else 'authorized' end;
-  if st='bound' and (b.bound_release_sha is distinct from q.release_sha or p.status<>'running' or m.status<>'running')
+  if st='bound' and (b.bound_release_sha is distinct from p_release or p.status<>'running' or m.status<>'running')
    then raise exception 'Already-bound exact release changed';end if;
   if st='authorized' and (p.status<>'blocked' or m.status<>'blocked')
    then raise exception 'Recorded window may not auto-restart management';end if;
   return jsonb_build_object('projectId',p.id,'stage',st,'releaseSha',p_release,
+   'authorizationReleaseSha',q.release_sha,
    'status',p.status,'missionStatus',m.status,'sourceMissionId',r.source_mission_id,
    'missionId',m.id,'assignmentId',j.id,'priorWindowId',r.window_id,
    'authorizationId',q.authorization_id,'scopeHash',p.approved_hash,
@@ -668,7 +669,7 @@ create or replace function public.project_org_retest_claim_release_authorized(
  join project_retest_future_window_receipts q on q.project_id=b.project_id
   and q.authorization_id=b.window_id and q.owner_id=b.owner_id
   and q.mission_id=b.mission_id and q.assignment_id=b.assignment_id
-  and q.release_sha=b.bound_release_sha and q.cutoff=b.cutoff
+  and q.cutoff=b.cutoff
   and q.scope_hash=b.scope_hash
  join project_blocked_management_retest_receipts r on r.project_id=b.project_id
   and r.owner_id=b.owner_id and r.source_mission_id=b.source_mission_id
@@ -711,7 +712,7 @@ begin
  if p_project is distinct from 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
   or q.project_id is null or p.id is null or a.owner_id is distinct from p_owner
   or not standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
-  or p_release is distinct from q.release_sha or q.owner_id is distinct from p_owner
+  or not project_org_retest_active_release(p_project,p_release) or q.owner_id is distinct from p_owner
   or p.deadline is distinct from q.cutoff or a.deadline is distinct from q.cutoff
   or a.window_id is distinct from q.authorization_id
   or p.max_missions<>96 or p.token_allowance<>600000
