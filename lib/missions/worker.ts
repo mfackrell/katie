@@ -386,8 +386,9 @@ export async function runMissionBatch(model=missionModel){
  // still actually serves that SHA. This read-only preflight is NOT a
  // substitute for the separately locked SQL release fence at claim time.
  let observedReleaseGeneration=0;
+ let releaseFence:string|undefined;
  if(release){
-  let mission79Epoch:{generation:number;active:boolean};
+  let mission79Epoch:{generation:number;active:boolean}|null=null;
   try{
    const epoch=await rpc<{generation:number;active:boolean}>('project_org_retest_release_epoch',{
     p_project:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',p_release:release,
@@ -397,14 +398,20 @@ export async function runMissionBatch(model=missionModel){
     throw Error('Invalid original mission79 release epoch response');
    mission79Epoch=epoch;
   }catch{
-   console.error('[Missions] Original mission79 release epoch unavailable; fail closed');
-   return {claimed:0,outcomes:[],releaseFence:'release_epoch_unavailable'};
+   console.error('[Missions] Original mission79 release epoch unavailable; denying its claim');
+   releaseFence='release_epoch_unavailable';
   }
-  observedReleaseGeneration=mission79Epoch.generation;
-  if(mission79Epoch.active&&!await verifyMission79ActiveProductionSha(release)){
-   console.warn('[Missions] Original mission79 release epoch is no longer the canonical production alias');
-   return {claimed:0,outcomes:[],releaseFence:'canonical_alias_changed'};
+  if(mission79Epoch){
+   observedReleaseGeneration=mission79Epoch.generation;
+   if(mission79Epoch.active&&!await verifyMission79ActiveProductionSha(release)){
+    console.warn('[Missions] Original mission79 release epoch is no longer the canonical production alias');
+    observedReleaseGeneration=0;
+    releaseFence='canonical_alias_changed';
+   }
   }
+  // Epoch zero cannot authorize mission79 in the PostgreSQL-bound claim RPC.
+  // Do not starve ordinary project leases when only this release proof fails.
+  // Never fall back to the unrestricted/legacy claim RPC.
  }
  for(let i=0;i<3;i++){
   const claim=release
@@ -458,5 +465,5 @@ export async function runMissionBatch(model=missionModel){
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...((claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))?Object.fromEntries(['rejectedSpecification','specificationValidationFeedback','specificationCharacters'].filter(key=>claim.job.result?.[key]!==undefined).map(key=>[key,claim.job.result![key]])):{}),...(claim.job.role==='review'&&claim.job.result?.sourceChecks?{sourceChecks:claim.job.result.sourceChecks}:{}),...(error instanceof MissionModelFailure?error.partial:{}),...(checkpointFailed?{checkpointFailed:true,specificationCheckpointError:specificationCheckpointError??'Provider response archival failed before settlement'}:{}),detail,diagnostic},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));
- return{claimed:claims.length,outcomes};
+ return{claimed:claims.length,outcomes,...(releaseFence?{releaseFence}:{})};
 }
