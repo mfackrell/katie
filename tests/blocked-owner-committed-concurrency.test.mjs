@@ -12,6 +12,9 @@ assert.match(bindingSql,/perform 1 from agent_missions where id=p_mission and pr
 assert.match(bindingSql,/perform 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;/);
 assert.doesNotMatch(bindingSql,/^ select 1 from (agent_missions|mission_assignments) where .* for update;/m);
 assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The native fixture must exercise the new exact-release binding predicate');
+assert.match(bindingSql,/b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid/,'Original mission79 source must be pinned in SQL');
+assert.match(bindingSql,/85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid/,'Original assignment source must be pinned in SQL');
+assert.match(bindingSql,/not exists\(select 1 from project_retest_future_window_receipts q where q.project_id=b.project_id\)/,'No downstream assignment may claim with stale pre-renewal release');
 assert.match(bindingSql,/create table public.project_retest_future_window_receipts/,'A distinct immutable owner window must exist');
 assert.match(bindingSql,/create function public.project_org_authorize_retest_future_window/,'Only the owner-confirmed window writer may renew time');
 assert.match(bindingSql,/project_org_retest_renewed_assignment/,'Source-bound inherited mission79 membership must be checked');
