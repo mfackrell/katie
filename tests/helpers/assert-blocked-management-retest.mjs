@@ -188,6 +188,18 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.notEqual(stale?.job?.id,originalJob.id,'Without an exact owner-source binding, a later SHA cannot claim mission 79');
 
   const offerArgs=[owner,project,executionRelease];
+  const runningOffer=(await first.query(
+   'select project_org_retest_claim_release_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(runningOffer.stage,'bind','Normal running mission 79 must satisfy exact saved authority');
+  // Reproduce the now-confirmed original production watchdog as disposable
+  // state only: it fired while this source-mismatched assignment stayed queued.
+  await first.query('reset role');
+  await first.query(`update work_projects set status='blocked',
+   progress_since=clock_timestamp()-interval '46 minutes',
+   detail='No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.'
+   where id=$1`,[project]);
+  await first.query('set role service_role');
+  assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
   const offer=(await first.query(
    'select project_org_retest_claim_release_offer($1,$2,$3) r',offerArgs)).rows[0].r;
   assert.equal(offer.stage,'bind');assert.equal(offer.missionId,scheduled.missionId);
@@ -207,6 +219,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role service_role');
   const receipt=(await bind()).rows[0].r;
   assert.equal(receipt.stage,'bound');assert.equal(receipt.releaseSha,executionRelease);
+  const resumed=(await first.query('select status,progress_since,detail from work_projects where id=$1',[project])).rows[0];
+  assert.equal(resumed.status,'running','One guarded bound-release action must re-admit only the exact watchdog state');
+  assert.match(resumed.detail,/mission 79 re-admitted/);
+  assert.ok(new Date(resumed.progress_since).getTime()>Date.now()-60000,
+   'Watchdog interval may renew only on actual auditable release binding');
   assert.equal(receipt.existing,false);assert.equal(receipt.historicalMissions,79);
   await rejected(bind,/bound|changed|release/i);
   assert.equal((await first.query(
