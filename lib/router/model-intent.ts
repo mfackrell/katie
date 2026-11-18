@@ -2358,10 +2358,25 @@ Rules:
 - Do not include markdown or any non-JSON text.
 `.trim();
 
+  // Preserve the Best Answer instruction bytes and output contract. Only Best
+  // Value adds a qualification-before-price contract and structured rationale.
+  const bestValueQualityContract = neutral && (args.routing_mode ?? "best_value") === "best_value" ? `
+BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:
+1. Establish the same material response-quality requirements that Best Answer would use for the user's actual objective. Never reduce them because the user selected Best Value.
+2. Assess which eligible models can reasonably meet that threshold. Use attributable results and feedback first, then documented capabilities and explicitly uncertain inference. Contextual, task-specific quality matters more than generic reasoning tier or low price.
+3. Exclude candidates that cannot reasonably meet the quality threshold. No evidence of superiority is NOT evidence of equivalence. A cheap model's basic text support, reasoning tier, or routine intent label cannot prove quality sufficiency.
+4. Only after qualification compare expected total costs of qualified candidates. Select the economical qualified candidate. When only a stronger model is sufficiently supported, it may also win Best Value. When direct evidence is unavailable, use grounded capability evidence and honest uncertainty; do not invent a quality score.
+5. For each feedback event, independently assess whether its source task_excerpt, source_intent, original objective and quality requirements are genuinely comparable to this request. A shared intent label does not prove similarity; different labels do not rule it out. Do not generalize creative results to finance, coding, or unrelated work.
+
+For Best Value selections with multiple eligible candidates, REQUIRED additional JSON:
+"quality_qualification":{"required_quality":"concrete material response requirements, independent of price","selected_fit":"why this model meets them","evidence_basis_kind":"attributed_feedback|verified_outcome|documented_capability|reasoned_inference","evidence_basis":"specific available evidence and provenance, or an explicit statement that direct outcome evidence is missing","comparative_uncertainty":"material unknown comparisons and limitations","cost_after_qualification":"why this is the economical choice among the reasonably qualified candidates"}
+Do not cite direct feedback or verified outcomes unless actually present in the supplied candidate evidence. Where evidence is only inferred, state that comparative outcome quality is unknown. Do not substitute cost for an adequate-quality finding.
+` : "";
+
   const result = await executeControlPlaneJsonTask({
     taskName: "routing-rerank",
     decisionProviders: eligibleDecisionProviders,
-    userPrompt: `${systemPrompt}\n\n${JSON.stringify({
+    userPrompt: `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
       prompt: args.prompt,
       intent: args.intent,
       secondary_intents: args.secondaryIntents ?? [],
@@ -2394,6 +2409,22 @@ Rules:
       const selectionJustification = typeof parsed.selection_justification === "string"
         ? parsed.selection_justification.trim().slice(0, 500) : "";
       if (neutral && !selectionJustification) return null;
+      if (neutral && (args.routing_mode ?? "best_value") === "best_value" && args.candidates.length > 1) {
+        const qualification = parsed.quality_qualification && typeof parsed.quality_qualification === "object"
+          ? parsed.quality_qualification as Record<string, unknown> : null;
+        const requiredFields = ["required_quality","selected_fit","evidence_basis","comparative_uncertainty","cost_after_qualification"];
+        if (!qualification || requiredFields.some(key =>
+          typeof qualification[key] !== "string" || !(qualification[key] as string).trim())) return null;
+        const kind = qualification.evidence_basis_kind;
+        if (!["attributed_feedback","verified_outcome","documented_capability","reasoned_inference"].includes(String(kind))) return null;
+        const supplied = Object.values(args.requestEvidence?.candidates ?? {});
+        if (kind === "attributed_feedback" && !supplied.some(candidate =>
+          (candidate.quality.feedback?.evidence.length ?? 0) > 0)) return null;
+        if (kind === "verified_outcome" && !supplied.some(candidate =>
+          candidate.quality.observations.some(observation => observation.passes > 0))) return null;
+        if (kind === "reasoned_inference" &&
+          !/unknown|uncertain|unverified|limited evidence/i.test(String(qualification.comparative_uncertainty))) return null;
+      }
       const selectionComparisons: Array<{ providerName: ProviderName; modelId: string; whyNotSelected: string }> = [];
       if (Array.isArray(parsed.alternatives)) {
         const seen = new Set<string>();
