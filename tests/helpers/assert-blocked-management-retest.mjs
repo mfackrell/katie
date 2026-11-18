@@ -306,6 +306,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   // executeClaim dispatcher with an injected deterministic no-network model.
   // The isolated DB command adapter is mocked here: no paid provider, worker
   // commissioning, or project decision is written during this assertion.
+  // Reuse the real owner-ratified development specification from the
+  // disposable original project. Do not fabricate a milestone in the model.
+  const approvedProjectRecord=(await first.query(
+   'select objective,team,phase,spec,approved_hash,deadline,milestone_index from work_projects where id=$1',
+   [project])).rows[0];
+  assert.ok(approvedProjectRecord?.spec?.milestones?.length>0,
+   'Offline management context must use the saved approved project milestone');
   const {modules}=await import('./load-project-modules.mjs');
   const rows={
    project_organization_nodes:[{id:root.id,agent_id:root.agent_id,kind:'project_director',status:'active'}],
@@ -317,8 +324,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   };
   const fakeDb={from(table){const q={
    select(){return q;},eq(){return q;},in(){return q;},order(){return q;},range(){return q;},
-   single:async()=>({data:{objective:'Approved original two-player tic-tac-toe',team:[],phase:'development',
-    approved_hash:scopeHash,deadline:claimOffer.cutoff,milestone_index:0},error:null}),
+   single:async()=>({data:approvedProjectRecord,error:null}),
    then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}
   };return q;}};
   const controlledCalls=[];
@@ -335,7 +341,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await loader('@/lib/missions/worker').executeClaim(claimed,async(c,instruction,input,tools)=>{
    modelCalls++;assert.equal(tools,'none');assert.equal(c.job.id,originalJob.id);
    assert.match(instruction,/Never write code/);
-   assert.equal(JSON.parse(input).project.objective,'Approved original two-player tic-tac-toe');
+   assert.equal(JSON.parse(input).project.objective,approvedProjectRecord.objective);
    return {text:'[{"action":"ready"}]',model:'deterministic-offline-fixture'};
   });
   assert.equal(modelCalls,1);
