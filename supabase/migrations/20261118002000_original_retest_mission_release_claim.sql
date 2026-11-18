@@ -232,6 +232,7 @@ create table public.project_retest_future_window_receipts (
  prior_cutoff timestamptz not null,
  cutoff timestamptz not null,
  state_hash text not null check(state_hash ~ '^[a-f0-9]{64}$'),
+ organization_hash text not null check(organization_hash ~ '^[a-f0-9]{64}$'),
  historical_missions integer not null check(historical_missions=79),
  authorized_at timestamptz not null default clock_timestamp(),
  check(isfinite(prior_cutoff) and isfinite(cutoff) and cutoff>prior_cutoff)
@@ -283,12 +284,21 @@ create function public.project_org_retest_renewed_assignment(
   and m.project_evidence->>'providerContinuationRelease'=r.prior_release_sha
   and m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
   and m.project_evidence->>'previousMissionId' is null
+  and project_org_scope_ratification_state(p.id)=q.organization_hash
   and (select count(*) from project_organization_contract_changes c
+    join project_organization_nodes n on n.id=c.node_id and n.project_id=p.id
     where c.project_id=p.id and c.window_id=q.authorization_id
       and c.deadline=q.cutoff and c.prior_deadline=q.prior_cutoff
-      and c.tools=c.prior_tools)=13
+      and c.tools=c.prior_tools and n.tools=c.tools
+      and n.status='active' and n.deadline=q.cutoff)=13
   and (select count(*) from project_organization_nodes n
     where n.project_id=p.id and n.status='active' and n.deadline=q.cutoff)=13
+  and not exists(with recursive qa as
+    (select id from project_organization_nodes where project_id=p.id
+     and area in ('independent_qa','quality_assurance')
+     union all select child.id from project_organization_nodes child join qa on child.parent_id=qa.id)
+    select 1 from qa join project_organization_nodes n on n.id=qa.id
+     where 'development'=any(n.tools))
  );
 $fn$;
 
@@ -304,6 +314,20 @@ begin
  then raise exception 'Original provider assignment source membership contract changed';end if;
  execute replace(body,anchor,replacement);
 end $source_patch$;
+
+-- After new owner renewal, the historical provider SHA is no longer eligible
+-- for the same saved assignment, even though its original evidence is retained.
+do $renewed_exact_release_fence$
+declare body text;
+ anchor text:='(project_provider_continued_assignment(a.id) and (p_release=(select continuation_release_sha from project_provider_execution where project_id=b.project_id) or project_org_retest_claim_release_authorized(b.project_id,p_release)))';
+ replacement text:='(project_provider_continued_assignment(a.id) and ((p_release=(select continuation_release_sha from project_provider_execution where project_id=b.project_id) and not exists(select 1 from project_retest_future_window_receipts q where q.project_id=b.project_id and q.mission_id=b.id and q.assignment_id=a.id)) or project_org_retest_claim_release_authorized(b.project_id,p_release)))';
+begin
+ body:=pg_get_functiondef('public.claim_mission_work_release(text)'::regprocedure);
+ if (length(body)-length(replace(body,anchor,'')))/length(anchor)<>2
+ then raise exception 'Installed exact-release worker claim contract changed';end if;
+ execute replace(body,anchor,replacement);
+end $renewed_exact_release_fence$;
+
 
 -- One locked read-only offer. Never synthesizes an approval or deadline.
 create function public.project_org_retest_future_window_offer(
@@ -345,6 +369,20 @@ begin
   or a.continuation_release_sha is distinct from r.prior_release_sha
   or a.approved_scope is distinct from p.approved_hash
   or m.id is null or m.project_kind<>'management' or m.calls<>0 or m.routing_calls<>0
+  or m.created_at<r.authorized_at
+  or m.id is distinct from (select mm.id from agent_missions mm where mm.project_id=p.id
+    order by mm.created_at desc,mm.id desc limit 1)
+  or not exists(select 1 from project_organization_nodes root
+    where root.project_id=p.id and root.id::text=m.project_evidence->>'organizationNodeId'
+    and root.kind='project_director' and root.parent_id is null
+    and root.status='active' and root.agent_id=j.agent_id
+    and j.payload->>'organizationNodeId'=root.id::text)
+  or exists(with recursive qa as
+    (select id from project_organization_nodes where project_id=p.id
+     and area in ('quality_assurance','independent_qa')
+     union all select child.id from project_organization_nodes child join qa on child.parent_id=qa.id)
+    select 1 from qa join project_organization_nodes n on n.id=qa.id
+     where 'development'=any(n.tools))
   or m.project_evidence->>'organizationNodeId' is distinct from
      (select id::text from project_organization_nodes n where n.project_id=p.id and n.kind='project_director' and n.parent_id is null)
   or m.project_evidence->>'providerContinuationRelease' is distinct from r.prior_release_sha
@@ -404,7 +442,7 @@ $fn$;
 
 -- Exactly one owner-confirmed, future cutoff; no work begins at this stage.
 create function public.project_org_authorize_retest_future_window(
- p_owner uuid,p_project uuid,p_release text,p_authorization uuid,
+ p_owner uuid,p_project uuid,p_release text,p_mission uuid,p_assignment uuid,p_authorization uuid,
  p_cutoff timestamptz,p_state_hash text
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 declare p work_projects;a project_provider_execution;m agent_missions;j mission_assignments;
@@ -418,6 +456,7 @@ begin
  select * into j from mission_assignments where mission_id=m.id and role='work' for update;
  offer:=project_org_retest_future_window_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'authorize'
+  or p_mission is distinct from m.id or p_assignment is distinct from j.id
   or p_authorization is null or p_state_hash is null or p_state_hash is distinct from offer->>'stateHash'
   or p_cutoff is null or not isfinite(p_cutoff) or p_cutoff<=clock_timestamp()+interval '5 minutes'
   or p_cutoff>clock_timestamp()+interval '24 hours' or p_cutoff<=p.deadline
@@ -432,14 +471,6 @@ begin
    decision_id,prior_cutoff,cutoff,prior_release_sha)
  values(p_authorization,p.id,p_owner,a.continuation_release_sha,
    a.continuation_decision_id,p.deadline,p_cutoff,a.continuation_release_sha);
- insert into project_retest_future_window_receipts(
-   project_id,authorization_id,owner_id,prior_window_id,source_mission_id,
-   mission_id,assignment_id,release_sha,original_retest_release_sha,
-   original_continuation_release_sha,scope_hash,prior_cutoff,cutoff,
-   state_hash,historical_missions,authorized_at)
- values(p.id,p_authorization,p_owner,r.window_id,r.source_mission_id,m.id,j.id,
-   p_release,r.release_sha,r.prior_release_sha,p.approved_hash,p.deadline,p_cutoff,
-   p_state_hash,79,stamp);
  update project_provider_execution set window_id=p_authorization,deadline=p_cutoff where project_id=p.id;
  update work_projects set deadline=p_cutoff,updated_at=stamp where id=p.id;
  update agent_missions set deadline=p_cutoff,updated_at=stamp where id=m.id;
@@ -449,6 +480,14 @@ begin
   values(p.id,n.id,p_authorization,n.deadline,p_cutoff,n.tools,n.tools,n.completion_submission);
   update project_organization_nodes set deadline=p_cutoff where id=n.id;
  end loop;
+ insert into project_retest_future_window_receipts(
+   project_id,authorization_id,owner_id,prior_window_id,source_mission_id,
+   mission_id,assignment_id,release_sha,original_retest_release_sha,
+   original_continuation_release_sha,scope_hash,prior_cutoff,cutoff,
+   state_hash,organization_hash,historical_missions,authorized_at)
+ values(p.id,p_authorization,p_owner,r.window_id,r.source_mission_id,m.id,j.id,
+   p_release,r.release_sha,r.prior_release_sha,p.approved_hash,p.deadline,p_cutoff,
+   p_state_hash,project_org_scope_ratification_state(p.id),79,stamp);
  if not project_provider_continued(p.id)
   or not project_provider_continued_assignment(j.id)
   or not project_org_retest_renewed_assignment(m.id,j.id)
@@ -612,12 +651,12 @@ $fn$;
 
 revoke all on function
  public.project_org_retest_future_window_offer(uuid,uuid,text),
- public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,timestamptz,text),
+ public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
  from public,anon,authenticated,service_role;
 grant execute on function
  public.project_org_retest_future_window_offer(uuid,uuid,text),
- public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,timestamptz,text),
+ public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
  to service_role;
 
