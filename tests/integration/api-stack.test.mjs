@@ -37,7 +37,7 @@ test("integration: API starts with local mock persistence and serves core applic
       response.end("[]");
       return;
     }
-    if (request.method !== "GET" || !["actors", "chats", "managed_agents"].includes(table)) {
+    if (request.method !== "GET" || !["actors", "chats", "managed_agents", "operating_instruction_modules"].includes(table)) {
       response.writeHead(404).end(JSON.stringify({ message: "Unexpected mock persistence request" }));
       return;
     }
@@ -106,7 +106,7 @@ test("integration: API starts with local mock persistence and serves core applic
   });
   assert.equal(forged.status, 401, "invalid cookie must not grant owner access");
 
-  for (const [path, expected] of [["models", {}], ["actors", { actors: [] }], ["chats", { chats: [] }]]) {
+  for (const [path, expected] of [["models", {}], ["actors", { actors: [], operatingInstructionModules: [] }], ["chats", { chats: [] }]]) {
     const response = await fetch(`${baseUrl}/api/${path}`, { headers: authenticatedHeaders, signal: AbortSignal.timeout(30_000) });
     assert.equal(response.status, 200, `${path} endpoint failed:\n${output}`);
     assert.deepEqual(await response.json(), expected);
@@ -114,6 +114,7 @@ test("integration: API starts with local mock persistence and serves core applic
   assert.ok(verifiedSessions >= 4, "middleware and owner endpoints must verify Supabase Auth");
   assert.ok(tablesRead.includes("actors"), "actor response must traverse the persistence adapter");
   assert.ok(tablesRead.includes("managed_agents"), "actor identities must include managed agent metadata");
+  assert.ok(tablesRead.includes("operating_instruction_modules"), "actor settings must include the reusable module catalog");
   assert.ok(tablesRead.includes("standalone_guest_actor_ids"), "owner listing must filter guest identities");
   assert.ok(tablesRead.includes("chats"), "chat response must traverse the persistence adapter");
 });
