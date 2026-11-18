@@ -267,6 +267,30 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role service_role');
   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
   assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,'blocked');
+  // Fixture-only reconstruction of the original expired receipt/window;
+  // historical owner retest first needed a live synthetic window to execute.
+  // All triggers are restored BEFORE any future owner authorization is tested.
+  const expiredOriginalCutoff='2026-11-18T14:00:00Z';
+  await first.query('reset role');
+  await first.query("set local session_replication_role = 'replica'");
+  try{
+   await first.query('update project_blocked_management_retest_receipts set cutoff=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update project_blocked_owner_windows set cutoff=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update project_execution_windows set cutoff=$2 where id=$1',[windowId,expiredOriginalCutoff]);
+   await first.query('update project_provider_execution set deadline=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update work_projects set deadline=$2 where id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update project_organization_contract_changes set deadline=$2 where project_id=$1 and window_id=$3',[project,expiredOriginalCutoff,windowId]);
+   await first.query('update project_organization_nodes set deadline=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update agent_missions set deadline=$2 where id=$1',[scheduled.missionId,expiredOriginalCutoff]);
+  }finally{await first.query("set local session_replication_role = 'origin'");}
+  assert.equal((await first.query("show session_replication_role")).rows[0].session_replication_role,'origin');
+  await first.query('set role service_role');
+  const originalAuthority=(await first.query(
+   'select r.window_id,r.cutoff,project_provider_continued(p.id) continued from work_projects p join project_blocked_management_retest_receipts r on r.project_id=p.id where p.id=$1',
+   [project])).rows[0];
+  assert.equal(new Date(originalAuthority.cutoff).toISOString(),'2026-11-18T14:00:00.000Z');
+  assert.equal(originalAuthority.window_id,'7d216bbe-596e-457e-b84d-e07ad1e80365');
+  assert.equal(originalAuthority.continued,true);
   // Only the disposable fixture commits the synthetic 79th management
   // mission before concurrent owner writes; production is never touched.
   await first.query('commit');
