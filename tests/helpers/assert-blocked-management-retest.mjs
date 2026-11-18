@@ -297,6 +297,32 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,79);
   await first.query('begin');
 
+  // Compare all immutable records BEFORE owner renewal, again after renewal
+  // and after release binding. Exempt only mission79 deadline/status/update
+  // timestamps, never its source evidence, usage or token reservations.
+  const originalIntegrity=async()=>{
+   await first.query('reset role');
+   try{
+    const sources={
+     missions:"select md5(coalesce(jsonb_agg(case when m.id=$2::uuid then to_jsonb(m)-'deadline'-'status'-'updated_at' else to_jsonb(m) end order by m.id)::text,'[]')) h from agent_missions m where m.project_id=$1",
+     calls:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.id)::text,'[]')) h from mission_calls c join mission_assignments j on j.id=c.job_id join agent_missions m on m.id=j.mission_id where m.project_id=$1",
+     assignments:"select md5(coalesce(jsonb_agg(to_jsonb(j) order by j.id)::text,'[]')) h from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1",
+     originalRetestReceipt:"select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.project_id)::text,'[]')) h from project_blocked_management_retest_receipts r where r.project_id=$1",
+     originalContracts:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.node_id)::text,'[]')) h from project_organization_contract_changes c where c.project_id=$1 and c.window_id=$3::uuid",
+     grants:"select md5(coalesce(jsonb_agg(to_jsonb(g) order by g.node_id)::text,'[]')) h from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1",
+     decisions:"select md5(coalesce(jsonb_agg(to_jsonb(d) order by d.id)::text,'[]')) h from project_organization_decisions d where d.project_id=$1",
+     exceptions:"select md5(coalesce(jsonb_agg(to_jsonb(e) order by e.id)::text,'[]')) h from project_organization_exceptions e where e.project_id=$1",
+     packageCount:"select count(*)::text h from project_work_packages where project_id=$1",
+     exposure:"select coalesce(sum(greatest(coalesce(m.actual_tokens,0),coalesce(m.reserved_tokens,0))),0)::text h from agent_missions m where m.project_id=$1"
+    };
+    const hashes={};
+    for(const [name,query] of Object.entries(sources))
+     hashes[name]=(await first.query(query,[project,scheduled.missionId,windowId])).rows[0].h;
+    return hashes;
+   }finally{await first.query('set role service_role');}
+  };
+  const sourceBeforeOwnerRenewal=await originalIntegrity();
+
   const futureOffer=(await first.query(
    'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
   assert.equal(futureOffer.stage,'authorize');
@@ -321,6 +347,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role anon');await rejected(approve,/permission denied/i);
   await first.query('set role service_role');
   const ownerWindow=(await approve()).rows[0].r;
+  assert.deepEqual(await originalIntegrity(),sourceBeforeOwnerRenewal,
+   'Owner-selected window preserves 79 historical missions, all charges, immutable retest receipt, original contracts and grants');
   assert.equal(ownerWindow.stage,'authorized');assert.equal(ownerWindow.status,'blocked');
   assert.equal(ownerWindow.missionStatus,'blocked');assert.equal(ownerWindow.authorizationId,authorizationId);
   assert.equal(Date.parse(ownerWindow.cutoff),Date.parse(explicitFutureCutoff));
@@ -371,6 +399,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role service_role');
   const receipt=(await bind()).rows[0].r;
   assert.equal(receipt.stage,'bound');assert.equal(receipt.releaseSha,executionRelease);
+  assert.deepEqual(await originalIntegrity(),sourceBeforeOwnerRenewal,
+   'Exact-release binding preserves all original mission and provider accounting data');
   await raceNewOwnerRpc('RELEASE_BIND',
    'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
   assert.equal((await observer.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,1);
