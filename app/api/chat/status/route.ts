@@ -5,7 +5,8 @@ import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentConfigSchema } from "@/lib/agents/policy";
 import { NextRequest, NextResponse } from "next/server";
 import { getChatRequest } from "@/lib/chat/request-idempotency";
-import { classifyPausedChatWorkflow } from "@/lib/chat/paused-workflow-recovery";
+import { classifyPausedChatWorkflow, isPausedRoutingTimeout, verifiedLateRoutingRecoveryReady } from "@/lib/chat/paused-workflow-recovery";
+import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 
 export async function GET(request: NextRequest) {
   const requestId = request.nextUrl.searchParams.get("requestId")?.trim() ?? "";
@@ -76,6 +77,31 @@ export async function GET(request: NextRequest) {
       agentConfigSchema.parse(data.snapshot);
     }
   } catch { return NextResponse.json({ error: "Task status unavailable" }, { status: 503 }); }
+  // A timed-out, already-billed routing helper may finish just after the
+  // workflow pauses. Report ONLY verified owner/chat-bound, settled original
+  // checkpoints as ready for exact saved-request replay; no new provider call
+  // is made by this read-only status endpoint.
+  if (!isManagedChat && (record.status === "failed" || record.status === "processing")) {
+    let saved:Awaited<ReturnType<typeof savedWorkflow>>|null=null;
+    try { saved=await savedWorkflow(record.actorId); } catch { /* Fail closed. */ }
+    if (isPausedRoutingTimeout(saved)) {
+      let routingRecoveryReady=false;
+      try {
+        const ledger=createStandaloneLedger();
+        routingRecoveryReady=await verifiedLateRoutingRecoveryReady(
+          {ownerId:authorizedOwnerId,actorId:record.actorId,chatId,requestId},
+          (ordinal)=>ledger.lookupAttempt(authorizedOwnerId,requestId,`control_plane_routing-rerank:${ordinal}`),
+        );
+      } catch { /* Missing or conflicting provider evidence is not retry authority. */ }
+      return NextResponse.json({
+        requestId,chatId,status:record.status,workflowStatus:"paused",
+        assistantMessageId:record.assistantMessageId??null,
+        routingRecoveryReady,
+        error:record.errorMessage??"The original routing provider attempt is saved for recovery.",
+        updatedAt:saved?.updated_at??record.updatedAt,
+      }, {headers:{"Cache-Control":"no-store, no-cache, must-revalidate"}});
+    }
+  }
   // A chat_requests receipt can remain 'processing' after the durable
   // standalone workflow has paused on an uncertain provider outcome.
   // The workflow is authoritative for recovery; never poll it as live work.

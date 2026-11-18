@@ -1,11 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { browserOwnerAuth, ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 /** Authentication is not authorization: server separately requires an explicit actor/chat grant. */
-export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
+export function SelfToolsOwnerSession({ chatId, recoverySignInRequired = false }: { chatId?: string; recoverySignInRequired?: boolean }) {
   const client = browserOwnerAuth();
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   const [email, setEmail] = useState("");
   const [emailReady, setEmailReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
@@ -14,6 +15,9 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
   const [codeRequested, setCodeRequested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (recoverySignInRequired && !signedIn) detailsRef.current?.setAttribute("open", "");
+  }, [recoverySignInRequired, signedIn]);
   useEffect(() => {
     if (!client) return;
     let active = true;
@@ -128,8 +132,8 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
     if(!error)window.dispatchEvent(new CustomEvent("katie-owner-session-changed",{detail:{guestReset:true}}));
   }
   return (
-    <details aria-label="Katie optional account tools" className="shrink-0 border-t border-white/10 bg-zinc-900 px-4 py-2 text-sm text-zinc-100">
-      <summary className="cursor-pointer text-zinc-300">Owner sign in (optional)</summary>
+    <details ref={detailsRef} id="katie-owner-sign-in" aria-label="Katie owner account tools" className="shrink-0 border-t border-white/10 bg-zinc-900 px-4 py-2 text-sm text-zinc-100">
+      <summary className="cursor-pointer text-zinc-300">{recoverySignInRequired ? (signedIn ? "Owner session active" : "Owner sign-in required for management retest") : "Owner sign in (optional)"}</summary>
       <section className="py-3">
       {!sessionReady ? (
         <p role="status">Restoring owner session…</p>
