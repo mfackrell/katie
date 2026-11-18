@@ -5,6 +5,8 @@ on:
     paths:
       - 'supabase/migrations/20261118002000_original_retest_mission_release_claim.sql'
       - 'lib/projects/mission79-future-window.ts'
+      - 'lib/missions/worker.ts'
+      - 'lib/projects/mission79-active-release.ts'
       - 'components/mission79-future-window-control.tsx'
       - 'app/api/projects/organization/route.ts'
       - 'app/api/projects/route.ts'
