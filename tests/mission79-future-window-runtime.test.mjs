@@ -60,7 +60,7 @@ test('expired original mission79 requires separately authenticated, owner-select
  assert.equal((await POST(request({...correct,cutoff:'2026-11-18T14:00:00.000Z'}))).status,409);
  assert.equal((await POST(request({...correct,cutoff:'2026-11-20T20:00:00.000Z'}))).status,409);
  process.env.VERCEL_ENV='preview';
- assert.equal((await POST(request(correct))).status,403,'No owner action from preview');
+ assert.equal((await POST(request(correct))).status,409,'Production-release check rejects preview even if test auth stub is true');
  process.env.VERCEL_ENV='production';
  assert.equal((await POST(request(correct))).status,200);
  assert.equal(writes.length,1);
