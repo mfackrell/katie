@@ -208,11 +208,11 @@ type TrustedPricingSnapshot = Pick<ModelRegistryRecord,
   "normalized_model_id" | "pricing_status" | "pricing_input_per_1m" |
   "pricing_output_per_1m" | "pricing_verified_at" | "source_metadata">;
 type RefreshedModelRecord = Omit<ReturnType<typeof enrichModelRecord>,
-  "pricing_status" | "source_metadata" | "capability_verified_at" | "pricing_verified_at" |
+  "pricing_status" | "capability_status" | "source_metadata" | "capability_verified_at" | "pricing_verified_at" |
   "supports_text" | "supports_vision" | "supports_web_search" | "supports_image_generation" |
   "supports_video" | "reasoning_tier" | "speed_tier" | "cost_tier"> &
   Pick<ModelRegistryRecord,
-    "pricing_status" | "source_metadata" | "capability_verified_at" | "pricing_verified_at" |
+    "pricing_status" | "capability_status" | "source_metadata" | "capability_verified_at" | "pricing_verified_at" |
     "supports_text" | "supports_vision" | "supports_web_search" | "supports_image_generation" |
     "supports_video" | "reasoning_tier" | "speed_tier" | "cost_tier">;
 export function retainTrustedPricing(
