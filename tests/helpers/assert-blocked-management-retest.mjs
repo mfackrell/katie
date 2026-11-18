@@ -26,6 +26,55 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
  assert.ok(claimRelease,"Original worker claim's new exact-release predicate must be installed");
 
+
+ // Reconstruct the actual saved 13-node reporting topology, not the generic
+ // benchmark's loop/writer/coder organization. Only the DISPOSABLE database
+ // changes; original node identities and all 13 contract-change receipts
+ // remain linked to their fixture rows. The production SQL guard is unchanged.
+ await first.query('reset role');
+ const originalNodes=(await first.query(
+  'select id,area,kind,management_level from project_organization_nodes where project_id=$1 order by id',
+  [project])).rows;
+ assert.equal(originalNodes.length,13,'Native original-project fixture must contain exactly 13 nodes');
+ const findNode=(area,level)=>originalNodes.filter(n=>n.area===area&&(level===undefined||n.management_level===level));
+ const unique=(area,level)=>{const hits=findNode(area,level);assert.equal(hits.length,1,'Expected one fixture node '+area+'/'+level);return hits[0];};
+ const fixtureRoot=unique('general','project_director');
+ const fixtureGame=unique('game_delivery','functional_director');
+ const fixtureQa=unique('independent_qa','functional_director');
+ const delivery=unique('loop delivery manager');
+ const qaExecution=unique('game_delivery','worker');
+ const qaPlanning=unique('loop supervisor');
+ const deliveryPlanning=unique('loop coder');
+ const repositoryAssessment=unique('loop writer');
+ const qaCoordinator=unique('loop reviewer');
+ const genericWorkers=originalNodes.filter(n=>n.area==='general'&&n.kind==='worker');
+ assert.equal(genericWorkers.length,4,'Four generic benchmark workers expected before mapping original roles');
+ const actualTopology=[
+  [delivery,'delivery_management','manager','manager',2,fixtureGame.id],
+  [qaExecution,'independent_qa_execution','manager','manager',2,fixtureQa.id],
+  [qaPlanning,'independent_qa_planning','manager','manager',2,fixtureQa.id],
+  [deliveryPlanning,'delivery_planning','manager','supervisor',3,delivery.id],
+  [repositoryAssessment,'delivery_repository_assessment','worker','worker',3,delivery.id],
+  [qaCoordinator,'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id],
+  [genericWorkers[0],'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id],
+  ...genericWorkers.slice(1).map(n=>[n,'qa_planning','manager','supervisor',3,qaPlanning.id]),
+ ];
+ await first.query('begin');
+ try{
+  await first.query("set local session_replication_role = 'replica'");
+  for(const [node,area,kind,level,depth,parent] of actualTopology){
+   await first.query('update project_organization_nodes set area=$2,kind=$3,management_level=$4,depth=$5,parent_id=$6 where id=$1',
+    [node.id,area,kind,level,depth,parent]);
+  }
+  await first.query('update project_organization_scope_grants g set parent_id=n.parent_id from project_organization_nodes n where g.node_id=n.id and n.project_id=$1',[project]);
+  await first.query("set local session_replication_role = 'origin'");
+  await first.query('commit');
+ }catch(error){await first.query('rollback');throw error;}
+ await first.query('set role service_role');
+ assert.equal((await first.query('select count(*)::int n from project_organization_contract_changes where project_id=$1 and window_id=$2',[project,windowId])).rows[0].n,13,
+  'All thirteen historical deadline contracts remain preserved');
+ console.log('MISSION79_AUTHENTIC_ORIGINAL_13_NODE_TOPOLOGY_FIXTURE_PASS');
+
  await first.query('begin');
  try{
   await first.query('reset role');
@@ -46,25 +95,28 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [0,firstId,priorRootFailed===0?root:game],
    [1,source,root]
   ]){
-   const detail=i===1?'Mission state operation failed: No delegation change requested':'Management session blocked';
+   const detail=i===1?'Mission state operation failed: {"code":"P0001","details":null,"hint":null,"message":"No delegation change requested"}':'Management session blocked';
    await first.query(`insert into agent_missions
     select (jsonb_populate_record(null::agent_missions,to_jsonb(m)||jsonb_build_object(
      'id',$2::uuid,'status','blocked','project_kind','management',
      'project_evidence',jsonb_build_object('organizationNodeId',$3::uuid,'previousMissionId',null,
-      'providerContinuationWindow',$4::uuid,'providerContinuationRelease',$5::text),
+      'providerContinuationWindow',$4::uuid,'providerContinuationRelease',$5::text,
+      'providerContinuationDecision',$7::text),
      'created_at',clock_timestamp(),'updated_at',clock_timestamp(),'calls',1,
      'detail',$6::text))).*
     from agent_missions m where m.id=$1`,
-    [exemplar,id,node.id,windowId,priorRelease,detail]);
+    [exemplar,id,node.id,windowId,priorRelease,detail,i===1?'476981a7-0b19-453a-b9e9-f5a2dcf31248':null]);
    // Model the real scheduler's exact temporary active-mission binding so
    // the existing management execution trigger remains ENFORCED in this fixture.
    await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,id]);
    await first.query(`insert into mission_assignments
     (id,mission_id,job_key,role,agent_id,instruction,payload,status,result,attempts)
-    values($1,$2,'plan','work',$3,'Make bounded management decisions',
+    values($1,$2,'plan','work',$3,$8::text,
       jsonb_build_object('organizationNodeId',$5::uuid),'failed',
-      jsonb_build_object('detail',$4::text),$6::integer)`,
-    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id,i===1?1:0]);
+      $7::jsonb,$6::integer)`,
+    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id,i===1?1:0,
+     JSON.stringify(i===1?{detail,diagnostic:{stage:'work',errorType:'Error',acceptedIssue:false}}:{detail}),
+     i===1?'Make bounded management decisions. Delegate all technical execution.':'Make bounded management decisions']);
   }
   await first.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,root.id]);
   await first.query(`update work_projects set status='blocked',
@@ -387,6 +439,33 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   }finally{
    await first.query('rollback to savepoint original_lineage_negative');
    await first.query('release savepoint original_lineage_negative');
+  }
+  // Full original evidence, not substring or selected-key acceptance.
+  await first.query('savepoint original_full_evidence_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update agent_missions set project_evidence=project_evidence||'{\"unauthorizedHistoricalMarker\":true}'::jsonb where id=$1",[source]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',offerArgs),
+    /Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_full_evidence_negative');
+   await first.query('release savepoint original_full_evidence_negative');
+  }
+  await first.query('savepoint original_full_result_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update mission_assignments set result=result||'{\"unauthorizedHistoricalMarker\":true}'::jsonb where id=$1",['cd81b57d-0812-485c-b8f6-d658aa80186f']);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',offerArgs),
+    /Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_full_result_negative');
+   await first.query('release savepoint original_full_result_negative');
   }
   await first.query('savepoint original_qa_topology_negative');
   try{

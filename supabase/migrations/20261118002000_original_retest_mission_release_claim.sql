@@ -403,7 +403,15 @@ create function public.project_org_retest_original_owner_lineage(
        and src.project_evidence->>'providerContinuationRelease'=r.prior_release_sha
        and src.project_evidence->>'previousMissionId' is null
        and director.kind='project_director' and director.parent_id is null
-       and director.management_level='project_director')
+       and director.management_level='project_director'
+       -- Immutable normalized full JSON evidence from the saved original
+       -- mission. Root identity and continuation release are separately
+       -- verified above against the actual director and owner receipt.
+       and md5((src.project_evidence||jsonb_build_object(
+        'organizationNodeId','PROJECT_DIRECTOR_ROOT',
+        'providerContinuationRelease','ORIGINAL_CONTINUATION_RELEASE'))::text)
+        ='4e048027f1bb74b4a5ab36add5aa27b4'
+       and md5(src.detail)='8ddada511e8f2bf0651bac4cab805156')
    and (select count(*) from mission_assignments historical_job
       where historical_job.mission_id=r.source_mission_id)=1
    and exists(select 1 from mission_assignments historical_job
@@ -417,7 +425,12 @@ create function public.project_org_retest_original_owner_lineage(
        and historical_job.status='failed' and historical_job.attempts=1
        and historical_job.lease is null
        and historical_job.payload->>'organizationNodeId'=director.id::text
-       and historical_job.result->>'detail' like '%No delegation change requested%')
+       and historical_job.result->>'detail' like '%No delegation change requested%'
+       and md5(historical_job.result::text)='6fb74874bbd75251de00eae1d12ea736'
+       and md5((historical_job.payload||jsonb_build_object(
+        'organizationNodeId','PROJECT_DIRECTOR_ROOT'))::text)
+        ='767e9764ef2b102f90a05e5b823a7db8'
+       and md5(historical_job.instruction)='a11af3226e8a475603769242c6133e4b')
    -- Freeze the actual original 13-node reporting/QA structure, sourced from
    -- the preserved project rather than re-hashing a potentially drifted
    -- hierarchy after renewal. Node IDs are already bound to 13 immutable
