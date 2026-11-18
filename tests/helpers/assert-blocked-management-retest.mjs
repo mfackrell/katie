@@ -111,7 +111,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,id]);
    await first.query(`insert into mission_assignments
     (id,mission_id,job_key,role,agent_id,instruction,payload,status,result,attempts)
-    values($1,$2,'plan','work',$3,$8::text,
+    values($1,$2,'plan','work',$3,coalesce($8::text,$4::text),
       jsonb_build_object('organizationNodeId',$5::uuid),'failed',
       $7::jsonb,$6::integer)`,
     [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id,i===1?1:0,
