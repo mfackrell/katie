@@ -1,6 +1,7 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as economics from '@/lib/router/control-plane-economics';
+import * as qualityEvidence from '@/lib/router/observed-evidence';
 import { runWithStandaloneAccounting } from '@/lib/standalone-accounting/context';
 import { chooseProvider } from '@/lib/router/master-router';
 import { buildCandidateMetadata, buildNeutralDecisionEvidence, inferRequestClassificationWithSource, type RequestIntent } from '@/lib/router/model-intent';
@@ -226,4 +227,56 @@ test('terminal Stage 1 accounting denial cannot enter a local fallback', async (
     await assert.rejects(runWithStandaloneAccounting(owner,()=>chooseProvider('Hi','',[provider],{modelRegistrySnapshot:registry()})), error=>error===terminal);
     assert.equal(calls,1);
   } finally {rank.mock.restore();}
+});
+
+
+test('user objective, constraints and model-specific outcome evidence reach the LLM selector unchanged',async()=>{
+  const rank = mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
+  const original = 'Continue the established creative story in my voice';
+  const evidence = mock.method(qualityEvidence,'resolveRoutingEvidence',async(candidates:Array<{providerName:string;modelId:string}>,_providers:unknown,_params:unknown,intent:string)=>{
+    assert.equal(intent,'rewrite');
+    return {overhead:{status:'unknown'},candidates:Object.fromEntries(candidates.map(candidate=>{
+      const grok=candidate.providerName==='grok' && candidate.modelId==='grok-4.3';
+      return [candidate.providerName+':'+candidate.modelId,{
+        quality:grok?{status:'limited, model-attributed task feedback',observations:[],
+          feedback:{positive:2,negative:0,ambiguous:0,evidence:[
+            {source:'message_reaction',source_id:'reaction-1',observed_at:new Date().toISOString(),
+              dimension:'user_satisfaction',outcome:'positive',confidence:'direct_response_reaction',task_excerpt:original}
+          ],uncertainty:'Task-specific, not a universal quality ranking'}}:{status:'unknown',observations:[]},
+        economics:{status:'unknown'}
+      }];
+    }))};
+  });
+  let selections=0;
+  const providers=Object.entries(models).map(([name,ids])=>({name,listModels:async()=>[...ids],generate:async p=>{
+    if(p.user.includes('CURRENT_USER_MESSAGE:')) return {
+      text:JSON.stringify({...understanding(original,'rewrite','high'),primary_objective:original,
+        response_constraints:'Existing provider policy and safety limits remain binding.'}),
+      provider:name,model:p.modelId!,
+    };
+    selections++;
+    const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
+    assert.equal(payload.understanding.decisionEvidence.primary_objective,original);
+    assert.match(payload.understanding.decisionEvidence.response_constraints,/policy and safety/);
+    assert.equal(payload.candidates.find(c=>c.provider==='grok'&&c.model==='grok-4.3')
+      .comparative_quality.feedback.positive,2);
+    assert.deepEqual(payload.candidates.find(c=>c.provider==='openai'&&c.model==='gpt-5-mini')
+      .comparative_quality,{status:'unknown',observations:[]});
+    return {text:JSON.stringify({selected:{provider:'grok',model:'grok-4.3'},
+      selection_justification:'Task-specific direct user reaction favors Grok; price and reasoning metadata do not establish better quality for alternatives.',
+      alternatives:[{provider:'openai',model:'gpt-5-mini',
+        why_not_selected:'No comparable feedback for this model; not selected merely for lower expense.'}]}),
+      provider:name,model:p.modelId!};
+  }} as LlmProvider));
+  try{
+    for(const mode of ['best_answer','best_value'] as const){
+      const result=await runWithStandaloneAccounting(owner,()=>chooseProvider(original,
+        'Earlier emotional discussion is background, not the new creative objective.',providers,
+        {modelRegistrySnapshot:registry(),routing_mode:mode}));
+      assert.equal(result.provider.name,'grok');
+      assert.equal(result.modelId,'grok-4.3');
+      assert.equal(result.resolvedIntent.decisionEvidence?.primary_objective,original);
+    }
+    assert.equal(selections,2,'one evidence-informed selection per route; no extra decision stage');
+  }finally{rank.mock.restore();evidence.mock.restore();}
 });
