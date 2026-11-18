@@ -403,7 +403,7 @@ export async function quarantineUnavailableModel(providerName: LlmProvider["name
 }
 
 export type ModelRefreshOutcome = {provider:LlmProvider["name"];ok:boolean;discovered:number;disabled:number;reason?:string};
-export async function refreshModelRegistry(providers: LlmProvider[], options?: { verifyQuarantined?: boolean }): Promise<ModelRefreshOutcome[]> {
+export async function refreshModelRegistry(providers: LlmProvider[], options?: { verifyPublishedSources?: boolean }): Promise<ModelRefreshOutcome[]> {
   const client = getSupabaseAdminClient();
   const nowIso = new Date().toISOString();
   const pricingCatalog = await fetchLiteLlmPricingCatalog();
@@ -421,45 +421,66 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
         .returns<{normalized_model_id:string;last_exception_at:string|null}>();
       if(quarantineError) throw new Error(quarantineError.message);
       const quarantinedIds = new Set((quarantined ?? []).map(row=>row.normalized_model_id as string));
-      const {data: verifiedPrices,error: verifiedPriceError}=await client.from("model_registry")
-        .select("normalized_model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at,source_metadata")
-        .eq("provider_name",provider.name).eq("pricing_status","verified")
-        .returns<TrustedPricingSnapshot>();
-      if(verifiedPriceError)throw new Error(verifiedPriceError.message);
-      const verifiedById=new Map((verifiedPrices??[]).map(row=>[row.normalized_model_id,row]));
-      const rows = discovered.filter(modelId=>!quarantinedIds.has(normalizeModelId(modelId)))
-        .map((modelId) => retainTrustedPricing(
-          enrichModelRecord(provider.name,modelId,pricingCatalog,nowIso),
-          verifiedById.get(normalizeModelId(modelId)),nowIso));
+      // Read all prior evidence, not just recently verified pricing. Transient source
+      // downtime must not erase an earlier independent capability verification.
+      const { data: priorRows, error: priorError } = await client.from("model_registry")
+        .select("normalized_model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at,capability_verified_at,source_metadata,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier")
+        .eq("provider_name", provider.name)
+        .returns<PriorPublishedSnapshot>();
+      if (priorError) throw new Error(priorError.message);
+      const priorById = new Map((priorRows ?? []).map((row) => [row.normalized_model_id, row]));
+      const verifiedById = new Map((priorRows ?? [])
+        .filter((row) => row.pricing_status === "verified")
+        .map((row) => [row.normalized_model_id, row]));
+      const publishedById = new Map<string, PublishedModelEvidence>();
 
-      const probeCandidate = (quarantined ?? []).find(row => discovered.some(id => normalizeModelId(id) === row.normalized_model_id)
-        && (!row.last_exception_at || Date.now()-new Date(row.last_exception_at).getTime() >= 60*60*1000));
-      if (options?.verifyQuarantined && probeCandidate) {
-        const candidateId = discovered.find(id => normalizeModelId(id) === probeCandidate.normalized_model_id)!;
-        try {
-          // Verify the same native tool-calling capability Katie uses for self-inspection,
-          // rather than merely testing ordinary text generation on a different endpoint.
-          const result = provider.generateToolTurn
-            ? await provider.generateToolTurn({
-                modelId:candidateId, system:"Reply with OK.", messages:[{role:"user",text:"OK"}],
-                tools:[{name:"ping",description:"Optional health verification",parameters:{type:"object",properties:{}}}],
-                signal:AbortSignal.timeout(12000),
-              })
-            : await provider.generate({modelId:candidateId,name:"Model verification",persona:"Reply with OK only.",summary:"",history:[],user:"OK"});
-          const valid = "response" in result
-            ? Boolean(result.response.text?.trim() || result.calls.length)
-            : Boolean(result.text?.trim());
-          if (valid) {
-            rows.push(enrichModelRecord(provider.name,candidateId,pricingCatalog,nowIso));
-            console.info("[ModelRegistry] model_reverified",{provider:provider.name,modelId:candidateId});
+      if (options?.verifyPublishedSources) {
+        const candidates = discovered.filter((modelId) => {
+          const normalized = normalizeModelId(modelId);
+          const prior = priorById.get(normalized);
+          const spec = officialModelSpec(provider.name, normalized);
+          if (!spec || quarantinedIds.has(normalized)) return false;
+          // Verify first-party model pages at most once in 20 hours for records
+          // whose price and capability evidence is still current.
+          const previous = Math.min(
+            Date.parse(prior?.capability_verified_at ?? "") || 0,
+            Date.parse(prior?.pricing_verified_at ?? "") || 0
+          );
+          const matchingSource = prior?.source_metadata?.capability_verification_source === spec.documentUrl &&
+            prior?.source_metadata?.pricing_verification_source === spec.documentUrl;
+          return !matchingSource || !Number.isFinite(previous) ||
+            Date.now() - previous >= 20 * 60 * 60 * 1000;
+        });
+        await Promise.all(candidates.map(async (modelId) => {
+          const normalized = normalizeModelId(modelId);
+          const spec = officialModelSpec(provider.name, normalized);
+          if (!spec) return;
+          try {
+            const evidence = await fetchOfficialModelEvidence(spec, normalized);
+            if (evidence) publishedById.set(normalized, evidence);
+            else console.warn("[ModelRegistry] published_model_evidence_not_qualified", {
+              provider: provider.name, modelId: normalized
+            });
+          } catch (error) {
+            console.warn("[ModelRegistry] official_documentation_unavailable", {
+              provider: provider.name, modelId: normalized,
+              reason: error instanceof Error ? error.name : "fetch_failure"
+            });
           }
-        } catch {
-          await client.from("model_registry").eq("provider_name",provider.name)
-            .eq("normalized_model_id",normalizeModelId(candidateId))
-            .update({last_exception_at:nowIso});
-          console.warn("[ModelRegistry] model_reverification_failed",{provider:provider.name,modelId:candidateId});
-        }
+        }));
       }
+      const rows = discovered.filter((modelId) => !quarantinedIds.has(normalizeModelId(modelId)))
+        .map((modelId) => {
+          const normalized = normalizeModelId(modelId);
+          return retainOfficialModelEvidence(
+            retainTrustedPricing(enrichModelRecord(provider.name, modelId, pricingCatalog, nowIso),
+              verifiedById.get(normalized), nowIso),
+            priorById.get(normalized),
+            publishedById.get(normalized) ?? null,
+            nowIso
+          );
+        });
+
       if (rows.length) {
         const { error } = await client.from("model_registry").upsert(rows, { onConflict: "provider_name,normalized_model_id" });
         if (error) {
