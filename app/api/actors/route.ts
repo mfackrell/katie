@@ -187,15 +187,18 @@ export async function GET(request:NextRequest) {
 
   const [{ data: managed, error }, { data: modules, error: moduleError }] = await Promise.all([
     getSupabaseAdminClient().from("managed_agents").select("id,actor_id").returns<{ id: string; actor_id: string }>(),
-    getSupabaseAdminClient().from("operating_instruction_modules").select("id,title,sort_order").order("sort_order", { ascending: true })
-      .returns<{ id: string; title: string; sort_order: number }>(),
+    getSupabaseAdminClient().from("operating_instruction_modules").select("id,title,content,sort_order").order("sort_order", { ascending: true })
+      .returns<{ id: string; title: string; content: string; sort_order: number }>(),
   ]);
   if (error) return NextResponse.json({ error: "Agent identities unavailable" }, { status: 503 });
   if (moduleError) return NextResponse.json({ error: "Actor operating modules unavailable" }, { status: 503 });
   const identities = new Map((managed ?? []).map(a => [a.actor_id, a.id]));
   return NextResponse.json({
     actors: actors.map(a => ({ ...a, ...(identities.has(a.id) ? { managedAgentId: identities.get(a.id) } : {}) })),
-    operatingInstructionModules: modules ?? [],
+    // Existing authenticated owner settings may inspect module text; guest workspaces see labels only.
+    operatingInstructionModules: principal.id === process.env.KATIE_OWNER_AUTH_USER_ID && !principal.isAnonymous
+      ? modules ?? []
+      : (modules ?? []).map(({ id, title, sort_order }) => ({ id, title, sort_order })),
   }, { headers: { "Cache-Control": "no-cache" } });
 }
 
