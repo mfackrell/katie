@@ -104,7 +104,8 @@ export async function POST(request:NextRequest){
    return NextResponse.json({error:'Explicit fresh future cutoff and original owner preflight are required'},{status:409});
   return NextResponse.json(await rpc('project_org_authorize_retest_future_window',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
-   p_release:p.releaseSha,p_authorization:p.authorizationId,p_cutoff:p.cutoff,
+   p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
+   p_authorization:p.authorizationId,p_cutoff:p.cutoff,
    p_state_hash:p.stateHash,
   }),{headers:{'Cache-Control':'no-store'}});
  }
