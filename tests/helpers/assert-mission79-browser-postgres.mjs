@@ -64,10 +64,17 @@ export async function assertMission79BrowserPostgres(first,{
  };
  // Record whether the real owner verifier attempts its local auth fetch,
  // without logging bearer values or changing its security decision.
- const authFetchAttempts=[];
+ const authFetchAttempts=[],aliasChecks=[];
  const underlyingFetch=globalThis.fetch;
  globalThis.fetch=async(...args)=>{
   const target=typeof args[0]==='string'?args[0]:args[0]?.url;
+  if(typeof target==='string'&&target.startsWith(
+   'https://katie-mu.vercel.app/api/version?mission79_verify=')){
+   aliasChecks.push(target);
+   return new Response(JSON.stringify({version:release,deploymentId:'dpl_NativeFixture79'}),{
+    status:200,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}
+   });
+  }
   const ownerLookup=typeof target==='string'&&target.endsWith('/auth/v1/user');
   try{
    const response=await underlyingFetch(...args);
@@ -80,14 +87,13 @@ export async function assertMission79BrowserPostgres(first,{
  };
  let POST;
  try{
+  const {verifyMission79ActiveProductionSha}=modules()('@/lib/projects/mission79-active-release');
   ({POST}=modules({
    '@/lib/missions/store':{rpc:adapter},
-   '@/lib/projects/mission79-active-release':{
-    verifyMission79ActiveProductionSha:async sha=>sha===release
-   },
+   '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha},
    '@/lib/data/persistence-store':{getMessages:async()=>[]},
   })('@/app/api/projects/organization/route'));
- }finally{globalThis.fetch=underlyingFetch;}
+ }catch(error){globalThis.fetch=underlyingFetch;throw error;}
  const source=ts.transpileModule(
   readFileSync('components/mission79-future-window-control.tsx','utf8'),{
    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX},
@@ -135,7 +141,7 @@ export async function assertMission79BrowserPostgres(first,{
    const alerts=await page.locator('[role="alert"]').allTextContents().catch(()=>[]);
    const bodyText=await page.locator('body').innerText().catch(()=>'');
    throw new Error('MISSION79_BROWSER_POSTGRES_DIAGNOSTIC '+JSON.stringify({
-    stage,posts,authRequests,authFetchAttempts,rpcCalls,postResults,alerts,
+    stage,posts,authRequests,authFetchAttempts,aliasChecks,rpcCalls,postResults,alerts,
     browserErrors,bodyText:bodyText.slice(0,1200),
    })+'; '+(error instanceof Error?error.message:String(error)));
   }
@@ -241,6 +247,8 @@ export async function assertMission79BrowserPostgres(first,{
   }
   assert.equal(posts,1,'Browser owner action must produce exactly one POST');
   assert.ok(authRequests>=1,'Real first-party owner verifier must fetch authenticated Supabase-style identity');
+  assert.equal(aliasChecks.length,1,
+   'The actual production alias verifier must resolve exact deployment SHA and ID once');
   assert.equal(await page.evaluate(()=>window.refreshes),1);
   assert.deepEqual(browserErrors,[]);
   assert.ok(rpcCalls.includes(stage==='authorize'
@@ -251,6 +259,7 @@ export async function assertMission79BrowserPostgres(first,{
   try{if(context)await context.close();}catch{}
   try{if(browser)await browser.close();}catch{}
   await new Promise(resolve=>server.close(()=>resolve()));
+  globalThis.fetch=underlyingFetch;
   for(const [k,v] of Object.entries(original)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
   await first.query('rollback to savepoint integrated_owner_ui');
   await first.query('release savepoint integrated_owner_ui');
