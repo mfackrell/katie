@@ -200,13 +200,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    where id=$1`,[project]);
   await first.query('set role service_role');
   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
-  const offer=(await first.query(
+  const claimOffer=(await first.query(
    'select project_org_retest_claim_release_offer($1,$2,$3) r',offerArgs)).rows[0].r;
-  assert.equal(offer.stage,'bind');assert.equal(offer.missionId,scheduled.missionId);
-  assert.equal(offer.assignmentId,originalJob.id);assert.equal(offer.historicalMissions,79);
-  assert.equal(offer.maxMissions,96);assert.equal(offer.tokenAllowance,600000);
+  assert.equal(claimOffer.stage,'bind');assert.equal(claimOffer.missionId,scheduled.missionId);
+  assert.equal(claimOffer.assignmentId,originalJob.id);assert.equal(claimOffer.historicalMissions,79);
+  assert.equal(claimOffer.maxMissions,96);assert.equal(claimOffer.tokenAllowance,600000);
   const immutableBeforeBinding=await unmodified();
-  const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,offer.stateHash];
+  const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash];
   const bind=()=>first.query(
    'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
   // Fail-closed caller/source, release, lease, and owner guards, all rolled back.
@@ -279,7 +279,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const fakeDb={from(table){const q={
    select(){return q;},eq(){return q;},in(){return q;},order(){return q;},range(){return q;},
    single:async()=>({data:{objective:'Approved original two-player tic-tac-toe',team:[],phase:'development',
-    approved_hash:scopeHash,deadline:offer.cutoff,milestone_index:0},error:null}),
+    approved_hash:scopeHash,deadline:claimOffer.cutoff,milestone_index:0},error:null}),
    then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}
   };return q;}};
   const controlledCalls=[];
