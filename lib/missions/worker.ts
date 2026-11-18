@@ -390,7 +390,7 @@ export async function runMissionBatch(model=missionModel){
  if(release){
   let mission79Epoch:{generation:number;active:boolean;deploymentId:string|null}|null=null;
   try{
-   const epoch=await rpc<{generation:number;active:boolean}>('project_org_retest_release_epoch',{
+   const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
     p_project:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',p_release:release,
    });
    if(!epoch||!Number.isSafeInteger(epoch.generation)||epoch.generation<0
