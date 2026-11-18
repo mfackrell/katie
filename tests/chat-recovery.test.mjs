@@ -173,3 +173,10 @@ test('UI retains pending receipt after stream interruption, controls duplicate s
  assert.doesNotMatch(source,/pendingAgeMs >/);
  assert.match(source,/savedStatus\.status === "completed" && savedStatus\.workflowStatus === "completed"/);
 });
+
+test('ambiguous 408/5xx and missing stream body are treated as recoverable delivery failures',()=>{
+ const bodyIndex=source.indexOf('throw new Error("Missing response stream from /api/chat.")');
+ const stageIndex=source.lastIndexOf('requestStage = "reading response stream"',bodyIndex);
+ assert.ok(stageIndex > 0 && stageIndex < bodyIndex);
+ assert.match(source,/if \(effectiveResponse\.status === 408 \|\| effectiveResponse\.status >= 500\) \{\s*requestStage = "reading response stream";\s*throw new Error\(httpCause\)/);
+});
