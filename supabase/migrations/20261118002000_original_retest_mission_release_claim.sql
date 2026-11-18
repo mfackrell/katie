@@ -49,7 +49,7 @@ begin
   or p_deployment is null or p_deployment !~ '^dpl_[A-Za-z0-9]+$'
   or p_action is null or p_action not in ('active','closed')
   or p.max_missions<>96 or p.token_allowance<>600000
-  or p.approved_hash is distinct from '4849dff2cfce136b3a1f3db675ee3cc3700ca529dcd84fe6c6'
+  or p.approved_hash is distinct from '4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6'
   or not exists(select 1 from project_blocked_management_retest_receipts r
     where r.project_id=p_project and r.historical_missions=78)
  then raise exception 'Exact original project release authority required';end if;
