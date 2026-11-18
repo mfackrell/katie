@@ -230,25 +230,64 @@ function BlockedManagementRetestControl({initial,onRefresh}:{initial:BlockedMana
   }catch(cause){setError(cause instanceof Error?cause.message:'Management retest request failed.');}
   finally{setPending(false);submitting.current=false;}
  }
- return <aside className="mx-3 my-2 min-w-0 rounded-xl border border-white/20 p-3" aria-label="One-time blocked management retest">
-  <p className="font-semibold">Original tic-tac-toe — one management retest</p>
-  <p>Preserved: 78 of 96 missions, original scope, all costs, 13 organization contracts,
-   and the existing approved cutoff {new Date(initial.cutoff).toLocaleString()}.
-   This authorizes one normal LLM management decision, not manual coding or a new window.</p>
-  <div role="status" aria-live="polite">
-   {initial.stage==='admitted'||receipt
-    ?<p>One-time retest has been recorded. The normal scheduler controls the next management mission.</p>
-    :expired?<p>Approved owner window is no longer eligible for a retest.</p>
-    :<p>Project blocked. No retest has been authorized yet.</p>}
+ const admitted=initial.stage==='admitted'||Boolean(receipt);
+ const eligible=initial.stage==='retest'&&!receipt&&!expired;
+ return <aside aria-label="One-time blocked management retest"
+   className="mx-3 my-3 min-w-0 overflow-hidden rounded-2xl border border-white/15 bg-zinc-900/70 shadow-sm">
+  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-5">
+   <div className="min-w-0">
+    <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-400">Milestone 3 · Developer Orchestrator</p>
+    <h3 className="mt-1 text-base font-semibold text-white">One management retest</h3>
+   </div>
+   <span className={'inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium '+
+    (admitted?'bg-emerald-500/15 text-emerald-300':expired?'bg-zinc-700/50 text-zinc-300':'bg-amber-500/15 text-amber-200')}>
+    {admitted?'Authorized':expired?'Window closed':'Action required'}
+   </span>
   </div>
-  {initial.stage==='retest'&&!receipt&&!expired&&
-   <button type="button" className="min-h-11 rounded border px-3 py-2 font-semibold"
-    onClick={()=>void authorize()} disabled={pending}>
-    {pending?'Authorizing one retest…':'Authorize one management retest'}
-   </button>}
-  <button type="button" className="min-h-11 rounded border px-3 py-2" disabled={pending}
-   onClick={onRefresh}>Refresh project status</button>
-  {error&&<p role="alert">{error}</p>}
+  <div className="space-y-3 px-4 py-4 sm:px-5">
+   <p className="max-w-2xl text-sm leading-relaxed text-zinc-300">
+    Resume one normal LLM management decision on the original tic-tac-toe project.
+    This does not manually commission code or extend its approval window.
+   </p>
+   <dl className="grid gap-2 sm:grid-cols-3">
+    <div className="rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2">
+     <dt className="text-xs text-zinc-400">Missions used</dt>
+     <dd className="mt-0.5 text-sm font-semibold text-white">{initial.historicalMissions}
+      <span className="font-normal text-zinc-400"> / {initial.maxMissions}</span></dd>
+    </div>
+    <div className="rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2">
+     <dt className="text-xs text-zinc-400">Approved until</dt>
+     <dd className="mt-0.5 text-sm font-semibold text-white">
+      {new Date(initial.cutoff).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'})}
+     </dd>
+    </div>
+    <div className="rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2">
+     <dt className="text-xs text-zinc-400">Organization contracts</dt>
+     <dd className="mt-0.5 text-sm font-semibold text-white">{initial.nodeCount}
+      <span className="font-normal text-zinc-400"> · preserved</span></dd>
+    </div>
+   </dl>
+   <p className="text-xs text-zinc-400">Existing project scope, history, and costs remain unchanged.</p>
+   <div role="status" aria-live="polite" className="text-sm text-zinc-300">
+    {admitted
+     ?<p>One-time retest has been recorded. The normal scheduler controls the next management mission.</p>
+     :expired?<p>Approved owner window is no longer eligible for a retest.</p>
+     :<p>Project blocked. No retest has been authorized yet.</p>}
+   </div>
+   <div className="flex flex-wrap items-center gap-2 pt-1">
+    {eligible&&<button type="button"
+     className="min-h-11 rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60"
+     onClick={()=>void authorize()} disabled={pending}>
+     {pending?'Authorizing one retest…':'Authorize one management retest'}
+    </button>}
+    <button type="button" className="min-h-11 rounded-lg border border-white/20 px-3 py-2 text-sm font-medium text-zinc-200 hover:bg-white/10 disabled:opacity-50"
+     disabled={pending} onClick={onRefresh}>Refresh project status</button>
+   </div>
+   {eligible&&<p className="text-xs leading-relaxed text-zinc-400">
+    Owner authentication is required. <a href="#katie-owner-sign-in" className="font-medium text-emerald-300 underline underline-offset-2">Sign in below</a> before authorizing.
+   </p>}
+   {error&&<p role="alert" className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p>}
+  </div>
  </aside>;
 }
 
