@@ -329,19 +329,22 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  t.after(()=>{for(const [key,value] of Object.entries(original)){
   if(value===undefined)delete process.env[key];else process.env[key]=value;
  }});
- const calls=[];let aliasLive=false,epochLive=true,epochUnavailable=false,verifications=0;
+ const calls=[];let aliasLive=false,epochLive=true,epochUnavailable=false,verifications=0,epochGeneration=1;
  const load=modules({
   '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async sha=>{
    verifications++;assert.equal(sha,releaseSha);return aliasLive;
   }},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    calls.push(name);
-   if(name==='project_org_retest_active_release'){
+   if(name==='project_org_retest_release_epoch'){
     assert.equal(args.p_project,projectId);assert.equal(args.p_release,releaseSha);
      if(epochUnavailable)throw Error('database epoch lookup unavailable');
-     return epochLive;
+     return {generation:epochGeneration,active:epochLive};
    }
-   if(name==='claim_mission_work_release')return null;
+   if(name==='claim_mission_work_release_epoch'){
+    assert.equal(args.p_release,releaseSha);assert.equal(args.p_epoch,epochGeneration);
+    return null;
+   }
    return null;
   }},
  });
@@ -357,29 +360,29 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  process.env.VERCEL_GIT_COMMIT_SHA=savedSha;
  const stopped=await runMissionBatch(forbidden);
  assert.equal(stopped.claimed,0);assert.equal(stopped.releaseFence,'canonical_alias_changed');
- assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,0,
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,0,
   'A superseded production deployment must not even request the worker lease');
  aliasLive=true;
  const normal=await runMissionBatch(forbidden);
  assert.equal(normal.claimed,0);
- assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,1,
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,1,
   'A canonical READY deployment may reach only the normal SQL claim RPC');
  assert.equal(verifications,2);
  epochLive=false;aliasLive=false;
  await runMissionBatch(forbidden);
  assert.equal(verifications,2,'No mission79 alias proof is needed after the SQL gate was closed');
  // A failed epoch lookup is not evidence of a closed release. Deny claims.
- const previousClaims=calls.filter(x=>x==='claim_mission_work_release').length;
+ const previousClaims=calls.filter(x=>x==='claim_mission_work_release_epoch').length;
  epochUnavailable=true;
  const denied=await runMissionBatch(forbidden);
  assert.equal(denied.claimed,0);
  assert.equal(denied.releaseFence,'release_epoch_unavailable');
- assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,previousClaims);
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,previousClaims);
  // An authentic negative epoch still allows unrelated ordinary claim routing.
  epochUnavailable=false;epochLive=false;
  const ordinary=await runMissionBatch(forbidden);
  assert.equal(ordinary.claimed,0);
- assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,previousClaims+1);
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,previousClaims+1);
 });
 
 
