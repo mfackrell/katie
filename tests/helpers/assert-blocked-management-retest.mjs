@@ -184,7 +184,17 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [scheduled.missionId])).rows[0];
   assert.equal(originalJob.status,'queued');assert.equal(originalJob.attempts,0);
   const executionRelease='d'.repeat(40),unboundRelease='e'.repeat(40);
-  const stale=(await first.query('select claim_mission_work_release($1) r',[executionRelease])).rows[0].r;
+  // Negative release probes must not leave unrelated fixture workers leased:
+  // doing so fills the unchanged three-worker global cap before mission 79.
+  const isolatedNegativeClaim=async release=>{
+   await first.query('savepoint negative_release_claim');
+   try{return (await first.query('select claim_mission_work_release($1) r',[release])).rows[0].r;}
+   finally{
+    await first.query('rollback to savepoint negative_release_claim');
+    await first.query('release savepoint negative_release_claim');
+   }
+  };
+  const stale=await isolatedNegativeClaim(executionRelease);
   assert.notEqual(stale?.job?.id,originalJob.id,'Without an exact owner-source binding, a later SHA cannot claim mission 79');
 
   const offerArgs=[owner,project,executionRelease];
@@ -247,8 +257,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [scheduled.missionId])).rows[0].project_evidence.providerContinuationRelease,priorRelease,
    'Mission 79 must retain its immutable original source release');
 
-  const staleOther=(await first.query('select claim_mission_work_release($1) r',
-   [unboundRelease])).rows[0].r;
+  const staleOther=await isolatedNegativeClaim(unboundRelease);
   assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
   const claimed=(await first.query('select claim_mission_work_release($1) r',
    [executionRelease])).rows[0].r;
