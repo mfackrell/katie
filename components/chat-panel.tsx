@@ -2120,11 +2120,12 @@ export function ChatPanel({
         return;
       }
 
+      // A missing stream body is an uncertain delivery, not proof that the
+      // original server request failed. Reconcile it through the saved ID.
+      requestStage = "reading response stream";
       if (!effectiveResponse.body) {
         throw new Error("Missing response stream from /api/chat.");
       }
-
-      requestStage = "reading response stream";
       const reader = effectiveResponse.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
