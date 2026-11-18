@@ -8,7 +8,11 @@ export function bestAnswerClaimSupported(
   selectedEvidence?: CandidateEvidence
 ): boolean {
   const claims = [justification, ...alternatives.map(x => x.whyNotSelected)];
-  if (!claims.some(text => priorQualityClaim.test(text))) return true;
+  // Explicit denials of proof must not themselves count as affirmative claims.
+  const affirmative = claims.some(text => priorQualityClaim.test(text.replace(
+    /\b(?:no evidence of|not|never|without|cannot claim|has not been)\s+(?:an?\s+)?(?:proven|established|demonstrated|confirmed)/gi,
+    "unverified")));
+  if (!affirmative) return true;
   // A prior generated message or a delivery PASS is not a quality measurement.
   // Require attributed positive task feedback with an identified source task.
   return Boolean(selectedEvidence?.quality?.feedback?.evidence?.some(row =>

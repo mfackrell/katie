@@ -79,6 +79,9 @@ test("provider refusal, provider failure and normal completed response are disti
     (error:unknown)=>error instanceof ProviderResponseError && error.code==="PROVIDER_REFUSAL");
   assert.throws(()=>assertProviderOutput({provider:"openai",model:base.modelId!,text:"",
     responseStatus:"failed"}), (error:unknown)=>error instanceof ProviderResponseError && error.code==="PROVIDER_FAILURE");
+  assert.throws(()=>assertProviderOutput({provider:"openai",model:base.modelId!,text:"",
+    responseStatus:"completed",content:[{type:"refusal",refusal:"cannot comply"}]}),
+    (error:unknown)=>error instanceof ProviderResponseError && error.code==="PROVIDER_REFUSAL");
   assert.doesNotThrow(()=>assertProviderOutput({provider:"openai",model:base.modelId!,text:"Substantive independent assessment.",
     responseStatus:"completed"}));
 });
@@ -123,6 +126,7 @@ test("Best Answer rejects fabricated prior task-quality evidence; delivery alone
   const priorDelivery={quality:{feedback:{evidence:[]}}};
   assert.equal(bestAnswerClaimSupported(claim,[],priorDelivery),false);
   assert.equal(bestAnswerClaimSupported("Comparable answer quality is unknown.",[],priorDelivery),true);
+  assert.equal(bestAnswerClaimSupported("No evidence of proven prior analytical quality exists.",[],priorDelivery),true);
   const falseAlternative=[{whyNotSelected:"The winner has an established track record from a prior completed message."}];
   assert.equal(bestAnswerClaimSupported("Reasoned selection only",falseAlternative),false);
   const feedback={quality:{feedback:{evidence:[{outcome:"positive",source:"internal_review",

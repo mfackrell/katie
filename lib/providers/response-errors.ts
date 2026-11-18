@@ -18,14 +18,14 @@ export function assertProviderOutput(result: ProviderResponse): void {
       "The model's response was stopped by provider safety filtering.", false, "PROVIDER_REFUSAL");
     throw new ProviderResponseError("The provider reported an incomplete answer.", false, "PROVIDER_INCOMPLETE");
   }
+  if (result.content?.some(part => /^(?:refusal|output_refusal)$/i.test(part.type)))
+    throw new ProviderResponseError("The provider declined this request.", false, "PROVIDER_REFUSAL");
   if (result.responseStatus === "completed" && !result.text?.trim() &&
       !result.content?.some(part => /image|video|audio/i.test(part.type) || Boolean(part.text?.trim())))
     throw new ProviderResponseError(
       "The provider completed without any visible answer or usable media.", false, "COMPLETED_EMPTY_RESPONSE");
   if (result.responseStatus === "failed" || result.responseStatus === "cancelled")
     throw new ProviderResponseError("The provider did not complete this generation.", false, "PROVIDER_FAILURE");
-  if (result.content?.some(part => /^(?:refusal|output_refusal)$/i.test(part.type)))
-    throw new ProviderResponseError("The provider declined this request.", false, "PROVIDER_REFUSAL");
   if (isTimestampOnlyResponse(result.text ?? "") &&
       !result.content?.some(part => /image|video|audio/i.test(String(part.type)))) {
     throw new ProviderResponseError("The AI provider returned only internal timestamp metadata.", true, "METADATA_ONLY_RESPONSE");
