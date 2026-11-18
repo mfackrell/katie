@@ -14,6 +14,12 @@ type ActorRow = {
   parent_actor_id: string | null;
   routing_profile: unknown;
   review_mode?: string;
+  operating_instruction_mode?: "legacy" | "modular";
+  actor_operating_instruction_assignments?: Array<{
+    module_id: string;
+    position: number;
+    operating_instruction_modules: { id: string; title: string; content: string } | null;
+  }>;
   created_at: string;
   updated_at: string;
 };
@@ -45,8 +51,21 @@ type MemoryRow = {
 };
 
 function toActor(row: ActorRow): Actor {
+  const assignments = row.actor_operating_instruction_assignments;
+  const validModules = Array.isArray(assignments) && assignments.every(item =>
+    item && Number.isInteger(item.position) && item.position > 0 &&
+    item.operating_instruction_modules &&
+    typeof item.operating_instruction_modules.id === "string" &&
+    typeof item.operating_instruction_modules.title === "string" &&
+    typeof item.operating_instruction_modules.content === "string");
+  // A missing or incomplete embedding must never cause a specialist to lose instructions.
+  const modular = row.operating_instruction_mode === "modular" && validModules;
+  const modules = modular ? [...assignments!]
+    .sort((a, b) => a.position - b.position)
+    .map(item => item.operating_instruction_modules!) : [];
   return {
     id: row.id,
+    ...(modular ? { operatingInstructionMode: "modular" as const, operatingInstructionModules: modules } : {}),
     name: row.name,
     actorKind: row.actor_kind,
     purpose: row.system_prompt,
@@ -180,7 +199,7 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at,operating_instruction_mode,actor_operating_instruction_assignments(module_id,position,operating_instruction_modules(id,title,content))")
     .eq("id", actorId)
     .maybeSingle<ActorRow>();
 
@@ -210,7 +229,7 @@ export async function listActors(): Promise<Actor[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at,operating_instruction_mode,actor_operating_instruction_assignments(module_id,position,operating_instruction_modules(id,title,content))")
     .order("name", { ascending: true })
     .order("created_at", { ascending: true })
     .returns<ActorRow>();
@@ -238,7 +257,7 @@ export async function saveActor(actor: Actor): Promise<Actor> {
   const { data, error } = await client
     .from("actors")
     .upsert(payload, { onConflict: "id" })
-    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at,operating_instruction_mode,actor_operating_instruction_assignments(module_id,position,operating_instruction_modules(id,title,content))")
     .single<ActorRow>();
 
   if (error) {

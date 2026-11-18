@@ -34,6 +34,9 @@ export type ActorRoutingProfile = {
 };
 
 export interface Actor {
+  /** Legacy assembly is the compatibility default for every unassigned actor. */
+  operatingInstructionMode?: "legacy" | "modular";
+  operatingInstructionModules?: Array<{ id: string; title: string; content: string }>;
   actorKind?: 'standard' | 'executive';
   managedAgentId?: string;
   reviewMode?: import("@/lib/collaboration/review-mode").ReviewMode;

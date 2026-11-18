@@ -132,6 +132,11 @@ const actorIdParamSchema = z.object({
   id: z.string().min(1)
 });
 
+const actorModuleUpdateSchema = z.object({
+  operatingInstructionMode: z.enum(["legacy","modular"]),
+  operatingInstructionModuleIds: z.array(z.string().min(1)).max(16),
+}).strict();
+
 const updateActorSchema = z.object({
   purpose: z.string().trim().min(1).optional(),
   reviewMode: z.enum(["adaptive", "always", "off"]).optional(),
@@ -180,10 +185,18 @@ export async function GET(request:NextRequest) {
     actors=allActors.filter(a=>!guestIds.has(a.id));
   }
 
-  const { data: managed, error } = await getSupabaseAdminClient().from("managed_agents").select("id,actor_id").returns<{ id: string; actor_id: string }>();
+  const [{ data: managed, error }, { data: modules, error: moduleError }] = await Promise.all([
+    getSupabaseAdminClient().from("managed_agents").select("id,actor_id").returns<{ id: string; actor_id: string }>(),
+    getSupabaseAdminClient().from("operating_instruction_modules").select("id,title,sort_order").order("sort_order", { ascending: true })
+      .returns<{ id: string; title: string; sort_order: number }>(),
+  ]);
   if (error) return NextResponse.json({ error: "Agent identities unavailable" }, { status: 503 });
+  if (moduleError) return NextResponse.json({ error: "Actor operating modules unavailable" }, { status: 503 });
   const identities = new Map((managed ?? []).map(a => [a.actor_id, a.id]));
-  return NextResponse.json({ actors: actors.map(a => ({ ...a, ...(identities.has(a.id) ? { managedAgentId: identities.get(a.id) } : {}) })) }, { headers: { "Cache-Control": "no-cache" } });
+  return NextResponse.json({
+    actors: actors.map(a => ({ ...a, ...(identities.has(a.id) ? { managedAgentId: identities.get(a.id) } : {}) })),
+    operatingInstructionModules: modules ?? [],
+  }, { headers: { "Cache-Control": "no-cache" } });
 }
 
 export async function POST(request: NextRequest) {
@@ -268,7 +281,9 @@ export async function PATCH(request: NextRequest) {
 
     const raw = await request.json();
     if(raw?.calibration === "apply") return calibrationApply(actorId,String(raw.hash||""),raw.approved,raw.groups,raw.proof);
-    const { purpose, reviewMode } = updateActorSchema.parse(raw);
+    const configuringModules = raw?.operatingInstructionMode !== undefined;
+    const moduleUpdate = configuringModules ? actorModuleUpdateSchema.parse(raw) : null;
+    const update = configuringModules ? null : updateActorSchema.parse(raw);
 
     if (await managedActor(actorId)) return NextResponse.json({ error: "Edit managed agents in Agents management." }, { status: 409 });
     const executiveIdentity = await getActorById(actorId);
@@ -278,6 +293,21 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
     }
 
+    if (moduleUpdate) {
+      // Same owner/guest-isolation and managed/executive protection as actor edits.
+      // The service_role-only RPC replaces the assignments transactionally.
+      const { error } = await authorizationDb.rpc("set_actor_operating_instruction_modules", {
+        p_actor_id: actorId,
+        p_mode: moduleUpdate.operatingInstructionMode,
+        p_module_ids: moduleUpdate.operatingInstructionModuleIds,
+      });
+      if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      const configured = await getActorById(actorId);
+      if (!configured) return NextResponse.json({ error: "Actor unavailable after module update" }, { status: 500 });
+      return NextResponse.json({ actor: configured });
+    }
+
+    const { purpose, reviewMode } = update!;
     const now = new Date().toISOString();
     const updates: Record<string, unknown> = { updated_at: now };
     if (purpose !== undefined && purpose !== existingActor.purpose) {

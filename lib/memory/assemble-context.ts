@@ -1,7 +1,7 @@
 import { recentActorReactionEvents, recentReactionContext } from "@/lib/chat/message-reactions";
 import { loadTaskHandoffKnowledgeContext } from "@/lib/agents/task-handoff-knowledge";
 import { currentAgentTask } from "@/lib/agents/policy";
-import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
+import { getDeliverableStandardInstruction, getUniversalDeliverableInstruction } from "@/lib/chat/deliverable-standard";
 import { getAdaptiveResponseCompositionInstruction } from "@/lib/chat/adaptive-response-composition";
 import { getChatContextState, getPendingIntermediateContext, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
@@ -117,20 +117,31 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
 
   const longTermBlock = formatLongTermMemoryForPrompt(longTermMemory);
 
+  const actorOperatingInstructions = actor.operatingInstructionMode === "modular"
+    && Array.isArray(actor.operatingInstructionModules)
+    ? [
+        getUniversalDeliverableInstruction(),
+        getAdaptiveResponseCompositionInstruction(),
+        MEMORY_ARCHITECTURE_GUIDE,
+        // Preserve the existing managed-task instruction snapshot as the
+        // authoritative task identity, instead of reinjecting actor.purpose.
+        ...(managedTask ? [] : [actor.purpose]),
+        ...actor.operatingInstructionModules.map(module => module.content),
+        ...(managedTask ? [managedTask.snapshot.instructions] : []),
+      ]
+    : [
+        currentAgentTask()?.snapshot.instructions ?? actor.purpose,
+        getDeliverableStandardInstruction(),
+        getAdaptiveResponseCompositionInstruction(),
+        MEMORY_ARCHITECTURE_GUIDE,
+      ];
+
   return {
     reviewMode: currentAgentTask()?.snapshot.reviewMode ?? actor.reviewMode ?? "adaptive",
     name: process.env.ASSISTANT_NAME || "Katie",
-    cacheablePersona: [
-      currentAgentTask()?.snapshot.instructions ?? actor.purpose,
-      getDeliverableStandardInstruction(),
-      getAdaptiveResponseCompositionInstruction(),
-      MEMORY_ARCHITECTURE_GUIDE,
-    ].join("\n\n"),
+    cacheablePersona: actorOperatingInstructions.join("\n\n"),
     persona: [
-      currentAgentTask()?.snapshot.instructions ?? actor.purpose,
-      getDeliverableStandardInstruction(),
-      getAdaptiveResponseCompositionInstruction(),
-      MEMORY_ARCHITECTURE_GUIDE,
+      ...actorOperatingInstructions,
       correctionsBlock,
       longTermBlock,
       handoffKnowledge,

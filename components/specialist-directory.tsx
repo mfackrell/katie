@@ -9,6 +9,8 @@ import type { Actor, ChatThread } from "@/lib/types/chat";
 import type { UIState } from "@/components/saved-workspace-state";
 import type { ManagedAgent } from "@/lib/agents/policy";
 
+type OperatingInstructionChoice = { id: string; title: string; sort_order: number };
+
 type Registry = {
   id: string;
   actor_id: string;
@@ -106,10 +108,12 @@ function MemoryCalibration({actor,chatId}:{actor:Actor;chatId?:string}) {
 function AgentControls({
   card,
   actors,
+  operatingModules,
   onChanged,
 }: {
   card: Card;
   actors: Actor[];
+  operatingModules: OperatingInstructionChoice[];
   onChanged: () => void;
 }) {
   const [instructions, setInstructions] = useState(
@@ -118,9 +122,14 @@ function AgentControls({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const [instructionMode, setInstructionMode] = useState<"legacy" | "modular">(card.actor.operatingInstructionMode ?? "legacy");
+  const [moduleIds, setModuleIds] = useState<string[]>(card.actor.operatingInstructionModules?.map(module => module.id) ?? []);
   useEffect(() => {
     setInstructions(card.managed?.config.instructions ?? card.actor.purpose);
-  }, [card.actor.purpose, card.managed?.config.instructions]);
+    setInstructionMode(card.actor.operatingInstructionMode ?? "legacy");
+    setModuleIds(card.actor.operatingInstructionModules?.map(module => module.id) ?? []);
+  }, [card.actor.purpose, card.actor.operatingInstructionMode,
+      card.actor.operatingInstructionModules, card.managed?.config.instructions]);
   async function save(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -146,6 +155,24 @@ function AgentControls({
       setBusy(false);
     }
   }
+  async function saveModules() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await change(`/api/actors?id=${encodeURIComponent(card.actor.id)}`, "PATCH", {
+        operatingInstructionMode: instructionMode,
+        operatingInstructionModuleIds: instructionMode === "modular" ? moduleIds : [],
+      });
+      setNotice("Actor operating-instruction modules saved.");
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Module configuration failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove() {
     const descendants = new Set([card.actor.id]);
     let size = 0;
@@ -255,6 +282,38 @@ function AgentControls({
           </p>
         )}
       </form>
+      {!card.managed && (
+        <section className="mt-5 border-t border-white/10 pt-4 text-sm">
+          <h4 className="font-medium">Operating instruction modules</h4>
+          <p className="mt-1 text-xs text-zinc-400">
+            Configure reusable operating instructions for this actor; its personality stays unchanged.
+          </p>
+          <label className="mt-3 block">
+            Instruction assembly mode
+            <select className={field} value={instructionMode}
+              onChange={event => setInstructionMode(event.target.value as "legacy" | "modular")}
+              disabled={busy}>
+              <option value="legacy">Existing shared operating instructions</option>
+              <option value="modular">Universal foundation + assigned modules</option>
+            </select>
+          </label>
+          {instructionMode === "modular" && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-zinc-400">Assigned reusable modules (optional):</p>
+              {operatingModules.map(module => (
+                <label key={module.id} className="flex items-start gap-2">
+                  <input type="checkbox" checked={moduleIds.includes(module.id)} disabled={busy}
+                    onChange={event => setModuleIds(previous =>
+                      event.target.checked ? [...previous, module.id] : previous.filter(id => id !== module.id))}/>
+                  <span>{module.title}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <button type="button" className={button+" mt-3"} disabled={busy}
+            onClick={() => void saveModules()}>Save operating modules</button>
+        </section>
+      )}
     </details>
   );
 }
@@ -262,6 +321,7 @@ function AgentControls({
 function AgentCard({
   card,
   actors,
+  operatingModules,
   chats,
   archived,
   onChanged,
@@ -269,6 +329,7 @@ function AgentCard({
 }: {
   card: Card;
   actors: Actor[];
+  operatingModules: OperatingInstructionChoice[];
   chats: ChatThread[];
   archived: Set<string>;
   onChanged: () => void;
@@ -357,14 +418,14 @@ function AgentCard({
         <p className="mt-4 text-xs text-zinc-400">System identity. Management rules are enforced by the Executive runtime, not editable chatbot instructions.</p>
       ) : card.registry ? (
         <p className="mt-4 text-xs text-zinc-400">This specialist uses a versioned, independently verified mission contract. Review its capability and assignment settings in <Link href="/settings/advanced" className="underline">Advanced management</Link>; it does not share editable global Executive instructions.</p>
-      ) : <AgentControls card={card} actors={actors} onChanged={onChanged} />}
+      ) : <AgentControls card={card} actors={actors} operatingModules={operatingModules} onChanged={onChanged} />}
     </article>
   );
 }
 
 export function SpecialistDirectory({ id }: { id?: string }) {
   const router = useRouter();
-  const actors = useResource<{ actors: Actor[] }>("/api/actors"),
+  const actors = useResource<{ actors: Actor[]; operatingInstructionModules: OperatingInstructionChoice[] }>("/api/actors"),
     registry = useResource<{ specialists: Registry[] }>("/api/specialists"),
     chats = useResource<{ chats: ChatThread[] }>("/api/chats"),
     saved = useResource<{ states: UIState[] }>("/api/ui-state"),
@@ -377,6 +438,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const all = actors.data?.actors ?? [],
+    operatingModules = actors.data?.operatingInstructionModules ?? [],
     entries = registry.data?.specialists ?? [];
   const state = new Map(
     (saved.data?.states ?? []).map((value) => [value.key, value.value]),
@@ -582,6 +644,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
             <AgentCard
               card={selected}
               actors={all}
+              operatingModules={operatingModules}
               chats={chats.data?.chats ?? []}
               archived={archived}
               onChanged={refresh}
@@ -631,6 +694,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
                     key={card.id}
                     card={card}
                     actors={all}
+                    operatingModules={operatingModules}
                     chats={chats.data?.chats ?? []}
                     archived={archived}
                     onChanged={refresh}

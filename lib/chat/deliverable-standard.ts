@@ -28,6 +28,22 @@ export function getDeliverableStandardInstruction(): string {
   ].join("\n");
 }
 
+
+/** The original general-purpose sentences, unchanged. Actor-specific sentences
+ * are supplied separately from assigned reusable instruction modules. */
+export function getUniversalDeliverableInstruction(): string {
+  const specialistPrefixes = [
+    "Choose the reasoning stance appropriate to the task:",
+    "APPLICATION COMPLETION:",
+    "EVIDENCE-BASED CAPABILITY REASONING:",
+    "Communicate the selected evidence in the most effective",
+  ];
+  return getDeliverableStandardInstruction()
+    .split("\n")
+    .filter(line => !specialistPrefixes.some(prefix => line.startsWith(prefix)))
+    .join("\n");
+}
+
 export function getReviewerCompletionInstruction(includeCompletionStandard = true): string {
   return [
     ...(includeCompletionStandard ? [getDeliverableStandardInstruction()] : []),
