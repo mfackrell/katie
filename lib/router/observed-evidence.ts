@@ -55,10 +55,16 @@ export function modelAttributedFeedback(
 ): Quality['feedback'] | undefined {
   const matchesModel = (observed: string) => observed === model ||
     (observed.startsWith(model + '-') && /^\d{4}-\d{2}-\d{2}$/.test(observed.slice(model.length+1)));
-  // Best Answer retains exact-intent feedback matching. Best Value may receive
-  // cross-intent observations for the selector to assess against the actual task.
+  // Best Answer retains exact-intent matching. Best Value may surface
+  // nearby conversational labels only when the original task excerpt exists;
+  // the selector still must establish actual objective-level comparability.
+  // Never admit coding/financial evidence merely because the model is identical.
+  const conversational = new Set(['general-text','social-emotional','safety-sensitive-vision']);
+  const isRelated = (row: ObservedModelFeedback) => row.intent === intent ||
+    (bestValueComparable && conversational.has(intent) && conversational.has(row.intent) &&
+      Boolean(row.task_excerpt?.trim()));
   const relevant = rows.filter(row => row.provider === provider && matchesModel(row.model) &&
-    (bestValueComparable || row.intent === intent) && ['positive','negative','ambiguous'].includes(row.outcome) &&
+    isRelated(row) && ['positive','negative','ambiguous'].includes(row.outcome) &&
     Number.isFinite(Date.parse(row.observed_at)) &&
     Date.parse(row.observed_at) <= now && Date.parse(row.observed_at) >= now - 30 * 86400000)
     .sort((a,b) => Date.parse(b.observed_at) - Date.parse(a.observed_at)).slice(0,12);
