@@ -808,6 +808,68 @@ begin
 end
 $fn$;
 
+-- The production worker must present the EXACT SQL-gate generation that
+-- it observed before verifying the canonical Vercel alias. A release gate
+-- closed/reopened between HTTP verification and claim has a new generation
+-- and therefore cannot claim the saved management job using stale proof.
+-- Ordinary projects never require this special epoch.
+create function public.project_org_retest_release_epoch(
+ p_project uuid,p_release text
+) returns jsonb language sql stable security definer set search_path=public,pg_temp as $fn$
+ select coalesce((select jsonb_build_object('generation',g.generation,
+  'active',g.state='active' and g.release_sha=p_release and
+   g.alias_name='katie-mu.vercel.app')
+  from project_retest_production_release_gate g
+  where g.project_id=p_project),
+  jsonb_build_object('generation',0,'active',false));
+$fn$;
+
+create function public.project_org_retest_claim_release_authorized_epoch(
+ p_project uuid,p_release text,p_generation bigint
+) returns boolean language sql stable security definer set search_path=public,pg_temp as $fn$
+ select coalesce(p_generation>0,false)
+  and public.project_org_retest_claim_release_authorized(p_project,p_release)
+  and exists(select 1 from public.project_retest_production_release_gate g
+   where g.project_id=p_project and g.release_sha=p_release
+    and g.state='active' and g.alias_name='katie-mu.vercel.app'
+    and g.generation=p_generation);
+$fn$;
+
+-- Clone the installed, source-qualified production claim implementation,
+-- including its global three-worker cap and all existing leasing predicates,
+-- but require p_epoch for the original renewed mission79 branch. Preserve the
+-- legacy function for unrelated work; it can no longer claim mission79 after
+-- its owner-approved future window exists (even on a stale deployment).
+do $epoch_claim_patch$
+declare
+ legacy text;epoch_body text;
+ header text:='FUNCTION public.claim_mission_work_release(p_release text)';
+ proof text:='project_org_retest_claim_release_authorized(b.project_id,p_release)';
+begin
+ legacy:=pg_get_functiondef('public.claim_mission_work_release(text)'::regprocedure);
+ if (length(legacy)-length(replace(legacy,header,'')))/length(header)<>1
+  or (length(legacy)-length(replace(legacy,proof,'')))/length(proof)<>2
+ then raise exception 'Unexpected original release-claim source contract for generation-bound worker';end if;
+ epoch_body:=replace(legacy,header,
+  'FUNCTION public.claim_mission_work_release_epoch(p_release text, p_epoch bigint)');
+ epoch_body:=replace(epoch_body,proof,
+  'project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch)');
+ execute epoch_body;
+ -- Fail closed for the original mission79 on older worker deployments that
+ -- still invoke the single-argument claim RPC; all other projects are intact.
+ execute replace(legacy,proof,'false');
+end $epoch_claim_patch$;
+
+revoke all on function
+ public.project_org_retest_release_epoch(uuid,text),
+ public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint),
+ public.claim_mission_work_release_epoch(text,bigint)
+ from public,anon,authenticated,service_role;
+grant execute on function
+ public.project_org_retest_release_epoch(uuid,text),
+ public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint),
+ public.claim_mission_work_release_epoch(text,bigint) to service_role;
+
 revoke all on function
  public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
