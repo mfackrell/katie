@@ -146,3 +146,30 @@ test('durable paused workflow takes precedence over failed chat receipt and rema
  await assert.rejects(poll('chat',{requestId:'req-paused',startedAt:new Date().toISOString(),content:'test'}),
    err=>err.name==='PausedChatError'&&err.message.includes('Status / Usage'));
 });
+
+test('same owner session authenticates existing status and message reads',async()=>{
+ const clock={now:(()=>{let t=0;return()=>t+=1;})(),parse:Date.parse};
+ const authorizationHeaders=[];
+ const poll=polling(async (url,opts)=>{
+  authorizationHeaders.push(opts?.headers?.Authorization);
+  return url.includes('/status')
+   ? {ok:true,json:async()=>({status:'completed',assistantMessageId:'reply',workflowStatus:'completed'})}
+   : {ok:true,json:async()=>({messages:[{id:'reply',role:'assistant',content:'verified'}]})};
+ },{clock});
+ const result=await poll('chat',{requestId:'r',startedAt:new Date().toISOString(),content:'question'},60,undefined,'owner-session');
+ assert.equal(result[0].content,'verified');
+ assert.deepEqual(authorizationHeaders,['Bearer owner-session','Bearer owner-session']);
+});
+
+test('UI retains pending receipt after stream interruption, controls duplicate sends and does not manufacture a failure',()=>{
+ const tail=source.slice(source.indexOf('let terminalFailure = error instanceof TerminalChatError;'),
+                         source.indexOf('function handleCancelRequest()'));
+ assert.match(tail,/if \(isRecoverableStreamFailure\)/);
+ assert.match(tail,/The polling window is not a terminal server outcome/);
+ assert.match(tail,/setStatusMessage\(savedAnswerPreviewed[\s\S]*?return;/);
+ assert.match(tail,/if \(!terminalFailure\) \{[\s\S]*?status remains unverified[\s\S]*?return;/);
+ assert.match(source,/if \(readPendingChatRequest\(chatId\)\) \{[\s\S]*?do not resend/);
+ assert.match(source,/Age alone cannot prove a saved request failed/);
+ assert.doesNotMatch(source,/pendingAgeMs >/);
+ assert.match(source,/savedStatus\.status === "completed" && savedStatus\.workflowStatus === "completed"/);
+});
