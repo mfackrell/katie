@@ -29,3 +29,10 @@ test("existing system instruction editor remains independently collapsible", () 
   assert.match(controls, /System instructions & agent settings/);
   assert.match(controls, /Save system instructions/);
 });
+
+test("advanced actor inventory exposes a direct link to the module editor", () => {
+  const advanced = readFileSync("components/identity-directory.tsx", "utf8");
+  assert.match(advanced, /Operating modules/);
+  assert.match(advanced, /#operating-instruction-modules/);
+  assert.match(advanced, /!actor\.managedAgentId && actor\.actorKind !== "executive"/);
+});
