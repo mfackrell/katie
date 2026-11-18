@@ -13,6 +13,7 @@ assert.match(bindingSql,/perform 1 from mission_assignments where id=p_assignmen
 assert.doesNotMatch(bindingSql,/^ select 1 from (agent_missions|mission_assignments) where .* for update;/m);
 assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The native fixture must exercise the new exact-release binding predicate');
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/rollback to savepoint negative_release_claim/,'Negative claim probes must not consume fixture-wide worker capacity');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/mission_assignments set created_at='2000-01-01T00:00:00Z'/,'Native proof must prioritize only the disposable original mission79 assignment');
 
 const PROJECT='fe9d2658-41e3-44c1-ae8e-a0cba98371fe';
 const SCOPE='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
