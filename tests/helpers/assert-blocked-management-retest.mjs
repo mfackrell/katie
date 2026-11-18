@@ -238,9 +238,15 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const executionRelease='d'.repeat(40),unboundRelease='e'.repeat(40);
   // Negative release probes must not leave unrelated fixture workers leased:
   // doing so fills the unchanged three-worker global cap before mission 79.
-  const isolatedNegativeClaim=async release=>{
+  const releaseEpoch=async release=>(await first.query(
+   'select project_org_retest_release_epoch($1,$2) e',[project,release])).rows[0].e;
+  const isolatedNegativeClaim=async(release,observedGeneration)=>{
    await first.query('savepoint negative_release_claim');
-   try{return (await first.query('select claim_mission_work_release($1) r',[release])).rows[0].r;}
+   try{
+    const generation=observedGeneration??(await releaseEpoch(release)).generation;
+    return (await first.query('select claim_mission_work_release_epoch($1,$2) r',
+     [release,generation])).rows[0].r;
+   }
    finally{
     await first.query('rollback to savepoint negative_release_claim');
     await first.query('release savepoint negative_release_claim');
@@ -339,6 +345,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
    [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
   assert.equal(activeGate.state,'active');
+  const activeEpoch=(await first.query('select project_org_retest_release_epoch($1,$2) e',
+   [project,executionRelease])).rows[0].e;
+  assert.equal(activeEpoch.active,true);assert.equal(activeEpoch.generation,activeGate.generation??1);
   await first.query('set role service_role');
   assert.equal((await first.query(
    'select project_org_retest_active_release($1,$2) allowed',
@@ -476,6 +485,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(closedGate.state,'closed');
   await first.query('set role service_role');
   const staleWhileClosed=await isolatedNegativeClaim(executionRelease);
+  assert.equal((await releaseEpoch(executionRelease)).active,false);
   assert.notEqual(staleWhileClosed?.job?.id,originalJob.id,
    'A superseded deployment cannot claim the original assignment while the canonical alias gate is sealed');
   await rejected(()=>first.query(
@@ -486,8 +496,17 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
    [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g.state,'active');
   await first.query('set role service_role');
-  const claimed=(await first.query('select claim_mission_work_release($1) r',
-   [executionRelease])).rows[0].r;
+  const reopenedEpoch=await releaseEpoch(executionRelease);
+  assert.equal(reopenedEpoch.active,true);
+  assert.ok(reopenedEpoch.generation>activeEpoch.generation,
+   'Closing/reopening the release gate must advance its generation');
+  const staleEpochClaim=await isolatedNegativeClaim(executionRelease,activeEpoch.generation);
+  assert.notEqual(staleEpochClaim?.job?.id,originalJob.id,
+   'Old pre-promotion epoch must not claim the original job after reopening');
+  const legacyClaim=await isolatedNegativeClaim(executionRelease,-1);
+  assert.notEqual(legacyClaim?.job?.id,originalJob.id);
+  const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2) r',
+   [executionRelease,reopenedEpoch.generation])).rows[0].r;
   if(!claimed||claimed.mission?.id!==scheduled.missionId){
    const predicateSql=[
     "select j.id job_id,j.status job_status,j.attempts,j.lease,j.available_at,",
@@ -503,9 +522,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     "from mission_assignments j join agent_missions m on m.id=j.mission_id join work_projects p on p.id=m.project_id where j.id=$1"
    ].join(' ');
    const diagnostic=(await first.query(predicateSql,[originalJob.id,executionRelease])).rows;
-   const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release(text)'::regprocedure) definition")).rows[0].definition;
+   const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint)'::regprocedure) definition")).rows[0].definition;
    console.log('MISSION79_CLAIM_REJECTION_DIAGNOSTIC '+JSON.stringify({
-    diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized(b.project_id,p_release)').length-1,
+    diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch)').length-1,
     staleClaim:stale,otherClaim:staleOther,claimed
    }));
   }
@@ -516,8 +535,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.ok(claimed?.job?.lease,'Real six-minute worker lease required');
   assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
   assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
-  const duplicate=(await first.query('select claim_mission_work_release($1) r',
-   [executionRelease])).rows[0].r;
+  const duplicate=(await first.query('select claim_mission_work_release_epoch($1,$2) r',
+   [executionRelease,reopenedEpoch.generation])).rows[0].r;
   assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');
 
   // Continue the REAL database-claimed management identity into the normal
