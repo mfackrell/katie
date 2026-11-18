@@ -41,12 +41,17 @@ on conflict (id) do nothing;
 
 -- Exact ID assignments established in docs/actor-operating-instruction-ownership.md.
 -- Do NOT assign modules by name; hundreds of guest actors have the name Katie.
-insert into public.actor_operating_instruction_assignments(actor_id,module_id,position) values
-  ('d36824aa-7fcd-4a7a-978a-73f073ccc789','task-stance',1),
-  ('d36824aa-7fcd-4a7a-978a-73f073ccc789','application-completion',2),
-  ('d36824aa-7fcd-4a7a-978a-73f073ccc789','professional-evidence',3),
-  ('d36824aa-7fcd-4a7a-978a-73f073ccc789','professional-communication',4),
-  ('6c178d99-6d19-49e6-83ac-a2d7eff3d458','technical-stance',1)
+-- Test and new tenants will not have these live actor IDs; leave them untouched.
+insert into public.actor_operating_instruction_assignments(actor_id,module_id,position)
+select a.id,seed.module_id,seed.position
+from (values
+  ('d36824aa-7fcd-4a7a-978a-73f073ccc789'::uuid,'task-stance',1),
+  ('d36824aa-7fcd-4a7a-978a-73f073ccc789'::uuid,'application-completion',2),
+  ('d36824aa-7fcd-4a7a-978a-73f073ccc789'::uuid,'professional-evidence',3),
+  ('d36824aa-7fcd-4a7a-978a-73f073ccc789'::uuid,'professional-communication',4),
+  ('6c178d99-6d19-49e6-83ac-a2d7eff3d458'::uuid,'technical-stance',1)
+) as seed(actor_id,module_id,position)
+join public.actors a on a.id=seed.actor_id
 on conflict (actor_id,module_id) do nothing;
 
 update public.actors set operating_instruction_mode='modular'
