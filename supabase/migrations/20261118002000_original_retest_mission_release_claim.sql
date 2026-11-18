@@ -263,6 +263,8 @@ create function public.project_org_retest_original_owner_lineage(
   join project_execution_windows oldw on oldw.id=w.authorization_id
    and oldw.project_id=w.project_id and oldw.owner_id=w.owner_id
    and oldw.decision_id=w.decision_id and oldw.release_sha=w.prior_release_sha
+  join project_provider_execution original_a on original_a.project_id=r.project_id
+   and original_a.owner_id=r.owner_id and original_a.continuation_decision_id=oldw.decision_id
    and oldw.prior_cutoff=w.prior_cutoff and oldw.cutoff=w.cutoff
   where r.project_id=p_project
    and r.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
@@ -270,10 +272,22 @@ create function public.project_org_retest_original_owner_lineage(
    and r.window_id='7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
    and r.cutoff='2026-11-18T14:00:00Z'::timestamptz
    and r.historical_missions=78
-   and (select count(*) from project_organization_contract_changes c
+   and (select count(*) from project_organization_nodes n
+      join project_organization_contract_changes c on c.node_id=n.id
+       and c.project_id=n.project_id and c.window_id=w.authorization_id
+      where n.project_id=r.project_id and n.status='active'
+       and c.prior_deadline=w.prior_cutoff and c.deadline=w.cutoff
+       and c.tools=c.prior_tools and n.tools=c.tools)=13
+   and (select count(*) from project_organization_nodes n
+      where n.project_id=r.project_id and n.status='active')=13
+   and (select count(distinct c.node_id) from project_organization_contract_changes c
+      join project_organization_nodes n on n.id=c.node_id
+       and n.project_id=c.project_id and n.status='active'
       where c.project_id=r.project_id and c.window_id=w.authorization_id
        and c.prior_deadline=w.prior_cutoff and c.deadline=w.cutoff
-       and c.tools=c.prior_tools)=13
+       and c.tools=c.prior_tools and n.tools=c.tools)=13
+   and (select count(*) from project_organization_contract_changes c
+      where c.project_id=r.project_id and c.window_id=w.authorization_id)=13
  );
 $fn$;
 
