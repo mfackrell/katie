@@ -320,7 +320,7 @@ end $source_patch$;
 do $renewed_exact_release_fence$
 declare body text;
  anchor text:='(project_provider_continued_assignment(a.id) and (p_release=(select continuation_release_sha from project_provider_execution where project_id=b.project_id) or project_org_retest_claim_release_authorized(b.project_id,p_release)))';
- replacement text:='(project_provider_continued_assignment(a.id) and ((p_release=(select continuation_release_sha from project_provider_execution where project_id=b.project_id) and not exists(select 1 from project_retest_future_window_receipts q where q.project_id=b.project_id and q.mission_id=b.id and q.assignment_id=a.id)) or project_org_retest_claim_release_authorized(b.project_id,p_release)))';
+ replacement text:='(project_provider_continued_assignment(a.id) and ((p_release=(select continuation_release_sha from project_provider_execution where project_id=b.project_id) and not exists(select 1 from project_retest_future_window_receipts q where q.project_id=b.project_id)) or project_org_retest_claim_release_authorized(b.project_id,p_release)))';
 begin
  body:=pg_get_functiondef('public.claim_mission_work_release(text)'::regprocedure);
  if (length(body)-length(replace(body,anchor,'')))/length(anchor)<>2
@@ -353,6 +353,9 @@ begin
   or r.prior_release_sha is null or r.prior_release_sha !~ '^[a-f0-9]{40}$'
   or r.release_sha is null or r.release_sha !~ '^[a-f0-9]{40}$'
   or r.release_sha is not distinct from r.prior_release_sha
+  -- This recovery is exclusively after the actual original owner cutoff.
+  -- No unexpired owner window may be silently superseded.
+  or clock_timestamp()<='2026-11-18T14:00:00Z'::timestamptz
  then raise exception 'Original owner retest and project identity not eligible for window renewal';end if;
  select * into m from agent_missions where id=p.active_mission_id and project_id=p.id;
  select * into j from mission_assignments where mission_id=m.id and role='work';
@@ -460,6 +463,7 @@ begin
   or p_authorization is null or p_state_hash is null or p_state_hash is distinct from offer->>'stateHash'
   or p_cutoff is null or not isfinite(p_cutoff) or p_cutoff<=clock_timestamp()+interval '5 minutes'
   or p_cutoff>clock_timestamp()+interval '24 hours' or p_cutoff<=p.deadline
+  or clock_timestamp()<='2026-11-18T14:00:00Z'::timestamptz
   or exists(select 1 from project_execution_windows where id=p_authorization)
  then raise exception 'Fresh authenticated owner future-window selection and unchanged state required';end if;
  perform 1 from project_organization_nodes where project_id=p.id order by depth,id for update;
