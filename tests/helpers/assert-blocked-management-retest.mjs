@@ -215,10 +215,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   // Reproduce the actual production 45-minute no-progress watchdog and its
   // expired management mission: neither status is changed in production.
   await first.query('reset role');
-  await first.query(\`update work_projects set status='blocked',
+  await first.query(`update work_projects set status='blocked',
     progress_since=clock_timestamp()-interval '46 minutes',
     detail='No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.'
-    where id=$1\`,[project]);
+    where id=$1`,[project]);
   await first.query("update agent_missions set status='blocked',detail='Mission deadline reached; no work started' where id=$1",
    [scheduled.missionId]);
   await first.query('set role service_role');
