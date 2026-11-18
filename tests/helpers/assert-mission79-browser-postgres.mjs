@@ -114,7 +114,15 @@ export async function assertMission79BrowserPostgres(first,{
     });
     const result=await POST(request);
     const responseText=await result.text();
-    postResults.push({status:result.status,response:responseText.slice(0,800)});
+    postResults.push({status:result.status,response:responseText.slice(0,800),
+     sentOrigin:req.headers.origin??null,requestOrigin:new URL(request.url).origin,
+     bearerPresent:typeof req.headers.authorization==='string',
+     bearerSyntax:/^Bearer [A-Za-z0-9._~-]+$/.test(req.headers.authorization??''),
+     configured:{production:process.env.VERCEL_ENV==='production',
+      authEndpoint:!!process.env.NEXT_PUBLIC_SUPABASE_URL,
+      publicKey:!!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      ownerId:!!process.env.KATIE_OWNER_AUTH_USER_ID}
+    });
     res.statusCode=result.status;res.setHeader('content-type','application/json');
     res.end(responseText);
     return;
