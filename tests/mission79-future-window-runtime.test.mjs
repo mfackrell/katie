@@ -409,6 +409,8 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
    let releaseResponse;
    responseGate.promise=new Promise(resolve=>{releaseResponse=resolve;});
    const posts=[],errors=[];
+   let observedRequest;
+   const requestSeen=new Promise(resolve=>{observedRequest=resolve;});
    page.removeAllListeners('pageerror');page.on('pageerror',e=>errors.push(e.message));
    const input=scenario==='bind-release'?approved:base;
    const bearer=scenario==='no-owner'?'null':'"actual-ui-test-owner"';
@@ -424,6 +426,7 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
       body:'<html><div id="root"></div><script>'+react+'</script><script>'+script+'</script></html>'});
     const item={method:route.request().method(),headers:route.request().headers(),body:route.request().postDataJSON()};
     posts.push(item);
+    observedRequest(item);
     await responseGate.promise;
     const newReceipt=scenario==='bind-release'
      ?{stage:'bound',projectId,releaseSha,missionId,assignmentId,scopeHash,
@@ -438,6 +441,7 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
     const button=page.getByRole('button',{name:'Resume one owner-approved management decision'});
     await button.waitFor({timeout:12000});
     await button.evaluate(el=>{el.click();el.click();});
+    await Promise.race([requestSeen,new Promise((_,reject)=>setTimeout(()=>reject(Error('Binding POST not sent')),12000))]);
     await page.waitForFunction(()=>window.refreshCount===0&&document.body.textContent.includes('Verifying exact released authority'),{timeout:12000});
     assert.equal(posts.length,1,'Double click must not bind release twice');
     assert.equal(posts[0].method,'POST');assert.equal(posts[0].headers.authorization,'Bearer actual-ui-test-owner');
@@ -459,8 +463,7 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
      releaseResponse();
     }else{
      await page.waitForFunction(()=>document.body.textContent.includes('Recording owner authorization'),{timeout:12000});
-     await page.waitForFunction(()=>window.fetch&&!document.body.textContent.includes('No execution'),{timeout:12000});
-     await page.waitForFunction(()=>document.body.textContent.includes('Recording owner authorization'),{timeout:12000});
+     await Promise.race([requestSeen,new Promise((_,reject)=>setTimeout(()=>reject(Error('Owner authorization POST not sent')),12000))]);
      // The first-party control owns the browser-selected time and fresh UUID;
      // the actual response is tied back to both before it displays success.
      await page.waitForFunction(()=>Boolean(document.querySelector('button:disabled')),{timeout:12000});
