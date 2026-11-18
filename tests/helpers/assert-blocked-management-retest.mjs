@@ -325,6 +325,26 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   };
   const sourceBeforeOwnerRenewal=await originalIntegrity();
 
+  // The release operator, not the owner UI or service-role runtime, must
+  // open the canonical production epoch only after verifying READY on alias.
+  // All gate transitions here are in disposable native PostgreSQL.
+  await first.query('set role service_role');
+  await rejected(()=>first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   [project,executionRelease,'dpl_NativeFixture79','active']),/permission denied/i);
+  await first.query('reset role');
+  const activeGate=(await first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
+  assert.equal(activeGate.state,'active');
+  await first.query('set role service_role');
+  assert.equal((await first.query(
+   'select project_org_retest_active_release($1,$2) allowed',
+   [project,executionRelease])).rows[0].allowed,true);
+  assert.equal((await first.query(
+   'select project_org_retest_active_release($1,$2) allowed',
+   [project,unboundRelease])).rows[0].allowed,false);
+
   const futureOffer=(await first.query(
    'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
   assert.equal(futureOffer.stage,'authorize');
@@ -443,6 +463,28 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'Historical continuation release must never reclaim owner-renewed mission79');
   const staleOther=await isolatedNegativeClaim(unboundRelease);
   assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
+  // Simulate privilege-separated canonical alias promotion: under the
+  // identical claim/state locks operator closes the gate BEFORE alias moves.
+  // A stale runtime cannot reactivate it and cannot claim even with a saved
+  // immutable binding/old SHA. Reopen only after a verified READY alias.
+  await first.query('reset role');
+  const closedGate=(await first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+  assert.equal(closedGate.state,'closed');
+  await first.query('set role service_role');
+  const staleWhileClosed=(await first.query('select claim_mission_work_release($1) r',
+   [executionRelease])).rows[0].r;
+  assert.notEqual(staleWhileClosed?.job?.id,originalJob.id,
+   'A superseded deployment cannot claim the original assignment while the canonical alias gate is sealed');
+  await rejected(()=>first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   [project,executionRelease,'dpl_NativeFixture79','active']),/permission denied/i);
+  await first.query('reset role');
+  assert.equal((await first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g.state,'active');
+  await first.query('set role service_role');
   const claimed=(await first.query('select claim_mission_work_release($1) r',
    [executionRelease])).rows[0].r;
   if(!claimed||claimed.mission?.id!==scheduled.missionId){
