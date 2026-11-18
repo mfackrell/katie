@@ -404,6 +404,20 @@ create function public.project_org_retest_original_owner_lineage(
        and src.project_evidence->>'previousMissionId' is null
        and director.kind='project_director' and director.parent_id is null
        and director.management_level='project_director')
+   and (select count(*) from mission_assignments historical_job
+      where historical_job.mission_id=r.source_mission_id)=1
+   and exists(select 1 from mission_assignments historical_job
+      join project_organization_nodes director
+       on director.project_id=r.project_id and director.agent_id=historical_job.agent_id
+       and director.kind='project_director'
+       and director.parent_id is null
+      where historical_job.id='cd81b57d-0812-485c-b8f6-d658aa80186f'::uuid
+       and historical_job.mission_id=r.source_mission_id
+       and historical_job.job_key='plan' and historical_job.role='work'
+       and historical_job.status='failed' and historical_job.attempts=1
+       and historical_job.lease is null
+       and historical_job.payload->>'organizationNodeId'=director.id::text
+       and historical_job.result->>'detail' like '%No delegation change requested%')
    -- Freeze the actual original 13-node reporting/QA structure, sourced from
    -- the preserved project rather than re-hashing a potentially drifted
    -- hierarchy after renewal. Node IDs are already bound to 13 immutable
