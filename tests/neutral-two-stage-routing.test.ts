@@ -258,9 +258,9 @@ test('user objective, constraints and model-specific outcome evidence reach the 
     const payload=JSON.parse(p.user.slice(p.user.indexOf('\n\n')+2));
     assert.equal(payload.understanding.decisionEvidence.primary_objective,original);
     assert.match(payload.understanding.decisionEvidence.response_constraints,/policy and safety/);
-    assert.equal(payload.candidates.find(c=>c.provider==='grok'&&c.model==='grok-4.3')
+    assert.equal(payload.candidates.find((c:{provider:string;model:string;comparative_quality:{feedback?:{positive:number}}})=>c.provider==='grok'&&c.model==='grok-4.3')
       .comparative_quality.feedback.positive,2);
-    assert.deepEqual(payload.candidates.find(c=>c.provider==='openai'&&c.model==='gpt-5-mini')
+    assert.deepEqual(payload.candidates.find((c:{provider:string;model:string;comparative_quality:{feedback?:{positive:number}}})=>c.provider==='openai'&&c.model==='gpt-5-mini')
       .comparative_quality,{status:'unknown',observations:[]});
     return {text:JSON.stringify({selected:{provider:'grok',model:'grok-4.3'},
       selection_justification:'Task-specific direct user reaction favors Grok; price and reasoning metadata do not establish better quality for alternatives.',
