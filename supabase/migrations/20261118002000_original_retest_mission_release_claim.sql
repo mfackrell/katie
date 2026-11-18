@@ -155,8 +155,8 @@ begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
  select * into p from work_projects where id=p_project for update;
  perform 1 from project_provider_execution where project_id=p_project for update;
- select 1 from agent_missions where id=p_mission and project_id=p_project for update;
- select 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;
+ perform 1 from agent_missions where id=p_mission and project_id=p_project for update;
+ perform 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;
  offer:=project_org_retest_claim_release_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'bind'
   or p_mission is distinct from (offer->>'missionId')::uuid
