@@ -161,6 +161,8 @@ begin
  if offer->>'stage' is distinct from 'bind'
   or p_mission is distinct from (offer->>'missionId')::uuid
   or p_assignment is distinct from (offer->>'assignmentId')::uuid
+  or p_mission is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  or p_assignment is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   or p_state_hash is null or p_state_hash is distinct from offer->>'stateHash'
   or (offer->>'cutoff')::timestamptz<=clock_timestamp()+interval '5 minutes'
  then raise exception 'Exact existing owner retest and production release required';end if;
@@ -276,6 +278,8 @@ create function public.project_org_retest_renewed_assignment(
  join mission_assignments j on j.id=q.assignment_id and j.mission_id=m.id
  where q.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
   and m.id=p_mission and j.id=p_job
+  and m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  and j.id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   and q.historical_missions=79
   and (select count(*) from agent_missions mm where mm.project_id=p.id)=79
   and p.active_mission_id=m.id and p.phase='development'
@@ -371,6 +375,8 @@ begin
   or a.objective_hash is distinct from encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex')
   or a.continuation_release_sha is distinct from r.prior_release_sha
   or a.approved_scope is distinct from p.approved_hash
+  or m.id is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  or j.id is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   or m.id is null or m.project_kind<>'management' or m.calls<>0 or m.routing_calls<>0
   or m.created_at<r.authorized_at
   or m.id is distinct from (select mm.id from agent_missions mm where mm.project_id=p.id
@@ -459,6 +465,8 @@ begin
  select * into j from mission_assignments where mission_id=m.id and role='work' for update;
  offer:=project_org_retest_future_window_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'authorize'
+  or p_mission is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  or p_assignment is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   or p_mission is distinct from m.id or p_assignment is distinct from j.id
   or p_authorization is null or p_state_hash is null or p_state_hash is distinct from offer->>'stateHash'
   or p_cutoff is null or not isfinite(p_cutoff) or p_cutoff<=clock_timestamp()+interval '5 minutes'
@@ -573,6 +581,8 @@ begin
  select count(*) into used from agent_missions where project_id=p.id;
  if used<>79 or m.id is distinct from q.mission_id
   or j.id is distinct from q.assignment_id
+  or m.id is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  or j.id is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   or m.calls<>0 or m.routing_calls<>0 or m.deadline is distinct from q.cutoff
   or p.active_mission_id is distinct from m.id
   or j.status<>'queued' or j.attempts<>0 or j.lease is not null or j.lease_until is not null
@@ -619,6 +629,8 @@ begin
  if offer->>'stage' is distinct from 'bind'
   or p_mission is distinct from (offer->>'missionId')::uuid
   or p_assignment is distinct from (offer->>'assignmentId')::uuid
+  or p_mission is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  or p_assignment is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   or p_state_hash is null or p_state_hash is distinct from offer->>'stateHash'
   or (offer->>'cutoff')::timestamptz<=clock_timestamp()+interval '5 minutes'
  then raise exception 'Owner-authorized new window, exact deployment and current mission required';end if;
