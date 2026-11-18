@@ -317,7 +317,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     };
     const hashes={};
     for(const [name,query] of Object.entries(sources))
-     hashes[name]=(await first.query(query,[project,scheduled.missionId,windowId])).rows[0].h;
+     hashes[name]=(await first.query(query,
+      query.includes('$3')?[project,scheduled.missionId,windowId]:
+      query.includes('$2')?[project,scheduled.missionId]:[project])).rows[0].h;
     return hashes;
    }finally{await first.query('set role service_role');}
   };
