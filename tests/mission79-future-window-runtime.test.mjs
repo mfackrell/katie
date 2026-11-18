@@ -14,12 +14,13 @@ const priorWindow='7d216bbe-596e-457e-b84d-e07ad1e80365';
 const scopeHash='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
 const priorCutoff='2026-11-18T14:00:00Z';
 const releaseSha='a'.repeat(40),stateHash='b'.repeat(64),ownerId='04ed6c05-a586-4a56-ba81-1b50e378746b';
+const deploymentId='dpl_NativeFixture79';
 const approvalId='a083ef03-80b0-44ac-9e24-6e66b223f017',futureCutoff='2026-11-18T20:00:00.000Z';
 
 test('expired original mission79 requires separately authenticated, owner-selected cutoff and durable receipt',async t=>{
- const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID},before=Date.now;
- Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,KATIE_OWNER_AUTH_USER_ID:ownerId});
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId,KATIE_OWNER_AUTH_USER_ID:ownerId});
  Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
  t.after(()=>{Date.now=before;for(const [key,value] of Object.entries(env)){
   if(value==null)delete process.env[key];else process.env[key]=value;
@@ -36,6 +37,7 @@ test('expired original mission79 requires separately authenticated, owner-select
   '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>aliasLive},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    if(name==='project_org_retest_future_window_offer')return stage==='authorize'?base:saved;
+   if(name==='project_org_retest_release_epoch')return {generation:1,active:true,deploymentId};
    if(name==='project_org_authorize_retest_future_window'){
     writes.push(args);stage='authorized';
     return {...saved,existing:false};
@@ -74,6 +76,7 @@ test('expired original mission79 requires separately authenticated, owner-select
   p_owner:ownerId,p_project:projectId,p_release:releaseSha,
   p_mission:missionId,p_assignment:assignmentId,
   p_authorization:approvalId,p_cutoff:futureCutoff,p_state_hash:stateHash,
+  p_epoch:1,p_deployment:deploymentId,
  });
  assert.equal((await (await read()).json()).mission79FutureWindow.stage,'authorized');
  assert.equal((await POST(request(correct))).status,409,'Recorded approval cannot authorize twice');
@@ -127,9 +130,9 @@ test('actual owner bearer, wrong identity and cross-origin boundary remain enfor
 });
 
 test('exact production release binding is a separate owner action after recorded future window',async t=>{
- const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID},oldNow=Date.now;
- Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,KATIE_OWNER_AUTH_USER_ID:ownerId});
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId,KATIE_OWNER_AUTH_USER_ID:ownerId});
  Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
  t.after(()=>{Date.now=oldNow;for(const [k,v] of Object.entries(env)){
   if(v==null)delete process.env[k];else process.env[k]=v;
@@ -146,6 +149,7 @@ test('exact production release binding is a separate owner action after recorded
   '@/lib/missions/store':{rpc:async(name,args)=>{
    calls.push({name,args});
    if(name==='project_org_retest_future_window_offer')return record;
+   if(name==='project_org_retest_release_epoch')return {generation:1,active:true,deploymentId};
    if(name==='project_org_retest_claim_release_offer')
     return {stage:'bind',projectId,releaseSha,missionId,assignmentId,cutoff:futureCutoff,stateHash:bindHash};
    if(name==='project_org_bind_retest_claim_release')return {
@@ -172,12 +176,14 @@ test('exact production release binding is a separate owner action after recorded
  assert.equal(binds.length,1);
  assert.deepEqual(JSON.parse(JSON.stringify(binds[0].args)),
   {p_owner:ownerId,p_project:projectId,p_release:releaseSha,
-   p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash});
+   p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash,
+   p_epoch:1,p_deployment:deploymentId});
 });
 
 test('canonical alias verification rejects superseded deployment, redirect and spoofed version',async t=>{
- const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA};
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID};
  process.env.VERCEL_ENV='production';process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;
+ process.env.VERCEL_DEPLOYMENT_ID=deploymentId;
  t.after(()=>{for(const [k,v] of Object.entries(env)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
  const {verifyMission79ActiveProductionSha}=modules()('@/lib/projects/mission79-active-release');
  let checked=0;
@@ -186,10 +192,13 @@ test('canonical alias verification rejects superseded deployment, redirect and s
   assert.equal(new URL(url).origin,'https://katie-mu.vercel.app');
   assert.equal(new URL(url).pathname,'/api/version');
   assert.equal(options.cache,'no-store');assert.equal(options.redirect,'error');
-  return new Response(JSON.stringify({version:releaseSha}),{status:200});
+  return new Response(JSON.stringify({version:releaseSha,deploymentId}),{status:200});
  };
  assert.equal(await verifyMission79ActiveProductionSha(releaseSha,fake),true);
  assert.equal(checked,1);
+ assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>new Response(JSON.stringify({
+  version:releaseSha,deploymentId:'dpl_OtherDeployment',
+ }),{status:200})),false,'Same SHA with wrong deployment is stale');
  assert.equal(await verifyMission79ActiveProductionSha('b'.repeat(40),fake),false);
  assert.equal(checked,1,'Stale self-reported runtime SHA cannot even query the alias');
  assert.equal(await verifyMission79ActiveProductionSha(releaseSha,async()=>new Response(JSON.stringify({version:'c'.repeat(40)}),{status:200})),false);
@@ -198,12 +207,12 @@ test('canonical alias verification rejects superseded deployment, redirect and s
 });
 
 test('real first-party owner auth and independently resolved production alias gate the actual window writer',async t=>{
- const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY};
  const oldFetch=globalThis.fetch,oldNow=Date.now;
- Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId,
   KATIE_OWNER_AUTH_USER_ID:ownerId,NEXT_PUBLIC_SUPABASE_URL:'https://auth.example.test',
   NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon'});
  Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
@@ -219,7 +228,7 @@ test('real first-party owner auth and independently resolved production alias ga
   }
   if(host.startsWith('https://katie-mu.vercel.app/api/version?mission79_verify=')){
    aliasCalls++;assert.equal(opts.cache,'no-store');
-   return new Response(JSON.stringify({version:currentAlias}),{status:200});
+   return new Response(JSON.stringify({version:currentAlias,deploymentId}),{status:200});
   }
   throw Error('Unexpected external request '+host);
  };
@@ -230,6 +239,7 @@ test('real first-party owner auth and independently resolved production alias ga
  const load=modules({
   '@/lib/missions/store':{rpc:async(name,args)=>{
    if(name==='project_org_retest_future_window_offer')return offer;
+   if(name==='project_org_retest_release_epoch')return {generation:1,active:true,deploymentId};
    if(name==='project_org_authorize_retest_future_window'){
     writeCalls++;return {...offer,stage:'authorized',authorizationId:approvalId,
      cutoff:futureCutoff,authorizedAt:'2026-11-18T16:00:00Z',existing:false};
@@ -254,12 +264,12 @@ test('real first-party owner auth and independently resolved production alias ga
 });
 
 test('real bearer and canonical alias jointly gate mission79 release binding',async t=>{
- const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY};
  const oldFetch=globalThis.fetch,oldNow=Date.now;
- Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId,
   KATIE_OWNER_AUTH_USER_ID:ownerId,NEXT_PUBLIC_SUPABASE_URL:'https://auth.example.test',
   NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon'});
  Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
@@ -276,7 +286,7 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
   }
   if(dest.startsWith('https://katie-mu.vercel.app/api/version?mission79_verify=')){
    aliasChecks++;assert.equal(opts.cache,'no-store');
-   return new Response(JSON.stringify({version:currentAlias}),{status:200});
+   return new Response(JSON.stringify({version:currentAlias,deploymentId}),{status:200});
   }
   throw Error('Unexpected auth/release identity fetch '+dest);
  };
@@ -288,13 +298,15 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
  const module=modules({
   '@/lib/missions/store':{rpc:async(name,args)=>{
    if(name==='project_org_retest_future_window_offer')return saved;
+   if(name==='project_org_retest_release_epoch')return {generation:1,active:true,deploymentId};
    if(name==='project_org_retest_claim_release_offer')
     return {stage:'bind',projectId,releaseSha,missionId,assignmentId,cutoff:futureCutoff,stateHash:bindHash};
    if(name==='project_org_bind_retest_claim_release'){
     bindCalls++;
     assert.deepEqual(JSON.parse(JSON.stringify(args)),{
      p_owner:ownerId,p_project:projectId,p_release:releaseSha,
-     p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash});
+     p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash,
+     p_epoch:1,p_deployment:deploymentId});
     return {stage:'bound',projectId,releaseSha,missionId,assignmentId,
      scopeHash,cutoff:futureCutoff,historicalMissions:79,maxMissions:96,
      tokenAllowance:600000,boundAt:'2026-11-18T16:00:01Z',existing:false};
