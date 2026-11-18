@@ -6,6 +6,7 @@ import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from
 import {blockedOwnerRecoveryOffer,ORIGINAL_BLOCKED_CUTOFF,ORIGINAL_BLOCKED_WINDOW} from '@/lib/projects/blocked-owner-recovery';
 import {blockedManagementRetestOffer,BLOCKED_RETEST_SOURCE,BLOCKED_RETEST_WINDOW,BLOCKED_RETEST_CUTOFF} from '@/lib/projects/blocked-management-retest';
 import {getMessages} from '@/lib/data/persistence-store';
+import {mission79FutureWindowOffer,MISSION79_ID,MISSION79_ASSIGNMENT} from '@/lib/projects/mission79-future-window';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -59,16 +60,27 @@ const managementRetestInput=z.object({
  sourceMissionId:z.literal(BLOCKED_RETEST_SOURCE),windowId:z.literal(BLOCKED_RETEST_WINDOW),
  cutoff:z.literal(BLOCKED_RETEST_CUTOFF),stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput]);
+const futureMission79WindowInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),
+ trialAction:z.literal('authorize_mission79_future_window'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ missionId:z.literal(MISSION79_ID),assignmentId:z.literal(MISSION79_ASSIGNMENT),
+ authorizationId:z.string().uuid(),cutoff:z.string().datetime({offset:true}),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({mission79FutureWindow:await mission79FutureWindowOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+  catch{
   try{return NextResponse.json({managementRetest:await blockedManagementRetestOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{
    try{return NextResponse.json({managementActivation:await managementActivationOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
    catch{return NextResponse.json({blockedOwnerRecovery:await blockedOwnerRecoveryOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+  }
   }
  }
  catch{return NextResponse.json({error:'Recovery state unavailable or changed. Refresh project status; no activation was performed.'},{status:409});}
@@ -80,6 +92,22 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_mission79_future_window'){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Exact READY production release is required'},{status:409});
+  const offer=await mission79FutureWindowOffer(p.projectId);
+  const next=Date.parse(p.cutoff);
+  if(offer.stage!=='authorize'||offer.stateHash!==p.stateHash
+   ||offer.missionId!==p.missionId||offer.assignmentId!==p.assignmentId
+   ||!Number.isFinite(next)||next<=Date.now()+300000||next>Date.now()+86400000
+   ||next<=Date.parse(offer.priorCutoff))
+   return NextResponse.json({error:'Explicit fresh future cutoff and original owner preflight are required'},{status:409});
+  return NextResponse.json(await rpc('project_org_authorize_retest_future_window',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
+   p_release:p.releaseSha,p_authorization:p.authorizationId,p_cutoff:p.cutoff,
+   p_state_hash:p.stateHash,
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='retest_blocked_management'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'The exact deployed production release is required'},{status:409});
@@ -178,7 +206,7 @@ export async function POST(request:NextRequest){
  }
  await rpc('project_org_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_objective_hash:p.objectiveHash,p_ceiling:p.ceilingMicrousd,p_per_call:p.perCallMicrousd,p_autonomous:p.autonomousExecution});
  return NextResponse.json({authorized:true});
- }catch{return NextResponse.json({error:'trialAction' in p&&['renew_paused_window','resume_management','retest_blocked_management'].includes(p.trialAction)
+ }catch{return NextResponse.json({error:'trialAction' in p&&['renew_paused_window','resume_management','retest_blocked_management','authorize_mission79_future_window'].includes(p.trialAction)
   ?'Recovery state changed or the request could not be confirmed. Refresh recovery status before continuing.'
   :'Owner binding, project objective or execution authority changed'},{status:409});}
 }
