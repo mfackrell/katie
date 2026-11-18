@@ -92,7 +92,9 @@ begin
  select * into n from project_organization_nodes where id=(m.project_evidence->>'organizationNodeId')::uuid and project_id=p.id;
  select count(*) into used from agent_missions where project_id=p.id;
  if p.organization_version<>1 or not project_provider_mode(p.id)
-  or p.status<>'running' or p.phase<>'development'
+  or p.status not in ('running','blocked') or p.phase<>'development'
+  or (p.status='blocked' and p.detail is distinct from
+   'No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.')
   or p.lease is not null or p.lease_until is not null
   or p.deadline is distinct from '2026-11-18T14:00:00Z'::timestamptz
   or p.deadline<=clock_timestamp()+interval '5 minutes'
@@ -163,6 +165,17 @@ begin
   or (offer->>'cutoff')::timestamptz<=clock_timestamp()+interval '5 minutes'
  then raise exception 'Exact existing owner retest and production release required';end if;
  stamp:=clock_timestamp();
+ -- The original scheduler's 45-minute wait watchdog has since blocked
+ -- this still-queued mission. Re-admit ONLY that exact no-progress state,
+ -- after the immutable retest and current source-bound release pass above.
+ -- The inactivity clock begins again at this genuine recovery transition;
+ -- no technical artifact, mission attempt, token or spend is fabricated.
+ if p.status='blocked' then
+  update work_projects set status='running',
+   progress_since=stamp,updated_at=stamp,
+   detail='Original owner-approved mission 79 re-admitted after exact release binding; queued work unchanged.'
+  where id=p.id and status='blocked';
+ end if;
  insert into project_retest_claim_release_receipts(
   project_id,owner_id,window_id,source_mission_id,mission_id,assignment_id,
   prior_release_sha,retest_release_sha,bound_release_sha,scope_hash,cutoff,historical_missions,bound_at
@@ -175,6 +188,7 @@ begin
   jsonb_build_object('ownerId',p_owner,'sourceMissionId',offer->>'sourceMissionId',
     'missionId',p_mission,'assignmentId',p_assignment,'windowId',offer->>'windowId',
     'retestReleaseSha',(select retest_release_sha from project_retest_claim_release_receipts where project_id=p.id),
+    'priorProjectStatus',p.status,'watchdogReadmission',p.status='blocked',
     'releaseSha',p_release,'scopeHash',p.approved_hash,'cutoff',p.deadline,
     'historicalMissions',79,'maxMissions',96,'tokenAllowance',600000,'boundAt',stamp));
  return jsonb_build_object('projectId',p.id,'stage','bound','releaseSha',p_release,
