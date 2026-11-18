@@ -773,7 +773,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     "from mission_assignments j join agent_missions m on m.id=j.mission_id join work_projects p on p.id=m.project_id where j.id=$1"
    ].join(' ');
    const diagnostic=(await first.query(predicateSql,[originalJob.id,executionRelease])).rows;
-   const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint)'::regprocedure) definition")).rows[0].definition;
+   const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint,text)'::regprocedure) definition")).rows[0].definition;
    console.log('MISSION79_CLAIM_REJECTION_DIAGNOSTIC '+JSON.stringify({
     diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch,p_deployment)').length-1,
     staleClaim:stale,otherClaim:staleOther,claimed
