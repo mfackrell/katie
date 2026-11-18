@@ -246,6 +246,37 @@ create trigger project_retest_future_window_immutable before update or delete
  on public.project_retest_future_window_receipts for each row
  execute function public.project_org_change_immutable();
 
+-- Verify immutable original owner/resume and 13 unchanged original
+-- contracts even after the live project moves to a newly approved window.
+create function public.project_org_retest_original_owner_lineage(
+ p_project uuid
+) returns boolean language sql stable security definer set search_path=public,pg_temp as $fn$
+ select exists(
+  select 1 from project_blocked_management_retest_receipts r
+  join project_blocked_owner_windows w on w.project_id=r.project_id
+   and w.authorization_id=r.window_id and w.owner_id=r.owner_id
+   and w.cutoff=r.cutoff and w.scope_hash=r.scope_hash
+   and w.resume_release_sha=r.prior_release_sha
+  join project_blocked_owner_resumes s on s.project_id=w.project_id
+   and s.owner_id=w.owner_id and s.authorization_id=w.authorization_id
+   and s.release_sha=w.resume_release_sha
+  join project_execution_windows oldw on oldw.id=w.authorization_id
+   and oldw.project_id=w.project_id and oldw.owner_id=w.owner_id
+   and oldw.decision_id=w.decision_id and oldw.release_sha=w.prior_release_sha
+   and oldw.prior_cutoff=w.prior_cutoff and oldw.cutoff=w.cutoff
+  where r.project_id=p_project
+   and r.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+   and r.source_mission_id='911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid
+   and r.window_id='7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
+   and r.cutoff='2026-11-18T14:00:00Z'::timestamptz
+   and r.historical_missions=78
+   and (select count(*) from project_organization_contract_changes c
+      where c.project_id=r.project_id and c.window_id=w.authorization_id
+       and c.prior_deadline=w.prior_cutoff and c.deadline=w.cutoff
+       and c.tools=c.prior_tools)=13
+ );
+$fn$;
+
 -- New-window membership is ONLY for the saved mission 79/queued job, and
 -- requires both immutable owner receipts and the new owner-selected window.
 -- Historical mission providerContinuationWindow/Release/Decision stay intact.
@@ -288,7 +319,8 @@ create function public.project_org_retest_renewed_assignment(
   and m.project_evidence->>'providerContinuationRelease'=r.prior_release_sha
   and m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
   and m.project_evidence->>'previousMissionId' is null
-  and project_org_scope_ratification_state(p.id)=q.organization_hash
+  and project_org_retest_original_owner_lineage(p.id)
+ and project_org_scope_ratification_state(p.id)=q.organization_hash
   and (select count(*) from project_organization_contract_changes c
     join project_organization_nodes n on n.id=c.node_id and n.project_id=p.id
     where c.project_id=p.id and c.window_id=q.authorization_id
@@ -354,6 +386,7 @@ begin
   or r.cutoff is distinct from '2026-11-18T14:00:00Z'::timestamptz
   or not exists(select 1 from project_blocked_owner_windows bw where bw.project_id=p.id
     and bw.authorization_id=r.window_id and bw.cutoff=r.cutoff)
+  or not project_org_retest_original_owner_lineage(p.id)
   or r.historical_missions<>78
   or r.scope_hash is distinct from '4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6'
   or r.prior_release_sha is null or r.prior_release_sha !~ '^[a-f0-9]{40}$'
@@ -556,6 +589,7 @@ create or replace function public.project_org_retest_claim_release_authorized(
   and m.id=q.mission_id and j.id=q.assignment_id
   and p.deadline>clock_timestamp() and project_provider_continued(p.id)
   and project_provider_continued_assignment(j.id)
+  and project_org_retest_original_owner_lineage(p.id)
   and project_org_retest_renewed_assignment(m.id,j.id)
   and b.historical_missions=79
  );
@@ -671,11 +705,13 @@ end
 $fn$;
 
 revoke all on function
+ public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
  public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
  from public,anon,authenticated,service_role;
 grant execute on function
+ public.project_org_retest_original_owner_lineage(uuid),
  public.project_org_retest_future_window_offer(uuid,uuid,text),
  public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text),
  public.project_org_retest_renewed_assignment(uuid,uuid)
