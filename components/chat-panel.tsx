@@ -334,7 +334,6 @@ const REQUEST_SIZE_SAFETY_BYTES = 150_000;
 const PENDING_CHAT_REQUEST_STORAGE_PREFIX = "chat:pending-request:";
 const MOBILE_RECOVERY_POLL_INTERVAL_MS = 1_500;
 const MOBILE_RECOVERY_WINDOW_MS = 4 * 60 * 1_000;
-const MOBILE_PENDING_MAX_AGE_MS = 30 * 60 * 1_000;
 const QWEN_RECOVERY_WINDOW_MS = 40 * 60 * 1_000;
 const QWEN_RECOVERY_POLL_INTERVAL_MS = 10_000;
 
@@ -423,6 +422,8 @@ async function pollForPersistedAssistant(
   maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
   onPersisted?: (messages: Message[]) => void,
 ): Promise<Message[] | null> {
+  // Legacy pending entries without an ID still use the original timestamp.
+  const startedAtMs = Date.parse(pending.startedAt);
   let deadline = Date.now() + (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : maxWaitMs);
   const qwenDeadline = Date.now() + QWEN_RECOVERY_WINDOW_MS;
   let previewedAssistantMessageId: string | null = null;
@@ -454,13 +455,14 @@ async function pollForPersistedAssistant(
             error?: string | null;
           };
 
-          if (statusPayload.status === "paused") {
+          if (statusPayload.status === "paused" || statusPayload.workflowStatus === "paused") {
             throw new PausedChatError(
               statusPayload.error ?? "Saved request paused for accounting review. Open Status / Usage to continue or cancel; do not resend this request.",
             );
           }
 
-          if (statusPayload.status === "failed") {
+          if (statusPayload.status === "failed" &&
+              !["pending", "running"].includes(statusPayload.workflowStatus ?? "")) {
             throw new TerminalChatError(
               statusPayload.error ?? "Katie's server-side request failed.",
               statusPayload.assistantMessageId ?? undefined,
