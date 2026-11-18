@@ -390,6 +390,49 @@ create function public.project_org_retest_original_owner_lineage(
        and c.tools=c.prior_tools and n.tools=c.tools)=13
    and (select count(*) from project_organization_contract_changes c
       where c.project_id=r.project_id and c.window_id=w.authorization_id)=13
+   -- The historical source itself must still be the same blocked director
+   -- mission. Receipt references alone are not proof that it is unchanged.
+   and exists(select 1 from agent_missions src
+     join project_organization_nodes director on director.project_id=src.project_id
+      and director.id::text=src.project_evidence->>'organizationNodeId'
+     where src.id=r.source_mission_id and src.project_id=r.project_id
+       and src.project_kind='management' and src.status='blocked'
+       and src.created_at<=r.authorized_at
+       and src.project_evidence->>'providerContinuationWindow'=r.window_id::text
+       and src.project_evidence->>'providerContinuationRelease'=r.prior_release_sha
+       and src.project_evidence->>'previousMissionId' is null
+       and director.kind='project_director' and director.parent_id is null
+       and director.management_level='project_director')
+   -- Freeze the actual original 13-node reporting/QA structure, sourced from
+   -- the preserved project rather than re-hashing a potentially drifted
+   -- hierarchy after renewal. Node IDs are already bound to 13 immutable
+   -- historical contract-change rows above.
+   and (select jsonb_object_agg(role_signature,qty) from (
+     select n.area||'|'||n.kind||'|'||n.management_level||'|'||n.depth::text
+       ||'|'||coalesce(parent.area,'ROOT')
+       ||'|'||coalesce(parent.management_level,'ROOT') role_signature,
+       count(*) qty
+     from project_organization_nodes n
+     left join project_organization_nodes parent on parent.id=n.parent_id
+       and parent.project_id=n.project_id
+     where n.project_id=r.project_id and n.status='active'
+     group by 1
+   ) saved_topology)=jsonb_build_object(
+     'general|project_director|project_director|0|ROOT|ROOT',1,
+     'game_delivery|manager|functional_director|1|general|project_director',1,
+     'independent_qa|manager|functional_director|1|general|project_director',1,
+     'delivery_management|manager|manager|2|game_delivery|functional_director',1,
+     'independent_qa_execution|manager|manager|2|independent_qa|functional_director',1,
+     'independent_qa_planning|manager|manager|2|independent_qa|functional_director',1,
+     'delivery_planning|manager|supervisor|3|delivery_management|manager',1,
+     'delivery_repository_assessment|worker|worker|3|delivery_management|manager',1,
+     'independent_qa_execution_coordination|manager|supervisor|3|independent_qa_execution|manager',2,
+     'qa_planning|manager|supervisor|3|independent_qa_planning|manager',3)
+   and not exists(select 1 from project_organization_scope_grants grant_row
+     join project_organization_nodes grant_node on grant_node.id=grant_row.node_id
+     where grant_node.project_id=r.project_id
+       and (grant_row.parent_id is distinct from grant_node.parent_id
+         or grant_row.scope_hash is distinct from r.scope_hash))
  );
 $fn$;
 
