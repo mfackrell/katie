@@ -493,6 +493,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(futureOffer.missionId,scheduled.missionId);
   assert.equal(futureOffer.assignmentId,originalJob.id);
   assert.equal(futureOffer.historicalMissions,79);
+  assert.equal(futureOffer.releaseGeneration,activeEpoch.generation);
+  assert.equal(futureOffer.deploymentId,'dpl_NativeFixture79');
   // Neither an altered source lineage nor a QA supervisor reporting into
   // delivery may be silently re-baselined by the fresh owner window.
   await first.query('savepoint original_lineage_negative');
@@ -597,6 +599,24 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const approveArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
   const approve=()=>first.query(
    'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',approveArgs);
+  // Owner offer predated a CLOSE -> OPEN transition of the SAME deployment.
+  // The old generation must not authorize even when SHA and state hash match.
+  await first.query('savepoint stale_owner_offer_generation');
+  try{
+   await first.query('reset role');
+   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','closed']);
+   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','active']);
+   await first.query('set role service_role');
+   await rejected(approve,/Observed canonical release epoch or deployment changed under owner write lock/i);
+   const reopenedOffer=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) o',offerArgs)).rows[0].o;
+   assert.ok(reopenedOffer.releaseGeneration>futureOffer.releaseGeneration,
+    'A reopened release must have a new generation even when SHA and deployment are unchanged');
+  }finally{
+   await first.query('rollback to savepoint stale_owner_offer_generation');
+   await first.query('release savepoint stale_owner_offer_generation');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_STALE_OWNER_OFFER_EPOCH_REJECTED_PASS');
   // The original preflight was valid; a grant-only change after it must still
   // be rejected by the locked writer even with its unchanged offered hash.
   await scopeGrantNegative('grant changed between offer and authorization',
@@ -693,6 +713,19 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const immutableBeforeBinding=await unmodified();
   const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
   const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
+  await first.query('savepoint stale_owner_binding_generation');
+  try{
+   await first.query('reset role');
+   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','closed']);
+   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','active']);
+   await first.query('set role service_role');
+   await rejected(bind,/Observed canonical release epoch or deployment changed under binding lock/i);
+  }finally{
+   await first.query('rollback to savepoint stale_owner_binding_generation');
+   await first.query('release savepoint stale_owner_binding_generation');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_STALE_OWNER_BINDING_EPOCH_REJECTED_PASS');
   await scopeGrantNegative('grant changed between release offer and binding',
    "update project_organization_scope_grants set paths=array['tests/changed-before-binding/'] where node_id=$1",
    [delivery.id],'select project_org_retest_claim_release_offer($1,$2,$3)',bind,
@@ -852,6 +885,38 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');
 
+  // The one permitted original attempt MUST settle terminally if its
+  // worker crashes or a transient error tries to queue a second inference.
+  // Negative simulations are rollback-only and preserve historical charges.
+  for(const scenario of ['expired','queued']){
+   await first.query('savepoint terminal_settlement_fixture');
+   try{
+    await first.query('reset role');
+    if(scenario==='expired')
+     await first.query("update mission_assignments set status='running',attempts=1,lease_until=clock_timestamp()-interval '1 second' where id=$1",[originalJob.id]);
+    else
+     await first.query("update mission_assignments set status='queued',attempts=1,lease=null,lease_until=null where id=$1",[originalJob.id]);
+    await first.query('set role service_role');
+    const callsBefore=(await first.query('select calls,reserved_tokens,actual_tokens from agent_missions where id=$1',[scheduled.missionId])).rows[0];
+    await first.query('select claim_mission_work_release_epoch($1,$2,$3)',[executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79']);
+    const settled=(await first.query('select status,attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
+    assert.equal(settled.status,'failed',scenario+' must be terminal');
+    assert.equal(settled.attempts,1,'One charged attempt only; do not reset or retry');
+    assert.equal(settled.lease,null);
+    assert.equal(settled.lease_until,null);
+    assert.deepEqual((await first.query('select calls,reserved_tokens,actual_tokens from agent_missions where id=$1',[scheduled.missionId])).rows[0],callsBefore,
+     'Terminal settlement must not change paid-call evidence');
+    await first.query('reset role');
+    const closed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+     [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+    assert.equal(closed.state,'closed','No stranded release gate after terminal settlement');
+    console.log('MISSION79_'+scenario.toUpperCase()+'_ORIGINAL_ATTEMPT_SETTLEMENT_PASS');
+   }finally{
+    await first.query('rollback to savepoint terminal_settlement_fixture');
+    await first.query('release savepoint terminal_settlement_fixture');
+    await first.query('set role service_role');
+   }
+  }
   // Closing an active generation must fail if a paid worker already owns a
   // lease. The SQL gate locks serialize with new claims, while this safety
   // check also covers an expired worker whose lease has been requeued.

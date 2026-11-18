@@ -10,7 +10,7 @@ export const MISSION79_PRIOR_CUTOFF='2026-11-18T14:00:00Z';
 
 export type Mission79FutureWindowOffer={
  projectId:string;stage:'authorize'|'authorized'|'bound';
- releaseSha:string;status:'blocked'|'running';missionStatus:'blocked'|'running';
+ releaseSha:string;releaseGeneration:number;deploymentId:string;status:'blocked'|'running';missionStatus:'blocked'|'running';
  sourceMissionId:string;missionId:string;assignmentId:string;
  priorWindowId:string;authorizationId:string|null;
  scopeHash:string;priorCutoff:string;cutoff:string|null;
@@ -26,6 +26,8 @@ export async function mission79FutureWindowOffer(projectId:string):Promise<Missi
   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:projectId,p_release:sha
  });
  if(!offer||offer.projectId!==projectId||offer.releaseSha!==sha
+  ||!Number.isSafeInteger(offer.releaseGeneration)||offer.releaseGeneration<=0
+  ||!/^dpl_[A-Za-z0-9]+$/.test(offer.deploymentId)
   ||offer.sourceMissionId!==MISSION79_SOURCE||offer.missionId!==MISSION79_ID
   ||offer.assignmentId!==MISSION79_ASSIGNMENT||offer.priorWindowId!==MISSION79_PRIOR_WINDOW
   ||offer.scopeHash!==ORIGINAL_TTT_SCOPE

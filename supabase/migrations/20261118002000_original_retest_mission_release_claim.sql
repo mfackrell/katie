@@ -635,7 +635,7 @@ create function public.project_org_retest_future_window_offer(
 ) returns jsonb language plpgsql stable security definer set search_path=public,pg_temp as $fn$
 declare p work_projects;a project_provider_execution;r project_blocked_management_retest_receipts;
  q project_retest_future_window_receipts;b project_retest_claim_release_receipts;
- m agent_missions;j mission_assignments;used integer;st text;
+ m agent_missions;j mission_assignments;used integer;st text;release_gate project_retest_production_release_gate;
 begin
  select * into p from work_projects where id=p_project;
  select * into a from project_provider_execution where project_id=p_project;
@@ -661,6 +661,12 @@ begin
   -- No unexpired owner window may be silently superseded.
   or clock_timestamp()<='2026-11-18T14:00:00Z'::timestamptz
  then raise exception 'Original owner retest and project identity not eligible for window renewal';end if;
+ select * into release_gate from project_retest_production_release_gate where project_id=p_project;
+ if release_gate.state is distinct from 'active'
+  or release_gate.release_sha is distinct from p_release
+  or release_gate.generation is null or release_gate.generation<=0
+  or release_gate.deployment_id is null
+ then raise exception 'Exact original release generation and deployment required';end if;
  select * into m from agent_missions where id=p.active_mission_id and project_id=p.id;
  select * into j from mission_assignments where mission_id=m.id and role='work';
  select count(*) into used from agent_missions where project_id=p.id;
@@ -722,6 +728,7 @@ begin
   if st='authorized' and (p.status<>'blocked' or m.status<>'blocked')
    then raise exception 'Recorded window may not auto-restart management';end if;
   return jsonb_build_object('projectId',p.id,'stage',st,'releaseSha',p_release,
+   'releaseGeneration',release_gate.generation,'deploymentId',release_gate.deployment_id,
    'authorizationReleaseSha',q.release_sha,
    'status',p.status,'missionStatus',m.status,'sourceMissionId',r.source_mission_id,
    'missionId',m.id,'assignmentId',j.id,'priorWindowId',r.window_id,
@@ -741,7 +748,8 @@ begin
   or not project_provider_continued_assignment(j.id)
  then raise exception 'Expired source-bound owner project is not eligible for another window';end if;
  return jsonb_build_object('projectId',p.id,'stage','authorize',
-  'releaseSha',p_release,'status',p.status,'missionStatus',m.status,
+  'releaseSha',p_release,'releaseGeneration',release_gate.generation,
+  'deploymentId',release_gate.deployment_id,'status',p.status,'missionStatus',m.status,
   'sourceMissionId',r.source_mission_id,'missionId',m.id,'assignmentId',j.id,
   'priorWindowId',r.window_id,'authorizationId',null,
   'scopeHash',p.approved_hash,'priorCutoff',r.cutoff,'cutoff',null,
@@ -1042,6 +1050,7 @@ do $epoch_claim_patch$
 declare
  legacy text;epoch_body text;
  header text:='FUNCTION public.claim_mission_work_release(p_release text)';
+ claim_lock text:=$claimlock$perform pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));$claimlock$;
  housekeeping_mission text:=$hm$where status in ('running','awaiting_approval') and benchmark_effective_mission_deadline(id)<=now();$hm$;
  housekeeping_lease text:=$hl$where j0.status='running' and lease_until<=now();$hl$;
  housekeeping_failed text:=$hf$where m0.status='running' and exists(select 1 from mission_assignments a where a.mission_id=m0.id and a.status='failed');$hf$;
@@ -1071,6 +1080,48 @@ begin
   'FUNCTION public.claim_mission_work_release_epoch(p_release text, p_epoch bigint, p_deployment text)');
  epoch_body:=replace(epoch_body,proof,
   'project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch,p_deployment)');
+ if (length(epoch_body)-length(replace(epoch_body,claim_lock,'')))/length(claim_lock)<>1
+ then raise exception 'Original mission79 claim lock location changed';end if;
+ epoch_body:=replace(epoch_body,claim_lock,claim_lock||$m79_finalize$
+ -- Original management mission 79 is one authorized attempt, not an
+ -- automatic retry. Only an EXACT active gate generation/deployment may
+ -- terminalize an expired lease or previously queued unsuccessful attempt.
+ -- Unresolved provider activity prevents settlement and release promotion.
+ update mission_assignments j79
+ set status='failed',lease=null,lease_until=null,updated_at=clock_timestamp(),
+  detail=coalesce(nullif(j79.detail,''),'Original mission79 attempt terminally settled after expired lease or rejected automatic retry.')
+ from agent_missions m79
+ join project_retest_claim_release_receipts receipt on receipt.project_id=m79.project_id
+ join project_retest_production_release_gate fence on fence.project_id=m79.project_id
+ where j79.id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+  and m79.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  and j79.mission_id=m79.id and receipt.mission_id=m79.id
+  and receipt.assignment_id=j79.id and receipt.bound_release_sha=p_release
+  and fence.release_sha=p_release and fence.generation=p_epoch
+  and fence.deployment_id=p_deployment and fence.state='active'
+  and fence.alias_name='katie-mu.vercel.app'
+  and j79.attempts>0
+  and ((j79.status='running' and j79.lease_until<=clock_timestamp())
+       or (j79.status='queued' and j79.lease is null and j79.lease_until is null))
+  and not exists(select 1 from project_provider_requests pending
+    where pending.assignment_id=j79.id and pending.resolved_at is null)
+ returning j79.* into j;
+ if found then
+  update agent_missions set status='blocked',
+   detail='Original mission79 attempt settled terminally; no automatic second inference attempt.',
+   updated_at=clock_timestamp()
+  where id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+   and status in ('running','awaiting_approval');
+  insert into project_events(project_id,event,data)
+   values('fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid,
+    'mission79_attempt_terminally_settled',
+    jsonb_build_object('missionId','b7c2e557-83e1-41cb-b174-bdb0d77d12e5',
+     'assignmentId',j.id,'attempts',j.attempts,'releaseSha',p_release,
+     'deploymentId',p_deployment,'generation',p_epoch,
+     'settledAt',clock_timestamp()));
+ end if;
+$m79_finalize$);
+
  -- The first release predicate is evaluated before waiting on the managed
  -- agent row lock. Recheck on the UPDATE statement itself, after locks, using
  -- clock_timestamp() inside the exact owner-source epoch predicate.

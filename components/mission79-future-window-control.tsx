@@ -32,6 +32,7 @@ export function Mission79FutureWindowControl({
     body:JSON.stringify({
      trialAction:"authorize_mission79_future_window",
      projectId:initial.projectId,releaseSha:initial.releaseSha,
+     releaseGeneration:initial.releaseGeneration,deploymentId:initial.deploymentId,
      missionId:initial.missionId,assignmentId:initial.assignmentId,
      authorizationId,cutoff,stateHash:initial.stateHash
     }),
@@ -64,7 +65,8 @@ export function Mission79FutureWindowControl({
    const response=await fetch('/api/projects/organization',{
     method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},
     body:JSON.stringify({trialAction:'bind_mission79_release',projectId:initial.projectId,
-     releaseSha:initial.releaseSha,missionId:initial.missionId,
+     releaseSha:initial.releaseSha,releaseGeneration:initial.releaseGeneration,
+     deploymentId:initial.deploymentId,missionId:initial.missionId,
      assignmentId:initial.assignmentId,stateHash:initial.stateHash})
    });
    const result=await response.json();

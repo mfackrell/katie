@@ -67,12 +67,14 @@ const futureMission79WindowInput=z.object({
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
  missionId:z.literal(MISSION79_ID),assignmentId:z.literal(MISSION79_ASSIGNMENT),
  authorizationId:z.string().uuid(),cutoff:z.string().datetime({offset:true}),
+ releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 const bindMission79ReleaseInput=z.object({
  projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('bind_mission79_release'),
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
  missionId:z.literal(MISSION79_ID),assignmentId:z.literal(MISSION79_ASSIGNMENT),
+ releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput]);
@@ -105,6 +107,7 @@ export async function POST(request:NextRequest){
   const offer=await mission79FutureWindowOffer(p.projectId);
   const next=Date.parse(p.cutoff);
   if(offer.stage!=='authorize'||offer.stateHash!==p.stateHash
+   ||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
    ||offer.missionId!==p.missionId||offer.assignmentId!==p.assignmentId
    ||!Number.isFinite(next)||next<=Date.now()+300000||next>Date.now()+86400000
    ||next<=Date.parse(offer.priorCutoff))
@@ -114,7 +117,8 @@ export async function POST(request:NextRequest){
   });
   if(!identity?.active||!Number.isSafeInteger(identity.generation)||identity.generation<=0
    ||!identity.deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(identity.deploymentId)
-   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID)
+   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID
+   ||identity.generation!==p.releaseGeneration||identity.deploymentId!==p.deploymentId)
    return NextResponse.json({error:'Deployment identity or release epoch no longer matches the canonical owner window'},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact authorization release'},{status:409});
@@ -122,7 +126,7 @@ export async function POST(request:NextRequest){
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
    p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
    p_authorization:p.authorizationId,p_cutoff:p.cutoff,
-   p_state_hash:p.stateHash,p_epoch:identity.generation,p_deployment:identity.deploymentId,
+   p_state_hash:p.stateHash,p_epoch:p.releaseGeneration,p_deployment:p.deploymentId,
   }),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='bind_mission79_release'){
@@ -130,6 +134,7 @@ export async function POST(request:NextRequest){
    return NextResponse.json({error:'Release binding requires the exact current deployed production SHA'},{status:409});
   const owner=await mission79FutureWindowOffer(p.projectId);
   if(owner.stage!=='authorized'||owner.releaseSha!==p.releaseSha
+    ||owner.releaseGeneration!==p.releaseGeneration||owner.deploymentId!==p.deploymentId
     ||owner.missionId!==p.missionId||owner.assignmentId!==p.assignmentId
     ||!owner.cutoff||Date.parse(owner.cutoff)<=Date.now()+300000)
    return NextResponse.json({error:'An explicit unexpired original-owner execution window is required'},{status:409});
@@ -147,14 +152,15 @@ export async function POST(request:NextRequest){
   });
   if(!identity?.active||!Number.isSafeInteger(identity.generation)||identity.generation<=0
    ||!identity.deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(identity.deploymentId)
-   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID)
+   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID
+   ||identity.generation!==p.releaseGeneration||identity.deploymentId!==p.deploymentId)
    return NextResponse.json({error:'Deployment identity or release epoch changed before owner binding'},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact binding release'},{status:409});
   return NextResponse.json(await rpc('project_org_bind_retest_claim_release',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
    p_mission:p.missionId,p_assignment:p.assignmentId,p_state_hash:p.stateHash,
-   p_epoch:identity.generation,p_deployment:identity.deploymentId
+   p_epoch:p.releaseGeneration,p_deployment:p.deploymentId
   }),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='retest_blocked_management'){
