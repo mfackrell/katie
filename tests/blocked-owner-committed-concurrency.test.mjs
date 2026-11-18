@@ -211,7 +211,7 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    assert.equal(initial.priorCutoff,'2026-11-16T18:00:00+00:00');
 
    const future=new Date(Date.now()+3600000).toISOString();
-   const winningWindow=randomUUID(),losingWindow=randomUUID();
+   const winningWindow='7d216bbe-596e-457e-b84d-e07ad1e80365',losingWindow=randomUUID();
    const authArgs=[fixture.owner,PROJECT,fixture.release,fixture.priorWindow,
     fixture.priorCutoff,future,winningWindow,initial.stateHash];
    const otherAuth=[...authArgs];otherAuth[6]=losingWindow;
