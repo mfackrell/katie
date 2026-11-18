@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { OpenAiProvider } from '@/lib/providers/openai-provider';
 import { ClaudeProvider } from '@/lib/providers/claude-provider';
 import { quoteSerializedRoutingRequest } from '@/lib/router/control-plane-economics';
-import { resolveRoutingEvidence, expectedCost, qualityFromObservations, type ObservedRoutingRow } from '@/lib/router/observed-evidence';
+import { resolveRoutingEvidence, expectedCost, qualityFromObservations, modelAttributedFeedback, type ObservedRoutingRow, type ObservedModelFeedback } from '@/lib/router/observed-evidence';
 import { getAccountingScope, runWithStandaloneAccounting } from '@/lib/standalone-accounting/context';
 import { buildCandidateMetadata } from '@/lib/router/model-intent';
 import { estimatePreparedRequest, prepareStandaloneRequest } from '@/lib/standalone-accounting/estimate';
@@ -59,6 +59,35 @@ test('quality observations retain provenance, recency, sample count and limits; 
   assert.deepEqual(qualityFromObservations(rows,'anthropic','claude-sonnet-4-6','rewrite'),{status:'unknown',observations:[]});
   assert.doesNotMatch(JSON.stringify(known),/quality_score|ranking/);
 });
+
+test('model-attributed user feedback retains task, provenance, exact source and uncertainty without scores', () => {
+  const observed_at = new Date().toISOString();
+  const source = (provider:string, model:string, intent:string, outcome:'positive'|'negative'|'ambiguous',
+    overrides:Partial<ObservedModelFeedback>={}):ObservedModelFeedback => ({
+    request_id:'prior-1', observed_at, provider, model, intent, outcome,
+    source:'adjacent_user_feedback',dimension:'objective_fidelity',
+    confidence:'context_attributed_not_verified',source_id:'user-msg-1',
+    task_excerpt:'An existing finance or creative task',...overrides
+  });
+  const rows = [
+    source('openai','gpt-5-mini-2025-08-07','social-emotional','negative'),
+    source('anthropic','claude-sonnet-5-5','social-emotional','positive',
+      {source:'message_reaction',dimension:'user_satisfaction',confidence:'direct_response_reaction'}),
+    source('openai','gpt-5-mini-2025-08-07','code-generation','positive'),
+    source('openai','gpt-5-mini-2025-08-07','social-emotional','positive',
+      {observed_at:'2020-01-01T00:00:00Z'}),
+  ];
+  const poor = modelAttributedFeedback(rows,'openai','gpt-5-mini','social-emotional');
+  assert.equal(poor?.negative,1);
+  assert.equal(poor?.positive,0);
+  assert.equal(poor?.evidence[0].source_id,'user-msg-1');
+  assert.match(poor?.uncertainty??'',/not.*global model superiority/i);
+  assert.equal(modelAttributedFeedback(rows,'anthropic','claude-sonnet-5-5','social-emotional')?.positive,1);
+  assert.equal(modelAttributedFeedback(rows,'openai','gpt-5-mini','rewrite'),undefined);
+  assert.equal(modelAttributedFeedback(rows,'openai','gpt-4o-mini','social-emotional'),undefined);
+  assert.doesNotMatch(JSON.stringify(poor),/quality_score|provider_rank|preferred_provider/);
+});
+
 function quote(model: string, media = false, textLength = 10000) {
   // Immutable PNG header with known 512x512 dimensions; no URL is fetched.
   const png = Buffer.alloc(24); Buffer.from([137,80,78,71,13,10,26,10]).copy(png);png.writeUInt32BE(512,16);png.writeUInt32BE(512,20);
@@ -104,7 +133,11 @@ test('runtime resolver uses admitted identity, observed task evidence and serial
     rpcCalls++;
     assert.equal(name,'standalone_routing_observations');
     assert.deepEqual(args,{p_owner:owner.userId,p_actor:owner.actorId,p_chat:owner.chatId,p_request:owner.requestId,p_intent:'rewrite'});
-    return {data:{observations:[row()],overhead_micro_usd:'123'},error:null};
+    return {data:{observations:[row()],overhead_micro_usd:'123',quality_feedback:[{
+      request_id:'user-feedback-1',observed_at:new Date().toISOString(),provider:'openai',model:'gpt-4o-mini',
+      intent:'rewrite',source:'message_reaction',dimension:'user_satisfaction',outcome:'positive',
+      confidence:'direct_response_reaction',source_id:'message-id-1',task_excerpt:'Rewrite this email'
+    }]},error:null};
   }} as unknown as ReturnType<typeof admin.getSupabaseAdminClient>));
   try {
     const provider = new OpenAiProvider('test-only');
@@ -113,6 +146,8 @@ test('runtime resolver uses admitted identity, observed task evidence and serial
     ],[provider],{name:'Katie',persona:'actor persona',summary:'memory',history:[],user:'Rewrite this'},'rewrite'));
     assert.equal(rpcCalls,1);
     assert.equal(result.candidates['openai:gpt-4o-mini'].quality.observations[0].sample_count,1);
+    assert.equal(result.candidates['openai:gpt-4o-mini'].quality.feedback?.positive,1);
+    assert.equal(result.candidates['openai:gpt-4o-mini'].quality.feedback?.evidence[0].source,'message_reaction');
     assert.deepEqual(result.candidates['openai:gpt-4.1'].quality,{status:'unknown',observations:[]});
     assert.match(JSON.stringify(result.candidates['openai:gpt-4o-mini'].economics),/serialized_request/);
     const before = rpcCalls;
