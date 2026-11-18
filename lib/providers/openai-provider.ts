@@ -1,4 +1,5 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
+import { planBestAnswerOutputTokens } from "./output-planning";
 import { openAiCacheSettings } from "./openai-cache";
 import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
@@ -235,7 +236,7 @@ function classifyModel(modelId: string): ModelClassification {
 }
 
 function toProviderResponse(
-  response: Pick<ProviderResponse, "text" | "content" | "usage">,
+  response: Pick<ProviderResponse, "text" | "content" | "usage" | "responseStatus" | "incompleteReason" | "providerResponseId">,
   model: string,
   provider: OpenAiProvider["name"]
 ): ProviderResponse {
@@ -244,7 +245,10 @@ function toProviderResponse(
     model,
     provider,
     content: response.content,
-    usage: response.usage
+    usage: response.usage,
+    responseStatus: response.responseStatus,
+    incompleteReason: response.incompleteReason,
+    providerResponseId: response.providerResponseId
   };
 }
 
@@ -319,8 +323,10 @@ export class OpenAiProvider implements LlmProvider {
     params: ChatGenerateParams,
     classification: ModelClassification
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const response = await this.client.responses.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_output_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey),
       input: toResponsesInput(params),
       ...(classification.isImageGenerationModel
@@ -338,11 +344,15 @@ export class OpenAiProvider implements LlmProvider {
       {
         text,
         content: contentItems,
+        responseStatus: response.status,
+        incompleteReason: response.incomplete_details?.reason ?? undefined,
+        providerResponseId: response.id,
         usage: response.usage
           ? {
               inputTokens: response.usage.input_tokens,
               outputTokens: response.usage.output_tokens,
-              totalTokens: response.usage.total_tokens
+              totalTokens: response.usage.total_tokens,
+              reasoningTokens: response.usage.output_tokens_details?.reasoning_tokens ?? 0
             }
           : undefined
       },
@@ -387,8 +397,10 @@ export class OpenAiProvider implements LlmProvider {
     classification: ModelClassification,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const stream = await this.client.responses.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_output_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey),
       input: toResponsesInput(params),
       stream: true,
@@ -434,11 +446,15 @@ export class OpenAiProvider implements LlmProvider {
       {
         text,
         content: contentItems,
+        responseStatus: completedResponse.status,
+        incompleteReason: completedResponse.incomplete_details?.reason ?? undefined,
+        providerResponseId: completedResponse.id,
         usage: completedResponse.usage
           ? {
               inputTokens: completedResponse.usage.input_tokens,
               outputTokens: completedResponse.usage.output_tokens,
-              totalTokens: completedResponse.usage.total_tokens
+              totalTokens: completedResponse.usage.total_tokens,
+              reasoningTokens: completedResponse.usage.output_tokens_details?.reasoning_tokens ?? 0
             }
           : undefined
       },

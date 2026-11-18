@@ -1881,6 +1881,7 @@ async function executeChat(request: NextRequest) {
         message: forReview ? message : visualContinuity
           ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\n\nADDITIONAL REQUEST CONTEXT:\n" + messageForGeneration)
           : messageForGeneration,
+        routingMode,
         requestIntent: classification?.intent ?? resolvedRequestIntent,
         secondaryIntents: storedWebsite.fresh ? [...(classification?.secondaryIntents ?? []), "web-search"] : classification?.secondaryIntents ?? [],
         images: visualContinuity ? [...visualContinuity.references.map(ref => ref.image), ...images] : images,

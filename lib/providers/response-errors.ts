@@ -7,6 +7,21 @@ export class ProviderResponseError extends Error {
   }
 }
 export function assertProviderOutput(result: ProviderResponse): void {
+  // The provider's terminal status is authoritative. An exhausted reasoning
+  // allowance is a settled, billable failure, not a transient empty response.
+  if (result.responseStatus === "incomplete") {
+    const reason = result.incompleteReason;
+    if (reason === "max_output_tokens") throw new ProviderResponseError(
+      "The selected model exhausted its output-token allowance (including internal reasoning) without completing the answer. This identical request will not be retried.",
+      false, "OUTPUT_TOKEN_EXHAUSTED");
+    if (reason === "content_filter") throw new ProviderResponseError(
+      "The model's response was stopped by provider safety filtering.", false, "PROVIDER_REFUSAL");
+    throw new ProviderResponseError("The provider reported an incomplete answer.", false, "PROVIDER_INCOMPLETE");
+  }
+  if (result.responseStatus === "failed" || result.responseStatus === "cancelled")
+    throw new ProviderResponseError("The provider did not complete this generation.", false, "PROVIDER_FAILURE");
+  if (result.content?.some(part => /^(?:refusal|output_refusal)$/i.test(part.type)))
+    throw new ProviderResponseError("The provider declined this request.", false, "PROVIDER_REFUSAL");
   if (isTimestampOnlyResponse(result.text ?? "") &&
       !result.content?.some(part => /image|video|audio/i.test(String(part.type)))) {
     throw new ProviderResponseError("The AI provider returned only internal timestamp metadata.", true, "METADATA_ONLY_RESPONSE");
