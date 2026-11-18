@@ -7,6 +7,7 @@ import {blockedOwnerRecoveryOffer,ORIGINAL_BLOCKED_CUTOFF,ORIGINAL_BLOCKED_WINDO
 import {blockedManagementRetestOffer,BLOCKED_RETEST_SOURCE,BLOCKED_RETEST_WINDOW,BLOCKED_RETEST_CUTOFF} from '@/lib/projects/blocked-management-retest';
 import {getMessages} from '@/lib/data/persistence-store';
 import {mission79FutureWindowOffer,MISSION79_ID,MISSION79_ASSIGNMENT} from '@/lib/projects/mission79-future-window';
+import {verifyMission79ActiveProductionSha} from '@/lib/projects/mission79-active-release';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -108,6 +109,8 @@ export async function POST(request:NextRequest){
    ||!Number.isFinite(next)||next<=Date.now()+300000||next>Date.now()+86400000
    ||next<=Date.parse(offer.priorCutoff))
    return NextResponse.json({error:'Explicit fresh future cutoff and original owner preflight are required'},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha))
+   return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact authorization release'},{status:409});
   return NextResponse.json(await rpc('project_org_authorize_retest_future_window',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
    p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
@@ -132,6 +135,8 @@ export async function POST(request:NextRequest){
    ||Date.parse(offer.cutoff)!==Date.parse(owner.cutoff)
    ||Date.parse(offer.cutoff)<=Date.now()+300000)
    return NextResponse.json({error:'Exact source-bound release state changed; no worker was restarted'},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha))
+   return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact binding release'},{status:409});
   return NextResponse.json(await rpc('project_org_bind_retest_claim_release',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
    p_mission:p.missionId,p_assignment:p.assignmentId,p_state_hash:p.stateHash
