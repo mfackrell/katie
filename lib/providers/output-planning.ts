@@ -8,10 +8,11 @@ import { getModelPrice } from "@/lib/standalone-accounting/pricing";
  * Routine requests and Best Value retain their existing preparation behavior.
  */
 export function planBestAnswerOutputTokens(
-  params: ChatGenerateParams, model: string
+  params: ChatGenerateParams, model: string,
+  provider: "openai" | "google" | "grok" = "openai"
 ): number | undefined {
   if (params.routingMode !== "best_answer") return undefined;
-  const price = getModelPrice("openai", model);
+  const price = getModelPrice(provider, model);
   if (!price || !price.maxOutputTokens || !price.maxContextTokens) return undefined;
   const request = params.user ?? "";
   const attachedLength = (params.attachments ?? []).reduce(

@@ -309,8 +309,10 @@ export class OpenAiProvider implements LlmProvider {
     selectedModel: string,
     params: ChatGenerateParams
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const completion = await this.client.chat.completions.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params)
     }, { signal: params.signal, maxRetries: 0 });
@@ -366,8 +368,10 @@ export class OpenAiProvider implements LlmProvider {
     params: ChatGenerateParams,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const stream = await this.client.chat.completions.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params),
       stream: true,

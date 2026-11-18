@@ -18,6 +18,10 @@ export function assertProviderOutput(result: ProviderResponse): void {
       "The model's response was stopped by provider safety filtering.", false, "PROVIDER_REFUSAL");
     throw new ProviderResponseError("The provider reported an incomplete answer.", false, "PROVIDER_INCOMPLETE");
   }
+  if (result.responseStatus === "completed" && !result.text?.trim() &&
+      !result.content?.some(part => /image|video|audio/i.test(part.type) || Boolean(part.text?.trim())))
+    throw new ProviderResponseError(
+      "The provider completed without any visible answer or usable media.", false, "COMPLETED_EMPTY_RESPONSE");
   if (result.responseStatus === "failed" || result.responseStatus === "cancelled")
     throw new ProviderResponseError("The provider did not complete this generation.", false, "PROVIDER_FAILURE");
   if (result.content?.some(part => /^(?:refusal|output_refusal)$/i.test(part.type)))

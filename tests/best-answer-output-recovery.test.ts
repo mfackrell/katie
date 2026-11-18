@@ -26,6 +26,15 @@ test("Best Answer plans substantive output plus reasoning from workload, not a u
   assert.equal(planBestAnswerOutputTokens(base, "unreviewed-model"), undefined);
 });
 
+test("long-form Google and Grok candidates also receive scoped, reviewed output allowances", () => {
+  const googleCap = planBestAnswerOutputTokens({...base, modelId:"gemini-2.5-pro"},"gemini-2.5-pro","google");
+  const grokCap = planBestAnswerOutputTokens({...base, modelId:"grok-4.7"},"grok-4.7","grok");
+  assert.ok(googleCap && googleCap > 4096);
+  assert.ok(grokCap && grokCap > 4096 && grokCap <= 30_000);
+  assert.equal(planBestAnswerOutputTokens({...base, routingMode:"best_value"},
+    "gemini-2.5-pro","google"),undefined);
+});
+
 test("long-form allowance is a frozen, priced request subject to ordinary context and accounting limits", () => {
   const cap = planBestAnswerOutputTokens(base, base.modelId!)!;
   const prepared = prepareStandaloneRequest("openai", base.modelId!, "/v1/responses",
@@ -58,6 +67,12 @@ test("partial visible text cannot disguise an incomplete output-exhausted respon
     responseStatus:"incomplete",incompleteReason:"max_output_tokens"}),
     (error:unknown)=>error instanceof ProviderResponseError && error.code==="OUTPUT_TOKEN_EXHAUSTED");
 });
+test("a provider-declared completed but entirely invisible answer is distinct from an unclassified empty response", () => {
+  assert.throws(()=>assertProviderOutput({provider:"openai",model:base.modelId!,text:"",
+    responseStatus:"completed",usage:{inputTokens:100,outputTokens:100,reasoningTokens:100}}),
+    (error:unknown)=>error instanceof ProviderResponseError && error.code==="COMPLETED_EMPTY_RESPONSE" && !error.retryable);
+});
+
 test("provider refusal, provider failure and normal completed response are distinguishable", () => {
   assert.throws(()=>assertProviderOutput({provider:"openai",model:base.modelId!,text:"",
     responseStatus:"incomplete",incompleteReason:"content_filter"}),
