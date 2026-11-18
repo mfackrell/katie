@@ -191,9 +191,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('reset role');
   const srcMission=(await first.query('select to_jsonb(m) row from agent_missions m where id=$1',[generatedMission])).rows[0].row;
   const srcJob=(await first.query('select to_jsonb(j) row from mission_assignments j where id=$1',[generatedJob])).rows[0].row;
-  await first.query(\`insert into agent_missions select (jsonb_populate_record(null::agent_missions,$1::jsonb||jsonb_build_object('id',$2::uuid))).*\`,[JSON.stringify(srcMission),exactMission79]);
+  await first.query(`insert into agent_missions select (jsonb_populate_record(null::agent_missions,$1::jsonb||jsonb_build_object('id',$2::uuid))).*`,[JSON.stringify(srcMission),exactMission79]);
   await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,exactMission79]);
-  await first.query(\`insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb||jsonb_build_object('id',$2::uuid,'mission_id',$3::uuid))).*\`,[JSON.stringify(srcJob),exactJob79,exactMission79]);
+  await first.query(`insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb||jsonb_build_object('id',$2::uuid,'mission_id',$3::uuid))).*`,[JSON.stringify(srcJob),exactJob79,exactMission79]);
   const oldBindings=(await first.query('select to_jsonb(b) row from project_organization_assignments b where b.assignment_id=$1',[generatedJob])).rows.map(x=>x.row);
   for(const binding of oldBindings){
    await first.query('insert into project_organization_assignments select (jsonb_populate_record(null::project_organization_assignments,$1::jsonb||jsonb_build_object('assignment_id',$2::uuid))).*',[JSON.stringify(binding),exactJob79]);
