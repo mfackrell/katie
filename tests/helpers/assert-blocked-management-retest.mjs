@@ -60,11 +60,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    // the existing management execution trigger remains ENFORCED in this fixture.
    await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,id]);
    await first.query(`insert into mission_assignments
-    (id,mission_id,job_key,role,agent_id,instruction,payload,status,result)
+    (id,mission_id,job_key,role,agent_id,instruction,payload,status,result,attempts)
     values($1,$2,'plan','work',$3,'Make bounded management decisions',
       jsonb_build_object('organizationNodeId',$5::uuid),'failed',
-      jsonb_build_object('detail',$4::text))`,
-    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id]);
+      jsonb_build_object('detail',$4::text),$6::integer)`,
+    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id,i===1?1:0]);
   }
   await first.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,root.id]);
   await first.query(`update work_projects set status='blocked',
