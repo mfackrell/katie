@@ -24,7 +24,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  )).rows[0].sig;
  if(!releaseInstalled)await observer.query(readFileSync(releaseMigration,'utf8'));
  const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
- assert.ok(claimRelease,'Original worker claim's new exact-release predicate must be installed');
+ assert.ok(claimRelease,"Original worker claim's new exact-release predicate must be installed");
 
  await first.query('begin');
  try{
