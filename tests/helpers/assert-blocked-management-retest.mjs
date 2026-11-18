@@ -20,7 +20,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  // committed native owner-authorization and genuine PostgreSQL scheduler.
  const releaseMigration='supabase/migrations/20261118002000_original_retest_mission_release_claim.sql';
  const releaseInstalled=(await observer.query(
-  "select to_regprocedure('public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text)') sig"
+  "select to_regprocedure('public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)') sig"
  )).rows[0].sig;
  if(!releaseInstalled)await observer.query(readFileSync(releaseMigration,'utf8'));
  const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
@@ -375,18 +375,26 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const authorizationId=randomUUID();
   const explicitFutureCutoff=new Date(Date.now()+4*3600000).toISOString();
   assert.ok(Date.parse(explicitFutureCutoff)>Date.parse(futureOffer.priorCutoff));
-  const approveArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash];
+  const approveArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
   const approve=()=>first.query(
-   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8) r',approveArgs);
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',approveArgs);
   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
    [randomUUID(),project,executionRelease]),/owner|auth|original/i);
   await rejected(()=>first.query(
-   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8)',
-   [...approveArgs.slice(0,7),'f'.repeat(64)]),/state|owner|fresh|authorization/i);
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [...approveArgs.slice(0,7),'f'.repeat(64),...approveArgs.slice(8)]),/state|owner|fresh|authorization/i);
   await rejected(()=>first.query(
-   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8)',
-   [owner,project,executionRelease,randomUUID(),originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash]),
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [owner,project,executionRelease,randomUUID(),originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash,...approveArgs.slice(8)]),
    /mission|state|owner|original|exact/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [...approveArgs.slice(0,8),activeEpoch.generation+1,'dpl_NativeFixture79']),
+   /Observed canonical release epoch or deployment changed/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [...approveArgs.slice(0,9),'dpl_WrongNativeFixture']),
+   /Observed canonical release epoch or deployment changed/i);
   await first.query('set role anon');await rejected(approve,/permission denied/i);
   await first.query('set role service_role');
   const ownerWindow=(await approve()).rows[0].r;
@@ -397,7 +405,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(Date.parse(ownerWindow.cutoff),Date.parse(explicitFutureCutoff));
   assert.equal(ownerWindow.historicalMissions,79);
   await raceNewOwnerRpc('OWNER_WINDOW',
-   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8) r',approveArgs);
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',approveArgs);
   assert.equal((await observer.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[project])).rows[0].n,1);
   assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_future_window_owner_authorized'",[project])).rows[0].n,1);
   assert.equal((await first.query('select deadline,max_missions,token_allowance from work_projects where id=$1',
@@ -437,13 +445,21 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    assignmentId:originalJob.id,stage:'authorized'
   });
   const immutableBeforeBinding=await unmodified();
-  const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash];
-  const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
+  const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
+  const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',
    [randomUUID(),project,executionRelease]),/authenticated|owner|window/);
   await rejected(()=>first.query(
-   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6)',
-   [...bindArgs.slice(0,5),'f'.repeat(64)]),/exact|state|required|fresh|owner/);
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...bindArgs.slice(0,5),'f'.repeat(64),...bindArgs.slice(6)]),/exact|state|required|fresh|owner/);
+  await rejected(()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...bindArgs.slice(0,6),activeEpoch.generation+1,'dpl_NativeFixture79']),
+   /Observed canonical release epoch or deployment changed/i);
+  await rejected(()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...bindArgs.slice(0,7),'dpl_WrongNativeFixture']),
+   /Observed canonical release epoch or deployment changed/i);
   await first.query('set role anon');await rejected(bind,/permission denied/i);
   await first.query('set role service_role');
   const receipt=(await bind()).rows[0].r;
@@ -451,7 +467,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.deepEqual(await originalIntegrity(),sourceBeforeOwnerRenewal,
    'Exact-release binding preserves all original mission and provider accounting data');
   await raceNewOwnerRpc('RELEASE_BIND',
-   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
   assert.equal((await observer.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,1);
   assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_new_window_release_bound'",[project])).rows[0].n,1);
   const resumed=(await first.query('select status,progress_since,detail from work_projects where id=$1',[project])).rows[0];
