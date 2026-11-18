@@ -12,6 +12,10 @@ assert.match(bindingSql,/perform 1 from agent_missions where id=p_mission and pr
 assert.match(bindingSql,/perform 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;/);
 assert.doesNotMatch(bindingSql,/^ select 1 from (agent_missions|mission_assignments) where .* for update;/m);
 assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The native fixture must exercise the new exact-release binding predicate');
+assert.match(bindingSql,/create table public.project_retest_future_window_receipts/,'A distinct immutable owner window must exist');
+assert.match(bindingSql,/create function public.project_org_authorize_retest_future_window/,'Only the owner-confirmed window writer may renew time');
+assert.match(bindingSql,/project_org_retest_renewed_assignment/,'Source-bound inherited mission79 membership must be checked');
+
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/rollback to savepoint negative_release_claim/,'Negative claim probes must not consume fixture-wide worker capacity');
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/mission_assignments set created_at='2000-01-01T00:00:00Z'/,'Native proof must prioritize only the disposable original mission79 assignment');
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/approvedProjectRecord\?\.spec\?\.milestones/,'Offline management must use the actual approved milestone from the native fixture');
@@ -312,6 +316,8 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
     'select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',
     [PROJECT])).rows[0].n;
    assert.equal(boundClaimRows,0,'The mission79 exact release binding must never escape the disposable native transaction');
+   assert.equal((await observer.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[PROJECT])).rows[0].n,0,
+    'A synthetic owner-renewed window must never escape the disposable PostgreSQL transaction');
    console.log('BLOCKED_OWNER_REAL_TWO_CONNECTION_RPCS_PASS: COMMITTED schema, two actual concurrent authorize RPCs, two actual concurrent resume RPCs, single receipts, replay and rollback, 76/96 missions, 600000 allowance, 13 contracts, history and QA protections; zero live dispatch/inference');
   }catch(error){
    console.error('COMMITTED_RACE_DIAGNOSTIC: '+String(error?.stack||error));
