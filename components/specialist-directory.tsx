@@ -9,7 +9,7 @@ import type { Actor, ChatThread } from "@/lib/types/chat";
 import type { UIState } from "@/components/saved-workspace-state";
 import type { ManagedAgent } from "@/lib/agents/policy";
 
-type OperatingInstructionChoice = { id: string; title: string; sort_order: number };
+type OperatingInstructionChoice = { id: string; title: string; content?: string; sort_order: number };
 
 type Registry = {
   id: string;
@@ -236,12 +236,21 @@ function AgentControls({
             <div className="mt-3 space-y-2">
               <p className="text-xs text-zinc-400">Assigned reusable modules (optional):</p>
               {operatingModules.map(module => (
-                <label key={module.id} className="flex items-start gap-2">
+                <div key={module.id}>
                   <input type="checkbox" checked={moduleIds.includes(module.id)} disabled={busy}
                     onChange={event => setModuleIds(previous =>
                       event.target.checked ? [...previous, module.id] : previous.filter(id => id !== module.id))}/>
                   <span>{module.title}</span>
                 </label>
+                {typeof module.content === "string" && (
+                  <details className="ml-6 rounded border border-white/10 p-2">
+                    <summary className="cursor-pointer text-xs text-emerald-300">
+                      View instructions
+                    </summary>
+                    <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-300">{module.content}</pre>
+                  </details>
+                )}
+              </div>
               ))}
             </div>
           )}
