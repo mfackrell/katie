@@ -756,6 +756,33 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'Old pre-promotion epoch must not claim the original job after reopening');
   const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
   assert.notEqual(legacyClaim?.job?.id,originalJob.id);
+  // A stale (zero-epoch) worker and legacy claimant must not perform
+  // housekeeping writes on the original mission/assignment, even if an
+  // expired lease would normally be requeued. Ordinary global workers remain
+  // eligible through their unchanged housekeeping and claim predicates.
+  await first.query('savepoint mission79_stale_housekeeping');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update mission_assignments set status='running',attempts=1,lease=gen_random_uuid(),lease_until=clock_timestamp()-interval '1 minute' where id=$1",[originalJob.id]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   const rowBefore=(await first.query('select status,attempts,lease,lease_until,updated_at from mission_assignments where id=$1',[originalJob.id])).rows[0];
+   const missionBefore=(await first.query('select status,detail,updated_at from agent_missions where id=$1',[scheduled.missionId])).rows[0];
+   await first.query('select claim_mission_work_release_epoch($1,$2,$3)',[executionRelease,0,'dpl_StaleRuntime']);
+   await first.query('select claim_mission_work_release($1)',[executionRelease]);
+   assert.deepEqual((await first.query('select status,attempts,lease,lease_until,updated_at from mission_assignments where id=$1',[originalJob.id])).rows[0],rowBefore,
+    'Stale or legacy claim cannot requeue, consume or clear original mission79 expired lease');
+   assert.deepEqual((await first.query('select status,detail,updated_at from agent_missions where id=$1',[scheduled.missionId])).rows[0],missionBefore,
+    'Stale or legacy claim must preserve original mission79 history');
+  }finally{
+   await first.query('rollback to savepoint mission79_stale_housekeeping');
+   await first.query('release savepoint mission79_stale_housekeeping');
+  }
+  const lockedClaimBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint,text)'::regprocedure) body")).rows[0].body;
+  assert.match(lockedClaimBody,/where id=j\.id and[\s\S]*?project_org_retest_claim_release_authorized_epoch\(m\.project_id,p_release,p_epoch,p_deployment\)/,
+   'Exact owner/source epoch and live cutoff must be rechecked at the post-lock lease UPDATE');
+  console.log('MISSION79_STALE_HOUSEKEEPING_AND_POSTLOCK_CUTOFF_NEGATIVES_PASS');
   const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   if(!claimed||claimed.mission?.id!==scheduled.missionId){

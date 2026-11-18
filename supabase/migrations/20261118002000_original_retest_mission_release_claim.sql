@@ -1031,16 +1031,46 @@ do $epoch_claim_patch$
 declare
  legacy text;epoch_body text;
  header text:='FUNCTION public.claim_mission_work_release(p_release text)';
+ housekeeping_mission text:=$hm$where status in ('running','awaiting_approval') and benchmark_effective_mission_deadline(id)<=now();$hm$;
+ housekeeping_lease text:=$hl$where j0.status='running' and lease_until<=now();$hl$;
+ housekeeping_failed text:=$hf$where m0.status='running' and exists(select 1 from mission_assignments a where a.mission_id=m0.id and a.status='failed');$hf$;
  proof text:='project_org_retest_claim_release_authorized(b.project_id,p_release)';
 begin
  legacy:=pg_get_functiondef('public.claim_mission_work_release(text)'::regprocedure);
  if (length(legacy)-length(replace(legacy,header,'')))/length(header)<>1
   or (length(legacy)-length(replace(legacy,proof,'')))/length(proof)<>2
  then raise exception 'Unexpected original release-claim source contract for generation-bound worker';end if;
+ -- The original M79 assignment has its own immutable, one-time owner window.
+ -- Legacy/zero-epoch housekeeping may manage EVERY ordinary mission, but may
+ -- not rewrite or silently requeue this already owner-bound historical job.
+ if (length(legacy)-length(replace(legacy,housekeeping_mission,'')))/length(housekeeping_mission)<>1
+  or (length(legacy)-length(replace(legacy,housekeeping_lease,'')))/length(housekeeping_lease)<>1
+  or (length(legacy)-length(replace(legacy,housekeeping_failed,'')))/length(housekeeping_failed)<>1
+ then raise exception 'Unexpected exact original mission79 maintenance boundary';end if;
+ legacy:=replace(legacy,housekeeping_mission,
+  $hm2$where status in ('running','awaiting_approval') and benchmark_effective_mission_deadline(id)<=now()
+   and id is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid;$hm2$);
+ legacy:=replace(legacy,housekeeping_lease,
+  $hl2$where j0.status='running' and lease_until<=now()
+   and j0.id is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid;$hl2$);
+ legacy:=replace(legacy,housekeeping_failed,
+  $hf2$where m0.status='running' and exists(select 1 from mission_assignments a where a.mission_id=m0.id and a.status='failed')
+   and m0.id is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid;$hf2$);
  epoch_body:=replace(legacy,header,
   'FUNCTION public.claim_mission_work_release_epoch(p_release text, p_epoch bigint, p_deployment text)');
  epoch_body:=replace(epoch_body,proof,
   'project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch,p_deployment)');
+ -- The first release predicate is evaluated before waiting on the managed
+ -- agent row lock. Recheck on the UPDATE statement itself, after locks, using
+ -- clock_timestamp() inside the exact owner-source epoch predicate.
+ if (length(epoch_body)-length(replace(epoch_body,'where id=j.id returning * into j;','')))/length('where id=j.id returning * into j;')<>1
+ then raise exception 'Unexpected original worker lease write boundary';end if;
+ epoch_body:=replace(epoch_body,'where id=j.id returning * into j;',
+  $lease$where id=j.id and
+    (j.id is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+     or project_org_retest_claim_release_authorized_epoch(m.project_id,p_release,p_epoch,p_deployment))
+    returning * into j;
+   if not found then return null; end if;$lease$);
  execute epoch_body;
  -- Fail closed for the original mission79 on older worker deployments that
  -- still invoke the single-argument claim RPC; all other projects are intact.

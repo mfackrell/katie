@@ -86,6 +86,18 @@ jobs:
             from this exact checkout. If either did not pass, return changes_requested.
             Don't edit, deploy, invoke any provider, spend, or claim a worker.
             Original project id fe9d2658-41e3-44c1-ae8e-a0cba98371fe.
+            Apply the owner's APPROVED security threat model in PR #1111
+            comment #6993245952 (not an execution approval). Trusted,
+            coordinated privileged Vercel operators use CLOSE → PROMOTE →
+            VERIFY → OPEN with autoAssignCustomDomains=false and canonical
+            alias readback. Verify all detectable stale SHA/deployment/epoch,
+            invalid gate, pending lease and replay negatives. Do NOT require
+            impossible database-transaction atomicity with a privileged
+            Vercel administrator outside the trusted operator protocol.
+            Authenticated, replay-resistant owner API consent is accepted;
+            do not require an unforgeable physical mouse click. Retain
+            genuine bearer/Origin, SQL/source, and deadline safeguards.
+            Report any demonstrable technical correctness defect independently.
             Mission 79 must be preserved, not duplicated; original approval
             deadline 2026-11-18T14:00:00Z has expired.
             Explicit owner choice of a NEW future cutoff is required from
