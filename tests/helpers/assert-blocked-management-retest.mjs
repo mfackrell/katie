@@ -555,6 +555,33 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [executionRelease,reopenedEpoch.generation])).rows[0].r;
   assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');
 
+  // Closing an active generation must fail if a paid worker already owns a
+  // lease. The SQL gate locks serialize with new claims, while this safety
+  // check also covers an expired worker whose lease has been requeued.
+  const gateStateBeforeAttempt=(await first.query(
+   'select state,generation from project_retest_production_release_gate where project_id=$1',
+   [project])).rows[0];
+  await first.query('reset role');
+  await rejected(()=>first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   [project,executionRelease,'dpl_NativeFixture79','closed']),
+   /Undrained owner-renewed worker attempt/i);
+  await first.query('savepoint expired_mission79_claim');
+  await first.query("update mission_assignments set status='queued',lease=null,lease_until=null where id=$1",
+   [originalJob.id]);
+  await rejected(()=>first.query(
+   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   [project,executionRelease,'dpl_NativeFixture79','closed']),
+   /Undrained owner-renewed worker attempt/i);
+  await first.query('rollback to savepoint expired_mission79_claim');
+  await first.query('release savepoint expired_mission79_claim');
+  await first.query('set role service_role');
+  assert.deepEqual((await first.query(
+   'select state,generation from project_retest_production_release_gate where project_id=$1',
+   [project])).rows[0],gateStateBeforeAttempt,
+   'Live/expired attempted worker must not change the sealed release-gate generation');
+  console.log('MISSION79_RELEASE_GATE_UNDRAINED_LEASE_NEGATIVES_PASS');
+
   // Continue the REAL database-claimed management identity into the normal
   // executeClaim dispatcher with an injected deterministic no-network model.
   // The isolated DB command adapter is mocked here: no paid provider, worker
