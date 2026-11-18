@@ -460,7 +460,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('begin');
   await first.query('reset role');
   await first.query('select id from project_organization_nodes where id=$1 for update',[fixtureRoot.id]);
-  const contenderPid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+  const cutoffContenderPid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
   await second.query('set role service_role');
   const nearCutoff=new Date(Date.now()+5*60000+8000).toISOString();
   const priorOffer=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
@@ -471,7 +471,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    .then(r=>({ok:true,r:r.rows[0].r}),error=>({ok:false,error}));
   let sawRealLock=false;
   for(let i=0;i<35;i++){
-   const locks=await observer.query('select locktype,granted from pg_locks where pid=$1 and granted=false',[contenderPid]);
+   const locks=await observer.query('select locktype,granted from pg_locks where pid=$1 and granted=false',[cutoffContenderPid]);
    if(locks.rows.some(l=>!l.granted)){sawRealLock=true;break;}
    const finished=await Promise.race([contender.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),50))]);
    if(finished)throw Error('Owner cutoff contender returned before waiting on the held original organization row');
