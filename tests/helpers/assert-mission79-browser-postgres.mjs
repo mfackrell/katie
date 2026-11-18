@@ -78,6 +78,7 @@ export async function assertMission79BrowserPostgres(first,{
   JSON.stringify(initial)+',onRefresh:()=>window.refreshes++}));';
  let baseUrl='',posts=0,authRequests=0;
  const postResults=[];
+ const browserErrors=[];
  const waitForSuccess=async message=>{
   try{await page.getByText(message).waitFor({timeout:15000});}
   catch(error){
@@ -85,7 +86,7 @@ export async function assertMission79BrowserPostgres(first,{
    const bodyText=await page.locator('body').innerText().catch(()=>'');
    throw new Error('MISSION79_BROWSER_POSTGRES_DIAGNOSTIC '+JSON.stringify({
     stage,posts,authRequests,rpcCalls,postResults,alerts,
-    browserErrors:errors,bodyText:bodyText.slice(0,1200),
+    browserErrors,bodyText:bodyText.slice(0,1200),
    })+'; '+(error instanceof Error?error.message:String(error)));
   }
  };
@@ -141,7 +142,7 @@ export async function assertMission79BrowserPostgres(first,{
   });
   context=await browser.newContext({timezoneId:'UTC'});
   page=await context.newPage();
-  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  page.on('pageerror',e=>browserErrors.push(e.message));
   await page.goto(baseUrl+'/owner',{waitUntil:'domcontentloaded',timeout:12000});
   if(stage==='authorize'){
    const cutoff=page.locator('#mission79-cutoff');
@@ -172,7 +173,7 @@ export async function assertMission79BrowserPostgres(first,{
   assert.equal(posts,1,'Browser owner action must produce exactly one POST');
   assert.ok(authRequests>=1,'Real first-party owner verifier must fetch authenticated Supabase-style identity');
   assert.equal(await page.evaluate(()=>window.refreshes),1);
-  assert.deepEqual(errors,[]);
+  assert.deepEqual(browserErrors,[]);
   assert.ok(rpcCalls.includes(stage==='authorize'
    ?'project_org_authorize_retest_future_window':'project_org_bind_retest_claim_release'));
   console.log('MISSION79_BROWSER_TO_AUTHENTICATED_ROUTE_TO_REAL_POSTGRES_'+stage.toUpperCase()+'_PASS: first-party cutoff/bearer, owner verification, immutable SQL receipt, rollback');
