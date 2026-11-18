@@ -321,11 +321,6 @@ function AgentControls({
           </p>
         )}
       </form>
-
-          <button type="button" className={button+" mt-3"} disabled={busy}
-            onClick={() => void saveModules()}>Save operating modules</button>
-        </section>
-      )}
       </details>
     </>
   );
