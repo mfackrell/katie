@@ -240,14 +240,14 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   // doing so fills the unchanged three-worker global cap before mission 79.
   const releaseEpoch=async release=>(await first.query(
    'select project_org_retest_release_epoch($1,$2) e',[project,release])).rows[0].e;
-  const isolatedNegativeClaim=async(release,observedGeneration)=>{
+  const isolatedNegativeClaim=async(release,observedGeneration,deployment='dpl_NativeFixture79')=>{
    await first.query('savepoint negative_release_claim');
    try{
     if(observedGeneration==='legacy')
      return (await first.query('select claim_mission_work_release($1) r',[release])).rows[0].r;
     const generation=observedGeneration??(await releaseEpoch(release)).generation;
-    return (await first.query('select claim_mission_work_release_epoch($1,$2) r',
-     [release,generation])).rows[0].r;
+    return (await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+     [release,generation,deployment])).rows[0].r;
    }
    finally{
     await first.query('rollback to savepoint negative_release_claim');
@@ -564,13 +564,16 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(reopenedEpoch.active,true);
   assert.ok(reopenedEpoch.generation>activeEpoch.generation,
    'Closing/reopening the release gate must advance its generation');
+  const wrongDeployment=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation,'dpl_OtherDeployment');
+  assert.notEqual(wrongDeployment?.job?.id,originalJob.id,
+   'Same release SHA with a different deployment ID must not lease mission79');
   const staleEpochClaim=await isolatedNegativeClaim(executionRelease,activeEpoch.generation);
   assert.notEqual(staleEpochClaim?.job?.id,originalJob.id,
    'Old pre-promotion epoch must not claim the original job after reopening');
   const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
   assert.notEqual(legacyClaim?.job?.id,originalJob.id);
-  const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2) r',
-   [executionRelease,reopenedEpoch.generation])).rows[0].r;
+  const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+   [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   if(!claimed||claimed.mission?.id!==scheduled.missionId){
    const predicateSql=[
     "select j.id job_id,j.status job_status,j.attempts,j.lease,j.available_at,",
@@ -588,7 +591,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    const diagnostic=(await first.query(predicateSql,[originalJob.id,executionRelease])).rows;
    const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint)'::regprocedure) definition")).rows[0].definition;
    console.log('MISSION79_CLAIM_REJECTION_DIAGNOSTIC '+JSON.stringify({
-    diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch)').length-1,
+    diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch,p_deployment)').length-1,
     staleClaim:stale,otherClaim:staleOther,claimed
    }));
   }
@@ -599,8 +602,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.ok(claimed?.job?.lease,'Real six-minute worker lease required');
   assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
   assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
-  const duplicate=(await first.query('select claim_mission_work_release_epoch($1,$2) r',
-   [executionRelease,reopenedEpoch.generation])).rows[0].r;
+  const duplicate=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+   [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');
 
   // Closing an active generation must fail if a paid worker already owns a

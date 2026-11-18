@@ -916,14 +916,14 @@ create function public.project_org_retest_release_epoch(
 $fn$;
 
 create function public.project_org_retest_claim_release_authorized_epoch(
- p_project uuid,p_release text,p_generation bigint
+ p_project uuid,p_release text,p_generation bigint,p_deployment text
 ) returns boolean language sql stable security definer set search_path=public,pg_temp as $fn$
  select coalesce(p_generation>0,false)
   and public.project_org_retest_claim_release_authorized(p_project,p_release)
   and exists(select 1 from public.project_retest_production_release_gate g
    where g.project_id=p_project and g.release_sha=p_release
     and g.state='active' and g.alias_name='katie-mu.vercel.app'
-    and g.generation=p_generation);
+    and g.generation=p_generation and g.deployment_id=p_deployment);
 $fn$;
 
 -- Clone the installed, source-qualified production claim implementation,
@@ -942,9 +942,9 @@ begin
   or (length(legacy)-length(replace(legacy,proof,'')))/length(proof)<>2
  then raise exception 'Unexpected original release-claim source contract for generation-bound worker';end if;
  epoch_body:=replace(legacy,header,
-  'FUNCTION public.claim_mission_work_release_epoch(p_release text, p_epoch bigint)');
+  'FUNCTION public.claim_mission_work_release_epoch(p_release text, p_epoch bigint, p_deployment text)');
  epoch_body:=replace(epoch_body,proof,
-  'project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch)');
+  'project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch,p_deployment)');
  execute epoch_body;
  -- Fail closed for the original mission79 on older worker deployments that
  -- still invoke the single-argument claim RPC; all other projects are intact.
@@ -953,13 +953,13 @@ end $epoch_claim_patch$;
 
 revoke all on function
  public.project_org_retest_release_epoch(uuid,text),
- public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint),
- public.claim_mission_work_release_epoch(text,bigint)
+ public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
+ public.claim_mission_work_release_epoch(text,bigint,text)
  from public,anon,authenticated,service_role;
 grant execute on function
  public.project_org_retest_release_epoch(uuid,text),
- public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint),
- public.claim_mission_work_release_epoch(text,bigint) to service_role;
+ public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
+ public.claim_mission_work_release_epoch(text,bigint,text) to service_role;
 
 revoke all on function
  public.project_org_retest_original_owner_lineage(uuid),

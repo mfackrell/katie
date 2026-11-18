@@ -388,13 +388,13 @@ export async function runMissionBatch(model=missionModel){
  let observedReleaseGeneration=0;
  let releaseFence:string|undefined;
  if(release){
-  let mission79Epoch:{generation:number;active:boolean}|null=null;
+  let mission79Epoch:{generation:number;active:boolean;deploymentId:string|null}|null=null;
   try{
    const epoch=await rpc<{generation:number;active:boolean}>('project_org_retest_release_epoch',{
     p_project:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',p_release:release,
    });
    if(!epoch||!Number.isSafeInteger(epoch.generation)||epoch.generation<0
-    ||typeof epoch.active!=='boolean')
+    ||typeof epoch.active!=='boolean'||(epoch.deploymentId!==null&&typeof epoch.deploymentId!=='string'))
     throw Error('Invalid original mission79 release epoch response');
    mission79Epoch=epoch;
   }catch{
@@ -403,7 +403,8 @@ export async function runMissionBatch(model=missionModel){
   }
   if(mission79Epoch){
    observedReleaseGeneration=mission79Epoch.generation;
-   if(mission79Epoch.active&&!await verifyMission79ActiveProductionSha(release)){
+   if(mission79Epoch.active&&(mission79Epoch.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID
+    ||!await verifyMission79ActiveProductionSha(release))){
     console.warn('[Missions] Original mission79 release epoch is no longer the canonical production alias');
     observedReleaseGeneration=0;
     releaseFence='canonical_alias_changed';
@@ -417,6 +418,7 @@ export async function runMissionBatch(model=missionModel){
   const claim=release
    ?await rpc<Claim|null>('claim_mission_work_release_epoch',{
     p_release:release,p_epoch:observedReleaseGeneration,
+    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??'',
    })
    :await rpc<Claim|null>('claim_mission_work');
   if(!claim)break;
