@@ -11,6 +11,7 @@ const bindingSql=readFileSync('supabase/migrations/20261118002000_original_retes
 assert.match(bindingSql,/perform 1 from agent_missions where id=p_mission and project_id=p_project for update;/);
 assert.match(bindingSql,/perform 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;/);
 assert.doesNotMatch(bindingSql,/^ select 1 from (agent_missions|mission_assignments) where .* for update;/m);
+assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The native fixture must exercise the new exact-release binding predicate');
 
 const PROJECT='fe9d2658-41e3-44c1-ae8e-a0cba98371fe';
 const SCOPE='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
