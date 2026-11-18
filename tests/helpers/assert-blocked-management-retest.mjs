@@ -259,7 +259,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [project])).rows[0].n,1);
   assert.equal((await first.query(
    'select organization_hash from project_retest_future_window_receipts where project_id=$1',[project]
-  )).rows[0].organization_hash,(await first.query('select project_org_scope_ratification_state($1) h',[project])).rows[0].h,
+  )).rows[0].organization_hash,await (async()=>{
+    await first.query('reset role');
+    try{return (await first.query('select project_org_scope_ratification_state($1) h',[project])).rows[0].h;}
+    finally{await first.query('set role service_role');}
+   })(),
    'New owner window must pin the immutable post-renewal organizational and QA contract');
   assert.equal((await first.query('select project_provider_continued($1) a',[project])).rows[0].a,true);
   assert.equal((await first.query('select project_provider_continued_assignment($1) a',[originalJob.id])).rows[0].a,true);
