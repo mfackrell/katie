@@ -421,10 +421,12 @@ async function pollForPersistedAssistant(
   chatId: string,
   pending: PendingChatRequest,
   maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
+  onPersisted?: (messages: Message[]) => void,
 ): Promise<Message[] | null> {
   const startedAtMs = Date.parse(pending.startedAt);
   let deadline = Date.now() + (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : maxWaitMs);
   const qwenDeadline = Date.now() + QWEN_RECOVERY_WINDOW_MS;
+  let previewedAssistantMessageId: string | null = null;
 
   while (Date.now() <= deadline) {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -433,6 +435,8 @@ async function pollForPersistedAssistant(
 
     try {
       let requiredAssistantMessageId: string | null = null;
+      let confirmedRequestCompleted = false;
+      let workflowStatus: string | null | undefined;
 
       if (pending.requestId) {
         const statusResponse = await fetch(
@@ -440,16 +444,14 @@ async function pollForPersistedAssistant(
           { cache: "no-store" },
         );
 
-        // An aged, verified missing POST is terminal, rather than trapping the composer.
-        if (statusResponse.status === 404 && Number.isFinite(startedAtMs) && Date.now() - startedAtMs >= 30_000) {
-          throw new TerminalChatError("Katie did not receive this request. Your message has been restored as a draft; resend it when ready.");
-        }
-
+        // A missing receipt can be a delayed server admission. HTTP 404 is not
+        // a terminal workflow result and must never invite a duplicate POST.
         if (statusResponse.ok) {
           const statusPayload = (await statusResponse.json()) as {
             status?: "processing" | "completed" | "failed" | "paused";
             waitingForRunpod?: boolean;
             assistantMessageId?: string | null;
+            workflowStatus?: string | null;
             error?: string | null;
           };
 
@@ -466,17 +468,22 @@ async function pollForPersistedAssistant(
             );
           }
 
-          if (statusPayload.status === "processing") {
-            if (statusPayload.waitingForRunpod) deadline = Math.max(deadline, qwenDeadline);
-            if (Date.now() >= deadline) {
-              break;
-            }
-            await waitForRecoveryPoll(statusPayload.waitingForRunpod ? QWEN_RECOVERY_POLL_INTERVAL_MS : MOBILE_RECOVERY_POLL_INTERVAL_MS);
-            continue;
+          if (statusPayload.status === "processing" && statusPayload.waitingForRunpod) {
+            deadline = Math.max(deadline, qwenDeadline);
           }
 
-          if (statusPayload.status === "completed") {
+          if (statusPayload.status === "processing" || statusPayload.status === "completed") {
             requiredAssistantMessageId = statusPayload.assistantMessageId ?? null;
+            confirmedRequestCompleted = statusPayload.status === "completed";
+            workflowStatus = statusPayload.workflowStatus;
+          }
+
+          if (!requiredAssistantMessageId) {
+            // Processing or unknown: do not infer a reply from an unrelated
+            // conversation message. The original request ID remains pending.
+            if (Date.now() >= deadline) break;
+            await waitForRecoveryPoll(statusPayload.waitingForRunpod ? QWEN_RECOVERY_POLL_INTERVAL_MS : MOBILE_RECOVERY_POLL_INTERVAL_MS);
+            continue;
           }
         }
       }
@@ -490,15 +497,28 @@ async function pollForPersistedAssistant(
         const payload = (await response.json()) as { messages?: Message[] };
         const serverMessages = payload.messages ?? [];
 
-        if (
-          requiredAssistantMessageId &&
-          serverMessages.some(
-            (candidate) =>
-              candidate.role === "assistant" &&
-              candidate.id === requiredAssistantMessageId,
-          )
-        ) {
-          return serverMessages;
+        if (requiredAssistantMessageId && serverMessages.some(
+          candidate => candidate.role === "assistant" &&
+            candidate.id === requiredAssistantMessageId,
+        )) {
+          // A saved answer may be shown before the account/memory workflow
+          // settles, but the durable pending receipt must remain until then.
+          if (onPersisted && previewedAssistantMessageId !== requiredAssistantMessageId) {
+            previewedAssistantMessageId = requiredAssistantMessageId;
+            onPersisted(serverMessages);
+          }
+          if (confirmedRequestCompleted &&
+              (workflowStatus === "completed" || workflowStatus === undefined)) {
+            return serverMessages;
+          }
+        }
+
+        // Old clients without a request ID retain their legacy fallback.
+        // New requests can ONLY recover the exact saved assistant message ID.
+        if (pending.requestId) {
+          if (Date.now() >= deadline) break;
+          await waitForRecoveryPoll();
+          continue;
         }
 
         let matchingUserIndex = -1;
