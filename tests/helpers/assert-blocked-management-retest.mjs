@@ -358,6 +358,14 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'select project_org_retest_active_release($1,$2) allowed',
    [project,unboundRelease])).rows[0].allowed,false);
 
+  // End-to-end: Chromium owner-selected cutoff -> real first-party route ->
+  // authenticated owner bearer -> real immutable PostgreSQL receipt. The
+  // browser integration rolls back a nested savepoint; no extra window survives.
+  const {assertMission79BrowserPostgres}=await import('./assert-mission79-browser-postgres.mjs');
+  await assertMission79BrowserPostgres(first,{
+   project,owner,release:executionRelease,missionId:scheduled.missionId,
+   assignmentId:originalJob.id,stage:'authorize'
+  });
   const futureOffer=(await first.query(
    'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
   assert.equal(futureOffer.stage,'authorize');
@@ -422,6 +430,12 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(claimOffer.historicalMissions,79);
   assert.equal(claimOffer.maxMissions,96);
   assert.equal(claimOffer.tokenAllowance,600000);
+  // A separate real browser interaction must bind the already persisted
+  // owner window; it must not double-write its immutable approval.
+  await assertMission79BrowserPostgres(first,{
+   project,owner,release:executionRelease,missionId:scheduled.missionId,
+   assignmentId:originalJob.id,stage:'authorized'
+  });
   const immutableBeforeBinding=await unmodified();
   const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash];
   const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
