@@ -336,12 +336,13 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
 
 
 test('superseded canonical alias cannot enter normal mission79 worker claim',async t=>{
- const original={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA};
- Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha});
+ const deploymentId='dpl_NativeFixture79';
+ const original={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID};
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId});
  t.after(()=>{for(const [key,value] of Object.entries(original)){
   if(value===undefined)delete process.env[key];else process.env[key]=value;
  }});
- const calls=[];let aliasLive=false,epochLive=true,epochUnavailable=false,verifications=0,epochGeneration=1;
+ const calls=[];let aliasLive=false,epochLive=true,epochUnavailable=false,verifications=0,epochGeneration=1,gateDeployment=deploymentId;
  const load=modules({
   '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async sha=>{
    verifications++;assert.equal(sha,releaseSha);return aliasLive;
@@ -351,11 +352,12 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
    if(name==='project_org_retest_release_epoch'){
     assert.equal(args.p_project,projectId);assert.equal(args.p_release,releaseSha);
      if(epochUnavailable)throw Error('database epoch lookup unavailable');
-     return {generation:epochGeneration,active:epochLive};
+     return {generation:epochGeneration,active:epochLive,deploymentId:gateDeployment};
    }
    if(name==='claim_mission_work_release_epoch'){
     assert.equal(args.p_release,releaseSha);
-    assert.equal(args.p_epoch,epochUnavailable||(epochLive&&!aliasLive)?0:epochGeneration,
+    assert.equal(args.p_deployment,deploymentId);
+    assert.equal(args.p_epoch,epochUnavailable||(epochLive&&(!aliasLive||gateDeployment!==deploymentId))?0:epochGeneration,
      'Epoch-zero claim must deny only mission79 when its release proof fails');
     return null;
    }
@@ -382,6 +384,13 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,2,
   'A canonical READY deployment may reach only the normal epoch-bound SQL claim RPC');
  assert.equal(verifications,2);
+ // A different deployment registered under the same SHA cannot claim.
+ gateDeployment='dpl_AnotherDeploymentSameSha';
+ const mismatchedDeployment=await runMissionBatch(forbidden);
+ assert.equal(mismatchedDeployment.claimed,0);
+ assert.equal(mismatchedDeployment.releaseFence,'canonical_alias_changed');
+ assert.equal(verifications,2,'Different gate deployment rejects before HTTP alias verification');
+ gateDeployment=deploymentId;
  epochLive=false;aliasLive=false;
  await runMissionBatch(forbidden);
  assert.equal(verifications,2,'No mission79 alias proof is needed after the SQL gate was closed');
