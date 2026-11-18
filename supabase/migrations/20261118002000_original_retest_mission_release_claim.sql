@@ -96,7 +96,7 @@ begin
   or (p.status='blocked' and p.detail is distinct from
    'No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.')
   or p.lease is not null or p.lease_until is not null
-  or p.deadline is distinct from '2026-11-18T14:00:00Z'::timestamptz
+  or p.deadline is distinct from r.cutoff
   or p.deadline<=clock_timestamp()+interval '5 minutes'
   or p.approved_hash is distinct from '4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6'
   or p.approval_hash is distinct from p.approved_hash
