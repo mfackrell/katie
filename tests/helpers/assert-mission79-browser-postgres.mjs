@@ -94,9 +94,35 @@ export async function assertMission79BrowserPostgres(first,{
   }).outputText;
  const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js']
   .map(p=>readFileSync('node_modules/'+p,'utf8')).join('\n');
+ // Exercise Katie's real ownerSessionBearer() and the installed Supabase
+ // browser SDK. The fixture's synthetic auth session stays local; the
+ // production endpoint is NEVER called with a test token.
+ const supabaseUmd=readFileSync('node_modules/@supabase/supabase-js/dist/umd/supabase.js','utf8');
+ const realOwnerSessionSource=ts.transpileModule(
+  readFileSync('lib/tools/browser-owner-session.ts','utf8'),{
+   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
+  }).outputText;
+ const b64url=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+ const nativeOwnerToken=[
+  b64url({alg:'HS256',typ:'JWT'}),
+  b64url({sub:owner,aud:'authenticated',role:'authenticated',
+   iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+7200}),
+  Buffer.from('local-native-owner-fixture').toString('base64url')
+ ].join('.');
+ const bootstrapOwnerSession=()=> '(()=>{const module={exports:{}};const exports=module.exports;'+
+  'const process={env:{NEXT_PUBLIC_SUPABASE_URL:'+JSON.stringify(baseUrl)+
+  ',NEXT_PUBLIC_SUPABASE_ANON_KEY:"native-owner-qa-key"}};'+
+  'const require=n=>n==="@supabase/supabase-js"?window.supabase:(()=>{throw Error("Unexpected owner dependency "+n)})();'+
+  realOwnerSessionSource+';window.nativeOwnerSession=module.exports;'+
+  'const client=module.exports.browserOwnerAuth();if(!client||!client.auth.storageKey)throw Error("Supabase browser owner SDK unavailable");'+
+  'localStorage.setItem(client.auth.storageKey,JSON.stringify({'+
+  'access_token:'+JSON.stringify(nativeOwnerToken)+',refresh_token:"native-local-refresh",'+
+  'token_type:"bearer",expires_in:7200,expires_at:Math.floor(Date.now()/1000)+7200,'+
+  'user:{id:'+JSON.stringify(owner)+',aud:"authenticated",role:"authenticated"}}));'+
+  '})();';
  const browserScript='const exports={};const require=n=>n==="react"?React:'+
   'n==="react/jsx-runtime"?{Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:'+
-  '{ownerSessionBearer:async()=> "integrated-owner-token"};'+
+  'n==="@/lib/tools/browser-owner-session"?window.nativeOwnerSession:{};'+
   'window.refreshes=0;'+source+
   ';ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(exports.Mission79FutureWindowControl,{initial:'+
   JSON.stringify(initial)+',onRefresh:()=>window.refreshes++}));';
@@ -120,12 +146,14 @@ export async function assertMission79BrowserPostgres(first,{
    const u=new URL(req.url,baseUrl||'http://127.0.0.1');
    if(req.method==='GET'&&u.pathname==='/owner'){
     res.statusCode=200;res.setHeader('content-type','text/html; charset=utf-8');
-    res.end('<!doctype html><html><div id="root"></div><script>'+react+'</script><script>'+browserScript+'</script></html>');
+    res.end('<!doctype html><html><div id="root"></div><script>'+supabaseUmd+
+     '</script><script>'+react+'</script><script>'+bootstrapOwnerSession()+
+     '</script><script>'+browserScript+'</script></html>');
     return;
    }
    if(req.method==='GET'&&u.pathname==='/auth/v1/user'){
     authRequests++;
-    if(req.headers.authorization!=='Bearer integrated-owner-token'
+    if(req.headers.authorization!=='Bearer '+nativeOwnerToken
      ||req.headers.apikey!=='native-owner-qa-key')return fail(403,{error:'unauthorized'});
     return fail(200,{id:owner});
    }
@@ -183,6 +211,8 @@ export async function assertMission79BrowserPostgres(first,{
   page=await context.newPage();
   page.on('pageerror',e=>browserErrors.push(e.message));
   await page.goto(baseUrl+'/owner',{waitUntil:'domcontentloaded',timeout:12000});
+  assert.equal(await page.evaluate(()=>window.nativeOwnerSession.ownerSessionBearer()),
+   nativeOwnerToken,'The real Supabase browser owner helper must retrieve the local saved session');
   if(stage==='authorize'){
    const cutoff=page.locator('#mission79-cutoff');
    await cutoff.waitFor({timeout:12000});
