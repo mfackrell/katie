@@ -57,13 +57,32 @@ export async function assertMission79BrowserPostgres(first,{
   if(!entry)throw Error('Browser integration attempted unexpected database call '+name);
   return (await first.query(entry[0],entry[1])).rows[0].r;
  };
- const {POST}=modules({
-  '@/lib/missions/store':{rpc:adapter},
-  '@/lib/projects/mission79-active-release':{
-   verifyMission79ActiveProductionSha:async sha=>sha===release
-  },
-  '@/lib/data/persistence-store':{getMessages:async()=>[]},
- })('@/app/api/projects/organization/route');
+ // Record whether the real owner verifier attempts its local auth fetch,
+ // without logging bearer values or changing its security decision.
+ const authFetchAttempts=[];
+ const underlyingFetch=globalThis.fetch;
+ globalThis.fetch=async(...args)=>{
+  const target=typeof args[0]==='string'?args[0]:args[0]?.url;
+  const ownerLookup=typeof target==='string'&&target.endsWith('/auth/v1/user');
+  try{
+   const response=await underlyingFetch(...args);
+   if(ownerLookup)authFetchAttempts.push({status:response.status});
+   return response;
+  }catch(error){
+   if(ownerLookup)authFetchAttempts.push({error:error instanceof Error?error.message:String(error)});
+   throw error;
+  }
+ };
+ let POST;
+ try{
+  ({POST}=modules({
+   '@/lib/missions/store':{rpc:adapter},
+   '@/lib/projects/mission79-active-release':{
+    verifyMission79ActiveProductionSha:async sha=>sha===release
+   },
+   '@/lib/data/persistence-store':{getMessages:async()=>[]},
+  })('@/app/api/projects/organization/route'));
+ }finally{globalThis.fetch=underlyingFetch;}
  const source=ts.transpileModule(
   readFileSync('components/mission79-future-window-control.tsx','utf8'),{
    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX},
@@ -85,7 +104,7 @@ export async function assertMission79BrowserPostgres(first,{
    const alerts=await page.locator('[role="alert"]').allTextContents().catch(()=>[]);
    const bodyText=await page.locator('body').innerText().catch(()=>'');
    throw new Error('MISSION79_BROWSER_POSTGRES_DIAGNOSTIC '+JSON.stringify({
-    stage,posts,authRequests,rpcCalls,postResults,alerts,
+    stage,posts,authRequests,authFetchAttempts,rpcCalls,postResults,alerts,
     browserErrors,bodyText:bodyText.slice(0,1200),
    })+'; '+(error instanceof Error?error.message:String(error)));
   }
