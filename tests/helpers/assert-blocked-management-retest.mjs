@@ -49,22 +49,28 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  const qaCoordinator=unique('loop reviewer');
  const genericWorkers=originalNodes.filter(n=>n.area==='general'&&n.kind==='worker');
  assert.equal(genericWorkers.length,4,'Four generic benchmark workers expected before mapping original roles');
+ const qaTools=['manage','analysis','research','repository_review'];
+ const deliveryTools=['analysis','development','manage','repository_review'];
+ const planningTools=['manage','analysis','repository_review'];
+ const assessmentTools=['analysis','repository_review'];
  const actualTopology=[
-  [delivery,'delivery_management','manager','manager',2,fixtureGame.id],
-  [qaExecution,'independent_qa_execution','manager','manager',2,fixtureQa.id],
-  [qaPlanning,'independent_qa_planning','manager','manager',2,fixtureQa.id],
-  [deliveryPlanning,'delivery_planning','manager','supervisor',3,delivery.id],
-  [repositoryAssessment,'delivery_repository_assessment','worker','worker',3,delivery.id],
-  [qaCoordinator,'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id],
-  [genericWorkers[0],'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id],
-  ...genericWorkers.slice(1).map(n=>[n,'qa_planning','manager','supervisor',3,qaPlanning.id]),
+  [delivery,'delivery_management','manager','manager',2,fixtureGame.id,deliveryTools],
+  [qaExecution,'independent_qa_execution','manager','manager',2,fixtureQa.id,qaTools],
+  [qaPlanning,'independent_qa_planning','manager','manager',2,fixtureQa.id,qaTools],
+  [deliveryPlanning,'delivery_planning','manager','supervisor',3,delivery.id,planningTools],
+  [repositoryAssessment,'delivery_repository_assessment','worker','worker',3,delivery.id,assessmentTools],
+  [qaCoordinator,'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id,qaTools],
+  [genericWorkers[0],'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id,qaTools],
+  ...genericWorkers.slice(1).map(n=>[n,'qa_planning','manager','supervisor',3,qaPlanning.id,qaTools]),
  ];
  await first.query('begin');
  try{
   await first.query("set local session_replication_role = 'replica'");
-  for(const [node,area,kind,level,depth,parent] of actualTopology){
-   await first.query('update project_organization_nodes set area=$2,kind=$3,management_level=$4,depth=$5,parent_id=$6 where id=$1',
-    [node.id,area,kind,level,depth,parent]);
+  for(const [node,area,kind,level,depth,parent,tools] of actualTopology){
+   await first.query('update project_organization_nodes set area=$2,kind=$3,management_level=$4,depth=$5,parent_id=$6,tools=$7 where id=$1',
+    [node.id,area,kind,level,depth,parent,tools]);
+   await first.query('update project_organization_contract_changes set tools=$2,prior_tools=$2 where project_id=$3 and window_id=$4 and node_id=$1',
+    [node.id,tools,project,windowId]);
   }
   await first.query('update project_organization_scope_grants g set parent_id=n.parent_id from project_organization_nodes n where g.node_id=n.id and n.project_id=$1',[project]);
   await first.query("set local session_replication_role = 'origin'");
