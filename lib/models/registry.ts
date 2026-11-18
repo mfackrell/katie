@@ -1,11 +1,12 @@
 import { isNonConversationalModel } from "./non-conversational";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { LlmProvider } from "@/lib/providers/types";
+import { fetchOfficialModelEvidence, officialModelSpec, type PublishedModelEvidence } from "./provider-evidence";
 
 export type RoutingEligibility = "verified" | "restricted" | "manual_override_only" | "disabled";
 export type ConfidenceTier = "high" | "medium" | "low";
 
-export type RegistryCapabilitySource = "provider" | "pricing_catalog" | "heuristic" | "unknown";
+export type RegistryCapabilitySource = "provider" | "provider_documentation" | "pricing_catalog" | "heuristic" | "unknown";
 
 export type ModelRegistryRecord = {
   provider_name: LlmProvider["name"];
@@ -89,7 +90,7 @@ function heuristicCapabilities(providerName: LlmProvider["name"], modelId: strin
   const supportsVision = !supportsImage && /vision|gpt-4o|gpt-5|gemini|claude|grok-4|grok-3|o3/.test(m);
   const supportsWebSearch = providerName === "grok" || /search/.test(m);
   const supportsVideo = providerName === "google" && /gemini/.test(m);
-  const reasoning = /o3|opus|sonnet|pro|codex|gpt-5/.test(m) ? "high" : /mini|flash|haiku/.test(m) ? "low" : "medium";
+  const reasoning = /o3|opus|sonnet|pro|codex|gpt-5|gpt-6/.test(m) ? "high" : /mini|flash|haiku/.test(m) ? "low" : "medium";
   const speed = /mini|flash|haiku|nano/.test(m) ? "fast" : /o3|opus/.test(m) ? "slow" : "medium";
   const cost = /mini|flash|haiku|nano/.test(m) ? "low" : /o3|opus|pro|gpt-5/.test(m) ? "high" : "medium";
 
@@ -114,7 +115,7 @@ export function computeRoutingEligibility(input: {
     return "disabled";
   }
 
-  if (input.capability_status === "verified" && input.pricing_status !== "missing" && input.confidence_score >= 0.8) {
+  if (input.capability_status === "verified" && input.pricing_status === "verified" && input.confidence_score >= 0.8) {
     return "verified";
   }
 
@@ -176,6 +177,7 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
     source_metadata: {
       capability_source: "heuristic" as RegistryCapabilitySource,
       pricing_source: pricing ? "pricing_catalog" : "unknown",
+      ...(pricing ? { pricing_catalog_observed_at: nowIso } : {}),
       normalized_model_id: normalizedModelId,
       pipeline_version: "registry-v1"
     },
@@ -190,10 +192,12 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
     speed_tier: heuristic.speed_tier,
     cost_tier: heuristic.cost_tier,
     capability_verified_at: null,
-    pricing_verified_at: pricing ? nowIso : null,
+    // A third-party catalog timestamp is not first-party price verification.
+    pricing_verified_at: null,
     verification_updated_at: nowIso,
     failure_reason: pricing ? null : "missing_pricing",
-    last_exception_at: pricing ? null : nowIso
+    // Missing catalog metadata is not a provider exception.
+    last_exception_at: null
   };
 }
 
@@ -233,6 +237,145 @@ export function retainTrustedPricing(
    source_metadata:{...fresh.source_metadata,
     pricing_verification_source:source,
     pricing_verification_date:prior.source_metadata.pricing_verification_date}};
+}
+
+type PriorPublishedSnapshot = TrustedPricingSnapshot & Pick<ModelRegistryRecord,
+  "capability_status" | "capability_verified_at" | "supports_text" | "supports_vision" |
+  "supports_web_search" | "supports_image_generation" | "supports_video" |
+  "reasoning_tier" | "speed_tier" | "cost_tier">;
+
+function freshOfficialEvidence(date: string | null | undefined, nowIso: string): boolean {
+  const timestamp = Date.parse(date ?? "");
+  const now = Date.parse(nowIso);
+  return Number.isFinite(timestamp) && Number.isFinite(now) &&
+    timestamp <= now && now - timestamp < 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Documentation proves published capabilities and base rates, never account permission,
+ * live endpoint execution, task-quality superiority, or owner spending authorization.
+ * Missing/failing source refresh preserves the evidence and ORIGINAL timestamp, but
+ * expired evidence cannot remain fully eligible for strict protected routing.
+ */
+export function retainOfficialModelEvidence(
+  fresh: RefreshedModelRecord,
+  prior: PriorPublishedSnapshot | undefined,
+  published: PublishedModelEvidence | null,
+  nowIso: string
+): RefreshedModelRecord {
+  const spec = officialModelSpec(fresh.provider_name, fresh.model_id);
+  if (!spec) return fresh;
+  const row: RefreshedModelRecord = { ...fresh };
+  const meta = prior?.source_metadata ?? {};
+  const priorMatches = Boolean(
+    prior?.normalized_model_id === fresh.normalized_model_id &&
+    prior?.capability_status === "verified" &&
+    meta.capability_evidence_basis === "first_party_model_documentation" &&
+    meta.capability_verification_source === spec.documentUrl &&
+    Number.isFinite(Date.parse(prior.capability_verified_at ?? ""))
+  );
+
+  if (priorMatches && prior) {
+    row.capability_status = "verified";
+    row.capability_verified_at = prior.capability_verified_at;
+    row.supports_text = prior.supports_text;
+    row.supports_vision = prior.supports_vision;
+    row.supports_web_search = prior.supports_web_search;
+    row.supports_image_generation = prior.supports_image_generation;
+    row.supports_video = prior.supports_video;
+    row.reasoning_tier = prior.reasoning_tier;
+    row.speed_tier = prior.speed_tier;
+    row.cost_tier = prior.cost_tier;
+    row.source_metadata = { ...fresh.source_metadata, ...meta };
+    if (prior.pricing_status === "verified" &&
+        meta.pricing_verification_source === spec.documentUrl &&
+        freshOfficialEvidence(prior.pricing_verified_at, nowIso) &&
+        typeof prior.pricing_input_per_1m === "number" &&
+        typeof prior.pricing_output_per_1m === "number" &&
+        prior.pricing_input_per_1m >= 0 && prior.pricing_output_per_1m >= 0) {
+      row.pricing_status = "verified";
+      row.pricing_input_per_1m = prior.pricing_input_per_1m;
+      row.pricing_output_per_1m = prior.pricing_output_per_1m;
+      row.pricing_verified_at = prior.pricing_verified_at;
+    } else {
+      row.source_metadata = {
+        ...row.source_metadata,
+        previous_pricing_verified_at: prior.pricing_verified_at,
+        pricing_revalidation_status: "requires_current_first_party_evidence"
+      };
+    }
+  }
+
+  if (published && published.documentUrl === spec.documentUrl &&
+      published.documentedModelId === spec.modelId) {
+    row.capability_status = "verified";
+    row.capability_verified_at = nowIso;
+    row.reasoning_tier = published.reasoningTier;
+    row.supports_text = published.supportsText;
+    row.supports_vision = published.supportsVision;
+    row.supports_web_search = published.supportsWebSearch;
+    row.supports_image_generation = false;
+    row.supports_video = false;
+    row.confidence_score = 0.95;
+    row.source_metadata = {
+      ...fresh.source_metadata,
+      capability_source: "provider_documentation",
+      capability_evidence_basis: "first_party_model_documentation",
+      capability_verification_source: published.documentUrl,
+      capability_verification_observed_at: nowIso,
+      provider_documented_model_id: published.documentedModelId,
+      supported_endpoints: published.supportedEndpoints,
+      structured_output_documented: published.supportsStructuredOutput,
+      tool_calling_documented: published.supportsToolCalling,
+      context_window_tokens: published.contextWindowTokens,
+      max_output_tokens: published.maxOutputTokens,
+      pricing_tier: published.pricingTier,
+      has_variable_long_context_rates: published.hasVariableLongContextRates,
+      price_verified_scope: "published_base_standard_rates_only",
+      published_base_input_per_1m: published.inputPer1m,
+      published_base_output_per_1m: published.outputPer1m,
+      // Documentation verification does not prove that a live request succeeds.
+      inference_account_verified: false
+    };
+    if (published.pricingMatchesApprovedSchedule) {
+      row.pricing_status = "verified";
+      row.pricing_input_per_1m = published.inputPer1m;
+      row.pricing_output_per_1m = published.outputPer1m;
+      row.pricing_verified_at = nowIso;
+      row.source_metadata = {
+        ...row.source_metadata,
+        pricing_source: "provider_documentation",
+        pricing_verification_source: published.documentUrl,
+        pricing_verification_observed_at: nowIso
+      };
+    } else {
+      row.pricing_status = fresh.pricing_status;
+      row.pricing_input_per_1m = fresh.pricing_input_per_1m;
+      row.pricing_output_per_1m = fresh.pricing_output_per_1m;
+      row.pricing_verified_at = null;
+      row.source_metadata = {
+        ...row.source_metadata,
+        pricing_source: fresh.source_metadata.pricing_source,
+        pricing_revalidation_status: "published_rates_changed_requires_review"
+      };
+    }
+  }
+  if (row.capability_status === "verified") {
+    row.confidence_score = 0.95;
+    row.confidence_tier = "high";
+    const current = freshOfficialEvidence(row.capability_verified_at, nowIso) &&
+      row.pricing_status === "verified" && freshOfficialEvidence(row.pricing_verified_at, nowIso);
+    row.routing_eligibility = current ? "verified" : "restricted";
+    row.failure_reason = current ? null : "verified_evidence_stale_or_pricing_unverified";
+    row.source_metadata = {
+      ...row.source_metadata,
+      capability_evidence_current: freshOfficialEvidence(row.capability_verified_at, nowIso),
+      pricing_evidence_current: row.pricing_status === "verified" &&
+        freshOfficialEvidence(row.pricing_verified_at, nowIso),
+      registry_evaluated_at: nowIso
+    };
+  }
+  return row;
 }
 
 /** A definitive 404 on a selected inference model must not be retried indefinitely.
