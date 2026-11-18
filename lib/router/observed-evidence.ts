@@ -11,8 +11,21 @@ export type ObservedRoutingRow = {
   output_tokens: number | null; cache_hit_tokens: number | null; attempts: number;
   overhead_micro_usd?: string | null;
 };
+export type ObservedModelFeedback = {
+  request_id: string; observed_at: string; provider: string; model: string; intent: string;
+  source: 'message_reaction' | 'adjacent_user_feedback' | 'internal_review';
+  dimension: string; outcome: 'positive' | 'negative' | 'ambiguous';
+  confidence: string; source_id: string; task_excerpt?: string | null;
+};
 type Quality = {status: string; observations: Array<{source: string; provenance: string[]; sample_count: number;
-  latest_observation: string; passes: number; failures: number; uncertainty: string}>};
+  latest_observation: string; passes: number; failures: number; uncertainty: string}>;
+  feedback?: {
+    positive: number; negative: number; ambiguous: number;
+    evidence: Array<{source: string; source_id: string; observed_at: string; dimension: string;
+      outcome: string; confidence: string; task_excerpt: string | null}>;
+    uncertainty: string;
+  };
+};
 export type RoutingEvidence = {overhead: unknown; candidates: Record<string, {quality: Quality; economics: unknown}>};
 
 /** Only categorical server audits for this task, actor and conversation are admitted.
@@ -30,6 +43,36 @@ export function qualityFromObservations(rows: ObservedRoutingRow[], provider: st
     failures: matching.filter(row => row.status === 'fail').length,
     uncertainty: 'Observational and selection-biased, not a controlled comparison. Explicit deliverable presence only; no correctness, style or general quality score.',
   }]};
+}
+
+
+/** Delivery presence is not response quality. Existing user reactions, clearly
+ * attributed next-turn feedback and internal reviews are distinct evidence,
+ * never a numerical ranking or a guarantee about a different task. */
+export function modelAttributedFeedback(
+  rows: ObservedModelFeedback[], provider: string, model: string, intent: string, now = Date.now()
+): Quality['feedback'] | undefined {
+  const matchesModel = (observed: string) => observed === model ||
+    (observed.startsWith(model + '-') && /^\d{4}-\d{2}-\d{2}$/.test(observed.slice(model.length+1)));
+  const relevant = rows.filter(row => row.provider === provider && matchesModel(row.model) &&
+    row.intent === intent && ['positive','negative','ambiguous'].includes(row.outcome) &&
+    Number.isFinite(Date.parse(row.observed_at)) &&
+    Date.parse(row.observed_at) <= now && Date.parse(row.observed_at) >= now - 30 * 86400000)
+    .sort((a,b) => Date.parse(b.observed_at) - Date.parse(a.observed_at)).slice(0,12);
+  if (!relevant.length) return undefined;
+  return {
+    positive: relevant.filter(row => row.outcome === 'positive').length,
+    negative: relevant.filter(row => row.outcome === 'negative').length,
+    ambiguous: relevant.filter(row => row.outcome === 'ambiguous').length,
+    evidence: relevant.map(row => ({
+      source: row.source, source_id: row.source_id, observed_at: row.observed_at,
+      dimension: row.dimension, outcome: row.outcome, confidence: row.confidence,
+      task_excerpt: row.task_excerpt?.slice(0,160) ?? null,
+    })),
+    uncertainty: 'User reactions and context-attributed comments are task-specific and can be ambiguous. ' +
+      'Review verdicts are internal and selection-biased. No evidence implies global model superiority; ' +
+      'the same model alias can resolve to a dated version shown in the underlying provider receipt.',
+  };
 }
 
 export function expectedCost(provider: LlmProvider['name'], model: string,
@@ -76,11 +119,12 @@ export async function resolveRoutingEvidence(candidates: CandidateMetadata[], pr
   const result: RoutingEvidence = {overhead: {status: 'unknown'}, candidates: {}};
   if (scope?.kind !== 'standalone') return result;
   let rows: ObservedRoutingRow[] = [], overhead: string | null = null;
+  let feedbackRows: ObservedModelFeedback[] = [];
   try {
-    const {data,error} = await getSupabaseAdminClient().rpc<{observations: ObservedRoutingRow[]; overhead_micro_usd: string | null}>(
+    const {data,error} = await getSupabaseAdminClient().rpc<{observations: ObservedRoutingRow[]; overhead_micro_usd: string | null; quality_feedback?: ObservedModelFeedback[]}>(
       'standalone_routing_observations', {p_owner: scope.context.userId, p_actor: scope.context.actorId,
         p_chat: scope.context.chatId, p_request: scope.context.requestId, p_intent: intent});
-    if (!error && data) { rows = data.observations ?? []; overhead = data.overhead_micro_usd; }
+    if (!error && data) { rows = data.observations ?? []; overhead = data.overhead_micro_usd; feedbackRows = data.quality_feedback ?? []; }
   } catch { /* Missing/unavailable evidence must never invent quality or block chat. */ }
   result.overhead = {source: 'standalone_provider_attempts settled receipts for current scoped request',
     observed_micro_usd: overhead, remaining_overhead: 'unknown; stage two and later helpers have not completed'};
@@ -88,7 +132,11 @@ export async function resolveRoutingEvidence(candidates: CandidateMetadata[], pr
     const provider = providers.find(p => p.name === candidate.providerName);
     const quote = provider && params ? await quoteSerializedRoutingRequest(provider, {...params, modelId: candidate.modelId, requestIntent: intent}) : null;
     result.candidates[`${candidate.providerName}:${candidate.modelId}`] = {
-      quality: qualityFromObservations(rows, candidate.providerName, candidate.modelId, intent),
+      quality: (() => {
+        const delivery = qualityFromObservations(rows, candidate.providerName, candidate.modelId, intent);
+        const feedback = modelAttributedFeedback(feedbackRows, candidate.providerName, candidate.modelId, intent);
+        return feedback ? {...delivery, status: 'limited, model-attributed task feedback; answer quality not independently verified', feedback} : delivery;
+      })(),
       economics: quote ? expectedCost(candidate.providerName, candidate.modelId, quote, rows.filter(row => row.intent === intent), overhead)
         : {status: 'unknown', reason: 'No serialized candidate request available; no synthetic text-only quote'},
     };
