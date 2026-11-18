@@ -452,6 +452,41 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    project,owner,release:executionRelease,missionId:scheduled.missionId,
    assignmentId:originalJob.id,stage:'authorize'
   });
+  // Real TWO-BACKEND lock wait across the five-minute owner authorization
+  // margin. This branch is disposable PostgreSQL only. The claimant passes
+  // the first validation, blocks on a genuine organization row, and must
+  // reject the now-expired selection before inserting its immutable receipt.
+  await first.query('commit'); // Release setup's advisory locks, keep disposable fixture.
+  await first.query('begin');
+  await first.query('reset role');
+  await first.query('select id from project_organization_nodes where id=$1 for update',[fixtureRoot.id]);
+  const contenderPid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+  await second.query('set role service_role');
+  const nearCutoff=new Date(Date.now()+5*60000+8000).toISOString();
+  const priorOffer=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(priorOffer.stage,'authorize');
+  const nearArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,randomUUID(),
+   nearCutoff,priorOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
+  const contender=second.query('select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',nearArgs)
+   .then(r=>({ok:true,r:r.rows[0].r}),error=>({ok:false,error}));
+  let sawRealLock=false;
+  for(let i=0;i<35;i++){
+   const locks=await observer.query('select locktype,granted from pg_locks where pid=$1 and granted=false',[contenderPid]);
+   if(locks.rows.some(l=>!l.granted)){sawRealLock=true;break;}
+   const finished=await Promise.race([contender.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),50))]);
+   if(finished)throw Error('Owner cutoff contender returned before waiting on the held original organization row');
+  }
+  assert.equal(sawRealLock,true,'Owner cutoff race must observe actual PostgreSQL lock contention');
+  await new Promise(resolve=>setTimeout(resolve,8500));
+  await first.query('commit');
+  const expiredContender=await contender;
+  assert.equal(expiredContender.ok,false,'Owner write must fail when margin expires under a real row lock');
+  assert.match(expiredContender.error.message,/future cutoff expired while acquiring organization locks/i);
+  await first.query('begin');
+  await first.query('set role service_role');
+  assert.equal((await first.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[project])).rows[0].n,0,
+   'A real post-lock owner cutoff failure cannot create any immutable owner receipt');
+  console.log('MISSION79_OWNER_CUTOFF_REAL_ROW_LOCK_CONTENTION_NEGATIVE_PASS');
   const futureOffer=(await first.query(
    'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
   assert.equal(futureOffer.stage,'authorize');
@@ -837,7 +872,19 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    /Undrained owner-renewed worker attempt/i);
   await first.query('rollback to savepoint expired_mission79_claim');
   await first.query('release savepoint expired_mission79_claim');
+  // A genuinely settled failure is terminal, has no lease and no pending
+  // provider receipt; unlike an expired/requeued attempt it cannot restart
+  // inference. Permit the privileged coordinator to CLOSE and promote.
+  await first.query('savepoint settled_terminal_mission79_attempt');
+  await first.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[originalJob.id]);
+  const settledGate=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+  assert.equal(settledGate.state,'closed',
+   'Completed terminal failed attempt without outstanding provider work must drain release gate');
+  await first.query('rollback to savepoint settled_terminal_mission79_attempt');
+  await first.query('release savepoint settled_terminal_mission79_attempt');
   await first.query('set role service_role');
+  console.log('MISSION79_TERMINAL_FAILED_ATTEMPT_DRAINS_RELEASE_GATE_PASS');
   assert.deepEqual((await first.query(
    'select state,generation from project_retest_production_release_gate where project_id=$1',
    [project])).rows[0],gateStateBeforeAttempt,

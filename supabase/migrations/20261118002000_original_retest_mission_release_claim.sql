@@ -71,7 +71,12 @@ begin
   where m.project_id=p_project
    and (m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
      or (w.project_id is not null and m.created_at>=w.authorized_at))
-   and j.attempts>0 and (j.status<>'completed' or j.lease is not null)
+   and j.attempts>0
+   and (j.lease is not null or j.lease_until is not null
+    or j.status not in ('completed','failed')
+    or (j.status='failed' and exists(
+      select 1 from project_provider_requests request
+      where request.assignment_id=j.id and request.resolved_at is null)))
  ) then raise exception 'Undrained owner-renewed worker attempt; release gate transition denied';end if;
  stamp:=clock_timestamp();
  if g.project_id is null then
@@ -786,6 +791,12 @@ begin
  then raise exception 'Original three-grant authority changed under owner lock';end if;
  if project_org_hierarchy_recovery_state(p.id) is distinct from p_state_hash
  then raise exception 'Original owner approval state changed while acquiring organization locks';end if;
+ -- The original offer cutoff check precedes these organization row locks.
+ -- A contender may wait across its five-minute safety margin without any
+ -- state-hash change. Do not save an expired owner window after that wait.
+ if p_cutoff<=clock_timestamp()+interval '5 minutes'
+  or p_cutoff>clock_timestamp()+interval '24 hours'
+ then raise exception 'Owner future cutoff expired while acquiring organization locks';end if;
  select * into r from project_blocked_management_retest_receipts where project_id=p.id;
  if r.window_id is distinct from '7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
   or r.cutoff is distinct from '2026-11-18T14:00:00Z'::timestamptz
