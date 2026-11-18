@@ -1881,7 +1881,6 @@ async function executeChat(request: NextRequest) {
         message: forReview ? message : visualContinuity
           ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\n\nADDITIONAL REQUEST CONTEXT:\n" + messageForGeneration)
           : messageForGeneration,
-        routingMode,
         requestIntent: classification?.intent ?? resolvedRequestIntent,
         secondaryIntents: storedWebsite.fresh ? [...(classification?.secondaryIntents ?? []), "web-search"] : classification?.secondaryIntents ?? [],
         images: visualContinuity ? [...visualContinuity.references.map(ref => ref.image), ...images] : images,
@@ -1889,7 +1888,8 @@ async function executeChat(request: NextRequest) {
         attachments,
         onProviderSystemPrepared: audit =>
           saveProviderSystemAudit(actorId, chatId, requestId, audit)
-      }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
+      }), routingMode: typeof routingMode === "string" ? routingMode : undefined,
+        previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
     };
 
     const videoRoutingPolicy = resolveVideoRoutingPolicy(attachments.some(requiresGoogleFileSource), overrideProvider);

@@ -28,6 +28,7 @@ const nonnegative = (value: unknown): number | null =>
 function containsVisibleText(root: Record<string, unknown>): boolean {
   if (typeof root.output_text === "string" && root.output_text.trim()) return true;
   const output = Array.isArray(root.output) ? root.output : [];
+  if (output.some(item => typeof record(item).result === "string" && Boolean((record(item).result as string).trim()))) return true;
   if (output.some(item => Array.isArray(record(item).content) &&
     (record(item).content as unknown[]).some(part => typeof record(part).text === "string" &&
       Boolean((record(part).text as string).trim())))) return true;
@@ -49,6 +50,10 @@ function containsVisibleText(root: Record<string, unknown>): boolean {
 export function summarizeProviderOutcome(
   body: string, provider: string, endpoint: string, streaming: boolean, httpStatus: number
 ): ProviderOutcomeDiagnostic {
+  // Provider and endpoint are deliberately not persisted with arbitrary
+  // response text; the surrounding accounting receipt already binds both.
+  void provider;
+  void endpoint;
   let terminal: Record<string, unknown> = {};
   let sawDone = !streaming, sawText = false;
   try {

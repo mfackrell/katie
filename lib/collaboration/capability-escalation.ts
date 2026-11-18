@@ -1,5 +1,5 @@
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
-import { ProviderResponseError } from "@/lib/providers/response-errors";
+import { ProviderResponseError, assertProviderOutput } from "@/lib/providers/response-errors";
 import type {
   CollaborationCapability,
   CollaborationProviderName,
@@ -153,6 +153,11 @@ export async function runCapabilityAwareGeneration(input: {
         async onTextDelta(delta) { rawStreamedText += delta; },
       }))
     : await runWithStandaloneActivity("capability_lead", () => input.provider.generate(input.params));
+
+  // Never emit streamed text from a settled, provider-declared incomplete
+  // answer. The outer recovery layer receives the precise terminal reason.
+  if (result.responseStatus === "incomplete" || result.responseStatus === "failed" ||
+      result.responseStatus === "cancelled") assertProviderOutput(result);
 
   const rawText = result.text || rawStreamedText;
   const escalationRequest = parseCapabilityEscalationRequest(rawText);
