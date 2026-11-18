@@ -421,6 +421,7 @@ async function pollForPersistedAssistant(
   pending: PendingChatRequest,
   maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
   onPersisted?: (messages: Message[]) => void,
+  bearer?: string | null,
 ): Promise<Message[] | null> {
   // Legacy pending entries without an ID still use the original timestamp.
   const startedAtMs = Date.parse(pending.startedAt);
@@ -441,7 +442,7 @@ async function pollForPersistedAssistant(
       if (pending.requestId) {
         const statusResponse = await fetch(
           `/api/chat/status?requestId=${encodeURIComponent(pending.requestId)}&chatId=${encodeURIComponent(chatId)}`,
-          { cache: "no-store" },
+          { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
         );
 
         // A missing receipt can be a delayed server admission. HTTP 404 is not
@@ -491,7 +492,7 @@ async function pollForPersistedAssistant(
 
       const response = await fetch(
         `/api/messages?chatId=${encodeURIComponent(chatId)}`,
-        { cache: "no-store" },
+        { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
       );
 
       if (response.ok) {
@@ -1434,6 +1435,7 @@ export function ChatPanel({
 
       try {
         let savedAnswerPreviewed = false;
+        const recoveryBearer = await ownerSessionBearer();
         const recoveredMessages = await pollForPersistedAssistant(
           chatId,
           pending,
@@ -1445,6 +1447,7 @@ export function ChatPanel({
             setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
             setStatusMessage("Saved answer restored. Finalizing the original request accounting…");
           },
+          recoveryBearer,
         );
 
         if (cancelled || !recoveredMessages) {
@@ -2045,6 +2048,7 @@ export function ChatPanel({
             setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
             setStatusMessage("Saved answer restored. Finalizing the original request accounting…");
           },
+          ownerBearer,
         );
 
         if (recoveredMessages) {
@@ -2572,6 +2576,7 @@ export function ChatPanel({
               setAnswerDisplayed(true);
               setStatusMessage("Saved reply restored; finalizing the original workflow…");
             },
+            ownerBearer,
           );
 
           if (recoveredMessages) {
