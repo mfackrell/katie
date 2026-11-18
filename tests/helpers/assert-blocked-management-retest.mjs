@@ -473,8 +473,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
   assert.equal(closedGate.state,'closed');
   await first.query('set role service_role');
-  const staleWhileClosed=(await first.query('select claim_mission_work_release($1) r',
-   [executionRelease])).rows[0].r;
+  const staleWhileClosed=await isolatedNegativeClaim(executionRelease);
   assert.notEqual(staleWhileClosed?.job?.id,originalJob.id,
    'A superseded deployment cannot claim the original assignment while the canonical alias gate is sealed');
   await rejected(()=>first.query(
