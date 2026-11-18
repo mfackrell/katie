@@ -1,0 +1,105 @@
+# Model registry eligibility audit — 2026-11-18
+
+## Production baseline (read-only Supabase query)
+
+| Provider | Active | Verified | Restricted | Estimated rate | Missing rate |
+|---|---:|---:|---:|---:|---:|
+| OpenAI | 100 | 0 | 100 | 90 | 10 |
+| Anthropic | 15 | 0 | 15 | 15 | 0 |
+| Google | 50 | 0 | 50 | 29 | 21 |
+| Grok | 13 | 0 | 13 | 0 | 13 |
+| **Total** | **178** | **0** | **178** | **134** | **44** |
+
+The old enrichment path stamps all discovered models as capability_status=heuristic, uses
+model-name regexes for capabilities (GPT-6 is not recognized as high reasoning), and treats
+LiteLLM catalog prices as estimated while stamping pricing_verified_at like an official check.
+Old verified prices stop surviving refresh after 24 hours; capabilities are never retained.
+The periodic authenticated registry GET/POST could also issue **paid** quarantined-model
+inference probes without a separate bounded owner authorization. The correction disables
+that automatic path.
+
+## Exact gate inventory
+
+| Gate | Existing admission behavior | Outcome / disposition |
+|---|---|---|
+| General chat automatic routing (master-router) | Active registry records with verified OR restricted eligibility; disabled/manual-only excluded | Restricted is **not** universal exclusion; preserved |
+| Intent/modality matching (model-intent) | Text, image, video, web-search paths filter by metadata, with name-based fallbacks | First-party documented fields now available; router's separate algorithms unchanged |
+| Control-plane decision models (master-router and model-intent) | Curated exact-ID allowlists, endpoint-specific handling | **Remaining integration:** lists omit GPT-6 and Claude 5.5 families; change belongs to routing agents after verifying instruction/schema compatibility |
+| Policy engine (policy-engine) | Optional hard request cap $0.12; relative-cost cutoff 3x cheapest; latency/quality constraints; can be enforced | **Remaining integration:** distinguish optimization from owner authorization in separate routing work; do not bypass legitimate spending controls |
+| Critique collaboration | Verified eligibility and high reasoning, different provider | New documented models can qualify after successful registry verification |
+| Organization executive gate | OpenAI/Anthropic + high reasoning + verified capabilities, pricing, eligibility + both verification timestamps <24h | Preserved; documentation can now supply fresh evidence, but does not authorize paid execution |
+| Mission orchestration | Bounded native transport, provider discovery, health, reservation and original approved mission envelope | Preserved; discovery is not proof of successful endpoint inference |
+| Missing price | Catalog absent or estimated, no verified price | Cannot be treated as independently verified; needs source validation or bounded owner decision |
+| Upstream 404 | Model inactive and quarantined | Preserved; no automatic paid retry |
+| Transient HTTP 429/5xx/timeouts | Never definitive unavailability | Preserved; source documentation failure retains historical evidence |
+| Manual model selector | Returns active registry rows; inactive/quarantined omitted | Existing shape maintained for compatibility; authenticated diagnostics explain hidden or restricted models |
+| Video/image-generation endpoints | Require separate modality/endpoint support | Documentation on text models does not qualify image/video generation |
+
+## Evidence-backed models
+
+The following first-party documentation sources are reviewed by the exact-ID parser
+when the *configured account's provider discovery* also lists the model. Published
+capabilities and Standard base rates are not a live paid inference receipt.
+
+| ID(s) | Source | Base input/output per 1M tokens | Documented transport |
+|---|---|---|---|
+| gpt-6.2-astra | https://developers.openai.com/api/docs/models/gpt-6.2-astra | $8 / $40 | Responses and Chat Completions |
+| gpt-6-astra | https://developers.openai.com/api/docs/models/gpt-6-astra | $10 / $50 | Responses and Chat Completions |
+| gpt-6.2-sol | https://developers.openai.com/api/docs/models/gpt-6.2-sol | $2 / $10 | Responses and Chat Completions |
+| gpt-6-sol | https://developers.openai.com/api/docs/models/gpt-6-sol | $2 / $10 | Responses and Chat Completions; Chat has feature limitations |
+| gpt-5.5-pro (+ exact 2026-04-23 snapshot) | https://developers.openai.com/api/docs/models/gpt-5.5-pro | $30 / $180 | **Responses only**; long-running requests |
+| gpt-5.4-pro (+ exact 2026-03-05 snapshot) | https://developers.openai.com/api/docs/models/gpt-5.4-pro | $30 / $180 | **Responses only** |
+| claude-opus-5-5 | https://platform.claude.com/docs/en/models/opus-5-5/overview | $4 / $20 | Claude Messages |
+| claude-sonnet-5-5 | https://platform.claude.com/docs/en/models/sonnet-5-5/overview | $2 / $10 | Claude Messages |
+| claude-fable-5-2 | https://platform.claude.com/docs/en/models/fable-5-2/overview | $8 / $40 | **Pending:** its own documentation page must be reachable and independently parse/qualify |
+
+No model is promoted merely because it appears on that table. The authenticated
+refresh must fetch the actual **first-party Markdown**, validate its exact published
+model ID, documented text/image/reasoning and output limits, native endpoint, both
+token rates and any exact snapshot. Changed published pricing preserves verified
+capabilities while withdrawing price verification pending review. If a docs request
+fails, previous evidence retains its original timestamp; the strict 24-hour gates
+fail closed. Catalog-only records remain estimated.
+
+**Pricing scope:** The stored verified rates are published **Standard base** rates,
+not a guarantee about the specific request invoice. Long-context (>272K) OpenAI
+requests can incur higher input/output rates; regional processing, cached tokens,
+Batch/Fast tiers and tools can also alter prices. Before authorizing high-exposure
+or long-context requests, existing financial admission must account for the actual
+usage tier or request explicit bounded owner approval. This PR does not alter
+mission, accounting or owner permissions.
+
+## Before/after eligibility matrix (pending release)
+
+| Cohort | Before | After a successful authorized refresh |
+|---|---|---|
+| Documented model listed by configured provider, first-party page passes | restricted / heuristic | verified / documented, with documented price and verified-at timestamps |
+| Documented model whose price differs from the reviewed schedule | restricted / heuristic | **restricted** / verified capabilities, estimated or missing price pending review |
+| Documented model whose source is unavailable | restricted / heuristic | retained original evidence and verification age; no fabricated renewal |
+| Unrecognized or undocumented model | restricted / heuristic | restricted / heuristic, explicit reason: no authoritative verification |
+| Unsupported modality/endpoint | filtered by routing | still filtered by routing; no automatic eligibility |
+| 404-quarantined model | inactive/disabled | inactive/disabled until **separate owner-authorized paid test** |
+| Provider with no configured credentials | undiscovered | undiscovered; no inferred account access |
+
+The actual promotion count cannot be claimed before successful authenticated refresh
+and production deployment. A simulation is not a production result.
+
+## Operational diagnostics
+
+Authenticated GET /api/internal/model-registry/diagnostics with x-internal-token
+returns model IDs, capability and price source, freshness, eligible status,
+reasoning tier, documented native endpoints, account-inference qualification state
+and reasons for exclusion. It never returns provider credentials or user prompts.
+
+## Verification / acceptance outstanding
+
+- Deterministic parser, source-integrity, rate-drift, stale-evidence and no-paid-request tests.
+- TypeScript, full Node/Vitest suite, build, smoke and CI.
+- Independent security and accounting review.
+- Source-specific documentation revalidation in deployment (no unapproved paid inference).
+- Owner-authorized release; **no merge, deployment or database migration by this PR**.
+
+Specific provider-account eligibility, endpoint authorization, and real answer quality
+still require a smallest-possible paid verification proposal and owner approval.
+The registry can independently verify published specifications; it cannot claim
+unmeasured response quality or guarantee account-level inference solely from listModels().
