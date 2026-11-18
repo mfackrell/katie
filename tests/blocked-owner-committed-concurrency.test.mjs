@@ -15,6 +15,7 @@ assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The nativ
 assert.match(bindingSql,/b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid/,'Original mission79 source must be pinned in SQL');
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/MISSION79_NEW_OWNER_WINDOW_TWO_CONNECTION_RACE_PASS|raceNewOwnerRpc\('OWNER_WINDOW'/,'New owner window must prove a two-connection race');
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/raceNewOwnerRpc\('RELEASE_BIND'/,'New release binding must prove a two-connection race');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/exactJob79='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'/,'Native test must bind the exact original assignment identity');
 assert.match(bindingSql,/85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid/,'Original assignment source must be pinned in SQL');
 assert.match(bindingSql,/not exists\(select 1 from project_retest_future_window_receipts q where q.project_id=b.project_id\)/,'No downstream assignment may claim with stale pre-renewal release');
 assert.match(bindingSql,/create table public.project_retest_future_window_receipts/,'A distinct immutable owner window must exist');
