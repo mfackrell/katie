@@ -16,6 +16,16 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   "to_regprocedure('public.project_org_resume_blocked_management_once(uuid,uuid,text,uuid,uuid,timestamptz,text)') admit"
  )).rows[0];
  assert.ok(definitions.offer&&definitions.admit,'Both guarded definitions must exist in committed PostgreSQL');
+ // Install and qualify the new source-bound claim grant against the SAME
+ // committed native owner-authorization and genuine PostgreSQL scheduler.
+ const releaseMigration='supabase/migrations/20261118002000_original_retest_mission_release_claim.sql';
+ const releaseInstalled=(await observer.query(
+  "select to_regprocedure('public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text)') sig"
+ )).rows[0].sig;
+ if(!releaseInstalled)await observer.query(readFileSync(releaseMigration,'utf8'));
+ const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
+ assert.ok(claimRelease,'Original worker claim's new exact-release predicate must be installed');
+
  await first.query('begin');
  try{
   await first.query('reset role');
@@ -161,6 +171,121 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const stillSource=(await first.query('select status,detail from agent_missions where id=$1',[source])).rows[0];
   assert.equal(stillSource.status,'blocked');assert.match(stillSource.detail,/No delegation change requested/);
   assert.equal((await first.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+  // Return the project scheduling lease through the NORMAL project lifecycle.
+  // The worker queue is not a Project Director management decision and does
+  // not automatically acquire new owner permissions.
+  const finished=(await first.query(
+   "select finish_work_project($1,$2,'wait',$3::jsonb) ok",
+   [project,lease,JSON.stringify({detail:'Awaiting the queued management assignment'})]
+  )).rows[0].ok;
+  assert.equal(finished,true,'Ordinary scheduler must relinquish project lease before worker claim');
+  const originalJob=(await first.query(
+   'select id,status,attempts,lease from mission_assignments where mission_id=$1',
+   [scheduled.missionId])).rows[0];
+  assert.equal(originalJob.status,'queued');assert.equal(originalJob.attempts,0);
+  const executionRelease='d'.repeat(40),unboundRelease='e'.repeat(40);
+  const stale=(await first.query('select claim_mission_work_release($1) r',[executionRelease])).rows[0].r;
+  assert.notEqual(stale?.job?.id,originalJob.id,'Without an exact owner-source binding, a later SHA cannot claim mission 79');
+
+  const offerArgs=[owner,project,executionRelease];
+  const offer=(await first.query(
+   'select project_org_retest_claim_release_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(offer.stage,'bind');assert.equal(offer.missionId,scheduled.missionId);
+  assert.equal(offer.assignmentId,originalJob.id);assert.equal(offer.historicalMissions,79);
+  assert.equal(offer.maxMissions,96);assert.equal(offer.tokenAllowance,600000);
+  const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,offer.stateHash];
+  const bind=()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',bindArgs);
+  // Fail-closed caller/source, release, lease, and owner guards, all rolled back.
+  await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',
+   [randomUUID(),project,executionRelease]),/authenticated|owner/);
+  await rejected(()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6)',
+   [...bindArgs.slice(0,5),'f'.repeat(64)]),/exact|state|required/i);
+  await first.query('set role anon');
+  await rejected(bind,/permission denied/i);
+  await first.query('set role service_role');
+  const receipt=(await bind()).rows[0].r;
+  assert.equal(receipt.stage,'bound');assert.equal(receipt.releaseSha,executionRelease);
+  assert.equal(receipt.existing,false);assert.equal(receipt.historicalMissions,79);
+  await rejected(bind,/bound|changed|release/i);
+  assert.equal((await first.query(
+   'select project_org_retest_claim_release_authorized($1,$2) a',
+   [project,executionRelease])).rows[0].a,true);
+  assert.equal((await first.query(
+   'select project_org_retest_claim_release_authorized($1,$2) a',
+   [project,unboundRelease])).rows[0].a,false);
+  assert.equal((await first.query(
+   'select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',
+   [project])).rows[0].n,1);
+  assert.equal((await first.query(
+   'select continuation_release_sha from project_provider_execution where project_id=$1',
+   [project])).rows[0].continuation_release_sha,priorRelease,
+   'Original owner continuation SHA must remain immutable');
+  assert.equal((await first.query(
+   'select project_evidence from agent_missions where id=$1',
+   [scheduled.missionId])).rows[0].project_evidence.providerContinuationRelease,priorRelease,
+   'Mission 79 must retain its immutable original source release');
+
+  const staleOther=(await first.query('select claim_mission_work_release($1) r',
+   [unboundRelease])).rows[0].r;
+  assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
+  const claimed=(await first.query('select claim_mission_work_release($1) r',
+   [executionRelease])).rows[0].r;
+  assert.equal(claimed?.mission?.id,scheduled.missionId,'Native release-bound worker must claim mission 79');
+  assert.equal(claimed?.job?.id,originalJob.id);
+  assert.equal(claimed?.job?.status,'running');
+  assert.equal(claimed?.job?.attempts,1);
+  assert.ok(claimed?.job?.lease,'Real six-minute worker lease required');
+  assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
+  assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
+  const duplicate=(await first.query('select claim_mission_work_release($1) r',
+   [executionRelease])).rows[0].r;
+  assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');
+
+  // Continue the REAL database-claimed management identity into the normal
+  // executeClaim dispatcher with an injected deterministic no-network model.
+  // The isolated DB command adapter is mocked here: no paid provider, worker
+  // commissioning, or project decision is written during this assertion.
+  const {modules}=await import('./load-project-modules.mjs');
+  const rows={
+   project_organization_nodes:[{id:root.id,agent_id:root.agent_id,kind:'project_director',status:'active'}],
+   project_organization_exceptions:[],
+   project_organization_assignments:[],
+   project_organization_scope_grants:[],
+   project_organization_plans:[{node_id:root.id,purpose:'Existing approved delivery',direction:'Delegate to functional director'}],
+   project_organization_dependencies:[],
+  };
+  const fakeDb={from(table){const q={
+   select(){return q;},eq(){return q;},in(){return q;},order(){return q;},range(){return q;},
+   single:async()=>({data:{objective:'Approved original two-player tic-tac-toe',team:[],phase:'development',
+    approved_hash:scopeHash,deadline:offer.cutoff,milestone_index:0},error:null}),
+   then(ok){return Promise.resolve({data:rows[table]??[],error:null}).then(ok);}
+  };return q;}};
+  const controlledCalls=[];
+  const loader=modules({
+   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>fakeDb},
+   '@/lib/missions/store':{rpc:async(name,args)=>{
+    controlledCalls.push({name,args});
+    if(name==='project_provider_mode')return true;
+    if(name==='project_org_decide')return true;
+    throw Error('Controlled management unexpectedly called '+name);
+   }},
+  });
+  let modelCalls=0;
+  await loader('@/lib/missions/worker').executeClaim(claimed,async(c,instruction,input,tools)=>{
+   modelCalls++;assert.equal(tools,'none');assert.equal(c.job.id,originalJob.id);
+   assert.match(instruction,/Never write code/);
+   assert.equal(JSON.parse(input).project.objective,'Approved original two-player tic-tac-toe');
+   return {text:'[{"action":"ready"}]',model:'deterministic-offline-fixture'};
+  });
+  assert.equal(modelCalls,1);
+  assert.deepEqual(controlledCalls.map(c=>c.name),['project_provider_mode','project_org_decide']);
+  assert.equal(controlledCalls[1].args.p_lease,claimed.job.lease);
+  assert.equal((await first.query('select calls from agent_missions where id=$1',
+   [scheduled.missionId])).rows[0].calls,0,'Controlled test cannot produce a charged model call');
+  console.log('RETEST_MISSION79_RELEASE_CLAIM_PASS: exact bound SHA only, original 79/96 ledger, source evidence, normal worker lease, one offline LLM management route, no paid inference');
+
   console.log('BLOCKED_MANAGEMENT_ONCE_POSTGRES_PASS: original 78 failed missions preserved, owner-scoped one-shot receipt, stale/replay/ACL negatives, zero owner-created missions, then one real lease-bound root management mission 79/96; disposable rollback, no inference');
  }finally{
   await first.query('rollback');
