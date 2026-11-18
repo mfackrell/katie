@@ -506,6 +506,14 @@ create function public.project_org_retest_renewed_assignment(
   and m.project_evidence->>'providerContinuationRelease'=r.prior_release_sha
   and m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
   and m.project_evidence->>'previousMissionId' is null
+  -- The scheduler-created original mission 79 must retain the COMPLETE
+  -- historical management source JSON. Its predecessor is independently
+  -- attested against an immutable original-production evidence digest.
+  and m.project_evidence=(select source.project_evidence from agent_missions source
+    where source.id=r.source_mission_id and source.project_id=p.id)
+  and j.payload=(select old_assignment.payload from mission_assignments old_assignment
+    where old_assignment.id='cd81b57d-0812-485c-b8f6-d658aa80186f'::uuid
+      and old_assignment.mission_id=r.source_mission_id)
   and project_org_retest_original_owner_lineage(p.id)
  and project_org_scope_ratification_state(p.id)=q.organization_hash
   and (select count(*) from project_organization_contract_changes c

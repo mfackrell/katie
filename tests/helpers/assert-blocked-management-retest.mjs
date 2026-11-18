@@ -547,6 +547,27 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await rejected(()=>first.query(
    'select project_org_retest_future_window_offer($1,$2,$3)',
    [owner,project,unboundRelease]),/SHA|release|window|production/i);
+  // The new mission79 payload must match the already immutable original
+  // source, including unknown/new evidence keys. Mutation is rolled back.
+  for(const [name,table,column,id] of [
+   ['mission evidence','agent_missions','project_evidence',scheduled.missionId],
+   ['assignment payload','mission_assignments','payload',originalJob.id],
+  ]){
+   await first.query('savepoint mission79_original_evidence_negative');
+   try{
+    await first.query('reset role');
+    await first.query("set local session_replication_role = 'replica'");
+    await first.query(`update ${table} set ${column}=${column}||'{"unauthorizedHistoricalMarker":true}'::jsonb where id=$1`,[id]);
+    await first.query("set local session_replication_role = 'origin'");
+    await first.query('set role service_role');
+    await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+     /Historical mission 79 or approved renewed source changed/i);
+   }finally{
+    await first.query('rollback to savepoint mission79_original_evidence_negative');
+    await first.query('release savepoint mission79_original_evidence_negative');
+   }
+  }
+  console.log('MISSION79_COMPLETE_SAVED_SOURCE_EVIDENCE_TAMPER_NEGATIVES_PASS');
   const claimOffer=(await first.query(
    'select project_org_retest_claim_release_offer($1,$2,$3) r',offerArgs)).rows[0].r;
   assert.equal(claimOffer.stage,'bind');
