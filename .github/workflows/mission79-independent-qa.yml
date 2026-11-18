@@ -16,6 +16,7 @@ on:
       - 'tests/blocked-owner-committed-concurrency.test.mjs'
       - 'tests/mission79-future-window-runtime.test.mjs'
       - '.github/workflows/mission79-independent-qa.yml'
+      - 'docs/qualification/mission79-production-release-fence.md'
 permissions:
   contents: read
   pull-requests: read
