@@ -342,7 +342,9 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
      return {generation:epochGeneration,active:epochLive};
    }
    if(name==='claim_mission_work_release_epoch'){
-    assert.equal(args.p_release,releaseSha);assert.equal(args.p_epoch,epochGeneration);
+    assert.equal(args.p_release,releaseSha);
+    assert.equal(args.p_epoch,epochUnavailable||(epochLive&&!aliasLive)?0:epochGeneration,
+     'Epoch-zero claim must deny only mission79 when its release proof fails');
     return null;
    }
    return null;
@@ -360,29 +362,30 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  process.env.VERCEL_GIT_COMMIT_SHA=savedSha;
  const stopped=await runMissionBatch(forbidden);
  assert.equal(stopped.claimed,0);assert.equal(stopped.releaseFence,'canonical_alias_changed');
- assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,0,
-  'A superseded production deployment must not even request the worker lease');
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,1,
+  'A stale alias must invoke only an epoch-zero SQL claim, retaining ordinary work');
  aliasLive=true;
  const normal=await runMissionBatch(forbidden);
  assert.equal(normal.claimed,0);
- assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,1,
-  'A canonical READY deployment may reach only the normal SQL claim RPC');
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,2,
+  'A canonical READY deployment may reach only the normal epoch-bound SQL claim RPC');
  assert.equal(verifications,2);
  epochLive=false;aliasLive=false;
  await runMissionBatch(forbidden);
  assert.equal(verifications,2,'No mission79 alias proof is needed after the SQL gate was closed');
- // A failed epoch lookup is not evidence of a closed release. Deny claims.
+ // A failed epoch lookup denies only mission79; ordinary work uses epoch-zero SQL.
  const previousClaims=calls.filter(x=>x==='claim_mission_work_release_epoch').length;
  epochUnavailable=true;
  const denied=await runMissionBatch(forbidden);
  assert.equal(denied.claimed,0);
  assert.equal(denied.releaseFence,'release_epoch_unavailable');
- assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,previousClaims);
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,previousClaims+1,
+  'An unavailable epoch must still route ordinary claims through epoch-zero SQL');
  // An authentic negative epoch still allows unrelated ordinary claim routing.
  epochUnavailable=false;epochLive=false;
  const ordinary=await runMissionBatch(forbidden);
  assert.equal(ordinary.claimed,0);
- assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,previousClaims+1);
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release_epoch').length,previousClaims+2);
 });
 
 
