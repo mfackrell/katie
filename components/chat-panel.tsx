@@ -1789,6 +1789,7 @@ export function ChatPanel({
     let recoveryWatchdogBusy = false;
     let recoveryWatchdogTimer: number | null = null;
     let uploadedReferencesForRetry: FileReference[] | null = null;
+    let ownerBearerForRecovery: string | null = null;
     const clientRequestId = crypto.randomUUID();
 
     try {
@@ -1906,6 +1907,7 @@ export function ChatPanel({
 
       requestStage = "sending chat request";
       const ownerBearer = await ownerSessionBearer();
+      ownerBearerForRecovery = ownerBearer;
       // The browser may lose an NDJSON stream while the server continues to
       // generate and durably persist an answer. Recovery checks the SAME
       // request ID, not a new model generation, only when stream progress
@@ -2576,7 +2578,7 @@ export function ChatPanel({
               setAnswerDisplayed(true);
               setStatusMessage("Saved reply restored; finalizing the original workflow…");
             },
-            ownerBearer,
+            ownerBearerForRecovery,
           );
 
           if (recoveredMessages) {
