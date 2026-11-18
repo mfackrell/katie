@@ -81,7 +81,7 @@ test('model-attributed user feedback retains task, provenance, exact source and 
   assert.equal(poor?.negative,1);
   assert.equal(poor?.positive,0);
   assert.equal(poor?.evidence[0].source_id,'user-msg-1');
-  assert.match(poor?.uncertainty??'',/not.*global model superiority/i);
+  assert.match(poor?.uncertainty??'',/No evidence implies global model superiority/i);
   assert.equal(modelAttributedFeedback(rows,'anthropic','claude-sonnet-5-5','social-emotional')?.positive,1);
   assert.equal(modelAttributedFeedback(rows,'openai','gpt-5-mini','rewrite'),undefined);
   assert.equal(modelAttributedFeedback(rows,'openai','gpt-4o-mini','social-emotional'),undefined);
