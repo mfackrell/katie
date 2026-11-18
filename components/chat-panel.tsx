@@ -423,7 +423,6 @@ async function pollForPersistedAssistant(
   maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
   onPersisted?: (messages: Message[]) => void,
 ): Promise<Message[] | null> {
-  const startedAtMs = Date.parse(pending.startedAt);
   let deadline = Date.now() + (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : maxWaitMs);
   const qwenDeadline = Date.now() + QWEN_RECOVERY_WINDOW_MS;
   let previewedAssistantMessageId: string | null = null;
@@ -1425,24 +1424,31 @@ export function ChatPanel({
         return;
       }
 
-      const pendingAgeMs = Date.now() - Date.parse(pending.startedAt);
-      if (Number.isFinite(pendingAgeMs) && pendingAgeMs > (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : MOBILE_PENDING_MAX_AGE_MS)) {
-        clearPendingChatRequest(chatId);
-        return;
-      }
-
+      // Age alone cannot prove a saved request failed. Reconcile the original
+      // request ID on every foreground resume; never discard the receipt.
       recoveryPollingRef.current = true;
       setLoading(true);
       setStatusMessage("Reconnecting to Katie and checking for the completed response…");
 
       try {
+        let savedAnswerPreviewed = false;
         const recoveredMessages = await pollForPersistedAssistant(
           chatId,
           pending,
           MOBILE_RECOVERY_WINDOW_MS,
+          (saved) => {
+            if (cancelled) return;
+            savedAnswerPreviewed = true;
+            setMessages(saved);
+            setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
+            setStatusMessage("Saved answer restored. Finalizing the original request accounting…");
+          },
         );
 
         if (cancelled || !recoveredMessages) {
+          if (!cancelled) setStatusMessage(savedAnswerPreviewed
+            ? "Saved answer restored. The original request is still settling; status will be checked when this conversation resumes."
+            : "Katie's saved request is not yet verified complete. Reconnect this conversation to check the original request; do not resend.");
           return;
         }
 
@@ -1694,6 +1700,12 @@ export function ChatPanel({
       );
       return;
     }
+    // A transport interruption cannot authorize a new request ID for the
+    // same unresolved chat. Keep the original saved receipt recoverable.
+    if (readPendingChatRequest(chatId)) {
+      setStatusMessage("The previous request has not been verified complete. Katie will check its saved status; do not resend.");
+      return;
+    }
     const latestComposerText = composerValueRef.current.trim();
     if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!reactionContent && !canSendForText(latestComposerText))) {
       return;
@@ -1913,7 +1925,8 @@ export function ChatPanel({
             const savedStatus = await statusResponse.json() as {
               status?: string; assistantMessageId?: string | null; workflowStatus?: string | null;
             };
-            if (savedStatus.status !== "completed" || !savedStatus.assistantMessageId) return;
+            if (!savedStatus.assistantMessageId ||
+                (savedStatus.status !== "processing" && savedStatus.status !== "completed")) return;
             const messagesResponse = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,
               {headers,cache:"no-store"});
             if (!messagesResponse.ok) return;
@@ -1932,7 +1945,7 @@ export function ChatPanel({
             }
             // Only a confirmed terminal workflow lets us close the abandoned
             // transport. A saved chat response alone is NOT settled accounting.
-            if (savedStatus.workflowStatus === "completed") {
+            if (savedStatus.status === "completed" && savedStatus.workflowStatus === "completed") {
               recoveredAndSettled = true;
               clearPendingChatRequest(chatId);
               abortController.abort();
@@ -2019,10 +2032,17 @@ export function ChatPanel({
             startedAt: optimisticUserMessage.createdAt,
             requestId: clientRequestId,
           };
+        let savedAnswerPreviewed = false;
         const recoveredMessages = await pollForPersistedAssistant(
           chatId,
           pending,
           MOBILE_RECOVERY_WINDOW_MS,
+          (saved) => {
+            savedAnswerPreviewed = true;
+            setMessages(saved);
+            setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
+            setStatusMessage("Saved answer restored. Finalizing the original request accounting…");
+          },
         );
 
         if (recoveredMessages) {
@@ -2033,6 +2053,10 @@ export function ChatPanel({
             [chatId]: recoveredMessages,
           }));
           setStatusMessage("Existing Katie request completed and was restored.");
+        } else {
+          setStatusMessage(savedAnswerPreviewed
+            ? "Saved reply restored; original request settlement remains pending. Do not resend."
+            : "Katie is still processing or verifying the original request. Do not resend; recovery resumes when this conversation is active.");
         }
         return;
       }
