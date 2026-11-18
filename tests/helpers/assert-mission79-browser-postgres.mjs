@@ -18,6 +18,7 @@ export async function assertMission79BrowserPostgres(first,{
  const original={
   VERCEL_ENV:process.env.VERCEL_ENV,
   VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+  VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -42,16 +43,20 @@ export async function assertMission79BrowserPostgres(first,{
    project_org_retest_future_window_offer:[
     'select project_org_retest_future_window_offer($1,$2,$3) r',
     [args.p_owner,args.p_project,args.p_release]],
+   project_org_retest_release_epoch:[
+    'select project_org_retest_release_epoch($1,$2) r',
+    [args.p_project,args.p_release]],
    project_org_authorize_retest_future_window:[
-    'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8) r',
+    'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',
     [args.p_owner,args.p_project,args.p_release,args.p_mission,args.p_assignment,
-     args.p_authorization,args.p_cutoff,args.p_state_hash]],
+     args.p_authorization,args.p_cutoff,args.p_state_hash,args.p_epoch,args.p_deployment]],
    project_org_retest_claim_release_offer:[
     'select project_org_retest_claim_release_offer($1,$2,$3) r',
     [args.p_owner,args.p_project,args.p_release]],
    project_org_bind_retest_claim_release:[
-    'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6) r',
-    [args.p_owner,args.p_project,args.p_release,args.p_mission,args.p_assignment,args.p_state_hash]],
+    'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',
+    [args.p_owner,args.p_project,args.p_release,args.p_mission,args.p_assignment,
+     args.p_state_hash,args.p_epoch,args.p_deployment]],
   };
   const entry=queries[name];
   if(!entry)throw Error('Browser integration attempted unexpected database call '+name);
@@ -159,6 +164,7 @@ export async function assertMission79BrowserPostgres(first,{
   baseUrl='http://127.0.0.1:'+server.address().port;
   Object.assign(process.env,{
    VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,
+   VERCEL_DEPLOYMENT_ID:'dpl_NativeFixture79',
    KATIE_OWNER_AUTH_USER_ID:owner,
    NEXT_PUBLIC_SUPABASE_URL:baseUrl,
    NEXT_PUBLIC_SUPABASE_ANON_KEY:'native-owner-qa-key',
