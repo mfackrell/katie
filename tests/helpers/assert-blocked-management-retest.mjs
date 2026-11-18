@@ -252,6 +252,27 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
   const claimed=(await first.query('select claim_mission_work_release($1) r',
    [executionRelease])).rows[0].r;
+  if(!claimed||claimed.mission?.id!==scheduled.missionId){
+   const predicateSql=[
+    "select j.id job_id,j.status job_status,j.attempts,j.lease,j.available_at,",
+    "m.id mission_id,m.status mission_status,p.status project_status,p.active_mission_id,p.deadline,",
+    "benchmark_effective_mission_deadline(m.id) mission_deadline,",
+    "project_provider_continued_assignment(j.id) source_ok,",
+    "project_org_retest_claim_release_authorized(p.id,$2) release_ok,",
+    "active_managed_work(j.agent_id,j.id) active_agent_work,",
+    "(select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(m.team) v where v->>'id'=j.agent_id::text) team_max,",
+    "(select (config->>'maxActiveTasks')::integer from managed_agents where id=j.agent_id) agent_max,",
+    "not exists(select 1 from unnest(j.dependencies) dep where not exists(select 1 from mission_assignments d where d.mission_id=j.mission_id and d.job_key=dep and d.status='completed')) deps_ready,",
+    "(select count(*) from mission_assignments aa join agent_missions bb on bb.id=aa.mission_id where aa.status='running' and aa.lease_until>now() and bb.status in ('running','awaiting_approval')) global_running",
+    "from mission_assignments j join agent_missions m on m.id=j.mission_id join work_projects p on p.id=m.project_id where j.id=$1"
+   ].join(' ');
+   const diagnostic=(await first.query(predicateSql,[originalJob.id,executionRelease])).rows;
+   const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release(text)'::regprocedure) definition")).rows[0].definition;
+   console.log('MISSION79_CLAIM_REJECTION_DIAGNOSTIC '+JSON.stringify({
+    diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized(b.project_id,p_release)').length-1,
+    staleClaim:stale,otherClaim:staleOther,claimed
+   }));
+  }
   assert.equal(claimed?.mission?.id,scheduled.missionId,'Native release-bound worker must claim mission 79');
   assert.equal(claimed?.job?.id,originalJob.id);
   assert.equal(claimed?.job?.status,'running');
