@@ -23,6 +23,8 @@ type Quality = {status: string; observations: Array<{source: string; provenance:
     positive: number; negative: number; ambiguous: number;
     evidence: Array<{source: string; source_id: string; observed_at: string; dimension: string;
       outcome: string; confidence: string; task_excerpt: string | null; source_intent?: string}>;
+    potentially_comparable?: Array<{source: string; source_id: string; observed_at: string; dimension: string;
+      outcome: string; confidence: string; task_excerpt: string | null; source_intent: string}>;
     uncertainty: string;
   };
 };
@@ -69,19 +71,29 @@ export function modelAttributedFeedback(
     Date.parse(row.observed_at) <= now && Date.parse(row.observed_at) >= now - 30 * 86400000)
     .sort((a,b) => Date.parse(b.observed_at) - Date.parse(a.observed_at)).slice(0,12);
   if (!relevant.length) return undefined;
+  // Different intent labels do not establish quality equivalence. Keep
+  // their raw events separate until the existing selection LLM compares
+  // original task excerpts and material response requirements.
+  const direct = relevant.filter(row => row.intent === intent);
+  const possible = bestValueComparable ? relevant.filter(row => row.intent !== intent) : [];
+  const event = (row: ObservedModelFeedback) => ({
+    source: row.source, source_id: row.source_id, observed_at: row.observed_at,
+    dimension: row.dimension, outcome: row.outcome, confidence: row.confidence,
+    task_excerpt: row.task_excerpt?.slice(0,160) ?? null,
+    ...(bestValueComparable ? {source_intent: row.intent} : {}),
+  });
   return {
-    positive: relevant.filter(row => row.outcome === 'positive').length,
-    negative: relevant.filter(row => row.outcome === 'negative').length,
-    ambiguous: relevant.filter(row => row.outcome === 'ambiguous').length,
-    evidence: relevant.map(row => ({
-      source: row.source, source_id: row.source_id, observed_at: row.observed_at,
-      dimension: row.dimension, outcome: row.outcome, confidence: row.confidence,
-      task_excerpt: row.task_excerpt?.slice(0,160) ?? null,
-      ...(bestValueComparable ? {source_intent: row.intent} : {}),
-    })),
-    uncertainty: 'User reactions and context-attributed comments are task-specific and can be ambiguous. ' +
-      'Review verdicts are internal and selection-biased. No evidence implies global model superiority; ' +
-      'the same model alias can resolve to a dated version shown in the underlying provider receipt.',
+    positive: direct.filter(row => row.outcome === 'positive').length,
+    negative: direct.filter(row => row.outcome === 'negative').length,
+    ambiguous: direct.filter(row => row.outcome === 'ambiguous').length,
+    evidence: direct.map(event),
+    ...(possible.length ? {potentially_comparable: possible.map(row => ({
+      ...event(row),source_intent:row.intent,
+    }))} : {}),
+    uncertainty: 'Direct evidence is scoped to the current intent. Cross-intent events are only ' +
+      'potential comparisons; the selector must verify actual objective and quality-requirement similarity ' +
+      'before using them. Reactions and adjacent comments may be ambiguous. Internal reviews are ' +
+      'selection-biased. No evidence implies global model superiority.',
   };
 }
 
