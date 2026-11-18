@@ -69,12 +69,14 @@ test('native preference migration denies browser roles and enforces durable scop
       id uuid primary key, actor_id uuid, chat_id uuid, role text, content text, created_at timestamptz default now());
       create table chat_requests(
         request_id text primary key, actor_id text, chat_id text, assistant_message_id text,
-        assistant_model text, status text, review_audit jsonb, created_at timestamptz default now(),
-        updated_at timestamptz default now());
+        assistant_model text, assistant_content text, status text, review_audit jsonb,
+        created_at timestamptz default now(), updated_at timestamptz default now(),
+        completed_at timestamptz);
       create table message_reactions(
         message_id uuid primary key, actor_id uuid, chat_id uuid, reaction text,
         updated_at timestamptz default now());`);
     await client.query(readFileSync('supabase/migrations/20261118163000_routing_quality_evidence.sql','utf8'));
+    await client.query(readFileSync('supabase/migrations/20261118191500_best_value_quality_feedback.sql','utf8'));
     await client.query('insert into standalone_owner_bindings(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
     const compiled = createRequire(new URL('../.test-dist/routing-postgres.cjs', import.meta.url));
     const {auditRoutingDelivery} = compiled('./lib/router/routing-delivery-audit');
@@ -140,6 +142,62 @@ test('native preference migration denies browser roles and enforces durable scop
       && event.outcome==='negative'));
     assert.ok(quality.some(event => event.source==='internal_review' && event.outcome==='ambiguous'));
     assert.ok(quality.every(event=>event.provider==='openai' && event.model==='gpt-4o-mini'));
+    // Distinct Best Value-only attribution: explicit negative, positive, neutral,
+    // and missing assistant-row recovery. No production database is touched.
+    await client.query(`update chat_requests
+      set assistant_content='Here is the revision',completed_at=now()-interval '5 minutes'
+      where request_id='relevant'`);
+    for (const [request,intent,model,age] of [
+      ['poor-conversation','social-emotional','gpt-5-mini-2025-08-07','3 minutes 40 seconds'],
+      ['good-conversation','general-text','claude-sonnet-5-5','2 minutes 40 seconds']
+    ]) {
+      await client.query(`insert into standalone_workflows(owner_id,actor_id,chat_id,request_id,
+        request_hash,request_body,status,checkpoints,updated_at)
+        values($1,$2,$3,$4,repeat('b',64),'{}','completed',$5,now()-$6::interval)`,
+        [owner,actor,chat,request,JSON.stringify({'routing-delivery-audit:v1':{
+          ...audit,classifiedIntent:intent,provider:model.startsWith('claude')?'anthropic':'openai',model
+        }}),age]);
+    }
+    const poorAssistant='88888888-8888-4888-8888-888888888888';
+    const goodAssistant='99999999-9999-4999-8999-999999999999';
+    await client.query(`insert into chat_requests(request_id,actor_id,chat_id,
+      assistant_message_id,assistant_model,assistant_content,status,completed_at)
+      values ('poor-conversation',$1,$2,$3,'gpt-5-mini-2025-08-07','Low quality response',
+        'completed',now()-interval '3 minutes 40 seconds'),
+        ('good-conversation',$1,$2,$4,'claude-sonnet-5-5','Strong creative response',
+        'completed',now()-interval '2 minutes 40 seconds')`,
+      [actor,chat,poorAssistant,goodAssistant]);
+    await client.query(`insert into messages(id,actor_id,chat_id,role,content,created_at)
+      values
+        ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',$1,$2,'user','Continue the playful conversation',now()-interval '3 minutes 50 seconds'),
+        ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',$1,$2,'user','Katie, that is terrible.',now()-interval '3 minutes 30 seconds'),
+        ('cccccccc-cccc-4ccc-8ccc-cccccccccccc',$1,$2,'user','Continue the imaginative scene',now()-interval '2 minutes 50 seconds'),
+        ('dddddddd-dddd-4ddd-8ddd-dddddddddddd',$1,$2,'user','That was much better.',now()-interval '2 minutes 30 seconds'),
+        ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',$1,$2,'user','Turn the intensity up please.',now()-interval '1 minute')`,
+      [actor,chat]);
+    const valueRpc='select standalone_best_value_quality_feedback($1,$2,$3,$4) as feedback';
+    for (const role of ['anon','authenticated']) {
+      await client.query(`set role ${role}`);
+      await assert.rejects(client.query(valueRpc,[owner,actor,chat,'current']),{code:'42501'});
+      await client.query('reset role');
+    }
+    const expanded=(await client.query(valueRpc,[owner,actor,chat,'current'])).rows[0].feedback;
+    assert.ok(expanded.some(event=>event.source_id==='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' &&
+      event.outcome==='negative' && event.model==='gpt-5-mini-2025-08-07' &&
+      event.intent==='social-emotional' && /playful conversation/.test(event.task_excerpt)),
+      'even a missing saved assistant row must not discard explicit critique');
+    assert.ok(expanded.some(event=>event.source_id==='dddddddd-dddd-4ddd-8ddd-dddddddddddd' &&
+      event.outcome==='positive' && event.model==='claude-sonnet-5-5' &&
+      event.intent==='general-text' && /imaginative scene/.test(event.task_excerpt)),
+      'positive feedback remains attached to exact model and original task');
+    assert.ok(expanded.some(event=>event.source_id===userCorrection &&
+      event.outcome==='negative' && event.dimension==='continuity'));
+    assert.ok(!expanded.some(event=>event.source_id==='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'),
+      'ordinary creative escalation must not count as negative feedback');
+    assert.ok(expanded.every(event=>event.source_id && event.request_id && event.intent && event.confidence));
+    await assert.rejects(client.query(valueRpc,
+      [owner,'44444444-4444-4444-8444-444444444444',chat,'current']),
+      /STANDALONE_SCOPE_DENIED/);
     await client.query('set role service_role');
     const database = mock.method(admin,'getSupabaseAdminClient',() => ({rpc: async (name, input) => {
       assert.equal(name,'standalone_routing_observations');
