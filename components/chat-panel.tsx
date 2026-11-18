@@ -334,7 +334,6 @@ const REQUEST_SIZE_SAFETY_BYTES = 150_000;
 const PENDING_CHAT_REQUEST_STORAGE_PREFIX = "chat:pending-request:";
 const MOBILE_RECOVERY_POLL_INTERVAL_MS = 1_500;
 const MOBILE_RECOVERY_WINDOW_MS = 4 * 60 * 1_000;
-const MOBILE_PENDING_MAX_AGE_MS = 30 * 60 * 1_000;
 const QWEN_RECOVERY_WINDOW_MS = 40 * 60 * 1_000;
 const QWEN_RECOVERY_POLL_INTERVAL_MS = 10_000;
 
@@ -421,10 +420,14 @@ async function pollForPersistedAssistant(
   chatId: string,
   pending: PendingChatRequest,
   maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
+  onPersisted?: (messages: Message[]) => void,
+  bearer?: string | null,
 ): Promise<Message[] | null> {
+  // Legacy pending entries without an ID still use the original timestamp.
   const startedAtMs = Date.parse(pending.startedAt);
   let deadline = Date.now() + (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : maxWaitMs);
   const qwenDeadline = Date.now() + QWEN_RECOVERY_WINDOW_MS;
+  let previewedAssistantMessageId: string | null = null;
 
   while (Date.now() <= deadline) {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -433,72 +436,91 @@ async function pollForPersistedAssistant(
 
     try {
       let requiredAssistantMessageId: string | null = null;
+      let confirmedRequestCompleted = false;
+      let workflowStatus: string | null | undefined;
 
       if (pending.requestId) {
         const statusResponse = await fetch(
           `/api/chat/status?requestId=${encodeURIComponent(pending.requestId)}&chatId=${encodeURIComponent(chatId)}`,
-          { cache: "no-store" },
+          { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
         );
 
-        // An aged, verified missing POST is terminal, rather than trapping the composer.
-        if (statusResponse.status === 404 && Number.isFinite(startedAtMs) && Date.now() - startedAtMs >= 30_000) {
-          throw new TerminalChatError("Katie did not receive this request. Your message has been restored as a draft; resend it when ready.");
-        }
-
+        // A missing receipt can be a delayed server admission. HTTP 404 is not
+        // a terminal workflow result and must never invite a duplicate POST.
         if (statusResponse.ok) {
           const statusPayload = (await statusResponse.json()) as {
             status?: "processing" | "completed" | "failed" | "paused";
             waitingForRunpod?: boolean;
             assistantMessageId?: string | null;
+            workflowStatus?: string | null;
             error?: string | null;
           };
 
-          if (statusPayload.status === "paused") {
+          if (statusPayload.status === "paused" || statusPayload.workflowStatus === "paused") {
             throw new PausedChatError(
               statusPayload.error ?? "Saved request paused for accounting review. Open Status / Usage to continue or cancel; do not resend this request.",
             );
           }
 
-          if (statusPayload.status === "failed") {
+          if (statusPayload.status === "failed" &&
+              !["pending", "running"].includes(statusPayload.workflowStatus ?? "")) {
             throw new TerminalChatError(
               statusPayload.error ?? "Katie's server-side request failed.",
               statusPayload.assistantMessageId ?? undefined,
             );
           }
 
-          if (statusPayload.status === "processing") {
-            if (statusPayload.waitingForRunpod) deadline = Math.max(deadline, qwenDeadline);
-            if (Date.now() >= deadline) {
-              break;
-            }
-            await waitForRecoveryPoll(statusPayload.waitingForRunpod ? QWEN_RECOVERY_POLL_INTERVAL_MS : MOBILE_RECOVERY_POLL_INTERVAL_MS);
-            continue;
+          if (statusPayload.status === "processing" && statusPayload.waitingForRunpod) {
+            deadline = Math.max(deadline, qwenDeadline);
           }
 
-          if (statusPayload.status === "completed") {
+          if (statusPayload.status === "processing" || statusPayload.status === "completed") {
             requiredAssistantMessageId = statusPayload.assistantMessageId ?? null;
+            confirmedRequestCompleted = statusPayload.status === "completed";
+            workflowStatus = statusPayload.workflowStatus;
+          }
+
+          if (!requiredAssistantMessageId) {
+            // Processing or unknown: do not infer a reply from an unrelated
+            // conversation message. The original request ID remains pending.
+            if (Date.now() >= deadline) break;
+            await waitForRecoveryPoll(statusPayload.waitingForRunpod ? QWEN_RECOVERY_POLL_INTERVAL_MS : MOBILE_RECOVERY_POLL_INTERVAL_MS);
+            continue;
           }
         }
       }
 
       const response = await fetch(
         `/api/messages?chatId=${encodeURIComponent(chatId)}`,
-        { cache: "no-store" },
+        { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
       );
 
       if (response.ok) {
         const payload = (await response.json()) as { messages?: Message[] };
         const serverMessages = payload.messages ?? [];
 
-        if (
-          requiredAssistantMessageId &&
-          serverMessages.some(
-            (candidate) =>
-              candidate.role === "assistant" &&
-              candidate.id === requiredAssistantMessageId,
-          )
-        ) {
-          return serverMessages;
+        if (requiredAssistantMessageId && serverMessages.some(
+          candidate => candidate.role === "assistant" &&
+            candidate.id === requiredAssistantMessageId,
+        )) {
+          // A saved answer may be shown before the account/memory workflow
+          // settles, but the durable pending receipt must remain until then.
+          if (onPersisted && previewedAssistantMessageId !== requiredAssistantMessageId) {
+            previewedAssistantMessageId = requiredAssistantMessageId;
+            onPersisted(serverMessages);
+          }
+          if (confirmedRequestCompleted &&
+              (workflowStatus === "completed" || workflowStatus === undefined)) {
+            return serverMessages;
+          }
+        }
+
+        // Old clients without a request ID retain their legacy fallback.
+        // New requests can ONLY recover the exact saved assistant message ID.
+        if (pending.requestId) {
+          if (Date.now() >= deadline) break;
+          await waitForRecoveryPoll();
+          continue;
         }
 
         let matchingUserIndex = -1;
@@ -1405,24 +1427,33 @@ export function ChatPanel({
         return;
       }
 
-      const pendingAgeMs = Date.now() - Date.parse(pending.startedAt);
-      if (Number.isFinite(pendingAgeMs) && pendingAgeMs > (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : MOBILE_PENDING_MAX_AGE_MS)) {
-        clearPendingChatRequest(chatId);
-        return;
-      }
-
+      // Age alone cannot prove a saved request failed. Reconcile the original
+      // request ID on every foreground resume; never discard the receipt.
       recoveryPollingRef.current = true;
       setLoading(true);
       setStatusMessage("Reconnecting to Katie and checking for the completed response…");
 
       try {
+        let savedAnswerPreviewed = false;
+        const recoveryBearer = await ownerSessionBearer();
         const recoveredMessages = await pollForPersistedAssistant(
           chatId,
           pending,
           MOBILE_RECOVERY_WINDOW_MS,
+          (saved) => {
+            if (cancelled) return;
+            savedAnswerPreviewed = true;
+            setMessages(saved);
+            setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
+            setStatusMessage("Saved answer restored. Finalizing the original request accounting…");
+          },
+          recoveryBearer,
         );
 
         if (cancelled || !recoveredMessages) {
+          if (!cancelled) setStatusMessage(savedAnswerPreviewed
+            ? "Saved answer restored. The original request is still settling; status will be checked when this conversation resumes."
+            : "Katie's saved request is not yet verified complete. Reconnect this conversation to check the original request; do not resend.");
           return;
         }
 
@@ -1674,6 +1705,12 @@ export function ChatPanel({
       );
       return;
     }
+    // A transport interruption cannot authorize a new request ID for the
+    // same unresolved chat. Keep the original saved receipt recoverable.
+    if (readPendingChatRequest(chatId)) {
+      setStatusMessage("The previous request has not been verified complete. Katie will check its saved status; do not resend.");
+      return;
+    }
     const latestComposerText = composerValueRef.current.trim();
     if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!reactionContent && !canSendForText(latestComposerText))) {
       return;
@@ -1752,6 +1789,7 @@ export function ChatPanel({
     let recoveryWatchdogBusy = false;
     let recoveryWatchdogTimer: number | null = null;
     let uploadedReferencesForRetry: FileReference[] | null = null;
+    let ownerBearerForRecovery: string | null = null;
     const clientRequestId = crypto.randomUUID();
 
     try {
@@ -1869,6 +1907,7 @@ export function ChatPanel({
 
       requestStage = "sending chat request";
       const ownerBearer = await ownerSessionBearer();
+      ownerBearerForRecovery = ownerBearer;
       // The browser may lose an NDJSON stream while the server continues to
       // generate and durably persist an answer. Recovery checks the SAME
       // request ID, not a new model generation, only when stream progress
@@ -1893,7 +1932,8 @@ export function ChatPanel({
             const savedStatus = await statusResponse.json() as {
               status?: string; assistantMessageId?: string | null; workflowStatus?: string | null;
             };
-            if (savedStatus.status !== "completed" || !savedStatus.assistantMessageId) return;
+            if (!savedStatus.assistantMessageId ||
+                (savedStatus.status !== "processing" && savedStatus.status !== "completed")) return;
             const messagesResponse = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,
               {headers,cache:"no-store"});
             if (!messagesResponse.ok) return;
@@ -1912,7 +1952,7 @@ export function ChatPanel({
             }
             // Only a confirmed terminal workflow lets us close the abandoned
             // transport. A saved chat response alone is NOT settled accounting.
-            if (savedStatus.workflowStatus === "completed") {
+            if (savedStatus.status === "completed" && savedStatus.workflowStatus === "completed") {
               recoveredAndSettled = true;
               clearPendingChatRequest(chatId);
               abortController.abort();
@@ -1999,10 +2039,18 @@ export function ChatPanel({
             startedAt: optimisticUserMessage.createdAt,
             requestId: clientRequestId,
           };
+        let savedAnswerPreviewed = false;
         const recoveredMessages = await pollForPersistedAssistant(
           chatId,
           pending,
           MOBILE_RECOVERY_WINDOW_MS,
+          (saved) => {
+            savedAnswerPreviewed = true;
+            setMessages(saved);
+            setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
+            setStatusMessage("Saved answer restored. Finalizing the original request accounting…");
+          },
+          ownerBearer,
         );
 
         if (recoveredMessages) {
@@ -2013,6 +2061,10 @@ export function ChatPanel({
             [chatId]: recoveredMessages,
           }));
           setStatusMessage("Existing Katie request completed and was restored.");
+        } else {
+          setStatusMessage(savedAnswerPreviewed
+            ? "Saved reply restored; original request settlement remains pending. Do not resend."
+            : "Katie is still processing or verifying the original request. Do not resend; recovery resumes when this conversation is active.");
         }
         return;
       }
@@ -2046,6 +2098,14 @@ export function ChatPanel({
             ? serverMessage
             : `Server request failed (HTTP ${effectiveResponse.status}${effectiveResponse.statusText ? ` ${effectiveResponse.statusText}` : ""}): ${serverMessage}`;
 
+        // A proxy timeout or 5xx does not prove the accepted workflow
+        // terminated. Use the original request ID and the existing recovery
+        // path instead of manufacturing a failed assistant response.
+        if (effectiveResponse.status === 408 || effectiveResponse.status >= 500) {
+          requestStage = "reading response stream";
+          throw new Error(httpCause);
+        }
+
         const failureMessage: Message = {
           id: crypto.randomUUID(),
           chatId,
@@ -2068,11 +2128,12 @@ export function ChatPanel({
         return;
       }
 
+      // A missing stream body is an uncertain delivery, not proof that the
+      // original server request failed. Reconcile it through the saved ID.
+      requestStage = "reading response stream";
       if (!effectiveResponse.body) {
         throw new Error("Missing response stream from /api/chat.");
       }
-
-      requestStage = "reading response stream";
       const reader = effectiveResponse.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
@@ -2512,10 +2573,21 @@ export function ChatPanel({
             "The mobile connection to Katie was interrupted. Waiting for the server-side response to finish…",
           );
 
+          let savedAnswerPreviewed = false;
           const recoveredMessages = await pollForPersistedAssistant(
             chatId,
             pending,
             MOBILE_RECOVERY_WINDOW_MS,
+            (saved) => {
+              savedAnswerPreviewed = true;
+              answerCommitted = true;
+              setMessages(saved);
+              setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
+              setStreamingAnswer("");
+              setAnswerDisplayed(true);
+              setStatusMessage("Saved reply restored; finalizing the original workflow…");
+            },
+            ownerBearerForRecovery,
           );
 
           if (recoveredMessages) {
@@ -2536,11 +2608,24 @@ export function ChatPanel({
               });
             }
             setStatusMessage(
-              "The live mobile stream disconnected, but Katie finished on the server. The saved response was restored.",
+              "The live connection disconnected, but Katie finished on the server. The saved response was restored.",
             );
             return;
           }
+          // The polling window is not a terminal server outcome. Retain the
+          // request ID and reconcile it when the chat next becomes active.
+          setStatusMessage(savedAnswerPreviewed
+            ? "Saved reply restored. Workflow settlement is still pending; do not resend."
+            : "Connection interrupted. Katie's saved request is not yet verified complete. Do not resend; recovery will continue on return.");
+          return;
         } catch (recoveryError: unknown) {
+          if (recoveryError instanceof PausedChatError) {
+            clearPendingChatRequest(chatId);
+            setStatusMessage(recoveryError.message);
+            setAccountingResumeFailure(recoveryError.message);
+            window.dispatchEvent(new Event("standalone-accounting-updated"));
+            return;
+          }
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
@@ -2552,6 +2637,10 @@ export function ChatPanel({
             stage: requestStage,
             recoveryError,
           });
+          if (!terminalFailure) {
+            setStatusMessage("Connection interrupted; the original request status remains unverified. Do not resend; Katie will check again when the chat resumes.");
+            return;
+          }
         }
       }
 
