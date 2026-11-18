@@ -385,28 +385,32 @@ export async function runMissionBatch(model=missionModel){
  // coordinator has the matching SQL epoch OPEN and the canonical Vercel alias
  // still actually serves that SHA. This read-only preflight is NOT a
  // substitute for the separately locked SQL release fence at claim time.
+ let observedReleaseGeneration=0;
  if(release){
-  let mission79Epoch:boolean;
+  let mission79Epoch:{generation:number;active:boolean};
   try{
-   const epoch=await rpc<boolean>('project_org_retest_active_release',{
+   const epoch=await rpc<{generation:number;active:boolean}>('project_org_retest_release_epoch',{
     p_project:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',p_release:release,
    });
-   if(typeof epoch!=='boolean')throw Error('Invalid original-mission release epoch response');
+   if(!epoch||!Number.isSafeInteger(epoch.generation)||epoch.generation<0
+    ||typeof epoch.active!=='boolean')
+    throw Error('Invalid original mission79 release epoch response');
    mission79Epoch=epoch;
   }catch{
-   // An unavailable release epoch is not evidence that no protected mission
-   // is eligible. Never allow worker claims through an unknown release fence.
    console.error('[Missions] Original mission79 release epoch unavailable; fail closed');
    return {claimed:0,outcomes:[],releaseFence:'release_epoch_unavailable'};
   }
-  if(mission79Epoch&&!await verifyMission79ActiveProductionSha(release)){
+  observedReleaseGeneration=mission79Epoch.generation;
+  if(mission79Epoch.active&&!await verifyMission79ActiveProductionSha(release)){
    console.warn('[Missions] Original mission79 release epoch is no longer the canonical production alias');
    return {claimed:0,outcomes:[],releaseFence:'canonical_alias_changed'};
   }
  }
  for(let i=0;i<3;i++){
   const claim=release
-   ?await rpc<Claim|null>('claim_mission_work_release',{p_release:release})
+   ?await rpc<Claim|null>('claim_mission_work_release_epoch',{
+    p_release:release,p_epoch:observedReleaseGeneration,
+   })
    :await rpc<Claim|null>('claim_mission_work');
   if(!claim)break;
   claims.push(claim);
