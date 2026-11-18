@@ -402,6 +402,7 @@ create function public.project_org_retest_original_owner_lineage(
        and src.project_evidence->>'providerContinuationWindow'=r.window_id::text
        and src.project_evidence->>'providerContinuationRelease'=r.prior_release_sha
        and src.project_evidence->>'previousMissionId' is null
+       and src.project_evidence->>'providerContinuationDecision'=original_a.continuation_decision_id::text
        and director.kind='project_director' and director.parent_id is null
        and director.management_level='project_director'
        -- Immutable normalized full JSON evidence from the saved original
@@ -409,8 +410,9 @@ create function public.project_org_retest_original_owner_lineage(
        -- verified above against the actual director and owner receipt.
        and md5((src.project_evidence||jsonb_build_object(
         'organizationNodeId','PROJECT_DIRECTOR_ROOT',
-        'providerContinuationRelease','ORIGINAL_CONTINUATION_RELEASE'))::text)
-        ='4e048027f1bb74b4a5ab36add5aa27b4'
+        'providerContinuationRelease','ORIGINAL_CONTINUATION_RELEASE',
+        'providerContinuationDecision','ORIGINAL_OWNER_DECISION'))::text)
+        ='4394ff6c15ac6d3bdc9e12daf6629d8d'
        and md5(src.detail)='8ddada511e8f2bf0651bac4cab805156')
    and (select count(*) from mission_assignments historical_job
       where historical_job.mission_id=r.source_mission_id)=1

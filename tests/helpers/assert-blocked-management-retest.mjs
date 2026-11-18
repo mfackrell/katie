@@ -96,6 +96,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [project,root.id,rat.approved_at])).rows[0].n);
   assert.ok(priorRootFailed<=1,'Synthetic source requires fewer than two prior post-ratification root failures');
   const exemplar=(await first.query("select id from agent_missions where project_id=$1 order by created_at desc,id desc limit 1",[project])).rows[0].id;
+  const actualSavedDecision=(await first.query('select continuation_decision_id from project_provider_execution where project_id=$1',[project])).rows[0].continuation_decision_id;
+  assert.ok(actualSavedDecision,'Fixture must preserve its own authenticated owner continuation decision');
   const firstId=randomUUID();
   for(const [i,id,node] of [
    [0,firstId,priorRootFailed===0?root:game],
@@ -111,7 +113,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
      'created_at',clock_timestamp(),'updated_at',clock_timestamp(),'calls',1,
      'detail',$6::text))).*
     from agent_missions m where m.id=$1`,
-    [exemplar,id,node.id,windowId,priorRelease,detail,i===1?'476981a7-0b19-453a-b9e9-f5a2dcf31248':null]);
+    [exemplar,id,node.id,windowId,priorRelease,detail,i===1?actualSavedDecision:null]);
    // Model the real scheduler's exact temporary active-mission binding so
    // the existing management execution trigger remains ENFORCED in this fixture.
    await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,id]);
