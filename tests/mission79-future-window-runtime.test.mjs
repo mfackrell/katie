@@ -318,3 +318,41 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
  assert.equal(bindCalls,1);
  assert.equal(aliasChecks,2);
 });
+
+
+test('superseded canonical alias cannot enter normal mission79 worker claim',async t=>{
+ const original={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA};
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha});
+ t.after(()=>{for(const [key,value] of Object.entries(original)){
+  if(value===undefined)delete process.env[key];else process.env[key]=value;
+ }});
+ const calls=[];let aliasLive=false,epochLive=true,verifications=0;
+ const load=modules({
+  '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async sha=>{
+   verifications++;assert.equal(sha,releaseSha);return aliasLive;
+  }},
+  '@/lib/missions/store':{rpc:async(name,args)=>{
+   calls.push(name);
+   if(name==='project_org_retest_active_release'){
+    assert.equal(args.p_project,projectId);assert.equal(args.p_release,releaseSha);return epochLive;
+   }
+   if(name==='claim_mission_work_release')return null;
+   return null;
+  }},
+ });
+ const {runMissionBatch}=load('@/lib/missions/worker');
+ const forbidden=async()=>{throw Error('Stale alias must not execute an LLM');};
+ const stopped=await runMissionBatch(forbidden);
+ assert.equal(stopped.claimed,0);assert.equal(stopped.releaseFence,'canonical_alias_changed');
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,0,
+  'A superseded production deployment must not even request the worker lease');
+ aliasLive=true;
+ const normal=await runMissionBatch(forbidden);
+ assert.equal(normal.claimed,0);
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,1,
+  'A canonical READY deployment may reach only the normal SQL claim RPC');
+ assert.equal(verifications,2);
+ epochLive=false;aliasLive=false;
+ await runMissionBatch(forbidden);
+ assert.equal(verifications,2,'No mission79 alias proof is needed after the SQL gate was closed');
+});
