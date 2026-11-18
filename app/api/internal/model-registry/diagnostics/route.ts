@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     .from("model_registry")
     .select("provider_name,model_id,is_active,discovery_status,capability_status,pricing_status,routing_eligibility,reasoning_tier,supports_text,capability_verified_at,pricing_verified_at,failure_reason,source_metadata")
     .order("provider_name").order("model_id").limit(1000)
-    .returns<DiagnosticModel[]>();
+    .returns<DiagnosticModel>();
   if (error) {
     return NextResponse.json({error: "Registry diagnostics unavailable"}, {status: 503});
   }
