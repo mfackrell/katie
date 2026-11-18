@@ -139,6 +139,7 @@ test('exact production release binding is a separate owner action after recorded
   stateHash,stage:'authorized',authorizedAt:'2026-11-18T15:00:00Z'};
  const mod=modules({
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>aliasLive},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    calls.push({name,args});
    if(name==='project_org_retest_future_window_offer')return record;
@@ -247,4 +248,73 @@ test('real first-party owner auth and independently resolved production alias ga
  currentAlias=releaseSha;
  assert.equal((await POST(req())).status,200);assert.equal(writeCalls,1);
  assert.equal(aliasCalls,2);assert.equal(authCalls,3);
+});
+
+test('real bearer and canonical alias jointly gate mission79 release binding',async t=>{
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
+  KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
+  NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY};
+ const oldFetch=globalThis.fetch,oldNow=Date.now;
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,
+  KATIE_OWNER_AUTH_USER_ID:ownerId,NEXT_PUBLIC_SUPABASE_URL:'https://auth.example.test',
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon'});
+ Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
+ t.after(()=>{globalThis.fetch=oldFetch;Date.now=oldNow;for(const [k,v] of Object.entries(env)){
+  if(v===undefined)delete process.env[k];else process.env[k]=v;
+ }});
+ let identity=ownerId,currentAlias=releaseSha,aliasChecks=0,bindCalls=0;
+ const bindHash='f'.repeat(64);
+ globalThis.fetch=async(url,opts)=>{
+  const dest=String(url);
+  if(dest==='https://auth.example.test/auth/v1/user'){
+   assert.match(opts.headers.Authorization,/^Bearer /);
+   return new Response(JSON.stringify({id:identity}),{status:200});
+  }
+  if(dest.startsWith('https://katie-mu.vercel.app/api/version?mission79_verify=')){
+   aliasChecks++;assert.equal(opts.cache,'no-store');
+   return new Response(JSON.stringify({version:currentAlias}),{status:200});
+  }
+  throw Error('Unexpected auth/release identity fetch '+dest);
+ };
+ const saved={projectId,stage:'authorized',status:'blocked',missionStatus:'blocked',
+  sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
+  authorizationId:approvalId,releaseSha,scopeHash,priorCutoff,cutoff:futureCutoff,
+  historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
+  stateHash,authorizedAt:'2026-11-18T15:00:00Z'};
+ const module=modules({
+  '@/lib/missions/store':{rpc:async(name,args)=>{
+   if(name==='project_org_retest_future_window_offer')return saved;
+   if(name==='project_org_retest_claim_release_offer')
+    return {stage:'bind',projectId,releaseSha,missionId,assignmentId,cutoff:futureCutoff,stateHash:bindHash};
+   if(name==='project_org_bind_retest_claim_release'){
+    bindCalls++;
+    assert.deepEqual(JSON.parse(JSON.stringify(args)),{
+     p_owner:ownerId,p_project:projectId,p_release:releaseSha,
+     p_mission:missionId,p_assignment:assignmentId,p_state_hash:bindHash});
+    return {stage:'bound',projectId,releaseSha,missionId,assignmentId,
+     scopeHash,cutoff:futureCutoff,historicalMissions:79,maxMissions:96,
+     tokenAllowance:600000,boundAt:'2026-11-18T16:00:01Z',existing:false};
+   }
+   throw Error('Unexpected binder RPC '+name);
+  }},
+  '@/lib/data/persistence-store':{getMessages:async()=>[]},
+ });
+ const {POST}=module('@/app/api/projects/organization/route');
+ const input={trialAction:'bind_mission79_release',projectId,releaseSha,missionId,assignmentId,stateHash:bindHash};
+ const req=(origin='https://katie.example.test')=>new Request('https://katie.example.test/api/projects/organization',{
+  method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Authorization:'Bearer original-owner-test'},
+  body:JSON.stringify(input)});
+ assert.equal((await POST(req('https://attacker.example.test'))).status,403);
+ assert.equal(aliasChecks,0);assert.equal(bindCalls,0);
+ identity='22222222-2222-4222-8222-222222222222';
+ assert.equal((await POST(req())).status,403);
+ assert.equal(aliasChecks,0);assert.equal(bindCalls,0);
+ identity=ownerId;currentAlias='c'.repeat(40);
+ assert.equal((await POST(req())).status,409);
+ assert.equal(bindCalls,0);
+ currentAlias=releaseSha;
+ assert.equal((await POST(req())).status,200);
+ assert.equal(bindCalls,1);
+ assert.equal(aliasChecks,2);
 });
