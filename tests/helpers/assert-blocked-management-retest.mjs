@@ -234,14 +234,18 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const authorizationId=randomUUID();
   const explicitFutureCutoff=new Date(Date.now()+4*3600000).toISOString();
   assert.ok(Date.parse(explicitFutureCutoff)>Date.parse(futureOffer.priorCutoff));
-  const approveArgs=[owner,project,executionRelease,authorizationId,explicitFutureCutoff,futureOffer.stateHash];
+  const approveArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash];
   const approve=()=>first.query(
-   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6) r',approveArgs);
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8) r',approveArgs);
   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
    [randomUUID(),project,executionRelease]),/owner|auth|original/i);
   await rejected(()=>first.query(
-   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6)',
-   [...approveArgs.slice(0,5),'f'.repeat(64)]),/state|owner|fresh|authorization/i);
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...approveArgs.slice(0,7),'f'.repeat(64)]),/state|owner|fresh|authorization/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8)',
+   [owner,project,executionRelease,randomUUID(),originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash]),
+   /mission|state|owner|original|exact/i);
   await first.query('set role anon');await rejected(approve,/permission denied/i);
   await first.query('set role service_role');
   const ownerWindow=(await approve()).rows[0].r;
@@ -253,6 +257,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [project])).rows[0].max_missions,96);
   assert.equal((await first.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',
    [project])).rows[0].n,1);
+  assert.equal((await first.query(
+   'select organization_hash from project_retest_future_window_receipts where project_id=$1',[project]
+  )).rows[0].organization_hash,(await first.query('select project_org_scope_ratification_state($1) h',[project])).rows[0].h,
+   'New owner window must pin the immutable post-renewal organizational and QA contract');
   assert.equal((await first.query('select project_provider_continued($1) a',[project])).rows[0].a,true);
   assert.equal((await first.query('select project_provider_continued_assignment($1) a',[originalJob.id])).rows[0].a,true);
   const recordedWindow=(await first.query(
@@ -314,6 +322,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [scheduled.missionId])).rows[0].project_evidence.providerContinuationRelease,priorRelease,
    'Mission 79 must retain its immutable original source release');
 
+  const oldContinuationClaim=await isolatedNegativeClaim(priorRelease);
+  assert.notEqual(oldContinuationClaim?.job?.id,originalJob.id,
+   'Historical continuation release must never reclaim owner-renewed mission79');
   const staleOther=await isolatedNegativeClaim(unboundRelease);
   assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
   const claimed=(await first.query('select claim_mission_work_release($1) r',
