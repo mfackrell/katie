@@ -350,6 +350,8 @@ begin
   or p_release is null or p_release !~ '^[a-f0-9]{40}$'
   or r.project_id is null or r.owner_id is distinct from p_owner
   or r.source_mission_id is distinct from '911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid
+  or r.window_id is distinct from '7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
+  or r.cutoff is distinct from '2026-11-18T14:00:00Z'::timestamptz
   or not exists(select 1 from project_blocked_owner_windows bw where bw.project_id=p.id
     and bw.authorization_id=r.window_id and bw.cutoff=r.cutoff)
   or r.historical_missions<>78
@@ -478,6 +480,9 @@ begin
  if project_org_hierarchy_recovery_state(p.id) is distinct from p_state_hash
  then raise exception 'Original owner approval state changed while acquiring organization locks';end if;
  select * into r from project_blocked_management_retest_receipts where project_id=p.id;
+ if r.window_id is distinct from '7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
+  or r.cutoff is distinct from '2026-11-18T14:00:00Z'::timestamptz
+ then raise exception 'Original immutable owner retest window or cutoff changed';end if;
  stamp:=clock_timestamp();
  insert into project_execution_windows(id,project_id,owner_id,release_sha,
    decision_id,prior_cutoff,cutoff,prior_release_sha)
