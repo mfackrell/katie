@@ -1874,7 +1874,7 @@ async function executeChat(request: NextRequest) {
         name,
         persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
           ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
-          ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
+          ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction, "Answer the user's actual request directly and substantively wherever permitted.\nDo not replace the requested objective with unsolicited counseling, moral commentary, unrelated recommendations, or speculation about underlying motives.\nKeep capability, provider, and safety constraints binding. If the exact request cannot be fulfilled, state the limitation accurately and briefly; do not promise an answer or experience that cannot be delivered.\nAvoid asking again for details or confirmations already supplied. Maintain relevant context, continuity, and established expectations."] : []),
           ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
         summary,
         history: historyForProvider,

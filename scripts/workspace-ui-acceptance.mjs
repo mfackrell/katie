@@ -355,9 +355,12 @@ try {
   await page.getByText(item.result, { exact: true }).waitFor();
   await page.getByRole("link", { name: "Open original conversation" }).click();
   await composer.waitFor();
-  assert.equal(
-    await composer.inputValue(),
-    "Keep this draft without executing.",
+  // Draft state hydrates asynchronously after navigation; assert the restored
+  // value rather than sampling the freshly mounted textarea too early.
+  await page.waitForFunction(
+    () =>
+      document.querySelector("textarea")?.value ===
+      "Keep this draft without executing.",
   );
   await page.reload();
   await composer.waitFor();

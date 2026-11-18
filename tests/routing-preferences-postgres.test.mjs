@@ -64,6 +64,17 @@ test('native preference migration denies browser roles and enforces durable scop
     await client.query('update chats set actor_id=$1 where id=$2',[actor,chat]);
     await client.query(readFileSync('supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql','utf8'));
     await client.query(readFileSync('supabase/migrations/20261117150000_routing_observations.sql','utf8'));
+    // Minimal production-equivalent existing feedback sources in the native test.
+    await client.query(`create table messages(
+      id uuid primary key, actor_id uuid, chat_id uuid, role text, content text, created_at timestamptz default now());
+      create table chat_requests(
+        request_id text primary key, actor_id text, chat_id text, assistant_message_id text,
+        assistant_model text, status text, review_audit jsonb, created_at timestamptz default now(),
+        updated_at timestamptz default now());
+      create table message_reactions(
+        message_id uuid primary key, actor_id uuid, chat_id uuid, reaction text,
+        updated_at timestamptz default now());`);
+    await client.query(readFileSync('supabase/migrations/20261118163000_routing_quality_evidence.sql','utf8'));
     await client.query('insert into standalone_owner_bindings(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
     const compiled = createRequire(new URL('../.test-dist/routing-postgres.cjs', import.meta.url));
     const {auditRoutingDelivery} = compiled('./lib/router/routing-delivery-audit');
@@ -108,6 +119,27 @@ test('native preference migration denies browser roles and enforces durable scop
     await receipt('relevant','chat:1','chat',{outputTokens:120,cachedInputTokens:8},'50');
     await receipt('relevant','helper:0','routing',{outputTokens:5,cachedInputTokens:0},'23');
     await receipt('current','helper:0','routing',{outputTokens:5,cachedInputTokens:0},'17');
+    // Reuse actual persisted messages, reactions and review audits; no new
+    // subjective score or model call is needed to attribute quality evidence.
+    const userSource = '55555555-5555-4555-8555-555555555555';
+    const assistant = '66666666-6666-4666-8666-666666666666';
+    const userCorrection = '77777777-7777-4777-8777-777777777777';
+    await client.query(`insert into messages(id,actor_id,chat_id,role,content,created_at)
+      values ($1,$2,$3,'user','Rewrite my email',now()-interval '6 minutes'),
+       ($4,$2,$3,'assistant','{"text":"Here is the revision"}',now()-interval '5 minutes'),
+       ($5,$2,$3,'user','You keep repeating the same thing',now()-interval '4 minutes')`,
+       [userSource,actor,chat,assistant,userCorrection]);
+    await client.query(`insert into chat_requests(request_id,actor_id,chat_id,assistant_message_id,assistant_model,status,review_audit)
+      values ('relevant',$1,$2,$3,'gpt-4o-mini','completed','{"status":"revised"}')`,[actor,chat,assistant]);
+    await client.query(`insert into message_reactions(message_id,actor_id,chat_id,reaction)
+      values ($1,$2,$3,'dislike')`,[assistant,actor,chat]);
+    const quality = (await client.query(rpc,args)).rows[0].evidence.quality_feedback;
+    assert.ok(quality.some(event => event.source==='message_reaction' && event.outcome==='negative'
+      && event.model==='gpt-4o-mini' && event.intent==='rewrite'));
+    assert.ok(quality.some(event => event.source==='adjacent_user_feedback' && event.dimension==='continuity'
+      && event.outcome==='negative'));
+    assert.ok(quality.some(event => event.source==='internal_review' && event.outcome==='ambiguous'));
+    assert.ok(quality.every(event=>event.provider==='openai' && event.model==='gpt-4o-mini'));
     await client.query('set role service_role');
     const database = mock.method(admin,'getSupabaseAdminClient',() => ({rpc: async (name, input) => {
       assert.equal(name,'standalone_routing_observations');
@@ -118,7 +150,10 @@ test('native preference migration denies browser roles and enforces durable scop
         () => resolveRoutingEvidence([buildCandidateMetadata('openai','gpt-4o-mini','rewrite')],
           [new OpenAiProvider('test-only')],{name:'Katie',persona:'Actor voice',summary:'',history:[],user:'Rewrite my next email'},'rewrite'));
       const candidate = result.candidates['openai:gpt-4o-mini'];
-      assert.deepEqual(candidate.quality,{status:'unknown',observations:[]});
+      assert.equal(candidate.quality.observations.length,0,'unverified delivery remains unverified');
+      assert.equal(candidate.quality.feedback?.negative,2,'direct dislike and explicit correction are retained');
+      assert.equal(candidate.quality.feedback?.ambiguous,1,'internal review revision is not a user quality verdict');
+      assert.match(candidate.quality.status,/limited, model-attributed task feedback/);
       assert.equal(candidate.economics.expected_output_tokens,100);
       assert.equal(candidate.economics.expected_cache_hit_tokens,10);
       assert.equal(candidate.economics.expected_attempts,2);

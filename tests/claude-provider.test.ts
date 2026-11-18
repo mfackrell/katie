@@ -385,7 +385,7 @@ test("actual Anthropic system payload has no extra personal conversation instruc
     assert.doesNotMatch(systems[1], /NEXT RESPONSE:|Engage naturally rather than simply acknowledging/);
     assert.deepEqual(wirePayloads[0].messages, wirePayloads[1].messages);
     const route = readFileSync("app/api/chat/route.ts", "utf8");
-    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction, "Answer the user's actual request directly/);
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -430,7 +430,7 @@ test("outbound provider system payload follows final personal response purpose, 
     assert.ok(sentSystems.every(system => system.includes("Actor instructions stay unchanged.")));
     const route = readFileSync("app/api/chat/route.ts", "utf8");
     assert.match(route, /responsePurpose: responsePurposeHint, intent: resolvedRequestIntent/);
-    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction, "Answer the user's actual request directly/);
   } finally {
     globalThis.fetch = priorFetch;
   }
@@ -554,7 +554,7 @@ test("Nov 3 nine-turn production replay uses actor guidance without extra conver
     assert.match(route, /const sourceLinkedPendingWork = Boolean/);
     assert.match(route, /progress: reviewTaskProgress, responsePurpose: "deliverable"/);
     assert.match(route, /hasPendingDeliverable: sourceLinkedPendingWork \|\| Boolean\(pendingReviewClarification\)/);
-    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction\] : \[\]\)/);
+    assert.match(route, /\.\.\.\(!forReview \? \[resumptionContext, responsePolicy\.generationInstruction, "Answer the user's actual request directly/);
   } finally {
     globalThis.fetch = priorFetch;
   }
