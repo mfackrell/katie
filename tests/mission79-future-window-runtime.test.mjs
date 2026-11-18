@@ -326,7 +326,7 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  t.after(()=>{for(const [key,value] of Object.entries(original)){
   if(value===undefined)delete process.env[key];else process.env[key]=value;
  }});
- const calls=[];let aliasLive=false,epochLive=true,verifications=0;
+ const calls=[];let aliasLive=false,epochLive=true,epochUnavailable=false,verifications=0;
  const load=modules({
   '@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async sha=>{
    verifications++;assert.equal(sha,releaseSha);return aliasLive;
@@ -334,7 +334,9 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
   '@/lib/missions/store':{rpc:async(name,args)=>{
    calls.push(name);
    if(name==='project_org_retest_active_release'){
-    assert.equal(args.p_project,projectId);assert.equal(args.p_release,releaseSha);return epochLive;
+    assert.equal(args.p_project,projectId);assert.equal(args.p_release,releaseSha);
+     if(epochUnavailable)throw Error('database epoch lookup unavailable');
+     return epochLive;
    }
    if(name==='claim_mission_work_release')return null;
    return null;
@@ -363,4 +365,16 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  epochLive=false;aliasLive=false;
  await runMissionBatch(forbidden);
  assert.equal(verifications,2,'No mission79 alias proof is needed after the SQL gate was closed');
+ // A failed epoch lookup is not evidence of a closed release. Deny claims.
+ const previousClaims=calls.filter(x=>x==='claim_mission_work_release').length;
+ epochUnavailable=true;
+ const denied=await runMissionBatch(forbidden);
+ assert.equal(denied.claimed,0);
+ assert.equal(denied.releaseFence,'release_epoch_unavailable');
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,previousClaims);
+ // An authentic negative epoch still allows unrelated ordinary claim routing.
+ epochUnavailable=false;epochLive=false;
+ const ordinary=await runMissionBatch(forbidden);
+ assert.equal(ordinary.claimed,0);
+ assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,previousClaims+1);
 });
