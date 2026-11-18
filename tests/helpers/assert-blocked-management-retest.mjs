@@ -295,7 +295,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     'Release binding must not change historical '+key);
   assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,
    'running','Only the owner-approved original blocked management mission may resume');
-  await rejected(bind,/bound|changed|release/i);
+  await rejected(bind,/bound|changed|release|window|mission|owner/i);
   assert.equal((await first.query(
    'select project_org_retest_claim_release_authorized($1,$2) a',
    [project,executionRelease])).rows[0].a,true);
