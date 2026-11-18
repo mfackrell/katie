@@ -306,6 +306,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     const sources={
      missions:"select md5(coalesce(jsonb_agg(case when m.id=$2::uuid then to_jsonb(m)-'deadline'-'status'-'updated_at' else to_jsonb(m) end order by m.id)::text,'[]')) h from agent_missions m where m.project_id=$1",
      calls:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.id)::text,'[]')) h from mission_calls c join mission_assignments j on j.id=c.job_id join agent_missions m on m.id=j.mission_id where m.project_id=$1",
+     providerRequests:"select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.id)::text,'[]')) h from project_provider_requests r where r.project_id=$1",
+     providerDispatches:"select md5(coalesce(jsonb_agg(to_jsonb(d) order by d.task_id)::text,'[]')) h from project_provider_dispatches d join mission_assignments j on j.id=d.task_id join agent_missions m on m.id=j.mission_id where m.project_id=$1",
      assignments:"select md5(coalesce(jsonb_agg(to_jsonb(j) order by j.id)::text,'[]')) h from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1",
      originalRetestReceipt:"select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.project_id)::text,'[]')) h from project_blocked_management_retest_receipts r where r.project_id=$1",
      originalContracts:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.node_id)::text,'[]')) h from project_organization_contract_changes c where c.project_id=$1 and c.window_id=$2::uuid",
