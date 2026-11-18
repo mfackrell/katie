@@ -53,9 +53,14 @@ jobs:
           KATIE_TEST_PG_TCP: "1"
           CI: "1"
         run: |
+          set +e
           set -o pipefail
           node --test tests/blocked-owner-committed-concurrency.test.mjs 2>&1 | tee mission79-native-evidence.log
+          native_status=${PIPESTATUS[0]}
           node --test tests/mission79-future-window-runtime.test.mjs 2>&1 | tee mission79-owner-auth-evidence.log
+          owner_status=${PIPESTATUS[0]}
+          echo "Independent native status: $native_status; owner-auth status: $owner_status"
+          test "$native_status" -eq 0 && test "$owner_status" -eq 0
       - name: Pin reviewed source
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
