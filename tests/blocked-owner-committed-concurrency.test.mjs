@@ -15,6 +15,7 @@ assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The nativ
 assert.match(bindingSql,/create table public.project_retest_future_window_receipts/,'A distinct immutable owner window must exist');
 assert.match(bindingSql,/create function public.project_org_authorize_retest_future_window/,'Only the owner-confirmed window writer may renew time');
 assert.match(bindingSql,/project_org_retest_renewed_assignment/,'Source-bound inherited mission79 membership must be checked');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/bound\\|changed\\|release\\|window\\|mission\\|owner/,'Replay must remain fail-closed after the one-time binding receipt');
 
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/rollback to savepoint negative_release_claim/,'Negative claim probes must not consume fixture-wide worker capacity');
 assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/mission_assignments set created_at='2000-01-01T00:00:00Z'/,'Native proof must prioritize only the disposable original mission79 assignment');
