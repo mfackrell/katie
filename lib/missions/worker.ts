@@ -1,3 +1,4 @@
+import {verifyMission79ActiveProductionSha} from '@/lib/projects/mission79-active-release';
 import {executeManagementClaim,ManagementCommandRejection,directorRecoveryRelease} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
@@ -376,6 +377,19 @@ export async function runMissionBatch(model=missionModel){
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  const release=process.env.VERCEL_ENV==='production'?process.env.VERCEL_GIT_COMMIT_SHA:null;
+ // Mission79's special release is valid only while the privileged release
+ // coordinator has the matching SQL epoch OPEN and the canonical Vercel alias
+ // still actually serves that SHA. This read-only preflight is NOT a
+ // substitute for the separately locked SQL release fence at claim time.
+ if(release){
+  const mission79Epoch=await rpc<boolean>('project_org_retest_active_release',{
+   p_project:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',p_release:release,
+  }).catch(()=>false);
+  if(mission79Epoch&&!await verifyMission79ActiveProductionSha(release)){
+   console.warn('[Missions] Original mission79 release epoch is no longer the canonical production alias');
+   return {claimed:0,outcomes:[],releaseFence:'canonical_alias_changed'};
+  }
+ }
  for(let i=0;i<3;i++){
   const claim=release
    ?await rpc<Claim|null>('claim_mission_work_release',{p_release:release})
