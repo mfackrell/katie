@@ -1103,8 +1103,7 @@ begin
   and j79.attempts>0
   and ((j79.status='running' and j79.lease_until<=clock_timestamp())
        or (j79.status='queued' and j79.lease is null and j79.lease_until is null))
-  and not exists(select 1 from project_provider_requests pending
-    where pending.assignment_id=j79.id and pending.resolved_at is null)
+  and not public.project_provider_request_pending(m79.project_id)
  returning j79.* into j;
  if found then
   update agent_missions set status='blocked',
