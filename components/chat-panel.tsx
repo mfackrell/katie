@@ -2556,10 +2556,20 @@ export function ChatPanel({
             "The mobile connection to Katie was interrupted. Waiting for the server-side response to finish…",
           );
 
+          let savedAnswerPreviewed = false;
           const recoveredMessages = await pollForPersistedAssistant(
             chatId,
             pending,
             MOBILE_RECOVERY_WINDOW_MS,
+            (saved) => {
+              savedAnswerPreviewed = true;
+              answerCommitted = true;
+              setMessages(saved);
+              setMessagesByChatId(cache => ({ ...cache, [chatId]: saved }));
+              setStreamingAnswer("");
+              setAnswerDisplayed(true);
+              setStatusMessage("Saved reply restored; finalizing the original workflow…");
+            },
           );
 
           if (recoveredMessages) {
@@ -2580,11 +2590,24 @@ export function ChatPanel({
               });
             }
             setStatusMessage(
-              "The live mobile stream disconnected, but Katie finished on the server. The saved response was restored.",
+              "The live connection disconnected, but Katie finished on the server. The saved response was restored.",
             );
             return;
           }
+          // The polling window is not a terminal server outcome. Retain the
+          // request ID and reconcile it when the chat next becomes active.
+          setStatusMessage(savedAnswerPreviewed
+            ? "Saved reply restored. Workflow settlement is still pending; do not resend."
+            : "Connection interrupted. Katie's saved request is not yet verified complete. Do not resend; recovery will continue on return.");
+          return;
         } catch (recoveryError: unknown) {
+          if (recoveryError instanceof PausedChatError) {
+            clearPendingChatRequest(chatId);
+            setStatusMessage(recoveryError.message);
+            setAccountingResumeFailure(recoveryError.message);
+            window.dispatchEvent(new Event("standalone-accounting-updated"));
+            return;
+          }
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
@@ -2596,6 +2619,10 @@ export function ChatPanel({
             stage: requestStage,
             recoveryError,
           });
+          if (!terminalFailure) {
+            setStatusMessage("Connection interrupted; the original request status remains unverified. Do not resend; Katie will check again when the chat resumes.");
+            return;
+          }
         }
       }
 
