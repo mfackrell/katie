@@ -342,6 +342,14 @@ test('superseded canonical alias cannot enter normal mission79 worker claim',asy
  });
  const {runMissionBatch}=load('@/lib/missions/worker');
  const forbidden=async()=>{throw Error('Stale alias must not execute an LLM');};
+ const savedSha=process.env.VERCEL_GIT_COMMIT_SHA;
+ delete process.env.VERCEL_GIT_COMMIT_SHA;
+ const missing=await runMissionBatch(forbidden);
+ assert.equal(missing.claimed,0);
+ assert.equal(missing.releaseFence,'missing_production_release');
+ assert.equal(calls.filter(x=>x==='claim_mission_work').length,0,
+  'Missing production SHA must never fall back to unrestricted worker claiming');
+ process.env.VERCEL_GIT_COMMIT_SHA=savedSha;
  const stopped=await runMissionBatch(forbidden);
  assert.equal(stopped.claimed,0);assert.equal(stopped.releaseFence,'canonical_alias_changed');
  assert.equal(calls.filter(x=>x==='claim_mission_work_release').length,0,
