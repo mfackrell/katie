@@ -116,7 +116,7 @@ test("trusted official pricing survives refresh only while both rates agree and 
     pricing_output_per_1m:14,
     pricing_verified_at:now,
     source_metadata:{pricing_source:"pricing_catalog"}
-  } as Parameters<typeof retainTrustedPricing>[0];
+  } as unknown as Parameters<typeof retainTrustedPricing>[0];
   const prior={
     normalized_model_id:"gpt-5.3-codex",
     pricing_status:"verified",
