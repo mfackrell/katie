@@ -25,6 +25,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000', infrastructureTotal = '0';
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
   let workPage={next:null},pagedApprovals=false;
+  let lateRoutingMode=false,lateRoutingStatusChecks=0;
   let page;let holdUsage=false;const heldUsage=[];let usageRequests=0,usageInFlight=0,maxUsageInFlight=0;
   const usageRequestIds=new Set();
   try {
@@ -117,8 +118,19 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
           return reply({ attemptId: original.id, requestId: original.requestId, state: body.action === 'approve_once' ? 'reserved' : body.action === 'cancel' ? 'cancelled' : 'paused', ...(body.action === 'cancel' ? { cancellationRequested: true, message: 'Attempt cancelled before dispatch.' } : {}) });
         }
       }
+      if (url.pathname === '/api/chat/status' && lateRoutingMode) {
+        lateRoutingStatusChecks++;
+        return reply({status:'failed',workflowStatus:'paused',routingRecoveryReady:lateRoutingStatusChecks>=2});
+      }
       if (url.pathname === '/api/chat') {
         const requestId = request.headers()['x-request-id']; resumes.push({ body, requestId });
+        if (lateRoutingMode) {
+          if (body?.standaloneResume === true) {
+            savedMessages=[{id:'late-routing-answer',role:'assistant',content:'Recovered late routing reply',createdAt:new Date().toISOString(),provider:'openai',model:'gpt-5-mini'}];
+            return route.fulfill({status:200,contentType:'application/x-ndjson',body:JSON.stringify({type:'content',messageId:'late-routing-answer',text:'Recovered late routing reply',provider:'openai',model:'gpt-5-mini'})+'\n'});
+          }
+          return reply({code:'standalone_outcome_unknown',error:'routing-rerank:openai:gpt-5-mini timed out after 17000ms; billing outcome unknown'},402);
+        }
         running = running.map(attempt => attempt.requestId === requestId && attempt.state === 'reserved' ? { ...attempt, state: 'dispatched' } : attempt);
         if (resumeMode === 'failed') return reply({ error: 'Saved attempt failed: exact fixture cause' }, 500);
         if (resumeMode === 'completed') { const qwenPoll=running.some(attempt=>attempt.requestId===requestId && attempt.pollableRunpod); if (qwenPoll) {running=[]; infrastructureTotal='20000';} savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; const stages=qwenPoll?['Analyzing image with Qwen…','Qwen image analysis queued…','Qwen image analysis complete','Using saved Qwen observation']:[]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: [...stages.map(imageObservation=>({type:'metadata',imageObservation})),{ type: 'content', messageId: savedMessages[0].id, text: savedMessages[0].content }].map(chunk=>JSON.stringify(chunk)).join('\n') + '\n' }); }
@@ -481,6 +493,20 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByText(/attempt-older-paused/).first().waitFor();
     assert.equal(await usage.getByRole('button',{name:'Newest work',exact:true}).count(),1,'all-paused pages retain navigation');
     assert.equal(await page.getByText('Continue the original development task', { exact: true }).count(), 0, 'ordinary conversation has no unrelated lifecycle proposal');
+    // A real Chromium HTTP 402 must recover from the saved original receipt.
+    // No additional provider inference and no new user-message POST.
+    lateRoutingMode=true;lateRoutingStatusChecks=0;
+    const beforeLate=resumes.length;
+    await composer.fill('A saved routing receipt must recover without resending my message');
+    await composer.press('Enter');
+    await page.getByText('Recovered late routing reply',{exact:true}).waitFor({timeout:30000});
+    assert.ok(lateRoutingStatusChecks>=2,'browser waits until saved settlement is confirmed');
+    const lateCalls=resumes.slice(beforeLate);
+    assert.equal(lateCalls.length,2,'one user POST and one saved workflow resume');
+    assert.equal(lateCalls[0].requestId,lateCalls[1].requestId,'resume retains the exact original request ID');
+    assert.equal(lateCalls[1].body?.standaloneResume,true);
+    assert.equal(lateCalls[1].body?.message,undefined,'resume never retransmits the user message');
+    assert.equal(lateCalls[0].body?.standaloneResume,undefined);
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {

@@ -5,6 +5,7 @@ import { RoutingPreferenceControls, useRoutingPreferences } from "@/components/r
 import { createPortal } from "react-dom";
 import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
+import { recoverLateRoutingResponse } from "@/lib/chat/late-routing-recovery";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
 import { ChatComposerInput } from "@/components/chat-composer-input";
@@ -1939,12 +1940,55 @@ export function ChatPanel({
         body: requestBody,
       });
 
-      if (response.ok) {
+      let effectiveResponse = response;
+      // The helper may finish after Katie's routing deadline. A 402 is not
+      // permission to send the user's text or another model request again.
+      // Only resume the immutable original workflow after the server verifies
+      // that all previously billed routing checkpoints are settled.
+      if (response.status === 402) {
+        const failure = await response.clone().json().catch(() => null) as {code?:string;error?:string}|null;
+        if (failure?.code === "standalone_outcome_unknown" && failure.error?.includes("routing-rerank:")) {
+          setStatusMessage("Routing timed out; checking the original provider receipt before safely resuming…");
+          const recovered = await recoverLateRoutingResponse({
+            cancelled: () => abortController.signal.aborted || composerChatRef.current !== chatId,
+            wait: () => waitForRecoveryPoll(1_200),
+            readStatus: async () => {
+              const status = await fetch(
+                `/api/chat/status?chatId=${encodeURIComponent(chatId)}&requestId=${encodeURIComponent(clientRequestId)}`,
+                {cache:"no-store",signal:abortController.signal,
+                  headers:ownerBearer?{Authorization:`Bearer ${ownerBearer}`}:{}},
+              );
+              return status.ok ? await status.json() as {workflowStatus?:string|null;routingRecoveryReady?:boolean;status?:string} : null;
+            },
+            resumeOriginal: async () => {
+              setStatusMessage("Original routing response confirmed. Continuing the saved conversation…");
+              return fetch("/api/chat",{
+                method:"POST",signal:abortController.signal,
+                headers:{"Content-Type":"application/json","x-request-id":clientRequestId,
+                  ...(ownerBearer?{Authorization:`Bearer ${ownerBearer}`}:{})},
+                body:JSON.stringify({actorId,chatId,standaloneResume:true}),
+              });
+            },
+          });
+          if (recovered) {
+            effectiveResponse = recovered;
+          } else {
+            // Keep the original pending receipt for later status/recovery. Do
+            // not fabricate a failed assistant message or invite a duplicate send.
+            setIsRoutingSelectionInFlight(false);
+            setStatusMessage("The original request is saved but its routing receipt is not yet recoverable. Do not resend it; check Status / Usage.");
+            window.dispatchEvent(new Event("standalone-accounting-updated"));
+            return;
+          }
+        }
+      }
+
+      if (effectiveResponse.ok) {
         // Only discard resumable receipts after the server accepts the chat.
         acknowledgeVideoUploads(videosToUpload);
       }
 
-      if (response.status === 202) {
+      if (effectiveResponse.status === 202) {
         setStatusMessage(
           "Katie is already processing this request. Reconnecting to the existing server-side job…",
         );
@@ -1973,9 +2017,9 @@ export function ChatPanel({
         return;
       }
 
-      if (!response.ok) {
-        const responseText = await response.text();
-        let serverMessage = responseText || `Request failed with status ${response.status}.`;
+      if (!effectiveResponse.ok) {
+        const responseText = await effectiveResponse.text();
+        let serverMessage = responseText || `Request failed with status ${effectiveResponse.status}.`;
 
         try {
           const parsed = JSON.parse(responseText) as { error?: string; code?: string };
@@ -1990,17 +2034,17 @@ export function ChatPanel({
           }
           serverMessage = parsed.error ?? serverMessage;
         } catch {
-          // Vercel can reject oversized requests before Next.js executes, returning a non-JSON 413 response.
+          // Vercel can reject oversized requests before Next.js executes, returning a non-JSON 413 effectiveResponse.
         }
 
-        if (response.status === 413) {
+        if (effectiveResponse.status === 413) {
           serverMessage = "The image upload is still too large for the server. Katie compressed it, but the request exceeded the upload limit.";
         }
 
         const httpCause =
-          response.status === 413
+          effectiveResponse.status === 413
             ? serverMessage
-            : `Server request failed (HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}): ${serverMessage}`;
+            : `Server request failed (HTTP ${effectiveResponse.status}${effectiveResponse.statusText ? ` ${effectiveResponse.statusText}` : ""}): ${serverMessage}`;
 
         const failureMessage: Message = {
           id: crypto.randomUUID(),
@@ -2024,12 +2068,12 @@ export function ChatPanel({
         return;
       }
 
-      if (!response.body) {
+      if (!effectiveResponse.body) {
         throw new Error("Missing response stream from /api/chat.");
       }
 
       requestStage = "reading response stream";
-      const reader = response.body.getReader();
+      const reader = effectiveResponse.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
       let textContent = "";
