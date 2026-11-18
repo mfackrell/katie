@@ -402,7 +402,113 @@ begin
  if p_project is distinct from 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
   or p.id is null or a.owner_id is distinct from p_owner
   or p_owner is null or not standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
-  or p_release is null or p_release !~ '^[a-f0-9]{40}$'
+  or p_release is null or p_release !~ '^[a-f0-9]{40}
+  or r.project_id is null or r.owner_id is distinct from p_owner
+  or r.source_mission_id is distinct from '911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid
+  or r.window_id is distinct from '7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
+  or r.cutoff is distinct from '2026-11-18T14:00:00Z'::timestamptz
+  or not exists(select 1 from project_blocked_owner_windows bw where bw.project_id=p.id
+    and bw.authorization_id=r.window_id and bw.cutoff=r.cutoff)
+  or not project_org_retest_original_owner_lineage(p.id)
+  or r.historical_missions<>78
+  or r.scope_hash is distinct from '4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6'
+  or r.prior_release_sha is null or r.prior_release_sha !~ '^[a-f0-9]{40}$'
+  or r.release_sha is null or r.release_sha !~ '^[a-f0-9]{40}$'
+  or r.release_sha is not distinct from r.prior_release_sha
+  -- This recovery is exclusively after the actual original owner cutoff.
+  -- No unexpired owner window may be silently superseded.
+  or clock_timestamp()<='2026-11-18T14:00:00Z'::timestamptz
+ then raise exception 'Original owner retest and project identity not eligible for window renewal';end if;
+ select * into m from agent_missions where id=p.active_mission_id and project_id=p.id;
+ select * into j from mission_assignments where mission_id=m.id and role='work';
+ select count(*) into used from agent_missions where project_id=p.id;
+ select * into q from project_retest_future_window_receipts where project_id=p.id;
+ select * into b from project_retest_claim_release_receipts where project_id=p.id;
+ if p.organization_version<>1 or not project_provider_mode(p.id) or p.phase<>'development'
+  or p.status not in ('blocked','running') or p.lease is not null or p.lease_until is not null
+  or p.approved_hash is distinct from r.scope_hash or p.approval_hash is distinct from p.approved_hash
+  or p.max_missions<>96 or p.token_allowance<>600000 or used<>79
+  or (select count(*) from project_work_packages w where w.project_id=p.id)<>0
+  or (select count(*) from project_organization_nodes n where n.project_id=p.id and n.status='active')<>13
+  or a.objective_hash is distinct from encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex')
+  or a.continuation_release_sha is distinct from r.prior_release_sha
+  or a.approved_scope is distinct from p.approved_hash
+  or m.id is distinct from 'b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  or j.id is distinct from '85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+  or m.id is null or m.project_kind<>'management' or m.calls<>0 or m.routing_calls<>0
+  or m.created_at<r.authorized_at
+  or m.id is distinct from (select mm.id from agent_missions mm where mm.project_id=p.id
+    order by mm.created_at desc,mm.id desc limit 1)
+  or not exists(select 1 from project_organization_nodes root
+    where root.project_id=p.id and root.id::text=m.project_evidence->>'organizationNodeId'
+    and root.kind='project_director' and root.parent_id is null
+    and root.status='active' and root.agent_id=j.agent_id
+    and j.payload->>'organizationNodeId'=root.id::text)
+  or exists(with recursive qa as
+    (select id from project_organization_nodes where project_id=p.id
+     and area in ('quality_assurance','independent_qa')
+     union all select child.id from project_organization_nodes child join qa on child.parent_id=qa.id)
+    select 1 from qa join project_organization_nodes n on n.id=qa.id
+     where 'development'=any(n.tools))
+  or m.project_evidence->>'organizationNodeId' is distinct from
+     (select id::text from project_organization_nodes n where n.project_id=p.id and n.kind='project_director' and n.parent_id is null)
+  or m.project_evidence->>'providerContinuationRelease' is distinct from r.prior_release_sha
+  or m.project_evidence->>'providerContinuationWindow' is distinct from r.window_id::text
+  or m.project_evidence->>'providerContinuationDecision' is distinct from a.continuation_decision_id::text
+  or m.project_evidence->>'previousMissionId' is not null
+  or j.id is null or j.status<>'queued' or j.attempts<>0
+  or j.lease is not null or j.lease_until is not null
+  or (select count(*) from mission_assignments jj where jj.mission_id=m.id)<>1
+  or project_provider_request_pending(p.id)
+ then raise exception 'Original 79th management mission or immutable authority changed';end if;
+ if q.project_id is not null then
+  if q.owner_id is distinct from p_owner or q.release_sha is distinct from p_release
+   or q.mission_id is distinct from m.id or q.assignment_id is distinct from j.id
+   or q.prior_window_id is distinct from r.window_id
+   or q.scope_hash is distinct from p.approved_hash
+   or q.prior_cutoff is distinct from r.cutoff
+   or q.original_continuation_release_sha is distinct from r.prior_release_sha
+   or q.original_retest_release_sha is distinct from r.release_sha
+   or a.window_id is distinct from q.authorization_id
+   or a.deadline is distinct from q.cutoff or p.deadline is distinct from q.cutoff
+   or m.deadline is distinct from q.cutoff
+   or not project_org_retest_renewed_assignment(m.id,j.id)
+  then raise exception 'Recorded future window state or production SHA changed';end if;
+  st:=case when b.project_id is not null then 'bound' else 'authorized' end;
+  if st='bound' and (b.bound_release_sha is distinct from q.release_sha or p.status<>'running' or m.status<>'running')
+   then raise exception 'Already-bound exact release changed';end if;
+  if st='authorized' and (p.status<>'blocked' or m.status<>'blocked')
+   then raise exception 'Recorded window may not auto-restart management';end if;
+  return jsonb_build_object('projectId',p.id,'stage',st,'releaseSha',p_release,
+   'status',p.status,'missionStatus',m.status,'sourceMissionId',r.source_mission_id,
+   'missionId',m.id,'assignmentId',j.id,'priorWindowId',r.window_id,
+   'authorizationId',q.authorization_id,'scopeHash',p.approved_hash,
+   'priorCutoff',q.prior_cutoff,'cutoff',q.cutoff,
+   'historicalMissions',used,'maxMissions',96,'tokenAllowance',600000,
+   'nodeCount',13,'authorizedAt',q.authorized_at,
+   'stateHash',project_org_hierarchy_recovery_state(p.id));
+ end if;
+ if b.project_id is not null or p.status<>'blocked' or m.status<>'blocked'
+  or p.detail is distinct from
+   'No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.'
+  or p.deadline is distinct from r.cutoff or a.deadline is distinct from r.cutoff
+  or a.window_id is distinct from r.window_id or m.deadline is distinct from r.cutoff
+  or (select count(*) from project_organization_nodes n where n.project_id=p.id and n.deadline=p.deadline and n.status='active')<>13
+  or not project_provider_continued(p.id)
+  or not project_provider_continued_assignment(j.id)
+ then raise exception 'Expired source-bound owner project is not eligible for another window';end if;
+ return jsonb_build_object('projectId',p.id,'stage','authorize',
+  'releaseSha',p_release,'status',p.status,'missionStatus',m.status,
+  'sourceMissionId',r.source_mission_id,'missionId',m.id,'assignmentId',j.id,
+  'priorWindowId',r.window_id,'authorizationId',null,
+  'scopeHash',p.approved_hash,'priorCutoff',r.cutoff,'cutoff',null,
+  'historicalMissions',used,'maxMissions',96,'tokenAllowance',600000,
+  'nodeCount',13,'stateHash',project_org_hierarchy_recovery_state(p.id));
+end
+$fn$;
+
+
+  or not project_org_retest_active_release(p_project,p_release)
   or r.project_id is null or r.owner_id is distinct from p_owner
   or r.source_mission_id is distinct from '911d15bd-be5f-416e-bbac-fbe86ca6fa90'::uuid
   or r.window_id is distinct from '7d216bbe-596e-457e-b84d-e07ad1e80365'::uuid
@@ -609,6 +715,7 @@ create or replace function public.project_org_retest_claim_release_authorized(
   and j.status='queued' and j.attempts=0 and j.lease is null
  where b.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
   and p_project=b.project_id and p_release=b.bound_release_sha
+  and project_org_retest_active_release(p_project,p_release)
   and m.id=q.mission_id and j.id=q.assignment_id
   and p.deadline>clock_timestamp() and project_provider_continued(p.id)
   and project_provider_continued_assignment(j.id)
