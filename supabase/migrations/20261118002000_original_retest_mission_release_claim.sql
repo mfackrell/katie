@@ -780,8 +780,8 @@ begin
  then raise exception 'Fresh authenticated owner future-window selection and unchanged state required';end if;
  perform 1 from project_organization_nodes where project_id=p.id order by depth,id for update;
  perform 1 from project_organization_scope_grants g
-  join project_organization_nodes n on n.id=g.node_id
-  where n.project_id=p.id order by g.node_id for update of g;
+  join project_organization_nodes grant_node on grant_node.id=g.node_id
+  where grant_node.project_id=p.id order by g.node_id for update of g;
  if not project_org_retest_exact_scope_grants(p.id)
  then raise exception 'Original three-grant authority changed under owner lock';end if;
  if project_org_hierarchy_recovery_state(p.id) is distinct from p_state_hash
@@ -950,8 +950,8 @@ begin
  then raise exception 'Observed canonical release epoch or deployment changed under binding lock';end if;
  perform 1 from project_organization_nodes where project_id=p.id order by depth,id for update;
  perform 1 from project_organization_scope_grants g
-  join project_organization_nodes n on n.id=g.node_id
-  where n.project_id=p.id order by g.node_id for update of g;
+  join project_organization_nodes grant_node on grant_node.id=g.node_id
+  where grant_node.project_id=p.id order by g.node_id for update of g;
  if not project_org_retest_exact_scope_grants(p.id)
  then raise exception 'Original three-grant authority changed under binding lock';end if;
  offer:=project_org_retest_claim_release_offer(p_owner,p_project,p_release);
