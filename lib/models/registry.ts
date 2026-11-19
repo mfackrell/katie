@@ -1,7 +1,7 @@
 import { isNonConversationalModel } from "./non-conversational";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { LlmProvider } from "@/lib/providers/types";
-import { fetchOfficialModelEvidence, officialModelSpec, type PublishedModelEvidence } from "./provider-evidence";
+import { fetchOfficialModelEvidence, officialModelSpec, type PublishedModelEvidence, type OfficialModelSpec } from "./provider-evidence";
 
 export type RoutingEligibility = "verified" | "restricted" | "manual_override_only" | "disabled";
 export type ConfidenceTier = "high" | "medium" | "low";
@@ -257,6 +257,28 @@ function verifiedNumericRate(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+/** Shared D3/D5 invariant: documentation, model, tier and stored economic values agree. */
+function hasApprovedPublishedPriceProvenance(
+  spec: OfficialModelSpec,
+  storedInput: unknown,
+  storedOutput: unknown,
+  metadata: Record<string, unknown>
+): boolean {
+  const capturedInput = verifiedNumericRate(metadata.published_base_input_per_1m);
+  const capturedOutput = verifiedNumericRate(metadata.published_base_output_per_1m);
+  const currentInput = verifiedNumericRate(storedInput);
+  const currentOutput = verifiedNumericRate(storedOutput);
+  return metadata.provider_documented_model_id === spec.modelId &&
+    metadata.capability_verification_source === spec.documentUrl &&
+    metadata.pricing_verification_source === spec.documentUrl &&
+    metadata.pricing_tier === "standard_base_per_1m" &&
+    metadata.price_verified_scope === "published_base_standard_rates_only" &&
+    capturedInput === spec.expectedInputPer1m &&
+    capturedOutput === spec.expectedOutputPer1m &&
+    currentInput !== null && currentOutput !== null &&
+    currentInput === capturedInput && currentOutput === capturedOutput;
+}
+
 function freshOfficialEvidence(date: string | null | undefined, nowIso: string): boolean {
   const timestamp = Date.parse(date ?? "");
   const now = Date.parse(nowIso);
@@ -306,17 +328,9 @@ export function retainOfficialModelEvidence(
     // This also rejects coordinated corruption of stored prices and provenance.
     const retainedInput = verifiedNumericRate(prior.pricing_input_per_1m);
     const retainedOutput = verifiedNumericRate(prior.pricing_output_per_1m);
-    const documentedInput = verifiedNumericRate(meta.published_base_input_per_1m);
-    const documentedOutput = verifiedNumericRate(meta.published_base_output_per_1m);
-    const pricingProvenanceMatches =
-      meta.provider_documented_model_id === spec.modelId &&
-      meta.pricing_tier === "standard_base_per_1m" &&
-      meta.price_verified_scope === "published_base_standard_rates_only" &&
-      documentedInput === spec.expectedInputPer1m &&
-      documentedOutput === spec.expectedOutputPer1m &&
-      retainedInput !== null && retainedOutput !== null &&
-      retainedInput === documentedInput &&
-      retainedOutput === documentedOutput;
+    const pricingProvenanceMatches = hasApprovedPublishedPriceProvenance(
+      spec, prior.pricing_input_per_1m, prior.pricing_output_per_1m, meta
+    );
     if (prior.pricing_status === "verified" &&
         meta.pricing_verification_source === spec.documentUrl &&
         freshOfficialEvidence(prior.pricing_verified_at, nowIso) &&
@@ -581,18 +595,35 @@ export function buildRoutingRegistrySnapshot(
   for (const persisted of persistedRows) {
     const {source_metadata, capability_verified_at, pricing_verified_at, ...row} = persisted;
     const evidence = source_metadata ?? {};
-    const documentedByProvider =
-      evidence.capability_evidence_basis === "first_party_model_documentation" ||
-      evidence.capability_source === "provider_documentation" ||
-      evidence.pricing_source === "provider_documentation";
-    const freshPublished =
-      row.capability_status === "verified" && row.pricing_status === "verified" &&
+    // Preserve genuinely independent provider proof, but never treat a missing
+    // documentation marker as evidence that a previously verified claim is safe.
+    const independentProviderProof =
+      evidence.capability_source === "provider" &&
+      evidence.pricing_source === "provider" &&
+      evidence.capability_evidence_basis !== "first_party_model_documentation" &&
+      evidence.pricing_tier !== "standard_base_per_1m" &&
+      evidence.published_base_input_per_1m === undefined &&
+      evidence.published_base_output_per_1m === undefined;
+    const spec = officialModelSpec(row.provider_name, row.model_id);
+    // Validate persisted rates at every read, including after discovery failed
+    // and retainOfficialModelEvidence (D3) was never called.
+    const validDocumentedEvidence = Boolean(
+      spec &&
+      evidence.capability_evidence_basis === "first_party_model_documentation" &&
+      evidence.capability_source === "provider_documentation" &&
+      evidence.pricing_source === "provider_documentation" &&
+      row.capability_status === "verified" &&
+      row.pricing_status === "verified" &&
       freshOfficialEvidence(capability_verified_at, nowIso) &&
-      freshOfficialEvidence(pricing_verified_at, nowIso);
+      freshOfficialEvidence(pricing_verified_at, nowIso) &&
+      hasApprovedPublishedPriceProvenance(
+        spec, row.pricing_input_per_1m, row.pricing_output_per_1m, evidence
+      )
+    );
     const effective: RegistryRoutingModel = {
       ...row,
-      routing_eligibility: documentedByProvider &&
-        row.routing_eligibility === "verified" && !freshPublished
+      routing_eligibility: row.routing_eligibility === "verified" &&
+        !independentProviderProof && !validDocumentedEvidence
         ? "restricted" : row.routing_eligibility
     };
     const existing = grouped.get(effective.provider_name);
