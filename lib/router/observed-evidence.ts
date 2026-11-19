@@ -175,15 +175,16 @@ export async function resolveRoutingEvidence(candidates: CandidateMetadata[], pr
   // The present correction may arrive before saveMessage. Admit it only when
   // the trusted scoped provenance links it to a prior completed assistant.
   // Never infer praise from silence or attach criticism to the NEXT model.
+  const currentPolarity=currentTurnFeedback?.source.polarity;
   if (bestValueQuality && currentTurnFeedback?.target.status === 'attributed' &&
-      currentTurnFeedback.source.polarity !== 'none' &&
+      currentPolarity && currentPolarity !== 'none' &&
       currentTurnFeedback.source.requestId === scope.context.requestId) {
     const {source,target}=currentTurnFeedback;
     feedbackRows=[...feedbackRows,{
       request_id:target.priorRequestId, observed_at:new Date().toISOString(),
       provider:target.provider, model:target.model, intent:target.priorIntent ?? intent,
       source:'adjacent_user_feedback',
-      dimension:source.dimension, outcome:source.polarity,
+      dimension:source.dimension, outcome:currentPolarity,
       confidence:'direct_current_turn_scoped_settled_reply',
       source_id:source.userMessageId ?? `current-request:${source.requestId}`,
       task_excerpt:source.textExcerpt,
