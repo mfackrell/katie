@@ -18,7 +18,8 @@ export async function POST(request: NextRequest) {
   }
 
   const providers = getAvailableProviders();
-  const discovery = await refreshModelRegistry(providers, {verifyQuarantined:true});
+  // Public first-party documentation only: never issue paid quarantined-model probes.
+  const discovery = await refreshModelRegistry(providers, { verifyPublishedSources: true });
   const snapshot = await getRoutingRegistryByProvider(providers);
 
   return NextResponse.json({
@@ -38,7 +39,7 @@ export const maxDuration = 300;
 export async function GET(request: NextRequest) {
   if (!assertCronAuth(request)) return NextResponse.json({error:"Unauthorized"},{status:401});
   const providers = getAvailableProviders();
-  const discovery = await refreshModelRegistry(providers, {verifyQuarantined:true});
+  const discovery = await refreshModelRegistry(providers, { verifyPublishedSources: true });
   const snapshot = await getRoutingRegistryByProvider(providers);
   const results = providers.map(provider => ({
     provider: provider.name,

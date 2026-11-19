@@ -1,11 +1,12 @@
 import { isNonConversationalModel } from "./non-conversational";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { LlmProvider } from "@/lib/providers/types";
+import { fetchOfficialModelEvidence, officialModelSpec, type PublishedModelEvidence, type OfficialModelSpec } from "./provider-evidence";
 
 export type RoutingEligibility = "verified" | "restricted" | "manual_override_only" | "disabled";
 export type ConfidenceTier = "high" | "medium" | "low";
 
-export type RegistryCapabilitySource = "provider" | "pricing_catalog" | "heuristic" | "unknown";
+export type RegistryCapabilitySource = "provider" | "provider_documentation" | "pricing_catalog" | "heuristic" | "unknown";
 
 export type ModelRegistryRecord = {
   provider_name: LlmProvider["name"];
@@ -89,7 +90,7 @@ function heuristicCapabilities(providerName: LlmProvider["name"], modelId: strin
   const supportsVision = !supportsImage && /vision|gpt-4o|gpt-5|gemini|claude|grok-4|grok-3|o3/.test(m);
   const supportsWebSearch = providerName === "grok" || /search/.test(m);
   const supportsVideo = providerName === "google" && /gemini/.test(m);
-  const reasoning = /o3|opus|sonnet|pro|codex|gpt-5/.test(m) ? "high" : /mini|flash|haiku/.test(m) ? "low" : "medium";
+  const reasoning = /o3|opus|sonnet|pro|codex|gpt-5|gpt-6/.test(m) ? "high" : /mini|flash|haiku/.test(m) ? "low" : "medium";
   const speed = /mini|flash|haiku|nano/.test(m) ? "fast" : /o3|opus/.test(m) ? "slow" : "medium";
   const cost = /mini|flash|haiku|nano/.test(m) ? "low" : /o3|opus|pro|gpt-5/.test(m) ? "high" : "medium";
 
@@ -114,7 +115,7 @@ export function computeRoutingEligibility(input: {
     return "disabled";
   }
 
-  if (input.capability_status === "verified" && input.pricing_status !== "missing" && input.confidence_score >= 0.8) {
+  if (input.capability_status === "verified" && input.pricing_status === "verified" && input.confidence_score >= 0.8) {
     return "verified";
   }
 
@@ -176,6 +177,7 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
     source_metadata: {
       capability_source: "heuristic" as RegistryCapabilitySource,
       pricing_source: pricing ? "pricing_catalog" : "unknown",
+      ...(pricing ? { pricing_catalog_observed_at: nowIso } : {}),
       normalized_model_id: normalizedModelId,
       pipeline_version: "registry-v1"
     },
@@ -190,10 +192,12 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
     speed_tier: heuristic.speed_tier,
     cost_tier: heuristic.cost_tier,
     capability_verified_at: null,
-    pricing_verified_at: pricing ? nowIso : null,
+    // A third-party catalog timestamp is not first-party price verification.
+    pricing_verified_at: null,
     verification_updated_at: nowIso,
     failure_reason: pricing ? null : "missing_pricing",
-    last_exception_at: pricing ? null : nowIso
+    // Missing catalog metadata is not a provider exception.
+    last_exception_at: null
   };
 }
 
@@ -203,10 +207,16 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
 type TrustedPricingSnapshot = Pick<ModelRegistryRecord,
   "normalized_model_id" | "pricing_status" | "pricing_input_per_1m" |
   "pricing_output_per_1m" | "pricing_verified_at" | "source_metadata">;
-type RefreshedModelRecord = Omit<ReturnType<typeof enrichModelRecord>,"pricing_status"|"source_metadata"> &
-  Pick<ModelRegistryRecord,"pricing_status"|"source_metadata">;
+type RefreshedModelRecord = Omit<ReturnType<typeof enrichModelRecord>,
+  "pricing_status" | "capability_status" | "source_metadata" | "capability_verified_at" | "pricing_verified_at" |
+  "supports_text" | "supports_vision" | "supports_web_search" | "supports_image_generation" |
+  "supports_video" | "reasoning_tier" | "speed_tier" | "cost_tier"> &
+  Pick<ModelRegistryRecord,
+    "pricing_status" | "capability_status" | "source_metadata" | "capability_verified_at" | "pricing_verified_at" |
+    "supports_text" | "supports_vision" | "supports_web_search" | "supports_image_generation" |
+    "supports_video" | "reasoning_tier" | "speed_tier" | "cost_tier">;
 export function retainTrustedPricing(
-  fresh: ReturnType<typeof enrichModelRecord>, prior: TrustedPricingSnapshot | undefined, nowIso: string
+  fresh: RefreshedModelRecord, prior: TrustedPricingSnapshot | undefined, nowIso: string
 ): RefreshedModelRecord {
   const source=prior?.source_metadata?.pricing_verification_source;
   // Trusted model-specific first-party source only; never accept URL lookalikes.
@@ -235,6 +245,189 @@ export function retainTrustedPricing(
     pricing_verification_date:prior.source_metadata.pricing_verification_date}};
 }
 
+type PriorPublishedSnapshot = TrustedPricingSnapshot & Pick<ModelRegistryRecord,
+  "capability_status" | "capability_verified_at" | "supports_text" | "supports_vision" |
+  "supports_web_search" | "supports_image_generation" | "supports_video" |
+  "reasoning_tier" | "speed_tier" | "cost_tier">;
+
+/** PostgREST may serialize PostgreSQL numeric rates as strings; reject non-decimal or nonfinite values. */
+function verifiedNumericRate(value: unknown): number | null {
+  if (typeof value !== "number" && !(typeof value === "string" && /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/** Shared D3/D5 invariant: documentation, model, tier and stored economic values agree. */
+function hasApprovedPublishedPriceProvenance(
+  spec: OfficialModelSpec,
+  storedInput: unknown,
+  storedOutput: unknown,
+  metadata: Record<string, unknown>
+): boolean {
+  const capturedInput = verifiedNumericRate(metadata.published_base_input_per_1m);
+  const capturedOutput = verifiedNumericRate(metadata.published_base_output_per_1m);
+  const currentInput = verifiedNumericRate(storedInput);
+  const currentOutput = verifiedNumericRate(storedOutput);
+  return metadata.provider_documented_model_id === spec.modelId &&
+    metadata.capability_verification_source === spec.documentUrl &&
+    metadata.pricing_verification_source === spec.documentUrl &&
+    metadata.pricing_tier === "standard_base_per_1m" &&
+    metadata.price_verified_scope === "published_base_standard_rates_only" &&
+    capturedInput === spec.expectedInputPer1m &&
+    capturedOutput === spec.expectedOutputPer1m &&
+    currentInput !== null && currentOutput !== null &&
+    currentInput === capturedInput && currentOutput === capturedOutput;
+}
+
+function freshOfficialEvidence(date: string | null | undefined, nowIso: string): boolean {
+  const timestamp = Date.parse(date ?? "");
+  const now = Date.parse(nowIso);
+  return Number.isFinite(timestamp) && Number.isFinite(now) &&
+    timestamp <= now && now - timestamp < 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Documentation proves published capabilities and base rates, never account permission,
+ * live endpoint execution, task-quality superiority, or owner spending authorization.
+ * Missing/failing source refresh preserves the evidence and ORIGINAL timestamp, but
+ * expired evidence cannot remain fully eligible for strict protected routing.
+ */
+export function retainOfficialModelEvidence(
+  fresh: RefreshedModelRecord,
+  prior: PriorPublishedSnapshot | undefined,
+  published: PublishedModelEvidence | null,
+  nowIso: string
+): RefreshedModelRecord {
+  const spec = officialModelSpec(fresh.provider_name, fresh.model_id);
+  if (!spec) return fresh;
+  const row: RefreshedModelRecord = { ...fresh };
+  const meta = prior?.source_metadata ?? {};
+  const priorMatches = Boolean(
+    prior?.normalized_model_id === fresh.normalized_model_id &&
+    prior?.capability_status === "verified" &&
+    meta.capability_evidence_basis === "first_party_model_documentation" &&
+    meta.capability_verification_source === spec.documentUrl &&
+    Number.isFinite(Date.parse(prior.capability_verified_at ?? ""))
+  );
+
+  if (priorMatches && prior) {
+    row.capability_status = "verified";
+    row.capability_verified_at = prior.capability_verified_at;
+    row.supports_text = prior.supports_text;
+    row.supports_vision = prior.supports_vision;
+    row.supports_web_search = prior.supports_web_search;
+    row.supports_image_generation = prior.supports_image_generation;
+    row.supports_video = prior.supports_video;
+    row.reasoning_tier = prior.reasoning_tier;
+    row.speed_tier = prior.speed_tier;
+    row.cost_tier = prior.cost_tier;
+    row.source_metadata = { ...fresh.source_metadata, ...meta };
+    // A parseable prior price is NOT proof of its economic provenance. Only retain
+    // pricing when BOTH stored rates still equal the originally captured first-party
+    // published Standard base rates AND this exact model's approved source schedule.
+    // This also rejects coordinated corruption of stored prices and provenance.
+    const retainedInput = verifiedNumericRate(prior.pricing_input_per_1m);
+    const retainedOutput = verifiedNumericRate(prior.pricing_output_per_1m);
+    const pricingProvenanceMatches = hasApprovedPublishedPriceProvenance(
+      spec, prior.pricing_input_per_1m, prior.pricing_output_per_1m, meta
+    );
+    if (prior.pricing_status === "verified" &&
+        meta.pricing_verification_source === spec.documentUrl &&
+        freshOfficialEvidence(prior.pricing_verified_at, nowIso) &&
+        pricingProvenanceMatches) {
+      row.pricing_status = "verified";
+      row.pricing_input_per_1m = retainedInput;
+      row.pricing_output_per_1m = retainedOutput;
+      row.pricing_verified_at = prior.pricing_verified_at;
+    } else {
+      row.pricing_status = fresh.pricing_status;
+      row.pricing_input_per_1m = fresh.pricing_input_per_1m;
+      row.pricing_output_per_1m = fresh.pricing_output_per_1m;
+      row.pricing_verified_at = null;
+      row.source_metadata = {
+        ...row.source_metadata,
+        pricing_source: fresh.source_metadata.pricing_source,
+        previous_pricing_verified_at: prior.pricing_verified_at,
+        pricing_revalidation_status: "requires_current_first_party_evidence",
+        ...(!pricingProvenanceMatches && prior.pricing_status === "verified"
+          ? { pricing_retention_rejection: "stored_rate_or_first_party_provenance_mismatch" }
+          : {})
+      };
+    }
+  }
+
+  if (published && published.documentUrl === spec.documentUrl &&
+      published.documentedModelId === spec.modelId) {
+    row.capability_status = "verified";
+    row.capability_verified_at = nowIso;
+    row.reasoning_tier = published.reasoningTier;
+    row.supports_text = published.supportsText;
+    row.supports_vision = published.supportsVision;
+    row.supports_web_search = published.supportsWebSearch;
+    row.supports_image_generation = false;
+    row.supports_video = false;
+    row.confidence_score = 0.95;
+    row.source_metadata = {
+      ...fresh.source_metadata,
+      capability_source: "provider_documentation",
+      capability_evidence_basis: "first_party_model_documentation",
+      capability_verification_source: published.documentUrl,
+      capability_verification_observed_at: nowIso,
+      provider_documented_model_id: published.documentedModelId,
+      supported_endpoints: published.supportedEndpoints,
+      structured_output_documented: published.supportsStructuredOutput,
+      tool_calling_documented: published.supportsToolCalling,
+      context_window_tokens: published.contextWindowTokens,
+      max_output_tokens: published.maxOutputTokens,
+      pricing_tier: published.pricingTier,
+      has_variable_long_context_rates: published.hasVariableLongContextRates,
+      price_verified_scope: "published_base_standard_rates_only",
+      published_base_input_per_1m: published.inputPer1m,
+      published_base_output_per_1m: published.outputPer1m,
+      // Documentation verification does not prove that a live request succeeds.
+      inference_account_verified: false
+    };
+    if (published.pricingMatchesApprovedSchedule) {
+      row.pricing_status = "verified";
+      row.pricing_input_per_1m = published.inputPer1m;
+      row.pricing_output_per_1m = published.outputPer1m;
+      row.pricing_verified_at = nowIso;
+      row.source_metadata = {
+        ...row.source_metadata,
+        pricing_source: "provider_documentation",
+        pricing_verification_source: published.documentUrl,
+        pricing_verification_observed_at: nowIso
+      };
+    } else {
+      row.pricing_status = fresh.pricing_status;
+      row.pricing_input_per_1m = fresh.pricing_input_per_1m;
+      row.pricing_output_per_1m = fresh.pricing_output_per_1m;
+      row.pricing_verified_at = null;
+      row.source_metadata = {
+        ...row.source_metadata,
+        pricing_source: fresh.source_metadata.pricing_source,
+        pricing_revalidation_status: "published_rates_changed_requires_review"
+      };
+    }
+  }
+  if (row.capability_status === "verified") {
+    row.confidence_score = 0.95;
+    row.confidence_tier = "high";
+    const current = freshOfficialEvidence(row.capability_verified_at, nowIso) &&
+      row.pricing_status === "verified" && freshOfficialEvidence(row.pricing_verified_at, nowIso);
+    row.routing_eligibility = current ? "verified" : "restricted";
+    row.failure_reason = current ? null : "verified_evidence_stale_or_pricing_unverified";
+    row.source_metadata = {
+      ...row.source_metadata,
+      capability_evidence_current: freshOfficialEvidence(row.capability_verified_at, nowIso),
+      pricing_evidence_current: row.pricing_status === "verified" &&
+        freshOfficialEvidence(row.pricing_verified_at, nowIso),
+      registry_evaluated_at: nowIso
+    };
+  }
+  return row;
+}
+
 /** A definitive 404 on a selected inference model must not be retried indefinitely.
  * The upstream catalog is not proof that the model can answer inference requests.
  * Transient errors (timeouts, 429, 5xx) never quarantine a model.
@@ -254,7 +447,7 @@ export async function quarantineUnavailableModel(providerName: LlmProvider["name
 }
 
 export type ModelRefreshOutcome = {provider:LlmProvider["name"];ok:boolean;discovered:number;disabled:number;reason?:string};
-export async function refreshModelRegistry(providers: LlmProvider[], options?: { verifyQuarantined?: boolean }): Promise<ModelRefreshOutcome[]> {
+export async function refreshModelRegistry(providers: LlmProvider[], options?: { verifyPublishedSources?: boolean }): Promise<ModelRefreshOutcome[]> {
   const client = getSupabaseAdminClient();
   const nowIso = new Date().toISOString();
   const pricingCatalog = await fetchLiteLlmPricingCatalog();
@@ -272,45 +465,66 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
         .returns<{normalized_model_id:string;last_exception_at:string|null}>();
       if(quarantineError) throw new Error(quarantineError.message);
       const quarantinedIds = new Set((quarantined ?? []).map(row=>row.normalized_model_id as string));
-      const {data: verifiedPrices,error: verifiedPriceError}=await client.from("model_registry")
-        .select("normalized_model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at,source_metadata")
-        .eq("provider_name",provider.name).eq("pricing_status","verified")
-        .returns<TrustedPricingSnapshot>();
-      if(verifiedPriceError)throw new Error(verifiedPriceError.message);
-      const verifiedById=new Map((verifiedPrices??[]).map(row=>[row.normalized_model_id,row]));
-      const rows = discovered.filter(modelId=>!quarantinedIds.has(normalizeModelId(modelId)))
-        .map((modelId) => retainTrustedPricing(
-          enrichModelRecord(provider.name,modelId,pricingCatalog,nowIso),
-          verifiedById.get(normalizeModelId(modelId)),nowIso));
+      // Read all prior evidence, not just recently verified pricing. Transient source
+      // downtime must not erase an earlier independent capability verification.
+      const { data: priorRows, error: priorError } = await client.from("model_registry")
+        .select("normalized_model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at,capability_verified_at,source_metadata,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier")
+        .eq("provider_name", provider.name)
+        .returns<PriorPublishedSnapshot>();
+      if (priorError) throw new Error(priorError.message);
+      const priorById = new Map((priorRows ?? []).map((row) => [row.normalized_model_id, row]));
+      const verifiedById = new Map((priorRows ?? [])
+        .filter((row) => row.pricing_status === "verified")
+        .map((row) => [row.normalized_model_id, row]));
+      const publishedById = new Map<string, PublishedModelEvidence>();
 
-      const probeCandidate = (quarantined ?? []).find(row => discovered.some(id => normalizeModelId(id) === row.normalized_model_id)
-        && (!row.last_exception_at || Date.now()-new Date(row.last_exception_at).getTime() >= 60*60*1000));
-      if (options?.verifyQuarantined && probeCandidate) {
-        const candidateId = discovered.find(id => normalizeModelId(id) === probeCandidate.normalized_model_id)!;
-        try {
-          // Verify the same native tool-calling capability Katie uses for self-inspection,
-          // rather than merely testing ordinary text generation on a different endpoint.
-          const result = provider.generateToolTurn
-            ? await provider.generateToolTurn({
-                modelId:candidateId, system:"Reply with OK.", messages:[{role:"user",text:"OK"}],
-                tools:[{name:"ping",description:"Optional health verification",parameters:{type:"object",properties:{}}}],
-                signal:AbortSignal.timeout(12000),
-              })
-            : await provider.generate({modelId:candidateId,name:"Model verification",persona:"Reply with OK only.",summary:"",history:[],user:"OK"});
-          const valid = "response" in result
-            ? Boolean(result.response.text?.trim() || result.calls.length)
-            : Boolean(result.text?.trim());
-          if (valid) {
-            rows.push(enrichModelRecord(provider.name,candidateId,pricingCatalog,nowIso));
-            console.info("[ModelRegistry] model_reverified",{provider:provider.name,modelId:candidateId});
+      if (options?.verifyPublishedSources) {
+        const candidates = discovered.filter((modelId) => {
+          const normalized = normalizeModelId(modelId);
+          const prior = priorById.get(normalized);
+          const spec = officialModelSpec(provider.name, normalized);
+          if (!spec || quarantinedIds.has(normalized)) return false;
+          // Verify first-party model pages at most once in 20 hours for records
+          // whose price and capability evidence is still current.
+          const previous = Math.min(
+            Date.parse(prior?.capability_verified_at ?? "") || 0,
+            Date.parse(prior?.pricing_verified_at ?? "") || 0
+          );
+          const matchingSource = prior?.source_metadata?.capability_verification_source === spec.documentUrl &&
+            prior?.source_metadata?.pricing_verification_source === spec.documentUrl;
+          return !matchingSource || !Number.isFinite(previous) ||
+            Date.now() - previous >= 20 * 60 * 60 * 1000;
+        });
+        await Promise.all(candidates.map(async (modelId) => {
+          const normalized = normalizeModelId(modelId);
+          const spec = officialModelSpec(provider.name, normalized);
+          if (!spec) return;
+          try {
+            const evidence = await fetchOfficialModelEvidence(spec, normalized);
+            if (evidence) publishedById.set(normalized, evidence);
+            else console.warn("[ModelRegistry] published_model_evidence_not_qualified", {
+              provider: provider.name, modelId: normalized
+            });
+          } catch (error) {
+            console.warn("[ModelRegistry] official_documentation_unavailable", {
+              provider: provider.name, modelId: normalized,
+              reason: error instanceof Error ? error.name : "fetch_failure"
+            });
           }
-        } catch {
-          await client.from("model_registry").eq("provider_name",provider.name)
-            .eq("normalized_model_id",normalizeModelId(candidateId))
-            .update({last_exception_at:nowIso});
-          console.warn("[ModelRegistry] model_reverification_failed",{provider:provider.name,modelId:candidateId});
-        }
+        }));
       }
+      const rows = discovered.filter((modelId) => !quarantinedIds.has(normalizeModelId(modelId)))
+        .map((modelId) => {
+          const normalized = normalizeModelId(modelId);
+          return retainOfficialModelEvidence(
+            retainTrustedPricing(enrichModelRecord(provider.name, modelId, pricingCatalog, nowIso),
+              verifiedById.get(normalized), nowIso),
+            priorById.get(normalized),
+            publishedById.get(normalized) ?? null,
+            nowIso
+          );
+        });
+
       if (rows.length) {
         const { error } = await client.from("model_registry").upsert(rows, { onConflict: "provider_name,normalized_model_id" });
         if (error) {
@@ -360,6 +574,141 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
   return outcomes;
 }
 
+export type RegistryEligibilityEvidence = Pick<ModelRegistryRecord,
+  "provider_name" | "model_id" | "routing_eligibility" | "capability_status" |
+  "pricing_status" | "capability_verified_at" | "pricing_verified_at"> & {
+    pricing_input_per_1m: unknown;
+    pricing_output_per_1m: unknown;
+    source_metadata: Record<string, unknown> | null;
+  };
+
+export type RegistryDiagnosticRow = RegistryEligibilityEvidence & {
+  is_active: boolean;
+  discovery_status: string;
+  reasoning_tier: ModelRegistryRecord["reasoning_tier"];
+  supports_text: boolean | null;
+  failure_reason: string | null;
+};
+
+/** The one read-time verified-admission decision used by both routing and diagnostics. */
+export function evaluateRegistryEvidence(
+  persisted: RegistryEligibilityEvidence,
+  nowIso: string
+): { eligibility: RoutingEligibility; evidence_reason: string | null } {
+  if (persisted.routing_eligibility !== "verified") {
+    return { eligibility: persisted.routing_eligibility, evidence_reason: null };
+  }
+  const evidence = persisted.source_metadata ?? {};
+  const spec = officialModelSpec(persisted.provider_name, persisted.model_id);
+  // The two mutable provider/provider labels are never a producer attestation.
+  if (!spec || evidence.capability_evidence_basis !== "first_party_model_documentation" ||
+      evidence.capability_source !== "provider_documentation" ||
+      evidence.pricing_source !== "provider_documentation") {
+    return { eligibility: "restricted", evidence_reason: "unattested_or_invalid_first_party_provenance" };
+  }
+  if (persisted.capability_status !== "verified" || persisted.pricing_status !== "verified") {
+    return { eligibility: "restricted", evidence_reason: "capability_or_pricing_not_verified" };
+  }
+  if (!freshOfficialEvidence(persisted.capability_verified_at, nowIso) ||
+      !freshOfficialEvidence(persisted.pricing_verified_at, nowIso)) {
+    return { eligibility: "restricted", evidence_reason: "first_party_evidence_stale_or_invalid" };
+  }
+  if (!hasApprovedPublishedPriceProvenance(
+    spec, persisted.pricing_input_per_1m, persisted.pricing_output_per_1m, evidence
+  )) {
+    return { eligibility: "restricted", evidence_reason: "first_party_model_or_price_provenance_mismatch" };
+  }
+  return { eligibility: "verified", evidence_reason: null };
+}
+
+type RegistryRoutingEvidenceRow = RegistryRoutingModel & Pick<ModelRegistryRecord,
+  "source_metadata" | "capability_verified_at" | "pricing_verified_at">;
+
+/** Protected diagnostic display built from exactly the router's read-time eligibility. */
+export function buildRegistryDiagnostic(row: RegistryDiagnosticRow, nowIso: string) {
+  const now = Date.parse(nowIso);
+  const { eligibility, evidence_reason } = evaluateRegistryEvidence(row, nowIso);
+  const ageHours = (value: string | null): number | null => {
+    const timestamp = Date.parse(value ?? "");
+    return Number.isFinite(timestamp) && timestamp <= now
+      ? Math.round((now - timestamp) / 36000) / 100 : null;
+  };
+  const capabilityAge = ageHours(row.capability_verified_at);
+  const pricingAge = ageHours(row.pricing_verified_at);
+  const meta = row.source_metadata ?? {};
+  const reasons = [
+    ...(!row.is_active ? [row.failure_reason || "not_active_or_quarantined"] : []),
+    ...(evidence_reason ? [evidence_reason] : []),
+    ...(row.capability_status !== "verified" ? ["capabilities_not_authoritatively_verified"] : []),
+    ...(row.pricing_status !== "verified" ? ["pricing_not_authoritatively_verified"] : []),
+    ...(row.is_active && eligibility === "manual_override_only" ? ["manual_override_required"] : []),
+    ...(row.is_active && eligibility === "disabled" ? ["explicitly_disabled"] : [])
+  ];
+  return {
+    provider: row.provider_name,
+    model_id: row.model_id,
+    discovered: row.discovery_status === "discovered",
+    active: row.is_active,
+    capability_status: row.capability_status,
+    pricing_status: row.pricing_status,
+    routing_eligibility: eligibility,
+    persisted_routing_eligibility: row.routing_eligibility,
+    reasoning_tier: row.reasoning_tier,
+    manual_selection_visible: row.is_active,
+    ordinary_text_candidate: row.is_active && row.supports_text === true &&
+      (eligibility === "verified" || eligibility === "restricted"),
+    complex_text_documented: row.is_active && row.supports_text === true &&
+      row.reasoning_tier === "high" && row.capability_status === "verified" &&
+      eligibility === "verified",
+    capability_age_hours: capabilityAge,
+    pricing_age_hours: pricingAge,
+    capability_source: meta.capability_verification_source ?? meta.capability_source ?? "unknown",
+    pricing_source: meta.pricing_verification_source ?? meta.pricing_source ?? "unknown",
+    endpoint_support: meta.supported_endpoints ?? "unverified",
+    context_window_tokens: meta.context_window_tokens ?? null,
+    max_output_tokens: meta.max_output_tokens ?? null,
+    price_scope: meta.price_verified_scope ?? null,
+    inference_account_verified: meta.inference_account_verified === true,
+    status_reasons: reasons.length ? reasons : ["eligible_subject_to_endpoint_and_spending_controls"]
+  };
+}
+
+/** Source-bound, verified and restricted eligibility policy is unchanged by diagnostics. */
+export function buildRoutingRegistrySnapshot(
+  providers: readonly Pick<LlmProvider, "name">[],
+  persistedRows: readonly RegistryRoutingEvidenceRow[],
+  nowIso: string
+): Map<LlmProvider["name"], RegistryRoutingModel[]> {
+  const grouped = new Map<LlmProvider["name"], RegistryRoutingModel[]>();
+  for (const provider of providers) grouped.set(provider.name, []);
+
+  for (const persisted of persistedRows) {
+    // Construct only the router's approved fields; provenance never leaks.
+    const effective: RegistryRoutingModel = {
+      provider_name: persisted.provider_name,
+      model_id: persisted.model_id,
+      pricing_status: persisted.pricing_status,
+      capability_status: persisted.capability_status,
+      pricing_input_per_1m: persisted.pricing_input_per_1m,
+      pricing_output_per_1m: persisted.pricing_output_per_1m,
+      routing_eligibility: evaluateRegistryEvidence(persisted, nowIso).eligibility,
+      confidence_tier: persisted.confidence_tier,
+      confidence_score: persisted.confidence_score,
+      supports_text: persisted.supports_text,
+      supports_vision: persisted.supports_vision,
+      supports_web_search: persisted.supports_web_search,
+      supports_image_generation: persisted.supports_image_generation,
+      supports_video: persisted.supports_video,
+      reasoning_tier: persisted.reasoning_tier,
+      speed_tier: persisted.speed_tier,
+      cost_tier: persisted.cost_tier
+    };
+    const existing = grouped.get(effective.provider_name);
+    if (existing) existing.push(effective);
+  }
+  return grouped;
+}
+
 export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Promise<Map<LlmProvider["name"], RegistryRoutingModel[]>> {
   const client = getSupabaseAdminClient();
   const providerNames = providers.map((provider) => provider.name);
@@ -371,28 +720,17 @@ export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Pr
   const { data, error } = await client
     .from("model_registry")
     .select(
-      "provider_name,model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,routing_eligibility,confidence_tier,confidence_score,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier"
+      "provider_name,model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,routing_eligibility,confidence_tier,confidence_score,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier,capability_verified_at,pricing_verified_at,source_metadata"
     )
     .in("provider_name", providerNames)
     .eq("is_active", true)
-    .returns<RegistryRoutingModel>();
+    .returns<RegistryRoutingEvidenceRow>();
 
   if (error) {
     throw new Error(`Failed loading model registry: ${error.message}`);
   }
 
-  const grouped = new Map<LlmProvider["name"], RegistryRoutingModel[]>();
-  for (const provider of providers) {
-    grouped.set(provider.name, []);
-  }
-
-  for (const row of data ?? []) {
-    const existing = grouped.get(row.provider_name) ?? [];
-    existing.push(row);
-    grouped.set(row.provider_name, existing);
-  }
-
-  return grouped;
+  return buildRoutingRegistrySnapshot(providers, data ?? [], new Date().toISOString());
 }
 
 export function snapshotToLookup(snapshot: Map<LlmProvider["name"], RegistryRoutingModel[]>) {
