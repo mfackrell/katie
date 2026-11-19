@@ -168,7 +168,12 @@ test('UI retains pending receipt after stream interruption, controls duplicate s
  assert.match(tail,/The polling window is not a terminal server outcome/);
  assert.match(tail,/setStatusMessage\(savedAnswerPreviewed[\s\S]*?return;/);
  assert.match(tail,/if \(!terminalFailure\) \{[\s\S]*?status remains unverified[\s\S]*?return;/);
- assert.match(source,/if \(readPendingChatRequest\(chatId\)\) \{[\s\S]*?do not resend/);
+ // Accept either the strict pending guard or the newer verified-completion guard.
+ // Neither path may transmit a second request while the original remains unresolved.
+ const strictPendingGuard=/if \(readPendingChatRequest\(chatId\)\) \{[\s\S]*?do not resend/.test(source);
+ const verifiedPendingGuard=/const previousPending = readPendingChatRequest\(chatId\);[\s\S]*?if \(previousPending\) \{[\s\S]*?isSavedChatRequestComplete\(chatId, previousPending\.requestId!, bearer\)/.test(source) &&
+  /if \(!finished \|\| readPendingChatRequest\(chatId\)\?\.requestId !== previousPending\.requestId\) \{[\s\S]*?no duplicate request was sent[\s\S]*?return;/.test(source);
+ assert.ok(strictPendingGuard || verifiedPendingGuard,'Unresolved pending work must not permit a duplicate send');
  assert.match(source,/Age alone cannot prove a saved request failed/);
  assert.doesNotMatch(source,/pendingAgeMs >/);
  assert.match(source,/savedStatus\.status === "completed" && savedStatus\.workflowStatus === "completed"/);

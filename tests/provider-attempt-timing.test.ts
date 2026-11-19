@@ -209,7 +209,19 @@ test("B-TQA1: rejected revoked proxy and primitive reasons remain exactly unchan
       runs++;
       return Promise.reject(original);
     }, event => events.push(event));
-    await assert.rejects(failure, reason => reason === original);
+    // Node's assert.rejects itself reads rejection.name, which throws on a
+    // revoked Proxy. Observe the Promise directly instead of testing Node's
+    // assertion implementation.
+    let rejected = false;
+    let observed: unknown;
+    try {
+      await failure;
+    } catch (reason) {
+      rejected = true;
+      observed = reason;
+    }
+    assert.equal(rejected, true, "provider Promise must reject");
+    assert.equal(Object.is(observed, original), true, "exact original rejection must survive");
     assert.equal(runs, 1);
     assert.equal(events.at(-1)?.phase, "attempt_finalized");
     assert.equal(events.at(-1)?.outcome, "failed");
