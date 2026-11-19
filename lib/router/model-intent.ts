@@ -2440,16 +2440,17 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         const selectedRationale = [
           selectionJustification, String(qualification.selected_fit), evidenceDescription
         ];
-        const explicitUserFeedbackClaim = selectedRationale.some(text =>
-          text.split(/[.;\n]|\b(?:but|however|yet)\b/i).some(fragment => {
-            const clause = fragment.trim();
-            // Honest absence-of-evidence statements are not praise claims.
-            if (/^(?:no|there (?:is|are|was|were) no|without|lack(?:s|ing)?|absence of|missing|unknown|unverified)\b/i.test(clause)) {
-              return false;
-            }
-            return /\b(?:users?|customers?|clients?|readers?)\s+(?:(?:explicitly|directly|previously|clearly)\s+)?(?:praised?|liked?|loved?|approved?|endorsed?|criticized?|disliked?|rejected?|complained?|(?:were|was)\s+(?:not\s+)?satisfied)\b|\b(?:positive|negative|mixed|ambiguous|favorable|unfavorable)\s+(?:(?:user|customer|client)\s+)?(?:feedback|reaction|review|rating)\b|\b(?:user|customer|client)\s+satisfaction\b/i.test(clause);
-          })
+        const explicitUserFeedbackClauses = selectedRationale.flatMap(text =>
+          text.split(/[.;\n]|\b(?:but|however|yet)\b/i).map(fragment => fragment.trim())
+            .filter(clause => {
+              // Honest absence-of-evidence statements are not praise claims.
+              if (/^(?:no|there (?:is|are|was|were) no|without|lack(?:s|ing)?|absence of|missing|unknown|unverified)\b/i.test(clause)) {
+                return false;
+              }
+              return /\b(?:users?|customers?|clients?|readers?)\s+(?:(?:explicitly|directly|previously|clearly)\s+)?(?:praised?|liked?|loved?|approved?|endorsed?|criticized?|disliked?|rejected?|complained?|(?:were|was|are|is)\s+(?:not\s+)?satisfied)\b|\b(?:positive|negative|mixed|ambiguous|favorable|unfavorable)\s+(?:(?:user|customer|client)\s+)?(?:feedback|reaction|review|rating)\b|\b(?:user|customer|client)\s+satisfaction\b/i.test(clause);
+            })
         );
+        const explicitUserFeedbackClaim = explicitUserFeedbackClauses.length > 0;
         if (explicitUserFeedbackClaim && kind !== "attributed_feedback") return null;
         // Even with an otherwise valid own-model citation, a separate source
         // ID belonging only to another candidate cannot support the winner's
@@ -2468,6 +2469,18 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
           const citedEvents = (selectedEvidence?.feedback?.evidence ?? []).filter(event =>
             Boolean(event.source_id) && evidenceDescription.includes(event.source_id));
           if (!citedEvents.length) return null;
+          // Validate claimed user polarity across all selected rationale
+          // fields, not just evidence_basis. An ambiguous/negative event cannot
+          // support invented satisfaction in selection_justification or fit.
+          if (explicitUserFeedbackClauses.some(clause =>
+            /\b(?:praised?|liked?|loved?|approved?|endorsed?|positive\s+(?:user\s+)?(?:feedback|reaction|review)|satisfaction|(?:was|were|is|are)\s+satisfied)\b/i.test(clause) &&
+            !citedEvents.some(event => event.outcome === "positive"))) return null;
+          if (explicitUserFeedbackClauses.some(clause =>
+            /\b(?:criticized?|disliked?|rejected?|complained?|negative\s+(?:user\s+)?(?:feedback|reaction|review)|not\s+satisfied|dissatisfied)\b/i.test(clause) &&
+            !citedEvents.some(event => event.outcome === "negative"))) return null;
+          if (explicitUserFeedbackClauses.some(clause =>
+            /\b(?:mixed|ambiguous)\s+(?:user\s+)?(?:feedback|reaction|review)\b/i.test(clause) &&
+            !citedEvents.some(event => event.outcome === "ambiguous"))) return null;
           if (/\b(praised?|positive|successful|success|satisfied|satisfaction|approved|liked?|better|good|excellent|accepted|worked)\b/i.test(evidenceDescription) &&
               !citedEvents.some(event => event.outcome === "positive")) return null;
           if (/\b(criticized?|negative|terrible|awful|bad|wrong|failed|repetitive)\b/i.test(evidenceDescription) &&
