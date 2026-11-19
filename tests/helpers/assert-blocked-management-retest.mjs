@@ -772,7 +772,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
     /Historical mission 79 or approved renewed source changed/i);
    await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
-    /Historical mission 79 or approved renewed source changed/i);
+    /Original three-grant authority changed under binding lock/i);
    await verifyBindingUnchanged('Approved specification drift before binding');
   }finally{
    await first.query('rollback to savepoint before_binding_specification_tamper');
@@ -937,6 +937,34 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.notEqual(staleEpochClaim?.job?.id,originalJob.id);
   const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
   assert.notEqual(legacyClaim?.job?.id,originalJob.id);
+  // An owner-approved window can expire before its FIRST worker lease.
+  // The exact bound runtime must settle that historical mission terminally,
+  // without manufacturing a retry, charging tokens, or changing receipts.
+  await first.query('savepoint never_claimed_owner_window_expiry');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set deadline=clock_timestamp()-interval '1 minute' where id=$1",[project]);
+   await first.query("update agent_missions set deadline=clock_timestamp()-interval '1 minute' where id=$1",[scheduled.missionId]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   const before=(await first.query('select attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
+   assert.equal(before.attempts,0);assert.equal(before.lease,null);
+   const noLease=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
+   assert.notEqual(noLease?.job?.id,originalJob.id,'No original mission79 lease after owner cutoff');
+   const terminated=(await first.query('select status,attempts,lease from mission_assignments where id=$1',[originalJob.id])).rows[0];
+   assert.deepEqual(terminated,{status:'failed',attempts:0,lease:null});
+   assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,'blocked');
+   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
+   assert.equal((await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_unleased_owner_window_expired'",[project])).rows[0].n,1);
+   assert.equal((await first.query('select count(*)::int n from mission_calls where job_id=$1',[originalJob.id])).rows[0].n,0);
+  }finally{
+   await first.query('rollback to savepoint never_claimed_owner_window_expiry');
+   await first.query('release savepoint never_claimed_owner_window_expiry');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_UNLEASED_OWNER_CUTOFF_TERMINAL_SETTLEMENT_PASS');
   const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   if(!claimed||claimed.mission?.id!==scheduled.missionId){

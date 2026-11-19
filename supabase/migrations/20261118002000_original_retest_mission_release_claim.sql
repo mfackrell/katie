@@ -1147,6 +1147,48 @@ begin
      'deploymentId',p_deployment,'generation',p_epoch,
      'settledAt',clock_timestamp()));
  end if;
+ -- A newly bound, never-claimed mission that reaches its owner cutoff has
+ -- no provider call, charge or recoverable lease. Terminalize that ONE saved
+ -- assignment under the exact gate generation, leaving all receipts intact.
+ update mission_assignments unleased
+ set status='failed',detail='Original mission79 cutoff expired before first worker lease; no inference was authorized.',
+  updated_at=clock_timestamp()
+ from agent_missions m79
+ join work_projects p79 on p79.id=m79.project_id
+ join project_retest_claim_release_receipts receipt on receipt.project_id=m79.project_id
+ join project_retest_production_release_gate fence on fence.project_id=m79.project_id
+ where unleased.id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+  and unleased.mission_id=m79.id and m79.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  and p79.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+  and p79.status='running' and p79.active_mission_id=m79.id
+  and p79.deadline<=clock_timestamp() and m79.deadline<=clock_timestamp()
+  and m79.status='running' and unleased.status='queued'
+  and unleased.attempts=0 and unleased.lease is null and unleased.lease_until is null
+  and receipt.mission_id=m79.id and receipt.assignment_id=unleased.id
+  and receipt.bound_release_sha=p_release
+  and receipt.bound_release_generation=p_epoch and receipt.bound_deployment_id=p_deployment
+  and fence.release_sha=p_release and fence.generation=p_epoch
+  and fence.deployment_id=p_deployment and fence.state='active'
+  and fence.alias_name='katie-mu.vercel.app'
+  and not public.project_provider_request_pending(p79.id)
+ returning unleased.* into j;
+ if found then
+  update agent_missions set status='blocked',
+   detail='Original mission79 owner window expired before any worker lease; no inference or new mission was admitted.',
+   updated_at=clock_timestamp()
+   where id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid and status='running';
+  update work_projects set status='blocked',
+   detail='Original mission79 owner window expired before first worker lease; original results and charges retained.',
+   updated_at=clock_timestamp()
+   where id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    and status='running' and active_mission_id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid;
+  insert into project_events(project_id,event,data)
+   values('fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid,
+    'mission79_unleased_owner_window_expired',
+    jsonb_build_object('missionId','b7c2e557-83e1-41cb-b174-bdb0d77d12e5',
+     'assignmentId',j.id,'attempts',0,'releaseSha',p_release,
+     'deploymentId',p_deployment,'generation',p_epoch,'expiredAt',clock_timestamp()));
+ end if;
 $m79_finalize$);
 
  -- The first release predicate is evaluated before waiting on the managed
