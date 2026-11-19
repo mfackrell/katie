@@ -199,3 +199,27 @@ test("PostgREST numeric-string verified rates survive an ordinary documentation 
   assert.equal(row.routing_eligibility, "verified");
   assert.equal(row.pricing_verified_at, "2026-11-18T19:00:00.000Z");
 });
+
+test("verified numeric rates reject invalid PostgREST values and accept canonical decimal strings", () => {
+  const now = "2026-11-18T20:00:00.000Z";
+  const evidence = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
+  const trusted = retainOfficialModelEvidence(syntheticRecord(now), undefined, evidence, now);
+  for (const [input, output] of [["0.10", "40"], ["8", "40"], [8, 40]] as const) {
+    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: output }
+      as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
+    const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
+    assert.equal(row.pricing_status, "verified");
+    assert.equal(row.pricing_input_per_1m, Number(input));
+    assert.equal(row.pricing_output_per_1m, Number(output));
+    assert.equal(row.routing_eligibility, "verified");
+    assert.equal(row.pricing_verified_at, now);
+  }
+  for (const input of ["-8", "8e2", "08", "8.", "", "NaN", "Infinity", " 8", null, Number.POSITIVE_INFINITY, Number.NaN]) {
+    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: "40" }
+      as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
+    const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
+    assert.equal(row.pricing_status, "estimated", String(input));
+    assert.equal(row.routing_eligibility, "restricted", String(input));
+    assert.equal(row.pricing_verified_at, null, String(input));
+  }
+});
