@@ -1,4 +1,5 @@
 import { type RoutingEvidence } from "@/lib/router/observed-evidence";
+import type { CurrentTurnFeedbackProvenanceV1 } from "@/lib/router/current-turn-feedback";
 import { getModelPrice } from "@/lib/standalone-accounting/pricing";
 import type { ProjectTransition } from "@/lib/chat/task-progress";
 import { isNonConversationalModel } from "@/lib/models/non-conversational";
@@ -873,6 +874,8 @@ async function executeControlPlaneJsonTask<T>(args: {
   userPrompt: string;
   parse: (raw: string, sourceLabel: string) => T | null;
   timeoutMs: number;
+  /** Best Value only: max of initial, correction, and one alternate decision-provider attempt. */
+  bestValueSelection?: boolean;
 }): Promise<{ result: T; provider: ProviderName; modelId: string } | null> {
   const params = {
     name: "Katie Control Plane",
@@ -883,7 +886,10 @@ async function executeControlPlaneJsonTask<T>(args: {
   let correctionAvailable = (args.taskName === "routing-rerank" || args.taskName === "intent-classification")
     && getAccountingScope()?.kind === "standalone";
   let correction = "";
-  while (remaining.length) {
+  const maxAttempts = args.bestValueSelection ? 3 : Number.POSITIVE_INFINITY;
+  let attempted = 0;
+  while (remaining.length && attempted < maxAttempts) {
+    attempted += 1;
     // Each failed/invalid helper consumes an activity ordinal. Resolve that
     // ordinal again before choosing the next fallback, including on resume.
     const ranked = await rankControlPlaneByActualCost(remaining, {...params, user: params.user + correction}, undefined, `control_plane_${args.taskName}`);
@@ -911,7 +917,9 @@ async function executeControlPlaneJsonTask<T>(args: {
         correctionAvailable = false;
         correction = args.taskName === "intent-classification"
           ? "\nCORRECTION: Previous output failed structured understanding validation. Return the full required JSON schema, including complexity, response_purpose, provider_refusal_risk, primary_objective, nonempty objective_evidence quoting the CURRENT_USER_MESSAGE exactly, context_influence (state explicitly if none), quality_requirements describing required response quality, and selection_justification."
-          : "\nCORRECTION: Previous output was invalid, lacked a task-specific justification or eligible comparisons, or selected an ineligible candidate. Return the full required JSON with exactly one eligible selected model, and 1-3 distinct eligible alternatives with specific quality/cost/uncertainty comparisons (or [] if only one eligible candidate).";
+          : args.bestValueSelection
+            ? "\nCORRECTION: The preceding Best Value selection did not satisfy the required contract. Select an EXACT provider:model pair present in candidates, supply a task-specific selection_justification and eligible alternatives, and include the COMPLETE quality_qualification object: required_quality, selected_fit, evidence_basis_kind, evidence_basis, comparative_uncertainty, cost_after_qualification. For attributed_feedback cite an explicit source_id in the SELECTED model's evidence and its actual positive/negative/ambiguous outcome; silence or mere continuation is NOT positive feedback. If no source supports a positive claim, use documented_capability or reasoned_inference with honest uncertainty."
+            : "\nCORRECTION: Previous output was invalid, lacked a task-specific justification or eligible comparisons, or selected an ineligible candidate. Return the full required JSON with exactly one eligible selected model, and 1-3 distinct eligible alternatives with specific quality/cost/uncertainty comparisons (or [] if only one eligible candidate).";
         remaining.unshift(candidate);
       }
       console.warn(`[ControlPlane:${args.taskName}] rejected_response provider=${sourceLabel}`);
@@ -2276,6 +2284,8 @@ export async function chooseRoutingWithLLM(args: {
   timeoutMs?: number;
   routing_mode?: RoutingMode;
   requestEvidence?: RoutingEvidence;
+  /** Current trusted feedback is supplemental; the next responder cannot be its target. */
+  currentTurnFeedback?: CurrentTurnFeedbackProvenanceV1 | null;
   understanding?: InferredRequestClassification | null;
   prompt: string;
   intent: RequestIntent;
@@ -2370,7 +2380,7 @@ BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:
 
 For Best Value selections with multiple eligible candidates, REQUIRED additional JSON:
 "quality_qualification":{"required_quality":"concrete material response requirements, independent of price","selected_fit":"why this model meets them","evidence_basis_kind":"attributed_feedback|verified_outcome|documented_capability|reasoned_inference","evidence_basis":"specific available evidence and provenance, or an explicit statement that direct outcome evidence is missing","comparative_uncertainty":"material unknown comparisons and limitations","cost_after_qualification":"why this is the economical choice among the reasonably qualified candidates"}
-Do not cite direct feedback or verified outcomes unless actually present in the supplied candidate evidence. Where evidence is only inferred, state that comparative outcome quality is unknown. Do not substitute cost for an adequate-quality finding.
+Do not cite direct feedback or verified outcomes unless actually present in the SELECTED provider:model candidate evidence. If evidence_basis_kind is attributed_feedback, cite the exact source_id and faithfully state whether its outcome was positive, negative or ambiguous; mere continued conversation and lack of complaint are not positive outcomes. Verified outcome citations must reference selected-model observations, never another candidate. Where evidence is only inferred, state that comparative outcome quality is unknown. Do not substitute cost for an adequate-quality finding.
 ` : "";
 
   const result = await executeControlPlaneJsonTask({
@@ -2387,7 +2397,8 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       modality_flags: args.modalityFlags,
       hard_route_context: args.hardRouteContext,
       ...(neutral ? {routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
-        routing_overhead: args.requestEvidence?.overhead ?? {status: "unknown", reason: "No observed control-plane receipts available"}} : {preference_profile: args.preferenceProfile}),
+        routing_overhead: args.requestEvidence?.overhead ?? {status: "unknown", reason: "No observed control-plane receipts available"},
+        ...(args.routing_mode === "best_answer" ? {} : {current_turn_feedback: args.currentTurnFeedback ?? null})} : {preference_profile: args.preferenceProfile}),
       candidates: neutral ? args.candidates.map(candidate => buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup, args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
     })}`,
     parse: (raw) => {
@@ -2417,11 +2428,78 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
           typeof qualification[key] !== "string" || !(qualification[key] as string).trim())) return null;
         const kind = qualification.evidence_basis_kind;
         if (!["attributed_feedback","verified_outcome","documented_capability","reasoned_inference"].includes(String(kind))) return null;
-        const supplied = Object.values(args.requestEvidence?.candidates ?? {});
-        if (kind === "attributed_feedback" && !supplied.some(candidate =>
-          (candidate.quality.feedback?.evidence.length ?? 0) > 0)) return null;
-        if (kind === "verified_outcome" && !supplied.some(candidate =>
-          candidate.quality.observations.some(observation => observation.passes > 0))) return null;
+        // A model must qualify on ITS OWN sourced evidence, never any other
+        // candidate's feedback. The model's citations must identify an actual
+        // direct event and cannot infer praise from user silence or engagement.
+        const selectedEvidence = args.requestEvidence?.candidates[`${selectedProvider}:${selectedModel}`]?.quality;
+        const evidenceDescription = String(qualification.evidence_basis);
+        // The basis label is generated by the decision model, not a trusted
+        // authority. Check *all* selected-model rationale fields so a claim of
+        // user satisfaction cannot be laundered as "documented_capability",
+        // "verified_outcome" or "reasoned_inference".
+        const selectedRationale = [
+          selectionJustification, String(qualification.selected_fit), evidenceDescription
+        ];
+        const explicitUserFeedbackClauses = selectedRationale.flatMap(text =>
+          text.split(/[.;\n]|\b(?:but|however|yet)\b/i).map(fragment => fragment.trim())
+            .filter(clause => {
+              // Absence of a reaction is not proof of either satisfaction or
+              // dissatisfaction. Preserve explicit absence-of-evidence claims.
+              if (/^(?:no|there (?:is|are|was|were) no|without|lack(?:s|ing)?|absence of|missing|unknown|unverified)\b/i.test(clause)) {
+                return false;
+              }
+              // The selecting model controls the narrative and basis label, not
+              // the facts. Detect user feedback even when its word order is
+              // "user feedback was positive", "user expressed satisfaction",
+              // or "the answer earned praise from the user". Do not infer
+              // feedback from generic claims that users want good answers.
+              const identifiesUser = /\b(?:users?|customers?|clients?|readers?)\b/i.test(clause);
+              const directAssessment = /\b(?:prais(?:e|ed|es|ing)|lik(?:e|ed|es|ing)|lov(?:e|ed|es|ing)|approv(?:e|ed|es|al)|endors(?:e|ed|es|ement)|criticiz(?:e|ed|es|ing)|critici(?:sm|sed|se)|dislik(?:e|ed|es|ing)|reject(?:ed|ion|s)?|complain(?:ed|s|t|ts)?|satisf(?:ied|action)|dissatisf(?:ied|action))\b/i.test(clause);
+              const feedbackNoun = /\b(?:feedback|reactions?|reviews?|ratings?|sentiment|responses?)\b/i.test(clause);
+              const describesOutcome = /\b(?:positive|negative|mixed|ambiguous|favorable|unfavorable|satisfied|dissatisfied)\b/i.test(clause);
+              return identifiesUser && (directAssessment || (feedbackNoun && describesOutcome));
+            })
+        );
+        const explicitUserFeedbackClaim = explicitUserFeedbackClauses.length > 0;
+        if (explicitUserFeedbackClaim && kind !== "attributed_feedback") return null;
+        // Even with an otherwise valid own-model citation, a separate source
+        // ID belonging only to another candidate cannot support the winner's
+        // user-reaction narrative or selection justification.
+        if (explicitUserFeedbackClaim && kind === "attributed_feedback") {
+          const ownSourceIds = new Set((selectedEvidence?.feedback?.evidence ?? [])
+            .map(event => event.source_id).filter(Boolean));
+          for (const [candidateKey, candidateEvidence] of Object.entries(args.requestEvidence?.candidates ?? {})) {
+            if (candidateKey === `${selectedProvider}:${selectedModel}`) continue;
+            if ((candidateEvidence.quality.feedback?.evidence ?? []).some(event =>
+              Boolean(event.source_id) && !ownSourceIds.has(event.source_id) &&
+              selectedRationale.some(text => text.includes(event.source_id)))) return null;
+          }
+        }
+        if (kind === "attributed_feedback") {
+          const citedEvents = (selectedEvidence?.feedback?.evidence ?? []).filter(event =>
+            Boolean(event.source_id) && evidenceDescription.includes(event.source_id));
+          if (!citedEvents.length) return null;
+          // Validate claimed user polarity across all selected rationale
+          // fields, not just evidence_basis. An ambiguous/negative event cannot
+          // support invented satisfaction in selection_justification or fit.
+          if (explicitUserFeedbackClauses.some(clause =>
+            /\b(?:positive|favorable|prais(?:e|ed|es|ing)|lik(?:e|ed|es|ing)|lov(?:e|ed|es|ing)|approv(?:e|ed|es|al)|endors(?:e|ed|es|ement)|satisf(?:ied|action))\b/i.test(clause) &&
+            !/\b(?:not|never)\s+(?:fully\s+)?satisfied\b/i.test(clause) &&
+            !citedEvents.some(event => event.outcome === "positive"))) return null;
+          if (explicitUserFeedbackClauses.some(clause =>
+            /\b(?:negative|unfavorable|criticiz(?:e|ed|es|ing)|critici(?:sm|sed|se)|dislik(?:e|ed|es|ing)|reject(?:ed|ion|s)?|complain(?:ed|s|t|ts)?|dissatisf(?:ied|action))\b|\b(?:not|never)\s+(?:fully\s+)?satisfied\b/i.test(clause) &&
+            !citedEvents.some(event => event.outcome === "negative"))) return null;
+          if (explicitUserFeedbackClauses.some(clause =>
+            /\b(?:mixed|ambiguous)\b/i.test(clause) &&
+            !citedEvents.some(event => event.outcome === "ambiguous"))) return null;
+          if (/\b(praised?|positive|successful|success|satisfied|satisfaction|approved|liked?|better|good|excellent|accepted|worked)\b/i.test(evidenceDescription) &&
+              !citedEvents.some(event => event.outcome === "positive")) return null;
+          if (/\b(criticized?|negative|terrible|awful|bad|wrong|failed|repetitive)\b/i.test(evidenceDescription) &&
+              !citedEvents.some(event => event.outcome === "negative")) return null;
+        }
+        if (kind === "verified_outcome" && !selectedEvidence?.observations.some(observation =>
+          observation.passes > 0 && observation.provenance.some(id =>
+            Boolean(id) && evidenceDescription.includes(id)))) return null;
         if (kind === "reasoned_inference" &&
           !/unknown|uncertain|unverified|limited evidence/i.test(String(qualification.comparative_uncertainty))) return null;
       }
@@ -2449,7 +2527,8 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       if (neutral && args.candidates.length > 1 && selectionComparisons.length === 0) return null;
       return { selectedProvider, selectedModel, selectionJustification, selectionComparisons };
     },
-    timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
+    timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+    bestValueSelection: neutral && (args.routing_mode ?? "best_value") === "best_value"
   });
   if (!result) {
     return { accepted: false, reason: "all_decision_providers_failed" };
