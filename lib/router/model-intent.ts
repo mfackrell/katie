@@ -2429,90 +2429,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     seenJudgeModels.add(key);
   }
 
-  const judgeBrief = `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
-    prompt: args.prompt,
-    intent: args.intent,
-    secondary_intents: args.secondaryIntents ?? [],
-    complexity: args.complexity ?? null,
-    provider_refusal_risk: args.providerRefusalRisk ?? "low",
-    conversation_context: compactConversationContext(args.conversationContext),
-    reroute_context: args.rerouteContext ?? null,
-    modality_flags: args.modalityFlags,
-    hard_route_context: args.hardRouteContext,
-    ...(neutral ? { routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
-      routing_overhead: args.requestEvidence?.overhead ?? { status: "unknown", reason: "No observed control-plane receipts available" },
-      ...(args.routing_mode === "best_answer" ? {} : { current_turn_feedback: args.currentTurnFeedback ?? null }) }
-      : { preference_profile: args.preferenceProfile }),
-    candidates: neutral ? args.candidates.map(candidate =>
-      buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup,
-        args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
-  })}`;
-
-  const judgeResults = await Promise.allSettled(judges.map((judge, lane) =>
-    executeControlPlaneJsonTask({
-      taskName: "routing-rerank",
-      decisionProviders: [judge],
-      userPrompt: judgeBrief,
-      activityOverride: `routing-rerank_judge_${lane}`,
-      singleAttempt: true,
-      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
-      parse: parseRoutingJudgeResponse,
-    })
-  ));
-  const validJudgments = judgeResults.flatMap((result, lane) =>
-    result.status === "fulfilled" && result.value
-      ? [{ ...result.value, lane }] : []);
-  console.info("[RoutingJudges] completed", {
-    requested: judges.length,
-    valid: validJudgments.length,
-    rejected: judgeResults.filter(result => result.status === "rejected").length,
-    // Only judge model IDs, not user content, are logged.
-    judges: judges.map(judge => `${judge.provider.name}:${judge.modelId}`),
-  });
-
-  // A supported quality qualification and corroborating independent judges
-  // are more valuable than a bare vote. Any selected model was already checked
-  // against the exact eligible candidate set by the shared parser below.
-  const winners = new Map<string, {
-    key: string; judgments: typeof validJudgments; votes: number; priorScore: number;
-  }>();
-  for (const judgment of validJudgments) {
-    const key = `${judgment.result.selectedProvider}:${judgment.result.selectedModel}`;
-    const existing = winners.get(key);
-    if (existing) {
-      existing.votes++;
-      existing.judgments.push(judgment);
-    } else {
-      const candidate = args.candidates.find(c =>
-        c.providerName === judgment.result.selectedProvider && c.modelId === judgment.result.selectedModel);
-      winners.set(key, { key, judgments: [judgment], votes: 1, priorScore: candidate?.prior_score ?? 0 });
-    }
-  }
-  const chosen = [...winners.values()].sort((a, b) =>
-    b.votes - a.votes || b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
-  const result = chosen?.judgments
-    .sort((a, b) => a.lane - b.lane)[0] ?? null;
-
-  /*
-  const result = await executeControlPlaneJsonTask({
-    taskName: "routing-rerank",
-    decisionProviders: eligibleDecisionProviders,
-    userPrompt: `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
-      prompt: args.prompt,
-      intent: args.intent,
-      secondary_intents: args.secondaryIntents ?? [],
-      complexity: args.complexity ?? null,
-      provider_refusal_risk: args.providerRefusalRisk ?? "low",
-      conversation_context: compactConversationContext(args.conversationContext),
-      reroute_context: args.rerouteContext ?? null,
-      modality_flags: args.modalityFlags,
-      hard_route_context: args.hardRouteContext,
-      ...(neutral ? {routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
-        routing_overhead: args.requestEvidence?.overhead ?? {status: "unknown", reason: "No observed control-plane receipts available"},
-        ...(args.routing_mode === "best_answer" ? {} : {current_turn_feedback: args.currentTurnFeedback ?? null})} : {preference_profile: args.preferenceProfile}),
-      candidates: neutral ? args.candidates.map(candidate => buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup, args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
-    })}`,
-    parse: (raw) => {
+  const parseRoutingJudgeResponse = (raw: string) => {
       const trimmed = raw.trim();
       if (!trimmed) {
         return null;
@@ -2637,11 +2554,72 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       // one actual eligible alternative whenever a choice exists.
       if (neutral && args.candidates.length > 1 && selectionComparisons.length === 0) return null;
       return { selectedProvider, selectedModel, selectionJustification, selectionComparisons };
-    },
-    timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
-    bestValueSelection: neutral && (args.routing_mode ?? "best_value") === "best_value"
+  };
+
+  const judgeBrief = `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
+    prompt: args.prompt,
+    intent: args.intent,
+    secondary_intents: args.secondaryIntents ?? [],
+    complexity: args.complexity ?? null,
+    provider_refusal_risk: args.providerRefusalRisk ?? "low",
+    conversation_context: compactConversationContext(args.conversationContext),
+    reroute_context: args.rerouteContext ?? null,
+    modality_flags: args.modalityFlags,
+    hard_route_context: args.hardRouteContext,
+    ...(neutral ? { routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
+      routing_overhead: args.requestEvidence?.overhead ?? { status: "unknown", reason: "No observed control-plane receipts available" },
+      ...(args.routing_mode === "best_answer" ? {} : { current_turn_feedback: args.currentTurnFeedback ?? null }) }
+      : { preference_profile: args.preferenceProfile }),
+    candidates: neutral ? args.candidates.map(candidate =>
+      buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup,
+        args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
+  })}`;
+
+  const judgeResults = await Promise.allSettled(judges.map((judge, lane) =>
+    executeControlPlaneJsonTask({
+      taskName: "routing-rerank",
+      decisionProviders: [judge],
+      userPrompt: judgeBrief,
+      activityOverride: `routing-rerank_judge_${lane}`,
+      singleAttempt: true,
+      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+      parse: parseRoutingJudgeResponse,
+    })
+  ));
+  const validJudgments = judgeResults.flatMap((result, lane) =>
+    result.status === "fulfilled" && result.value
+      ? [{ ...result.value, lane }] : []);
+  console.info("[RoutingJudges] completed", {
+    requested: judges.length,
+    valid: validJudgments.length,
+    rejected: judgeResults.filter(result => result.status === "rejected").length,
+    // Only judge model IDs, not user content, are logged.
+    judges: judges.map(judge => `${judge.provider.name}:${judge.modelId}`),
   });
-  */
+
+  // A supported quality qualification and corroborating independent judges
+  // are more valuable than a bare vote. Any selected model was already checked
+  // against the exact eligible candidate set by the shared parser below.
+  const winners = new Map<string, {
+    key: string; judgments: typeof validJudgments; votes: number; priorScore: number;
+  }>();
+  for (const judgment of validJudgments) {
+    const key = `${judgment.result.selectedProvider}:${judgment.result.selectedModel}`;
+    const existing = winners.get(key);
+    if (existing) {
+      existing.votes++;
+      existing.judgments.push(judgment);
+    } else {
+      const candidate = args.candidates.find(c =>
+        c.providerName === judgment.result.selectedProvider && c.modelId === judgment.result.selectedModel);
+      winners.set(key, { key, judgments: [judgment], votes: 1, priorScore: candidate?.prior_score ?? 0 });
+    }
+  }
+  const chosen = [...winners.values()].sort((a, b) =>
+    b.votes - a.votes || b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
+  const result = chosen?.judgments
+    .sort((a, b) => a.lane - b.lane)[0] ?? null;
+
   if (!result) {
     return { accepted: false, reason: "all_decision_providers_failed" };
   }
