@@ -130,3 +130,70 @@ billing-specific surcharge controls require their separate acceptance gates.
 **Release gate remains:** no automatic inference requalification, no assumption that
 a documented model is authorized for billing, no routing-agent source changes, and
 no merge/deployment without independent review and owner authorization.
+
+
+## D6 owner-decision brief — 2026-11-19 (NO production policy implemented)
+
+### Independently inspected impact
+
+A read-only query of Katie's live public.model_registry on 2026-11-19 UTC showed:
+264 total rows; 178 active, 86 inactive; 178 active restricted, **zero active
+verified**, **zero verified provider/provider-label records across active and
+inactive**, and zero active provider_documentation-source rows. This is a
+point-in-time observation, NOT a guarantee about other environments, future
+refreshes or historical states. No production update occurred.
+
+The current D6 branch in buildRoutingRegistrySnapshot accepts two editable
+source_metadata fields (capability_source=provider and pricing_source=provider)
+without a provider-origin receipt. A stored previously documented model with
+0.10/40 instead of approved 8/40 can spoof these labels and bypass economic
+qualification. Repository/schema investigation found no independently
+verifiable provider capability+pricing producer or receipt. Adding a third
+untrusted JSON field does not establish provenance.
+
+Existing imported-production D6 tests expose the bypass; full strict CI on
+test-only SHA 4af32570257c50c41428b5094d59496c7565bad7 is intentionally
+RED: https://github.com/mfackrell/katie/actions/runs/44489521919 .
+Native PostgreSQL, video/review and website checks on that SHA passed.
+The D5 production code was restored byte-for-byte; no new D6 fix exists.
+
+### Option A: explicit OWNER authorization REQUIRED
+
+Propose a narrow in-memory routing-read gate: retain persisted verified only
+when the already implemented same-model first-party documentation, standard
+base pricing, expiry and scope checks pass, OR a future separately authorized
+independently attestable provider producer/receipt validates. **While no
+provider receipt exists, provider/provider labels alone never prove verified**;
+those records are effectively restricted at routing read, even if stored as
+verified. Current observed records to be downgraded: ZERO. Potential legacy
+or future provider-only verified records outside the observed snapshot could
+lose verified eligibility. This is a policy tightening and requires owner
+approval notwithstanding zero observed current impact.
+
+Preserve valid first-party documented verified records; pre-existing
+restricted/manual_override_only/disabled, inactive/quarantine and owner/actor
+rules; routing algorithms, paid-inference budget, financial controls and
+documented endpoint rules. Do not rewrite DB, call providers or alter A/B/C
+files. Reversible by reverting the reviewed read-time gate, not by altering
+stored prices, timestamps or evidence.
+
+### Option B: keep legacy behavior and HOLD release
+
+Without owner approval for Option A, or a separately approved, trustworthy
+external provider attestation mechanism and producer, D6 remains exploitable.
+Do not claim QA PASS or create a fabricated provider-origin positive fixture.
+
+### Post-approval acceptance matrix
+
+- Actual imported production snapshot builder: forged provider/provider labels
+  and 0.10/40, 8/41, labels-only 8/40, fabricated metadata receipt and
+  heuristic/missing-status combinations are ALL restricted.
+- Current exact same-model documented 8/40 positive remains verified;
+  missing/future/stale >24h timestamp, source/price/scope drift fail closed.
+- Restricted/manual/disabled and inactive/quarantine statuses unchanged.
+- A genuinely independent provider-origin positive case must use a real
+  authorized producer and verifiable receipt; no mutable-label-only fixture.
+- D6 RED-to-GREEN test logs, complete new-head strict/native PostgreSQL CI,
+  and Agent B independent non-author PASS required before owner release review.
+
+**No owner D6 authorization has been received. This is a proposal only.**
