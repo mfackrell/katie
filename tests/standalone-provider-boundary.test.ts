@@ -13,6 +13,7 @@ import { nativeToolTurn } from '../lib/providers/native-tools';
 import * as accountingDispatch from '../lib/standalone-accounting/dispatch';
 import { describeAttachmentEvidence } from '../lib/uploads/attachment-observations';
 import { googleGenerateContent } from '../lib/providers/google-transport';
+import { recordProviderTrace, readProviderResponseText, runProviderAttemptTrace, type ProviderTraceEvent } from '../lib/diagnostics/provider-attempt-timing';
 import type { GenerateContentParameters } from '@google/genai';
 import { selectStoredAttachments } from '../lib/chat/attachment-selection';
 import { ClaudeProvider } from '../lib/providers/claude-provider';
@@ -1295,4 +1296,100 @@ test('Gemini image quote refuses unreviewed model or resolution before provider 
   )),isStandaloneAccountingError);
  }
  assert.equal(paid,0);assert.equal(f.attempts.length,0);
+});
+
+
+test('diagnostic direct-versus-Katie mock sends byte-identical prepared payload without paid inference',async()=>{
+  const fake=fakeLedger();const katieEvents:ProviderTraceEvent[]=[];const directEvents:ProviderTraceEvent[]=[];
+  const transmitted:string[]=[];
+  const upstream:typeof fetch=async(_url,init)=>{
+    transmitted.push(String(init?.body));
+    return receipt('mock-receipt');
+  };
+  const send=createAccountingFetch('openai',upstream,fake.factory);
+  const meta={taskName:'routing-rerank',requestId:context.requestId,provider:'openai',modelId:'gpt-4o'};
+  const viaKatie=await runWithStandaloneAccounting(context,()=>runProviderAttemptTrace(meta,async()=>{
+    recordProviderTrace('request_preparation_started');
+    const result=await send('https://api.openai.com/v1/chat/completions',request);
+    recordProviderTrace('response_parsing_completed');
+    return result;
+  },event=>katieEvents.push(event)));
+  assert.equal(viaKatie.status,200);
+  assert.equal(fake.attempts[0].state,'settled');
+  assert.equal(transmitted.length,1);
+  assert.equal(transmitted[0],fake.attempts[0].prepared_payload.serializedBody);
+  const exactPrepared=transmitted[0];
+  await runProviderAttemptTrace(meta,async()=>{
+    recordProviderTrace('request_preparation_started');
+    recordProviderTrace('request_preparation_completed');
+    recordProviderTrace('dispatch_initiated');
+    const response=await upstream('https://api.openai.com/v1/chat/completions',{method:'POST',body:exactPrepared});
+    recordProviderTrace('response_headers_received',{httpStatus:response.status});
+    const text=await readProviderResponseText(response);
+    assert.ok(JSON.parse(text).id);
+    recordProviderTrace('response_parsing_completed');
+  },event=>directEvents.push(event));
+  assert.equal(transmitted.length,2);
+  assert.equal(transmitted[1],transmitted[0]);
+  for(const stages of [katieEvents,directEvents]){
+    for(const stage of ['dispatch_initiated','response_headers_received','first_response_chunk_received','response_body_received','response_parsing_completed']){
+      assert.ok(stages.some(event=>event.phase===stage),stage);
+    }
+  }
+  const katieHeaders=katieEvents.find(event=>event.phase==='response_headers_received')!;
+  const katieDispatch=katieEvents.find(event=>event.phase==='dispatch_initiated')!;
+  assert.ok(katieHeaders.elapsedMs>=katieDispatch.elapsedMs);
+  assert.equal(katieEvents.find(event=>event.phase==='provider_receipt_observed')?.attemptId,fake.attempts[0].id);
+  assert.equal(katieEvents.at(-1)?.observed?.receipt,true);
+  assert.equal(directEvents.at(-1)?.observed?.receipt,false,'direct mock has no accounting receipt reconciliation');
+});
+
+test('diagnostics distinguish actual provider HTTP rate limiting from missing receipt',async()=>{
+  const fake=fakeLedger();const events:ProviderTraceEvent[]=[];let sends=0;
+  const send=createAccountingFetch('openai',async()=>{
+    sends++;
+    return new Response(JSON.stringify({error:{type:'rate_limit_exceeded',message:'private response body'}}),{status:429});
+  },fake.factory);
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'trace-rate-limited'},()=>runProviderAttemptTrace({
+    taskName:'routing-rerank',requestId:'trace-rate-limited',provider:'openai',modelId:'gpt-4o',
+  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event))),isStandaloneAccountingError);
+  assert.equal(sends,1);
+  assert.equal(fake.attempts[0].state,'uncertain');
+  assert.equal(events.find(e=>e.phase==='response_headers_received')?.httpStatus,429);
+  assert.equal(events.find(e=>e.phase==='provider_http_rejection')?.failureCategory,'provider_rate_limit');
+  assert.equal(events.find(e=>e.phase==='provider_http_rejection')?.errorCode,'rate_limit_exceeded');
+  assert.equal(events.some(e=>e.phase==='local_synthetic_response'),false);
+  assert.equal(events.some(e=>e.phase==='provider_receipt_missing'),true);
+  assert.equal(events.at(-1)?.observed?.receipt,false);
+  assert.equal(JSON.stringify(events).includes('private response body'),false);
+});
+
+test('diagnostics mark complete HTTP body and missing provider receipt separately',async()=>{
+  const fake=fakeLedger();const events:ProviderTraceEvent[]=[];
+  const send=createAccountingFetch('openai',async()=>new Response('{"choices":[]}',{status:200}),fake.factory);
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'trace-missing-receipt'},()=>runProviderAttemptTrace({
+    taskName:'routing-rerank',requestId:'trace-missing-receipt',provider:'openai',modelId:'gpt-4o',
+  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event))),isStandaloneAccountingError);
+  assert.equal(events.find(e=>e.phase==='response_headers_received')?.httpStatus,200);
+  assert.equal(events.at(-1)?.observed?.completeBody,true);
+  assert.equal(events.at(-1)?.observed?.receipt,false);
+  assert.equal(events.some(e=>e.phase==='provider_receipt_missing'),true);
+  assert.equal(fake.attempts[0].state,'uncertain');
+});
+
+test('diagnostics distinguish owner abort request from transport abort observation',async()=>{
+  const fake=fakeLedger();const controller=new AbortController();const events:ProviderTraceEvent[]=[];
+  const send=createAccountingFetch('openai',async(_url,init)=>{
+    controller.abort();
+    init?.signal?.throwIfAborted();
+    throw Error('Unexpected transport continuation');
+  },fake.factory);
+  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'trace-cancelled',signal:controller.signal},()=>runProviderAttemptTrace({
+    taskName:'routing-rerank',requestId:'trace-cancelled',provider:'openai',modelId:'gpt-4o',
+  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event))),isStandaloneAccountingError);
+  assert.equal(fake.attempts[0].state,'uncertain');
+  assert.equal(events.filter(e=>e.phase==='cancellation_requested').length,1);
+  assert.equal(events.find(e=>e.phase==='cancellation_requested')?.cancellationReason,'parent_signal');
+  assert.equal(events.some(e=>e.phase==='cancellation_acknowledged'),true);
+  assert.equal(events.at(-1)?.observed?.cancellationAcknowledged,true);
 });
