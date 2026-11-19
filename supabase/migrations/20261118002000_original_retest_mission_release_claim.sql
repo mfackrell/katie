@@ -58,6 +58,26 @@ begin
  then raise exception 'Only active exact deployment can be sealed before promotion';end if;
  if p_action='active' and g.project_id is not null and g.state<>'closed'
  then raise exception 'Prior release must be closed before a new SHA is activated';end if;
+ -- A bound but unleased original management mission still has a valid
+ -- one-time owner grant. Closing and reopening this gate would invalidate
+ -- its immutable generation without any supported rebinding operation.
+ -- Fail CLOSED before any release mutation; let normal cron claim it, or
+ -- terminalize the expired unleased window under its existing exact epoch.
+ if p_action='closed' and exists(
+  select 1 from project_retest_claim_release_receipts receipt
+  join agent_missions m on m.id=receipt.mission_id
+  join mission_assignments j on j.id=receipt.assignment_id and j.mission_id=m.id
+  join work_projects wp on wp.id=receipt.project_id
+  where receipt.project_id=p_project
+   and receipt.mission_id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+   and receipt.assignment_id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+   and receipt.bound_release_sha=g.release_sha
+   and receipt.bound_deployment_id=g.deployment_id
+   and receipt.bound_release_generation=g.generation
+   and wp.active_mission_id=m.id and wp.status='running' and m.status='running'
+   and j.status='queued' and j.attempts=0
+   and j.lease is null and j.lease_until is null
+ ) then raise exception 'Bound original mission79 is unleased; close only after normal claim or expiry settlement';end if;
  -- Closing a generation must NEVER race a paid worker that already holds a
  -- source-bound lease. An expired lease can be cleared/requeued by the worker
  -- scheduler while the original worker is still in-flight, so reject every

@@ -897,38 +897,28 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'Historical continuation release must never reclaim owner-renewed mission79');
   const staleOther=await isolatedNegativeClaim(unboundRelease);
   assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
-  // A bound receipt is immutable for one deployment and generation.
-  // A later deployment serving the SAME SHA must not inherit the one-shot
-  // authority. Roll back promotions, then claim the real original binding.
-  await first.query('savepoint same_sha_replacement_negative');
+  // A promotion cannot invalidate the immutable bound generation while
+  // original mission79 is still queued and unleased. No release state,
+  // authorization receipt, mission, charges or worker attempt may change.
+  await first.query('savepoint unleased_binding_close_negative');
   try{
+   const gateBefore=(await first.query('select state,generation,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
+   const receiptBefore=(await first.query('select bound_release_sha,bound_release_generation,bound_deployment_id from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0];
    await first.query('reset role');
-   const sealed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
-    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
-   assert.equal(sealed.state,'closed');
+   await rejected(()=>first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',
+    [project,executionRelease,'dpl_NativeFixture79','closed']),
+    /Bound original mission79 is unleased/i);
+   assert.deepEqual((await first.query('select state,generation,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0],gateBefore);
+   assert.deepEqual((await first.query('select bound_release_sha,bound_release_generation,bound_deployment_id from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0],receiptBefore);
    await first.query('set role service_role');
-   assert.notEqual((await isolatedNegativeClaim(executionRelease))?.job?.id,originalJob.id);
-   await first.query('reset role');
-   const replacement=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
-    [project,executionRelease,'dpl_AnotherDeploymentSameSha','active'])).rows[0].g;
-   assert.equal(replacement.state,'active');
-   await first.query('set role service_role');
-   const newer=await releaseEpoch(executionRelease);
-   assert.ok(newer.generation>activeEpoch.generation);
-   const inherited=await isolatedNegativeClaim(executionRelease,newer.generation,'dpl_AnotherDeploymentSameSha');
-   assert.notEqual(inherited?.job?.id,originalJob.id,
-    'Same SHA on different production deployment cannot claim original mission79');
-   assert.equal((await first.query(
-    'select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',
-    [project,executionRelease,newer.generation,'dpl_AnotherDeploymentSameSha'])).rows[0].ok,false);
-   assert.notEqual((await isolatedNegativeClaim(executionRelease,activeEpoch.generation,'dpl_NativeFixture79'))?.job?.id,originalJob.id);
-   assert.notEqual((await isolatedNegativeClaim(executionRelease,'legacy'))?.job?.id,originalJob.id);
+   assert.equal((await first.query('select project_org_retest_claim_release_authorized($1,$2) ok',[project,executionRelease])).rows[0].ok,true);
+   assert.equal((await first.query('select status,attempts,lease from mission_assignments where id=$1',[originalJob.id])).rows[0].attempts,0);
   }finally{
-   await first.query('rollback to savepoint same_sha_replacement_negative');
-   await first.query('release savepoint same_sha_replacement_negative');
+   await first.query('rollback to savepoint unleased_binding_close_negative');
+   await first.query('release savepoint unleased_binding_close_negative');
    await first.query('set role service_role');
   }
-  console.log('MISSION79_SAME_SHA_REPLACEMENT_DEPLOYMENT_REJECTED_PASS');
+  console.log('MISSION79_UNLEASED_BOUND_GENERATION_CANNOT_BE_SUPERSEDED_PASS');
   const reopenedEpoch=await releaseEpoch(executionRelease);
   assert.equal(reopenedEpoch.generation,activeEpoch.generation,'Original owner-bound generation restored');
   const wrongDeployment=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation,'dpl_OtherDeployment');
@@ -961,6 +951,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
    assert.equal((await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_unleased_owner_window_expired'",[project])).rows[0].n,1);
    assert.equal((await first.query('select count(*)::int n from mission_calls where job_id=$1',[originalJob.id])).rows[0].n,0);
+   // Terminally expired, zero-attempt mission now permits the trusted
+   // coordinator's exact CLOSE, without creating a replacement grant.
+   await first.query('reset role');
+   const afterExpiryClose=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+   assert.equal(afterExpiryClose.state,'closed');
+   await first.query('set role service_role');
   }finally{
    await first.query('rollback to savepoint never_claimed_owner_window_expiry');
    await first.query('release savepoint never_claimed_owner_window_expiry');
