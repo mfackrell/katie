@@ -335,12 +335,12 @@ test("D4: stale documentation-verified stored row fails closed on routing read w
     assert.equal(loadWithoutRefresh([row({routing_eligibility: unchanged})])[0].routing_eligibility,
       unchanged, "do not upgrade or rewrite a preexisting policy status");
   }
-  const oldNonDocumentation = row({
+  const unprovenProviderLabels = row({
     source_metadata: {capability_source:"provider", pricing_source:"provider"},
     capability_verified_at: null, pricing_verified_at: null
   });
-  assert.equal(loadWithoutRefresh([oldNonDocumentation])[0].routing_eligibility, "verified",
-    "unrelated verified provider policy must not be silently rewritten");
+  assert.equal(loadWithoutRefresh([unprovenProviderLabels])[0].routing_eligibility, "restricted",
+    "provider labels alone are not independent verified proof");
   const grouped = buildRoutingRegistrySnapshot([{name:"openai"}, {name:"anthropic"}], [row()], now);
   assert.equal(grouped.get("openai")?.length, 1);
   assert.deepEqual(grouped.get("anthropic"), []);
@@ -392,5 +392,37 @@ test("D5: persisted documentation economic provenance is revalidated on every ro
   }
   assert.equal(noRefresh(persisted({source_metadata:{
     capability_source:"provider", pricing_source:"provider"
-  }})).routing_eligibility, "verified", "preserve independently established non-documentation provider evidence");
+  }})).routing_eligibility, "restricted", "unattested provider labels cannot establish independent verification");
+});
+
+test("D6: provider-only metadata labels cannot bypass read-time verified admission", () => {
+  const now = "2026-11-19T05:30:00.000Z";
+  const establishedAt = "2026-11-19T01:00:00.000Z";
+  const published = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
+  const approved = retainOfficialModelEvidence(syntheticRecord(establishedAt), undefined, published, establishedAt);
+  type Persisted = Parameters<typeof buildRoutingRegistrySnapshot>[1][number];
+  const snapshot = (changes: Record<string, unknown> = {}): string =>
+    buildRoutingRegistrySnapshot([{name:"openai"}], [
+      {...approved, ...changes} as unknown as Persisted
+    ], now).get("openai")![0].routing_eligibility;
+  const fakeProviderLabels = {capability_source:"provider", pricing_source:"provider"};
+  assert.equal(snapshot(), "verified", "valid current first-party evidence is still admitted");
+  assert.equal(snapshot({
+    source_metadata: fakeProviderLabels, pricing_input_per_1m:"0.10", pricing_output_per_1m:"40"
+  }), "restricted", "pricing 0.10/40 must not become verified after provenance labels swap");
+  assert.equal(snapshot({
+    source_metadata: fakeProviderLabels, pricing_input_per_1m:"8", pricing_output_per_1m:"41"
+  }), "restricted", "pricing 8/41 must not become verified after labels swap");
+  assert.equal(snapshot({source_metadata:fakeProviderLabels}), "restricted",
+    "matching prices plus two editable provider labels do not constitute a producer receipt");
+  assert.equal(snapshot({
+    source_metadata:fakeProviderLabels, capability_status:"heuristic", pricing_status:"missing"
+  }), "restricted", "contradictory statuses always block verified admission");
+  assert.equal(snapshot({source_metadata:{
+    ...fakeProviderLabels, provider_verification_receipt:"invented", producer:"claimed-provider"
+  }}), "restricted", "an unrecognized metadata receipt cannot self-attest independent proof");
+  for (const locked of ["restricted","manual_override_only","disabled"] as const) {
+    assert.equal(snapshot({routing_eligibility:locked}), locked,
+      "explicit non-verified routing policy is preserved");
+  }
 });
