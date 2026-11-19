@@ -91,7 +91,7 @@ function prepared(f:Case, mode=f.mode??'best-answer', overrides:{
   currentTurnFeedback?:unknown;
 }={}) {
   const history=f.history.map(turn=>({
-    id:turn.id,role:turn.role,content:turn.text,
+    id:turn.id,role:turn.role,content:turn.text,chatId:turn.chat_id??f.current.chat_id??'chat-fixture',
     ...(turn.model?{model:turn.model}:{}),
     ...(turn.provider?{provider:turn.provider}:{}),
     ...(turn.request_id?{request_id:turn.request_id}:{}),
@@ -295,6 +295,10 @@ test('C-08 v1 feedback provenance must reach generation as prior settled source,
   }});
   assert.ok(!wrongTarget.persona.includes(f.history[0].text),
     'Misattributed previous assistant must fail closed');
+  const foreignChat:Case={...f,history:f.history.map(turn=>({...turn,chat_id:'foreign-chat'}))};
+  const wrongChat=prepared(foreignChat,'best-value',{currentTurnFeedback:sourceLinkedFeedback});
+  assert.ok(!wrongChat.persona.includes(f.history[0].text),
+    'Source linked to another chat must not be promoted into generation guidance');
   const wrongRequest=prepared(f,'best-value',{currentTurnFeedback:{
     ...sourceLinkedFeedback,source:{...sourceLinkedFeedback.source,requestId:'foreign-request'},
   }});
