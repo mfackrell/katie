@@ -2586,6 +2586,14 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       parse: parseRoutingJudgeResponse,
     })
   ));
+  // A cancelled/unauthorized owner request is terminal for the whole
+  // operation, even if another judge happened to produce an answer.
+  const fatal = judgeResults.find(result =>
+    result.status === "rejected" &&
+    isTerminalAttemptError(result.reason) &&
+    !(result.reason instanceof Error && "code" in result.reason &&
+      result.reason.code === "standalone_outcome_unknown"));
+  if (fatal?.status === "rejected") throw fatal.reason;
   const validJudgments = judgeResults.flatMap((result, lane) =>
     result.status === "fulfilled" && result.value
       ? [{ ...result.value, lane }] : []);
@@ -2602,6 +2610,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
   // against the exact eligible candidate set by the shared parser below.
   const winners = new Map<string, {
     key: string; judgments: typeof validJudgments; votes: number; priorScore: number;
+    qualityEvidence: number;
   }>();
   for (const judgment of validJudgments) {
     const key = `${judgment.result.selectedProvider}:${judgment.result.selectedModel}`;
@@ -2612,11 +2621,23 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     } else {
       const candidate = args.candidates.find(c =>
         c.providerName === judgment.result.selectedProvider && c.modelId === judgment.result.selectedModel);
-      winners.set(key, { key, judgments: [judgment], votes: 1, priorScore: candidate?.prior_score ?? 0 });
+      const feedback = args.requestEvidence?.candidates[key]?.quality.feedback;
+      // Only explicit task-intent-attributed reactions can change evidence
+      // strength. Delivery receipts are not treated as proof of answer quality.
+      const qualityEvidence = Math.max(-2, Math.min(2,
+        Math.min(2, feedback?.positive ?? 0) - Math.min(2, feedback?.negative ?? 0)));
+      winners.set(key, {
+        key, judgments: [judgment], votes: 1,
+        priorScore: candidate?.prior_score ?? 0, qualityEvidence,
+      });
     }
   }
+  // Strong direct feedback can outweigh a 2:1 vote; absent trustworthy
+  // quality observations, independent agreement wins. Scorecard prior scores
+  // are only tie-breakers and never counterfeit observed response quality.
   const chosen = [...winners.values()].sort((a, b) =>
-    b.votes - a.votes || b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
+    (b.qualityEvidence * 3 + b.votes) - (a.qualityEvidence * 3 + a.votes) ||
+    b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
   const result = chosen?.judgments
     .sort((a, b) => a.lane - b.lane)[0] ?? null;
 
