@@ -1,0 +1,426 @@
+{
+  "title": "Agent C — Objective continuity and feedback correction independent regression fixtures",
+  "status": "PREPARATION ONLY — NOT EXECUTED AGAINST KATIE",
+  "fixture_nature": "Synthetic, deterministic, no user secrets or live provider calls",
+  "target": "mfackrell/katie; Director V2 issue #1120",
+  "baseline_sha": "4e4c167f8faa6a5c0ec088ad41f21545a08937b0",
+  "proposed_interface": "Capture the production generation input, classified intent, routing evidence attribution and durable dispatch ledger through existing test seams; no new production interface is mandated by this packet.",
+  "evaluation": "Fields under expect are acceptance requirements. Semantic initiative/newness is separately rated by independent QA; never treat a keyword-only rule as a full correctness proof.",
+  "fixtures": [
+    {
+      "id": "C-01",
+      "category": "objective_continuity",
+      "title": "Criticism of repetitive assistant must preserve creative conversational objective",
+      "history": [
+        {
+          "id": "msg-c-prior-user",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "msg-c-prior-assistant",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "request_id": "req-c-prior"
+        }
+      ],
+      "current": {
+        "id": "msg-c-current-user",
+        "text": "Katie, that is terrible. You repeated yourself and failed to take initiative."
+      },
+      "mode": "best-value",
+      "expect": {
+        "continue_prior_objective": true,
+        "objective_source_message_id": "msg-c-prior-user",
+        "correction_source_message_id": "msg-c-current-user",
+        "feedback_target_assistant_id": "msg-c-prior-assistant",
+        "no_menu": true,
+        "no_unnecessary_question": true,
+        "new_concrete_idea_or_development": true,
+        "not_merely_apology": true
+      }
+    },
+    {
+      "id": "C-02",
+      "category": "objective_continuity",
+      "title": "Positive feedback and request to continue: retain objective without fabricating negative feedback",
+      "history": [
+        {
+          "id": "u2",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a2",
+          "role": "assistant",
+          "text": "A brief, original conversational invitation about a strange postcard."
+        }
+      ],
+      "current": {
+        "id": "u2-current",
+        "text": "That is better. Keep leading."
+      },
+      "mode": "best-answer",
+      "expect": {
+        "continue_prior_objective": true,
+        "objective_source_message_id": "u2",
+        "feedback_polarity": "positive",
+        "do_not_invent_negative_feedback": true,
+        "new_concrete_idea_or_development": true
+      }
+    },
+    {
+      "id": "C-03",
+      "category": "objective_continuity",
+      "title": "Semantic premise repetition is not hidden by different wording",
+      "history": [
+        {
+          "id": "u3",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a3",
+          "role": "assistant",
+          "text": "Imagine an imaginary personal performance review with scores for your conversation style and a list of categories."
+        }
+      ],
+      "current": {
+        "id": "u3-current",
+        "text": "Stop rehashing your performance-review gimmick. Take initiative."
+      },
+      "mode": "best-value",
+      "expect": {
+        "continue_prior_objective": true,
+        "do_not_reuse_premise": "scorecard, performance-review, interview, or menu framework",
+        "new_concrete_idea_or_development": true,
+        "not_merely_apology": true
+      }
+    },
+    {
+      "id": "C-04",
+      "category": "task_boundary",
+      "title": "Explicit topic switch supersedes creative objective",
+      "history": [
+        {
+          "id": "u4",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a4",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u4-current",
+        "text": "New topic: what does an accrual mean in accounting?"
+      },
+      "mode": "best-answer",
+      "expect": {
+        "continue_prior_objective": false,
+        "respond_to_current_topic": true,
+        "no_creative_context_in_generation_directives": true
+      }
+    },
+    {
+      "id": "C-05",
+      "category": "task_boundary",
+      "title": "Newest explicit preference reverses no-questions constraint",
+      "history": [
+        {
+          "id": "u5",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a5",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u5-current",
+        "text": "I changed my mind: ask me three questions before continuing."
+      },
+      "mode": "best-value",
+      "expect": {
+        "latest_explicit_user_instruction_wins": true,
+        "must_not_enforce_old_no_questions": true
+      }
+    },
+    {
+      "id": "C-06",
+      "category": "task_boundary",
+      "title": "Active professional deliverable pause remains intact during terminology clarification",
+      "history": [
+        {
+          "id": "u6",
+          "role": "user",
+          "text": "Prepare my FP&A application response."
+        },
+        {
+          "id": "a6",
+          "role": "assistant",
+          "text": "Do you have sponsor reporting experience?"
+        }
+      ],
+      "current": {
+        "id": "u6-current",
+        "text": "What is sponsor reporting?"
+      },
+      "mode": "best-answer",
+      "expect": {
+        "answer_definition": true,
+        "do_not_resume_application_draft": true,
+        "retain_work_as_pending_not_auto_execute": true
+      }
+    },
+    {
+      "id": "C-07",
+      "category": "task_boundary",
+      "title": "Open-ended creative dialogue is not treated as fictional narrative by default",
+      "history": [
+        {
+          "id": "u7",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a7",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u7-current",
+        "text": "Katie, that is terrible. You repeated yourself and failed to take initiative."
+      },
+      "mode": "best-answer",
+      "expect": {
+        "continue_prior_objective": true,
+        "must_not_force_fiction_scene": true,
+        "natural_personal_conversation": true,
+        "take_initiative": true
+      }
+    },
+    {
+      "id": "C-08",
+      "category": "feedback_attribution",
+      "title": "Current-turn negative feedback targets prior settled answer, not new selected model",
+      "history": [
+        {
+          "id": "u8",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a8",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?",
+          "request_id": "req-old",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "status": "completed"
+        }
+      ],
+      "current": {
+        "id": "u8-current",
+        "text": "Katie, that is terrible. You repeated yourself and failed to take initiative."
+      },
+      "selected_next": {
+        "provider": "google",
+        "model": "gemini-2.5-pro"
+      },
+      "mode": "best-value",
+      "expect": {
+        "feedback_target_assistant_id": "a8",
+        "feedback_target_request_id": "req-old",
+        "feedback_target_provider": "openai",
+        "feedback_target_model": "gpt-5.6-luna",
+        "do_not_attribute_to_next_model": true,
+        "do_not_invent_positive_satisfaction": true
+      }
+    },
+    {
+      "id": "C-09",
+      "category": "feedback_attribution",
+      "title": "Feedback without a preceding completed assistant response is not misattributed",
+      "history": [
+        {
+          "id": "u9",
+          "role": "user",
+          "text": "Set a reminder to review the report."
+        }
+      ],
+      "current": {
+        "id": "u9-current",
+        "text": "That was terrible."
+      },
+      "selected_next": {
+        "provider": "google",
+        "model": "gemini-2.5-pro"
+      },
+      "mode": "best-value",
+      "expect": {
+        "unattributed_or_ambiguous_feedback": true,
+        "must_not_guess_feedback_target": true
+      }
+    },
+    {
+      "id": "C-10",
+      "category": "isolation",
+      "title": "Prior unrelated chat or actor must not leak objective or criticism",
+      "history": [
+        {
+          "id": "u10",
+          "role": "user",
+          "actor_id": "actor-other",
+          "chat_id": "chat-other",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a10",
+          "role": "assistant",
+          "actor_id": "actor-other",
+          "chat_id": "chat-other",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u10-current",
+        "text": "Explain the account balance.",
+        "actor_id": "actor-c-fixture-01",
+        "chat_id": "chat-c-fixture-01"
+      },
+      "mode": "best-answer",
+      "expect": {
+        "continue_prior_objective": false,
+        "no_cross_actor_or_chat_context": true
+      }
+    },
+    {
+      "id": "C-11",
+      "category": "provider_boundary",
+      "title": "Uncertain helper receipt is not automatically retransmitted during resume",
+      "history": [
+        {
+          "id": "u11",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a11",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u11-current",
+        "text": "Katie, that is terrible. You repeated yourself and failed to take initiative."
+      },
+      "mode": "best-value",
+      "provider_state": {
+        "helper_attempt_id": "helper-uncertain-c11",
+        "status": "uncertain",
+        "receipt_id": null,
+        "same_durable_request": true
+      },
+      "expect": {
+        "no_duplicate_helper_dispatch": true,
+        "objective_preserved_after_resume": true,
+        "correction_preserved_after_resume": true
+      }
+    },
+    {
+      "id": "C-12",
+      "category": "mode_parity",
+      "title": "Objective survival must not depend on Best Answer versus Best Value",
+      "history": [
+        {
+          "id": "u12",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a12",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u12-current",
+        "text": "Katie, that is terrible. You repeated yourself and failed to take initiative."
+      },
+      "modes": [
+        "best-answer",
+        "best-value"
+      ],
+      "expect": {
+        "same_objective_and_correction_evidence_in_both_modes": true,
+        "best_answer_model_policy_unchanged": true
+      }
+    },
+    {
+      "id": "C-13",
+      "category": "task_boundary",
+      "title": "Explicit image request takes precedence over conversational narrative carryover",
+      "history": [
+        {
+          "id": "u13",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a13",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u13-current",
+        "text": "Generate a picture of this scene instead."
+      },
+      "mode": "best-value",
+      "expect": {
+        "route_image_modality": true,
+        "do_not_generate_text_only_scene_instead": true
+      }
+    },
+    {
+      "id": "C-14",
+      "category": "provider_boundary",
+      "title": "Same request replay retains correction but does not duplicate settled assistant publication",
+      "history": [
+        {
+          "id": "u14",
+          "role": "user",
+          "text": "Katie, take the lead. Be witty, creative, playful, and surprising. Keep our conversational continuity, introduce something interesting, and drive the interaction yourself. No menus or unnecessary questions."
+        },
+        {
+          "id": "a14",
+          "role": "assistant",
+          "text": "We could discuss a journal, an interview, or a notebook. What would you like to do?"
+        }
+      ],
+      "current": {
+        "id": "u14-current",
+        "text": "Katie, that is terrible. You repeated yourself and failed to take initiative."
+      },
+      "mode": "best-value",
+      "provider_state": {
+        "same_durable_request": true,
+        "existing_final_message_saved": true,
+        "new_attempt": false
+      },
+      "expect": {
+        "final_answer_emitted_once": true,
+        "no_new_provider_charge": true,
+        "objective_and_correction_same_across_resume": true
+      }
+    }
+  ]
+}
