@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   guardExplicitWrittenObjective,
   parseIntentClassifierResponse,
+  reconcileVerbatimObjectiveEvidence,
   type RequestClassification,
   type RequestIntent
 } from "../lib/router/model-intent";
@@ -123,4 +124,51 @@ test("legacy classification without diagnostic metadata remains backward compati
     intents, "test"
   );
   assert.deepEqual(parsed, { intent: "general-text", preferred_provider: "openai" });
+});
+
+test("classifier restores source-exact curly apostrophes without weakening evidence validation", () => {
+  const current = "You're reviewing Katie’s cash flow, aren’t you?";
+  const quote = current.replaceAll("’", "'");
+  const parsed: RequestClassification = {
+    intent: "general-text",
+    preferred_provider: null,
+    complexity: "medium",
+    provider_refusal_risk: "low",
+    response_purpose: "conversation",
+    decision_evidence: {
+      quality_requirements: "Answer the exact question with relevant context.",
+      primary_objective: "Review the cash flow.",
+      context_influence: "Continuing the earlier finance discussion.",
+      objective_evidence: [quote],
+      selection_justification: "Finance question in progress."
+    }
+  };
+  assert.equal(current.includes(quote), false, "fixture reproduces the actual false-negative");
+  const repaired = reconcileVerbatimObjectiveEvidence(parsed, current);
+  assert.deepEqual(repaired.decision_evidence?.objective_evidence, [current]);
+  assert.ok(repaired.decision_evidence?.objective_evidence?.every(item => current.includes(item)));
+  assert.deepEqual(parsed.decision_evidence?.objective_evidence, [quote], "original response stays immutable");
+
+  const invented = {...parsed, decision_evidence: {
+    ...parsed.decision_evidence!,
+    objective_evidence: ["You're reviewing Katie's revenue, aren't you?"]
+  }};
+  assert.deepEqual(reconcileVerbatimObjectiveEvidence(invented, current), invented,
+    "do not repair different words by manufacturing user evidence");
+  const changedCase = {...parsed, decision_evidence: {
+    ...parsed.decision_evidence!,
+    objective_evidence: [quote.toUpperCase()]
+  }};
+  assert.deepEqual(reconcileVerbatimObjectiveEvidence(changedCase, current), changedCase,
+    "do not silently accept different capitalization");
+});
+
+test("classifier accepts already exact Unicode evidence without changing the response", () => {
+  const current = "You’re right 😏—let's review the forecast.";
+  const parsed: RequestClassification = {
+    intent: "general-text",
+    preferred_provider: null,
+    decision_evidence: {objective_evidence: ["You’re right 😏"]}
+  };
+  assert.equal(reconcileVerbatimObjectiveEvidence(parsed, current), parsed);
 });
