@@ -175,3 +175,27 @@ test("a definitive, unsupported model does not become verified from a different 
   assert.equal(spec.modelId,"gpt-5.5-pro");
   assert.equal(parseOfficialModelEvidence(spec,openaiDoc,"gpt-5.5-pro-2026-04-23"),null);
 });
+
+test("PostgREST numeric-string verified rates survive an ordinary documentation refresh", () => {
+  const now = "2026-11-18T20:00:00.000Z";
+  const prior = {
+    ...syntheticRecord(now),
+    capability_status: "verified",
+    pricing_status: "verified",
+    capability_verified_at: "2026-11-18T19:00:00.000Z",
+    pricing_verified_at: "2026-11-18T19:00:00.000Z",
+    pricing_input_per_1m: "8",
+    pricing_output_per_1m: "40",
+    source_metadata: {
+      capability_evidence_basis: "first_party_model_documentation",
+      capability_verification_source: "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md",
+      pricing_verification_source: "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md"
+    }
+  } as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
+  const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
+  assert.equal(row.pricing_status, "verified");
+  assert.equal(row.pricing_input_per_1m, 8);
+  assert.equal(row.pricing_output_per_1m, 40);
+  assert.equal(row.routing_eligibility, "verified");
+  assert.equal(row.pricing_verified_at, "2026-11-18T19:00:00.000Z");
+});
