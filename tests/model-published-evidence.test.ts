@@ -234,8 +234,8 @@ test("retained numeric rates require the exact previously documented and approve
   }
 
   for (const input of ["-8", "8e2", "08", "8.", "", "NaN", "Infinity", " 8", null, Number.POSITIVE_INFINITY, Number.NaN]) {
-    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: "40" }
-      as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
+    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: "40" } as unknown as
+      Parameters<typeof retainOfficialModelEvidence>[1];
     const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
     assert.equal(row.pricing_status, "estimated", String(input));
     assert.equal(row.routing_eligibility, "restricted", String(input));
