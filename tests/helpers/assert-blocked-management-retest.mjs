@@ -1036,6 +1036,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(claimed?.job?.status,'running');
   assert.equal(claimed?.job?.attempts,1);
   assert.ok(claimed?.job?.lease,'Real six-minute worker lease required');
+  // The PostgreSQL transaction predates browser authorization, owner locks,
+  // and the original cutoff-race wait. A transaction-start lease would have
+  // lost that elapsed time; the one allowed attempt must get a fresh clock.
+  const remainingLeaseMs=new Date(claimed.job.lease_until).getTime()-Date.now();
+  assert.ok(remainingLeaseMs>355000&&remainingLeaseMs<=361000,
+   'Mission79 six-minute lease must be fresh after database lock waits: '+remainingLeaseMs+'ms');
+  console.log('MISSION79_POSTLOCK_WALL_CLOCK_LEASE_FRESHNESS_PASS: '+remainingLeaseMs+'ms');
   assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
   assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
   const duplicate=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',

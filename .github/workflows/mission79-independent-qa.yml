@@ -22,7 +22,7 @@ permissions:
   contents: read
   pull-requests: read
 jobs:
-  independent-qa:
+  native-evidence:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'fix/1061-mission79-exact-release-claim' &&
@@ -49,7 +49,6 @@ jobs:
           test -x /usr/lib/postgresql/16/bin/initdb
       - name: Independent native and authenticated owner tests
         id: native
-        continue-on-error: true
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
@@ -66,6 +65,40 @@ jobs:
           owner_status=${PIPESTATUS[0]}
           echo "Independent native status: $native_status; owner-auth status: $owner_status"
           test "$native_status" -eq 0 && test "$owner_status" -eq 0
+      - name: Preserve isolated native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mission79-native-evidence
+          path: |
+            mission79-native-evidence.log
+            mission79-owner-auth-evidence.log
+          if-no-files-found: warn
+  independent-qa:
+    needs: native-evidence
+    if: needs.native-evidence.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Retrieve native results from separate unprivileged runner
+        uses: actions/download-artifact@v4
+        with:
+          name: mission79-native-evidence
+          path: .
+      - name: Verify exact reviewer checkout and evidence files
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code HEAD
+          test -s mission79-native-evidence.log
+          test -s mission79-owner-auth-evidence.log
       - name: Pin reviewed source
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
@@ -121,11 +154,9 @@ jobs:
       - name: Validate exact-source independent verdict
         if: always()
         env:
-          NATIVE_SUCCESS: ${{ steps.native.outcome }}
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          test "$NATIVE_SUCCESS" = success
           test "$(cat reviewed-head.txt)" = "$EXPECTED_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           expected_tree="$(cat reviewed-tree.txt)"
