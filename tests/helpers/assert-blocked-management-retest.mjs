@@ -1072,6 +1072,28 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   }
   console.log('MISSION79_PROVIDER_LINEAGE_REAL_LEASE_POSITIVE_PASS');
 
+  // A genuine inference admission must also succeed under the same source
+  // when live. Its provider-audit insert and model-call counter increment are
+  // rolled back: no HTTP request, model charge, or durable extra inference.
+  const lineageInferenceArgs=[originalJob.id,claimed.job.lease,randomUUID(),
+   'inference','b'.repeat(64),null,null];
+  await first.query('savepoint mission79_intact_inference_admission');
+  try{
+   const callsBefore=(await first.query('select calls from agent_missions where id=$1',
+    [scheduled.missionId])).rows[0].calls;
+   const admitted=(await first.query(
+    'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    lineageInferenceArgs)).rows[0].ok;
+   assert.equal(admitted,true,'Real inference request with the valid lease and original owner lineage is admissible before expiration');
+   assert.equal((await first.query('select calls from agent_missions where id=$1',
+    [scheduled.missionId])).rows[0].calls,callsBefore+1,
+    'Normal inference writer increments only the transactional call counter');
+  }finally{
+   await first.query('rollback to savepoint mission79_intact_inference_admission');
+   await first.query('release savepoint mission79_intact_inference_admission');
+  }
+  console.log('MISSION79_PROVIDER_INFERENCE_VALID_LEASE_ROLLBACK_ONLY_POSITIVE_PASS');
+
   // Real lease already exists. Forge a new-window evidence reference without
   // changing decision/release. The exact original lineage must still be
   // required by BOTH model-provider admission and management decision writes.
@@ -1337,6 +1359,60 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     if(secondOpen)await second.query('rollback').catch(()=>{});
    }
   };
+  // The FK insert can pass a concurrent FOR NO KEY UPDATE lock on the
+  // mission, whereas the subsequent inference-call UPDATE cannot. Reproduce
+  // a genuinely blocked second PostgreSQL session across the lease deadline.
+  // The postwrite provider guard must roll back BOTH audit and counter writes.
+  const providerLockLease=new Date(Date.now()+5800).toISOString();
+  await first.query('reset role');
+  await first.query("set session_replication_role='replica'");
+  try{
+   await first.query('update mission_assignments set lease_until=$2 where id=$1',
+    [originalJob.id,providerLockLease]);
+  }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  const beforeProviderLockRace=await stateDuringRace();
+  let providerLockerOpen=false,providerContenderOpen=false;
+  try{
+   await first.query('begin');providerLockerOpen=true;
+   await first.query('reset role');
+   const lockedMission=await first.query(
+    'select id from agent_missions where id=$1 for no key update',[scheduled.missionId]);
+   assert.equal(lockedMission.rows.length,1,'Target mission row lock must be real');
+   await second.query('begin');providerContenderOpen=true;
+   const started=(await second.query('select transaction_timestamp() t')).rows[0].t;
+   assert.ok(new Date(started).getTime()<new Date(providerLockLease).getTime(),
+    'Inference starts before original live worker lease expires');
+   const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const contender=second.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) admitted',
+    lineageInferenceArgs).then(r=>({ok:true,admitted:r.rows[0].admitted}),
+     error=>({ok:false,error}));
+   let sawMissionRowWait=false;
+   for(let i=0;i<50;i++){
+    const locks=(await observer.query(
+     'select locktype from pg_locks where pid=$1 and not granted',[pid])).rows;
+    if(locks.some(l=>l.locktype==='transactionid'||l.locktype==='tuple')){
+     sawMissionRowWait=true;break;
+    }
+    const early=await Promise.race([contender.then(()=>true),raceWait(40).then(()=>false)]);
+    if(early)throw Error('Inference did not wait on held mission NO KEY UPDATE lock');
+   }
+   assert.equal(sawMissionRowWait,true,
+    'Real provider inference must wait on mission calls UPDATE after initial authorization checks');
+   await raceWait(Math.max(0,new Date(providerLockLease).getTime()-Date.now()+700));
+   await first.query('commit');providerLockerOpen=false;
+   const result=await contender;
+   await second.query('rollback');providerContenderOpen=false;
+   assert.equal(result.ok,false,'Expired inference cannot be authorized after mission row lock wait');
+   assert.match(result.error.message,/Mission79 provider request expired before dispatch/i);
+   assert.deepEqual(await stateDuringRace(),beforeProviderLockRace,
+    'Late inference must leave no provider request, model calls, decision, assignment or historical mutation');
+   console.log('MISSION79_PROVIDER_INFERENCE_ROW_LOCK_POSTWRITE_ROLLBACK_PASS');
+  }finally{
+   if(providerLockerOpen)await first.query('rollback').catch(()=>{});
+   if(providerContenderOpen)await second.query('rollback').catch(()=>{});
+   await first.query('set role service_role');
+  }
+
   const shortLease=new Date(Date.now()+3500).toISOString();
   await first.query('reset role');
   await first.query("set session_replication_role='replica'");

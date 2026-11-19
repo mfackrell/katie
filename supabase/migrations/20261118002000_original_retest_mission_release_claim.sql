@@ -1395,6 +1395,59 @@ begin
    old_principal,new_principal),old_return,new_return);
 end $mission79_postwrite_decision_clock$;
 
+
+-- Existing provider admission already rechecks time after the state advisory
+-- lock, but its INSERT and inference-call counter UPDATE can wait on another
+-- transaction's mission-row lock. Model.ts dispatches only after a successful
+-- RPC response. Fail closed AFTER ALL writes, before replying to the worker:
+-- an exception reverses the request row and calls increment atomically.
+-- Do not fence late settlement receipts: an existing request must be allowed
+-- to record its exact provider receipt after lease/cutoff expiration.
+do $mission79_provider_postwrite_clock$
+declare
+ body text;
+ old_declaration text:='declare r project_director_recoveries;';
+ new_declaration text:=$providervars$declare r project_director_recoveries;
+ mission79_provider_result boolean;$providervars$;
+ old_return text:='return project_provider_request_before_director_recovery(p_job,p_attempt,p_request,p_operation,p_hash,p_scope,p_receipt);';
+ new_return text:=$providerreturn$mission79_provider_result:=
+  project_provider_request_before_director_recovery(
+   p_job,p_attempt,p_request,p_operation,p_hash,p_scope,p_receipt);
+ if mission79_provider_result and p_receipt is null and p_scope is null
+  and p_job='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid then
+  if not exists(
+   select 1 from mission_assignments j
+   join agent_missions m on m.id=j.mission_id
+   join work_projects p on p.id=m.project_id
+   join project_provider_execution a on a.project_id=p.id
+   join project_retest_future_window_receipts q on q.project_id=p.id
+   join project_organization_nodes n on n.id::text=j.payload->>'organizationNodeId'
+     and n.project_id=p.id and n.agent_id=j.agent_id
+   where j.id=p_job and j.lease::text=p_attempt
+    and j.status='running' and j.lease is not null
+    and m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    and p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    and p.active_mission_id=m.id and p.status='running' and m.status='running'
+    and q.mission_id=m.id and q.assignment_id=j.id
+    and q.cutoff=p.deadline and q.cutoff=m.deadline
+    and j.lease_until>clock_timestamp()
+    and q.cutoff>clock_timestamp()
+    and p.deadline>clock_timestamp()
+    and m.deadline>clock_timestamp()
+    and a.deadline>clock_timestamp()
+    and n.deadline>clock_timestamp()
+  ) then raise exception 'Mission79 provider request expired before dispatch';end if;
+ end if;
+ return mission79_provider_result;$providerreturn$;
+begin
+ body:=pg_get_functiondef('public.project_provider_request(uuid,text,uuid,text,text,text,text)'::regprocedure);
+ if (length(body)-length(replace(body,old_declaration,'')))/length(old_declaration)<>1
+  or (length(body)-length(replace(body,old_return,'')))/length(old_return)<>1
+  or strpos(body,'Mission79 provider request expired before dispatch')>0
+ then raise exception 'Inherited provider request wrapper changed; postwrite wall-clock fence not installed';end if;
+ execute replace(replace(body,old_declaration,new_declaration),old_return,new_return);
+end $mission79_provider_postwrite_clock$;
+
 revoke all on function
  public.project_org_retest_release_epoch(uuid,text),
  public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
