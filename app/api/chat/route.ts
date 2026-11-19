@@ -480,7 +480,7 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   // In that case use only the same scoped history, without naming a model.
   const explicitContinuityCorrection =
     feedback.target.status==="unattributed" && feedback.target.reason==="not_feedback" &&
-    /^(?:\\s*)(?:stop (?:rehashing|repeating|recycling)|(?:please\\s+)?take initiative|keep leading)\\b/i.test(message);
+    /^(?:\s*)(?:stop (?:rehashing|repeating|recycling)|(?:please\s+)?take initiative|keep leading)\b/i.test(message);
   const attributed=feedback.target.status==="attributed" && feedback.source.polarity!=="none";
   if (!attributed && !explicitContinuityCorrection) return "";
 
