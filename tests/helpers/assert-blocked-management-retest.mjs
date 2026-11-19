@@ -986,6 +986,14 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('set role service_role');
    const before=(await first.query('select attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
    assert.equal(before.attempts,0);assert.equal(before.lease,null);
+   // Reproduce actual cron ordering: project batch takes the shared state
+   // lock FIRST and blocks the expired project while mission79 remains queued.
+   await first.query('select claim_work_project()');
+   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
+   assert.equal((await first.query('select status,attempts from mission_assignments where id=$1',[originalJob.id])).rows[0].status,'queued');
+   await first.query('reset role');
+   await rejected(()=>setGate([project,executionRelease,'dpl_NativeFixture79','closed']),/Bound original mission79 is unleased/i);
+   await first.query('set role service_role');
    const noLease=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
     [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
    assert.notEqual(noLease?.job?.id,originalJob.id,'No original mission79 lease after owner cutoff');
@@ -1007,6 +1015,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('release savepoint never_claimed_owner_window_expiry');
    await first.query('set role service_role');
   }
+  console.log('MISSION79_PROJECT_FIRST_CUTOFF_ORDER_TERMINAL_SETTLEMENT_PASS');
   console.log('MISSION79_UNLEASED_OWNER_CUTOFF_TERMINAL_SETTLEMENT_PASS');
   const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;

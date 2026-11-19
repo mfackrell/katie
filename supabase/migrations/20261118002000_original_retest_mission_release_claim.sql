@@ -78,7 +78,11 @@ begin
    and receipt.bound_release_sha=g.release_sha
    and receipt.bound_deployment_id=g.deployment_id
    and receipt.bound_release_generation=g.generation
-   and wp.active_mission_id=m.id and wp.status='running' and m.status='running'
+   and wp.active_mission_id=m.id
+   -- The normal project cron may have blocked an expired owner window
+   -- before mission cron can terminally settle this still-unclaimed job.
+   -- Do not let CLOSE invalidate that bound generation on either status.
+   and wp.status in ('running','blocked') and m.status in ('running','blocked')
    and j.status='queued' and j.attempts=0
    and j.lease is null and j.lease_until is null
  ) then raise exception 'Bound original mission79 is unleased; close only after normal claim or expiry settlement';end if;
@@ -1187,9 +1191,9 @@ begin
  where unleased.id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
   and unleased.mission_id=m79.id and m79.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
   and p79.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
-  and p79.status='running' and p79.active_mission_id=m79.id
+  and p79.status in ('running','blocked') and p79.active_mission_id=m79.id
   and p79.deadline<=clock_timestamp() and m79.deadline<=clock_timestamp()
-  and m79.status='running' and unleased.status='queued'
+  and m79.status in ('running','blocked') and unleased.status='queued'
   and unleased.attempts=0 and unleased.lease is null and unleased.lease_until is null
   and receipt.mission_id=m79.id and receipt.assignment_id=unleased.id
   and receipt.bound_release_sha=p_release
