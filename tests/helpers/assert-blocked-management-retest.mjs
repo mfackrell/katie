@@ -1243,6 +1243,137 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'Live/expired attempted worker must not change the sealed release-gate generation');
   console.log('MISSION79_RELEASE_GATE_UNDRAINED_LEASE_NEGATIVES_PASS');
 
+  // Two real PostgreSQL sessions now exercise the inherited transaction-start
+  // deadline race against the *actual* mission79 decision RPC. The instance
+  // is an isolated native fixture, never the user's original project.
+  // Commit the valid claim here so the second backend can observe its lease;
+  // later offline inference still runs inside a separately rolled-back txn.
+  await first.query('commit');
+  const originalRaceIntegrity=await originalIntegrity();
+  const originalFutureReceipt=(await first.query(
+   'select cutoff,organization_hash,authorization_id from project_retest_future_window_receipts where project_id=$1',[project])).rows[0];
+  const originalLeaseUntil=(await first.query(
+   'select lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0].lease_until;
+  const receiptHash=async()=> (await first.query(
+   "select md5((select to_jsonb(q)::text from project_retest_future_window_receipts q where q.project_id=$1)||"+
+   "(select to_jsonb(b)::text from project_retest_claim_release_receipts b where b.project_id=$1)) h",
+   [project])).rows[0].h;
+  const originalReceiptHash=await receiptHash();
+  const raceCommands=JSON.stringify([{action:'plan',purpose:'Preserve the approved plan',
+   direction:'Continue existing approved delivery and independent QA',
+   outcomes:[{criterion:'Existing approved plan remains valid',verification:'Current source authority and plan are unchanged'}],
+   milestones:[{objective:'Only the owner-approved original milestone'}],
+   organizations:['game_delivery','independent_qa']}]);
+  // These are deterministic no-network management commands, not inference.
+  // Use existing saved plan contents so a successful pre-expiry decision has
+  // a legitimate shape rather than relying on input validation failure.
+  const savedRacePlan=(await first.query(
+   'select purpose,direction,outcomes,milestones,organizations from project_organization_plans where node_id=$1',
+   [fixtureRoot.id])).rows[0];
+  assert.ok(savedRacePlan?.purpose);
+  const realRaceCommands=JSON.stringify([{action:'plan',...savedRacePlan}]);
+  const stateDuringRace=async()=>{
+   await observer.query('reset role');
+   const [d,a,r,p,c,e]=await Promise.all([
+    observer.query('select count(*)::int n from project_organization_decisions where project_id=$1',[project]),
+    observer.query('select status,attempts,lease,lease_until,result from mission_assignments where id=$1',[originalJob.id]),
+    observer.query('select count(*)::int n from project_provider_requests where project_id=$1',[project]),
+    observer.query('select count(*)::int n from project_work_packages where project_id=$1',[project]),
+    observer.query('select calls,routing_calls,status from agent_missions where id=$1',[scheduled.missionId]),
+    observer.query('select count(*)::int n from project_events where project_id=$1',[project])
+   ]);
+   return {decisions:d.rows[0].n,assignment:a.rows[0],requests:r.rows[0].n,
+    packages:p.rows[0].n,mission:c.rows[0],events:e.rows[0].n};
+  };
+  const raceWait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const blockedDecisionAcross=async(label,expiry)=>{
+   const before=await stateDuringRace();
+   let firstOpen=false,secondOpen=false;
+   try{
+    await first.query('begin');firstOpen=true;
+    await first.query("select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))");
+    await second.query('begin');secondOpen=true;
+    const started=(await second.query('select transaction_timestamp() started')).rows[0].started;
+    assert.ok(new Date(started).getTime()<new Date(expiry).getTime(),
+     label+': second transaction must start BEFORE expiry');
+    const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+    const contender=second.query('select project_org_decide($1,$2,$3::jsonb) accepted',
+     [originalJob.id,claimed.job.lease,realRaceCommands])
+     .then(r=>({ok:true,accepted:r.rows[0].accepted}),error=>({ok:false,error}));
+    let blocked=false;
+    for(let attempt=0;attempt<40;attempt++){
+     const locks=(await observer.query(
+      'select locktype,granted from pg_locks where pid=$1 and not granted',[pid])).rows;
+     if(locks.some(lock=>lock.locktype==='advisory')){blocked=true;break;}
+     const early=await Promise.race([contender.then(()=>true),raceWait(40).then(()=>false)]);
+     if(early)throw Error(label+': decision did not wait for mission-state advisory lock');
+    }
+    assert.equal(blocked,true,label+': separate PostgreSQL decision must block on real mission-state lock');
+    await raceWait(Math.max(0,new Date(expiry).getTime()-Date.now()+700));
+    await first.query('commit');firstOpen=false;
+    const result=await contender;
+    await second.query('rollback');secondOpen=false;
+    assert.equal(result.ok,false,label+': expired transaction-start authorization must not save decision');
+    assert.match(result.error.message,/mission79 (owner cutoff|worker lease) expired after mission-state lock/i,
+     label+': rejection must come from actual post-lock wall-clock validation');
+    assert.deepEqual(await stateDuringRace(),before,
+     label+': no decision, assignment, package, event, model call or provider request changed');
+    console.log('MISSION79_DECISION_'+label+'_TWO_CONNECTION_POSTLOCK_NEGATIVE_PASS');
+   }finally{
+    if(firstOpen)await first.query('rollback').catch(()=>{});
+    if(secondOpen)await second.query('rollback').catch(()=>{});
+   }
+  };
+  const shortLease=new Date(Date.now()+3500).toISOString();
+  await first.query('reset role');
+  await first.query("set session_replication_role='replica'");
+  try{
+   await first.query('update mission_assignments set lease_until=$2 where id=$1',[originalJob.id,shortLease]);
+  }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+   [scheduled.missionId,originalJob.id])).rows[0].ok,true);
+  await blockedDecisionAcross('LEASE_EXPIRY',shortLease);
+
+  // The real owner API enforces a five-minute minimum on NEW approvals.
+  // Compress ONLY this disposable fixture's already-authorized cutoff for a
+  // fast decision-race test; then restore receipt bytes and source hashes.
+  // This cannot modify real owner receipts or weaken the production UI.
+  const setFixtureCutoff=async(cutoff,leaseUntil,restoreHash=false)=>{
+   await first.query('reset role');
+   await first.query("set session_replication_role='replica'");
+   try{
+    await first.query('update work_projects set deadline=$2 where id=$1',[project,cutoff]);
+    await first.query('update project_provider_execution set deadline=$2 where project_id=$1',[project,cutoff]);
+    await first.query('update agent_missions set deadline=$2 where id=$1',[scheduled.missionId,cutoff]);
+    await first.query('update mission_assignments set lease_until=$2 where id=$1',[originalJob.id,leaseUntil]);
+    await first.query('update project_execution_windows set cutoff=$2 where id=$1',
+     [originalFutureReceipt.authorization_id,cutoff]);
+    await first.query('update project_organization_nodes set deadline=$2 where project_id=$1',[project,cutoff]);
+    await first.query('update project_organization_contract_changes set deadline=$2 where project_id=$1 and window_id=$3',
+     [project,cutoff,originalFutureReceipt.authorization_id]);
+    await first.query('update project_retest_claim_release_receipts set cutoff=$2 where project_id=$1',[project,cutoff]);
+    await first.query('update project_retest_future_window_receipts set cutoff=$2,organization_hash=$3 where project_id=$1',
+     [project,cutoff,restoreHash?originalFutureReceipt.organization_hash:
+      (await first.query('select project_org_scope_ratification_state($1) h',[project])).rows[0].h]);
+   }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  };
+  const shortCutoff=new Date(Date.now()+3500).toISOString();
+  await setFixtureCutoff(shortCutoff,new Date(Date.now()+600000).toISOString());
+  assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+   [scheduled.missionId,originalJob.id])).rows[0].ok,true,
+   'Before owner cutoff, original release and hierarchy remain source-qualified');
+  await blockedDecisionAcross('OWNER_CUTOFF',shortCutoff);
+  await setFixtureCutoff(originalFutureReceipt.cutoff,originalLeaseUntil,true);
+  assert.equal(await receiptHash(),originalReceiptHash,
+   'Both immutable owner/release receipts are byte-identical after disposable time compression');
+  assert.deepEqual(await originalIntegrity(),originalRaceIntegrity,
+   'Original historical mission, grants, organization and receipts remain unchanged');
+  assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+   [scheduled.missionId,originalJob.id])).rows[0].ok,true);
+  console.log('MISSION79_DECISION_POSTLOCK_RACE_RESTORE_SOURCE_INTEGRITY_PASS');
+  await first.query('begin');
+  await first.query('set role service_role');
+
   // Continue the REAL database-claimed management identity into the normal
   // executeClaim dispatcher with an injected deterministic no-network model.
   // The isolated DB command adapter is mocked here: no paid provider, worker
