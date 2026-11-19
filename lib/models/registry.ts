@@ -578,9 +578,12 @@ type RegistryRoutingEvidenceRow = RegistryRoutingModel & Pick<ModelRegistryRecor
   "source_metadata" | "capability_verified_at" | "pricing_verified_at">;
 
 /**
- * Fail closed on stale first-party documentation at the READ boundary, not only
- * during successful discovery. An upstream failure must never keep old published
- * claims eligible as freshly verified. Non-documentation eligibility is unchanged.
+ * Fail closed at the READ boundary even when discovery failed. There is currently
+ * no authenticated, independent provider-qualification producer/receipt in this
+ * registry: editable source_metadata labels cannot establish provider proof.
+ * Until such a producer is separately designed and accepted, only current,
+ * exact-model first-party documentation evidence supports verified eligibility.
+ * Explicit restricted/manual/disabled policy states are never upgraded.
  *
  * Pure and shared by the database reader and deterministic no-refresh tests.
  */
@@ -595,15 +598,9 @@ export function buildRoutingRegistrySnapshot(
   for (const persisted of persistedRows) {
     const {source_metadata, capability_verified_at, pricing_verified_at, ...row} = persisted;
     const evidence = source_metadata ?? {};
-    // Preserve genuinely independent provider proof, but never treat a missing
-    // documentation marker as evidence that a previously verified claim is safe.
-    const independentProviderProof =
-      evidence.capability_source === "provider" &&
-      evidence.pricing_source === "provider" &&
-      evidence.capability_evidence_basis !== "first_party_model_documentation" &&
-      evidence.pricing_tier !== "standard_base_per_1m" &&
-      evidence.published_base_input_per_1m === undefined &&
-      evidence.published_base_output_per_1m === undefined;
+    // D6: two mutable "provider" labels (or a claimed receipt in this same
+    // metadata object) are NOT verified provider-origin evidence. No trusted
+    // independent provider attestation is produced or validated by this path.
     const spec = officialModelSpec(row.provider_name, row.model_id);
     // Validate persisted rates at every read, including after discovery failed
     // and retainOfficialModelEvidence (D3) was never called.
@@ -623,7 +620,7 @@ export function buildRoutingRegistrySnapshot(
     const effective: RegistryRoutingModel = {
       ...row,
       routing_eligibility: row.routing_eligibility === "verified" &&
-        !independentProviderProof && !validDocumentedEvidence
+        !validDocumentedEvidence
         ? "restricted" : row.routing_eligibility
     };
     const existing = grouped.get(effective.provider_name);
