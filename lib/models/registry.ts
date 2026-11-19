@@ -560,6 +560,47 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
   return outcomes;
 }
 
+type RegistryRoutingEvidenceRow = RegistryRoutingModel & Pick<ModelRegistryRecord,
+  "source_metadata" | "capability_verified_at" | "pricing_verified_at">;
+
+/**
+ * Fail closed on stale first-party documentation at the READ boundary, not only
+ * during successful discovery. An upstream failure must never keep old published
+ * claims eligible as freshly verified. Non-documentation eligibility is unchanged.
+ *
+ * Pure and shared by the database reader and deterministic no-refresh tests.
+ */
+export function buildRoutingRegistrySnapshot(
+  providers: readonly Pick<LlmProvider, "name">[],
+  persistedRows: readonly RegistryRoutingEvidenceRow[],
+  nowIso: string
+): Map<LlmProvider["name"], RegistryRoutingModel[]> {
+  const grouped = new Map<LlmProvider["name"], RegistryRoutingModel[]>();
+  for (const provider of providers) grouped.set(provider.name, []);
+
+  for (const persisted of persistedRows) {
+    const {source_metadata, capability_verified_at, pricing_verified_at, ...row} = persisted;
+    const evidence = source_metadata ?? {};
+    const documentedByProvider =
+      evidence.capability_evidence_basis === "first_party_model_documentation" ||
+      evidence.capability_source === "provider_documentation" ||
+      evidence.pricing_source === "provider_documentation";
+    const freshPublished =
+      row.capability_status === "verified" && row.pricing_status === "verified" &&
+      freshOfficialEvidence(capability_verified_at, nowIso) &&
+      freshOfficialEvidence(pricing_verified_at, nowIso);
+    const effective: RegistryRoutingModel = {
+      ...row,
+      routing_eligibility: documentedByProvider &&
+        row.routing_eligibility === "verified" && !freshPublished
+        ? "restricted" : row.routing_eligibility
+    };
+    const existing = grouped.get(effective.provider_name);
+    if (existing) existing.push(effective);
+  }
+  return grouped;
+}
+
 export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Promise<Map<LlmProvider["name"], RegistryRoutingModel[]>> {
   const client = getSupabaseAdminClient();
   const providerNames = providers.map((provider) => provider.name);
@@ -571,28 +612,17 @@ export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Pr
   const { data, error } = await client
     .from("model_registry")
     .select(
-      "provider_name,model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,routing_eligibility,confidence_tier,confidence_score,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier"
+      "provider_name,model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,routing_eligibility,confidence_tier,confidence_score,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier,capability_verified_at,pricing_verified_at,source_metadata"
     )
     .in("provider_name", providerNames)
     .eq("is_active", true)
-    .returns<RegistryRoutingModel>();
+    .returns<RegistryRoutingEvidenceRow>();
 
   if (error) {
     throw new Error(`Failed loading model registry: ${error.message}`);
   }
 
-  const grouped = new Map<LlmProvider["name"], RegistryRoutingModel[]>();
-  for (const provider of providers) {
-    grouped.set(provider.name, []);
-  }
-
-  for (const row of data ?? []) {
-    const existing = grouped.get(row.provider_name) ?? [];
-    existing.push(row);
-    grouped.set(row.provider_name, existing);
-  }
-
-  return grouped;
+  return buildRoutingRegistrySnapshot(providers, data ?? [], new Date().toISOString());
 }
 
 export function snapshotToLookup(snapshot: Map<LlmProvider["name"], RegistryRoutingModel[]>) {
