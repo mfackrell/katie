@@ -892,6 +892,8 @@ create or replace function public.project_org_retest_claim_release_authorized(
   and project_provider_continued_assignment(j.id)
   and project_org_retest_original_owner_lineage(p.id)
   and project_org_retest_renewed_assignment(m.id,j.id)
+  and not project_provider_request_pending(p.id)
+  and a.objective_hash=encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex')
   and b.historical_missions=79
  );
 $fn$;
@@ -929,6 +931,8 @@ begin
   or not project_provider_continued(p.id)
   or not project_provider_continued_assignment(j.id)
   or not project_org_retest_renewed_assignment(m.id,j.id)
+  or project_provider_request_pending(p.id)
+  or a.objective_hash is distinct from encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex')
   or exists(select 1 from project_work_packages pkg where pkg.project_id=p.id)
  then raise exception 'Historical mission 79 or approved renewed source changed';end if;
  if b.project_id is not null then
@@ -985,6 +989,8 @@ begin
   where grant_node.project_id=p.id order by scope_grant.node_id for update of scope_grant;
  if not project_org_retest_exact_scope_grants(p.id)
  then raise exception 'Original three-grant authority changed under binding lock';end if;
+ if project_provider_request_pending(p.id)
+ then raise exception 'Unresolved original project provider request blocks release binding';end if;
  offer:=project_org_retest_claim_release_offer(p_owner,p_project,p_release);
  if offer->>'stage' is distinct from 'bind'
   or p_mission is distinct from (offer->>'missionId')::uuid
