@@ -1054,6 +1054,44 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   console.log('MISSION79_POSTLOCK_WALL_CLOCK_LEASE_FRESHNESS_PASS: '+remainingLeaseMs+'ms');
   assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
   assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
+  // Real lease already exists. Forge a new-window evidence reference without
+  // changing decision/release. The exact original lineage must still be
+  // required by BOTH model-provider admission and management decision writes.
+  await first.query('savepoint mission79_after_lease_source_drift');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query(
+    "update agent_missions set project_evidence=jsonb_set(project_evidence,'{providerContinuationWindow}',to_jsonb($2::text)) where id=$1",
+    [scheduled.missionId,authorizationId]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+    [scheduled.missionId,originalJob.id])).rows[0].ok,false);
+   assert.equal((await first.query('select project_provider_continued_assignment($1) ok',
+    [originalJob.id])).rows[0].ok,false,
+    'New-window evidence cannot bypass the original mission79 source contract');
+   const requestsBefore=(await first.query('select count(*)::int n from project_provider_requests where assignment_id=$1',
+    [originalJob.id])).rows[0].n;
+   const decisionsBefore=(await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',
+    [project])).rows[0].n;
+   const admitted=(await first.query(
+    'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    [originalJob.id,'model-list',randomUUID(),'model-list','a'.repeat(64),null,null])).rows[0].ok;
+   assert.equal(admitted,false,'Provider admission with drifted original source must fail');
+   await rejected(()=>first.query('select project_org_decide($1,$2,$3::jsonb)',
+    [originalJob.id,claimed.job.lease,JSON.stringify([{action:'ready'}])]),
+    /Current owner execution window required|source|window/i);
+   assert.equal((await first.query('select count(*)::int n from project_provider_requests where assignment_id=$1',
+    [originalJob.id])).rows[0].n,requestsBefore);
+   assert.equal((await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',
+    [project])).rows[0].n,decisionsBefore);
+   console.log('MISSION79_POSTLEASE_DRIFT_PROVIDER_AND_MANAGEMENT_NEGATIVES_PASS');
+  }finally{
+   await first.query('rollback to savepoint mission79_after_lease_source_drift');
+   await first.query('release savepoint mission79_after_lease_source_drift');
+   await first.query('set role service_role');
+  }
   const duplicate=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');

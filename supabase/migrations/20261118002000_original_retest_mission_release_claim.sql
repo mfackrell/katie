@@ -642,7 +642,16 @@ $fn$;
 do $source_patch$
 declare body text;
  anchor text:='(m.project_evidence->>''providerContinuationWindow'') is not distinct from a.window_id::text and public.project_provider_continued(a.project_id)';
- replacement text:='((m.project_evidence->>''providerContinuationWindow'') is not distinct from a.window_id::text or public.project_org_retest_renewed_assignment(m.id,j.id)) and public.project_provider_continued(a.project_id)';
+ -- Once the unique original mission79 has a new owner window, NEVER
+ -- allow its ordinary current-window branch to replace immutable-source
+ -- attestation. Other missions/projects keep their original predicate.
+ replacement text:='(case when m.id=''b7c2e557-83e1-41cb-b174-bdb0d77d12e5''::uuid
+  and exists(select 1 from project_retest_future_window_receipts new_window where new_window.project_id=a.project_id)
+  then j.id=''85e229aa-e571-43ef-9d4a-5cb64f4efcd1''::uuid
+   and public.project_org_retest_renewed_assignment(m.id,j.id)
+  else ((m.project_evidence->>''providerContinuationWindow'') is not distinct from a.window_id::text
+   or public.project_org_retest_renewed_assignment(m.id,j.id)) end)
+  and public.project_provider_continued(a.project_id)';
 begin
  body:=pg_get_functiondef('public.project_provider_continued_assignment(uuid)'::regprocedure);
  if (length(body)-length(replace(body,anchor,'')))/length(anchor)<>1
