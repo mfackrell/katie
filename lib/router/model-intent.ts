@@ -936,7 +936,16 @@ async function executeControlPlaneJsonTask<T>(args: {
       }
       console.warn(`[ControlPlane:${args.taskName}] rejected_response provider=${sourceLabel}`);
     } catch (error) {
-      if (isTerminalAttemptError(error)) throw error;
+      // A local deadline on a control-plane helper leaves THAT exact
+      // transmission uncertain, not the entire chat. Its operation key is
+      // retained by the ledger and must never be replayed. A distinct,
+      // eligible decision provider is a new one-shot operation and may run.
+      // Keep every other terminal error (including owner cancellation and
+      // genuinely terminal provider failures) terminal.
+      const isLocalUnknownHelper =
+        error instanceof Error && "code" in error &&
+        error.code === "standalone_outcome_unknown";
+      if (!isLocalUnknownHelper && isTerminalAttemptError(error)) throw error;
       console.warn(`[ControlPlane:${args.taskName}] provider_failed provider=${sourceLabel}`, error);
     }
   }
