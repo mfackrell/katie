@@ -200,14 +200,15 @@ const executableLockGate = ts.transpileModule(
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
-async function checkSendLock(payload, { ok = true, networkError = false, swapped = false, pendingId = 'req' } = {}) {
-  let pending = { requestId: pendingId, chatId: 'chat' };
+async function checkSendLock(payload, { ok = true, networkError = false, swapped = false, pendingId = 'req', composerText = 'original text' } = {}) {
+  let pending = { requestId: pendingId, chatId: 'chat', content: 'original text' };
   let reads = 0;
   let clears = 0;
   const statusRequests = [];
   const messages = [];
   const sandbox = vm.createContext({
     chatId: 'chat',
+    composerValueRef: { current: composerText },
     encodeURIComponent,
     ownerSessionBearer: async () => 'owner-token',
     readPendingChatRequest: (id) => {
@@ -251,6 +252,20 @@ test('Send unlocks after exact completed-and-saved or definitively failed chat p
   const failed = await checkSendLock({ ...exact, status: 'failed', workflowStatus: 'failed' });
   assert.equal(failed.allowed, true);
   assert.equal(failed.statusReads, 2, 'failed case is verified after the completed check fails');
+});
+
+test('a distinctly new explicit message may clear only failed paused routing-timeout lock', async () => {
+ const exact = { requestId: 'req', chatId: 'chat', status:'failed',
+   workflowStatus:'paused', assistantMessageId:null,
+   routingRecoveryReady:false,
+   error:'The saved request paused after a provider timeout. Resume the original request once its provider receipt is available; do not send a new request.' };
+ const allowed = await checkSendLock(exact, { composerText: 'a new message' });
+ assert.equal(allowed.allowed,true);
+ assert.equal(allowed.statusReads,3);
+ const notReady = await checkSendLock({ ...exact, routingRecoveryReady:true }, { composerText:'a new message' });
+ assert.equal(notReady.allowed,false);
+ const noError = await checkSendLock({ ...exact, error:'Paused for manual review' }, { composerText:'a new message' });
+ assert.equal(noError.allowed,false);
 });
 
 test('Send stays locked for live, paused, uncertain, missing, mismatched or changed receipts', async () => {
