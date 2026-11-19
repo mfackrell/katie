@@ -110,6 +110,7 @@ function prepared(f:Case, mode=f.mode??'best-answer', overrides:{
     documentProduction:null,DOCUMENT_DRAFT_GUIDANCE:'Document drafting',DOCUMENT_REVIEW_GUIDANCE:'Document review',
     CREATIVE_CONTINUITY_INSTRUCTIONS:'Narrative continuity only',summary:'',
     historyForProvider:history.map(({role,content})=>({role,content})),
+    history, // authenticated scoped source messages for the actual objective builder
     message:f.current.text,messageForGeneration:f.current.text,images:[],attachments:[],
     resolvedRequestIntent:'assistant-reflection',buildGenerationParams,
     saveProviderSystemAudit:async()=>{throw Error('No provider audit writes permitted in offline test');},
