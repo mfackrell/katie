@@ -1071,8 +1071,15 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    assert.equal((await first.query('select project_provider_continued_assignment($1) ok',
     [originalJob.id])).rows[0].ok,false,
     'New-window evidence cannot bypass the original mission79 source contract');
-   const requestsBefore=(await first.query('select count(*)::int n from project_provider_requests where assignment_id=$1',
-    [originalJob.id])).rows[0].n;
+   // Protected provider audit rows are intentionally unreadable by
+   // service_role; inspect them only as the disposable PostgreSQL owner.
+   const countProviderRequests=async()=>{
+    await first.query('reset role');
+    try{return (await first.query('select count(*)::int n from project_provider_requests where assignment_id=$1',
+     [originalJob.id])).rows[0].n;}
+    finally{await first.query('set role service_role');}
+   };
+   const requestsBefore=await countProviderRequests();
    const decisionsBefore=(await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',
     [project])).rows[0].n;
    const admitted=(await first.query(
@@ -1082,8 +1089,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await rejected(()=>first.query('select project_org_decide($1,$2,$3::jsonb)',
     [originalJob.id,claimed.job.lease,JSON.stringify([{action:'ready'}])]),
     /Current owner execution window required|source|window/i);
-   assert.equal((await first.query('select count(*)::int n from project_provider_requests where assignment_id=$1',
-    [originalJob.id])).rows[0].n,requestsBefore);
+   assert.equal(await countProviderRequests(),requestsBefore);
    assert.equal((await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',
     [project])).rows[0].n,decisionsBefore);
    console.log('MISSION79_POSTLEASE_DRIFT_PROVIDER_AND_MANAGEMENT_NEGATIVES_PASS');
