@@ -411,6 +411,15 @@ test('C-QA8 latest standalone tasks outrank criticism without erasing referentia
     'That response was terrible — instead of another menu, keep leading the conversation.',
     'That response was terrible. You repeated yourself and failed to take initiative.',
     'That response was terrible. Could you keep leading the conversation?',
+    'That response was terrible. You need to do better.',
+    'That response was terrible. Stop rehashing the same thing.',
+    'That response was terrible. Try again, with a more creative idea.',
+    "That response was terrible. Give me a fresh idea, don't interview me.",
+    "That response was terrible. Don't keep asking me questions.",
+    'That response was terrible. Keep it interesting.',
+    'That response was terrible. It was repetitive.',
+    "That response was terrible. I'm expecting a less repetitive response.",
+    'That response was terrible. Why are you repeating yourself?',
   ];
   for (const latest of continuing) {
     const changed:Case={...f,current:{...f.current,text:latest}};
