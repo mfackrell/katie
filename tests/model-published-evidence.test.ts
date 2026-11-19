@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { officialModelSpec, parseOfficialModelEvidence, fetchOfficialModelEvidence } from "../lib/models/provider-evidence";
-import { buildRoutingRegistrySnapshot, computeRoutingEligibility, retainOfficialModelEvidence } from "../lib/models/registry";
+import { buildRegistryDiagnostic, buildRoutingRegistrySnapshot, computeRoutingEligibility, retainOfficialModelEvidence } from "../lib/models/registry";
 
 const openaiDoc = [
   "# GPT-6.2 Astra",
@@ -425,4 +425,67 @@ test("D6: provider-only metadata labels cannot bypass read-time verified admissi
     assert.equal(snapshot({routing_eligibility:locked}), locked,
       "explicit non-verified routing policy is preserved");
   }
+});
+
+test("D7: protected operations diagnostic uses the SAME effective verification as routing", () => {
+  const now = "2026-11-19T05:30:00.000Z";
+  const establishedAt = "2026-11-19T01:00:00.000Z";
+  const published = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
+  const approved = retainOfficialModelEvidence(syntheticRecord(establishedAt), undefined, published, establishedAt);
+  type RoutingRow = Parameters<typeof buildRoutingRegistrySnapshot>[1][number];
+  type DiagnosticRow = Parameters<typeof buildRegistryDiagnostic>[0];
+  const diagnose = (changes: Record<string, unknown> = {}) => {
+    const row = { ...approved, discovery_status: "discovered", ...changes } as unknown as RoutingRow & DiagnosticRow;
+    const effective = buildRoutingRegistrySnapshot([{name:"openai"}], [row], now).get("openai")![0];
+    const diagnostic = buildRegistryDiagnostic(row, now);
+    assert.equal(diagnostic.routing_eligibility, effective.routing_eligibility,
+      "diagnostics must never contradict production read-time admission");
+    assert.equal(diagnostic.ordinary_text_candidate, row.is_active && row.supports_text === true &&
+      ["verified", "restricted"].includes(effective.routing_eligibility),
+      "restricted text models remain ordinary automatic candidates");
+    assert.equal("pricing_input_per_1m" in diagnostic, false, "diagnostics must not expose economic fields");
+    assert.equal("source_metadata" in diagnostic, false, "diagnostics must not expose raw proof");
+    return diagnostic;
+  };
+  const valid = diagnose({pricing_input_per_1m:"8.00", pricing_output_per_1m:"40"});
+  assert.equal(valid.routing_eligibility, "verified", "matching fresh first-party evidence retained");
+  assert.deepEqual(valid.status_reasons, ["eligible_subject_to_endpoint_and_spending_controls"]);
+
+  const providerLabels = {capability_source:"provider", pricing_source:"provider"};
+  for (const change of [
+    {source_metadata: providerLabels},
+    {source_metadata: providerLabels, pricing_input_per_1m:"0.10", pricing_output_per_1m:"40"},
+    {source_metadata: providerLabels, capability_status:"heuristic", pricing_status:"missing"},
+    {source_metadata: {...providerLabels, provider_verification_receipt:"invented"}}
+  ]) {
+    const result = diagnose(change);
+    assert.equal(result.persisted_routing_eligibility, "verified");
+    assert.equal(result.routing_eligibility, "restricted", "unattested provider labels are restricted");
+    assert.ok(result.status_reasons.includes("unattested_or_invalid_first_party_provenance"),
+      "report must explain why stored verified is untrusted");
+  }
+  for (const change of [
+    {capability_verified_at:"2026-11-18T01:00:00.000Z"},
+    {pricing_verified_at:"2026-11-18T01:00:00.000Z"}
+  ]) {
+    const result = diagnose(change);
+    assert.equal(result.routing_eligibility, "restricted");
+    assert.ok(result.status_reasons.includes("first_party_evidence_stale_or_invalid"));
+  }
+  for (const change of [
+    {pricing_input_per_1m:"0.10"},
+    {pricing_output_per_1m:"41"},
+    {source_metadata:{...approved.source_metadata, published_base_input_per_1m:0.10}}
+  ]) {
+    const result = diagnose(change);
+    assert.equal(result.routing_eligibility, "restricted");
+    assert.ok(result.status_reasons.includes("first_party_model_or_price_provenance_mismatch"));
+  }
+  for (const state of ["restricted", "manual_override_only", "disabled"] as const) {
+    const result = diagnose({routing_eligibility:state});
+    assert.equal(result.routing_eligibility, state, "existing explicit eligibility must not be changed");
+  }
+  const inactive = diagnose({is_active:false, routing_eligibility:"disabled", failure_reason:"upstream_404"});
+  assert.equal(inactive.routing_eligibility, "disabled");
+  assert.ok(inactive.status_reasons.includes("upstream_404"));
 });
