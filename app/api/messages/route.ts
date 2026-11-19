@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
-import { deleteSingleMessage, getChatById, getMessages } from "@/lib/data/persistence-store";
+import { deleteSingleMessage, getChatById, getMessages, getMessageHistoryPage } from "@/lib/data/persistence-store";
 import {
   authenticateStandaloneOwner,
   authenticateStandalonePrincipal,
@@ -28,7 +28,23 @@ export async function GET(request: NextRequest) {
     if(!chat)return NextResponse.json({error:"Conversation not found."},{status:404});
     if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
       await authorizeStandaloneCaller(request,chat.actorId,chatId);
-    const messages = await getMessages(chatId);
+    // Legacy callers retain complete history; the chat UI opts into bounded pages.
+    const pageLimitRaw = request.nextUrl.searchParams.get("limit");
+    const beforeCreatedAt = request.nextUrl.searchParams.get("beforeCreatedAt");
+    const beforeId = request.nextUrl.searchParams.get("beforeId");
+    if ((beforeCreatedAt === null) !== (beforeId === null)) {
+      return NextResponse.json({ error: "Incomplete history cursor." }, { status: 400 });
+    }
+    if (pageLimitRaw !== null && (!/^(10|20)$/.test(pageLimitRaw) ||
+      (beforeCreatedAt !== null && (!Number.isFinite(Date.parse(beforeCreatedAt)) ||
+        !/^[0-9a-f-]{36}$/i.test(beforeId ?? ""))))) {
+      return NextResponse.json({ error: "Invalid history pagination." }, { status: 400 });
+    }
+    const historyPage = pageLimitRaw !== null
+      ? await getMessageHistoryPage(chatId, Number(pageLimitRaw),
+          beforeCreatedAt !== null ? { createdAt: beforeCreatedAt, id: beforeId! } : undefined)
+      : null;
+    const messages = historyPage?.messages ?? await getMessages(chatId);
 
     const pendingRequests = [...new Set(messages
       .filter(message => message.role === "assistant")
@@ -103,7 +119,7 @@ export async function GET(request: NextRequest) {
         console.warn("[Video Progress] Status unavailable; video jobs continue independently", error);
       }
     }
-    return NextResponse.json({ messages, videoProgress }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ messages, videoProgress, ...(historyPage ? { hasMore: historyPage.hasMore } : {}) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "Invalid chat id" }, { status: 400 });
   }
