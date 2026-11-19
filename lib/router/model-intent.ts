@@ -2591,6 +2591,32 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
   })}`;
 
+  // The three-judge fan-out is for normal standalone Katie conversations.
+  // Preserve the existing one-at-a-time decision contract for orchestrated
+  // software-building tasks and when fewer than three eligible judges exist.
+  if (!neutral || judges.length < 3) {
+    const legacy = await executeControlPlaneJsonTask({
+      taskName: "routing-rerank",
+      decisionProviders: eligibleDecisionProviders,
+      userPrompt: judgeBrief,
+      parse: parseRoutingJudgeResponse,
+      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+      bestValueSelection: neutral && (args.routing_mode ?? "best_value") === "best_value",
+    });
+    if (!legacy) return { accepted: false, reason: "all_decision_providers_failed" };
+    return {
+      accepted: true,
+      selected: { providerName: legacy.result.selectedProvider, modelId: legacy.result.selectedModel },
+      ranking: args.candidates.map(candidate => ({
+        providerName: candidate.providerName, modelId: candidate.modelId, score: candidate.prior_score
+      })),
+      decisionProviderName: legacy.provider,
+      decisionModelId: legacy.modelId,
+      selectionJustification: legacy.result.selectionJustification,
+      selectionComparisons: legacy.result.selectionComparisons,
+    };
+  }
+
   const judgeStartMs = Date.now();
   const judgeResults = await Promise.allSettled(judges.map((judge, lane) =>
     executeControlPlaneJsonTask({
