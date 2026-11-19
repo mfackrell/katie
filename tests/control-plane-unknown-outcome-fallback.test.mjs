@@ -17,7 +17,7 @@ const context = vm.createContext({
  args: { taskName: "routing-rerank" },
  sourceLabel: "openai:gpt-5-mini"
 });
-vm.runInContext(`globalThis.run = async function(error) { try { throw error; } ${catchClause} return "alternate"; };`,context);
+vm.runInContext(`globalThis.run = async function(error) { try { throw error; ${catchClause} return "alternate"; };`,context);
 
 test("uncertain local routing timeout continues to a distinct alternate", async () => {
  const error = Object.assign(new Error("timed out"), { code: "standalone_outcome_unknown", terminal: true });
