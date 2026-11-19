@@ -315,7 +315,7 @@ test('C-QA4 actual post-routing gate fails closed when optional feedback vanishe
     'post-routing currentTurnFeedback assignment') as ts.BinaryExpression;
   assert.equal(assignment.right.getText(routeAst),'preflightTurnFeedback',
     'Matching records must preserve the authenticated preflight version');
-  assert.ok(assignment.pos>statement.end,
+  assert.ok(assignment.getStart(routeAst)>=statement.end,
     'The trusted record can only be adopted after the mismatch guard');
 });
 
