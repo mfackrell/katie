@@ -5,7 +5,7 @@ import { authorizeStandaloneCaller } from './auth';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { assertCronAuth } from '@/lib/runpod/durable-results';
-import { runWithStandaloneAccounting, isStandaloneAccountingError, standaloneAccountingCause, standaloneFailureDetails, standaloneTechnicalBlocker } from './context';
+import { runWithStandaloneAccounting, standaloneAccountingCause, standaloneFailureDetails, standaloneTechnicalBlocker } from './context';
 import { canonicalJson, type JsonValue } from './estimate';
 
 type Workflow = {owner_id:string;actor_id:string;chat_id:string;request_id:string;request_hash:string;request_body:Record<string,unknown>;status:string;lease_token:string;created_at:string;checkpoints:Record<string,unknown>;claimed?:boolean;blocked?:string;result?:{body:string;status:number;headers:[string,string][]}};
@@ -57,7 +57,7 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
  * Private server-only entry for an already claimed reaction job. The owner
  * derives from the durable job and active actor/chat binding, not a request
  * header or a synthetic browser credential. All normal workflow admission,
- * ledger and spending limits below remain mandatory.
+ * durable attempt identity and security checks remain mandatory; finance is reporting-only.
  */
 export async function executeVerifiedReactionReplyWorkflow(
   request:NextRequest,payload:Record<string,unknown>,
@@ -126,13 +126,13 @@ async function executeScopedStandaloneWorkflow(
         // The chat route emits a saved reasoning_error; finalize it as a failure.
         const terminalImageBilling=events.find(event=>event.type==='reasoning_error'&&event.code==='standalone_unsupported_billing');
         const technical=Boolean(technicalEvent||terminalImageBilling);
-        const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
+        const paused=!technical&&/"code":"standalone_runpod_in_progress"/.test(body);
         const executionFailure=events.find(event=>event.type==='error'||event.type==='reasoning_error');
         const failureMessage=(technicalEvent||terminalImageBilling) ? String((technicalEvent||terminalImageBilling).code)+': '+String((technicalEvent||terminalImageBilling).message??(technicalEvent||terminalImageBilling).error??'Image generation unavailable.').slice(0,1800) : executionFailure ? String(executionFailure.message??executionFailure.error??'Saved request execution failed.') : undefined;
         const result={body,status:response.status,headers:Array.from(response.headers.entries())};
         const finished=await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
         if(finished.status==='paused'&&!paused&&!executionFailure&&!technical)
-          return {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
+          return {type:'processing_update',stage:'recovery',requestId,message:'Saved provider work requires technical recovery; accounting does not authorize it.'};
         return null;
       };
 
@@ -186,9 +186,11 @@ async function executeScopedStandaloneWorkflow(
       return new Response(bytes,{status:response.status,headers:response.headers});
     }));
   } catch(error) {
-    const terminal=isStandaloneAccountingError(error)&&!standaloneTechnicalBlocker(standaloneAccountingCause(error)?.code);
-    error=standaloneAccountingCause(error)??error;
-    const finished=await finish(terminal?'paused':'failed',undefined,standaloneFailureDetails(error));
+    const cause=standaloneAccountingCause(error);
+    const recoverable=cause?.code==='standalone_runpod_in_progress' ||
+      cause?.code==='standalone_outcome_unknown';
+    error=cause??error;
+    const finished=await finish(recoverable?'paused':'failed',undefined,standaloneFailureDetails(error));
     // A pre-stream routing timeout can pause the durable workflow after the chat
     // receipt was claimed. Do not strand chat_requests in "processing" forever:
     // a verified standaloneResume may reclaim this receipt from the same workflow.
@@ -203,7 +205,7 @@ async function executeScopedStandaloneWorkflow(
         console.warn('[Standalone Workflow] Unable to finalize paused chat receipt',{requestId,reason:chatError instanceof Error?chatError.message:String(chatError)});
       }
     }
-    if (finished.status==='paused'&&!terminal) throw Object.assign(new StandaloneAccountingError('pending_attempt',`Saved request execution failed: ${standaloneFailureDetails(error)}. Existing spending exposure remains held.`),{cause:error});
+    if(finished.status==='paused'&&!recoverable)throw Object.assign(new StandaloneAccountingError('pending_attempt',`Saved request requires technical recovery: ${standaloneFailureDetails(error)}.`),{cause:error});
     throw error;
   }
 }
