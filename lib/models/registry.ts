@@ -252,7 +252,7 @@ type PriorPublishedSnapshot = TrustedPricingSnapshot & Pick<ModelRegistryRecord,
 
 /** PostgREST may serialize PostgreSQL numeric rates as strings; reject non-decimal or nonfinite values. */
 function verifiedNumericRate(value: unknown): number | null {
-  if (typeof value !== "number" && !(typeof value === "string" && /^(?:0|[1-9]\\d*)(?:\\.\\d+)?$/.test(value))) return null;
+  if (typeof value !== "number" && !(typeof value === "string" && /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
