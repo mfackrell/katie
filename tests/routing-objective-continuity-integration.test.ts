@@ -286,6 +286,48 @@ test('C-QA5 feedback plus polite or reordered replacement requests must honor th
   }
 });
 
+test('C-QA6 feedback punctuation and help-me-understand must respect explicit latest task',()=>{
+  const f=scenario('C-01');
+  const original=f.history.find(t=>t.role==='user')!.text;
+  // These sentences are genuine new tasks after feedback, not an invitation
+  // to resume the prior creative objective. Exercise the extracted PRODUCTION
+  // prepareCandidateRequest for both routing modes with scoped A-v1 evidence.
+  for (const latest of [
+    'That response was terrible, can you explain accrual accounting instead?',
+    'That response was terrible — please explain accrual accounting instead.',
+    'That response was terrible. Could you help me understand accrual accounting instead?',
+    'That response was terrible, could you help me understand the balance sheet instead?',
+  ]) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    for (const mode of ['best-value','best-answer'] as const) {
+      const generated=prepared(changed,mode,{
+        currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
+      });
+      assert.equal(generated.user,latest,'Latest user text must remain unchanged');
+      assert.ok(!generated.persona.includes(original),
+        `Explicit replacement must not revive the old creative goal (${mode}): ${latest}`);
+      assert.doesNotMatch(generated.persona,/SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY/,
+        `Feedback plus new accounting task is not same-objective continuation: ${latest}`);
+    }
+  }
+  // Genuine same-objective corrections with the same punctuation must retain
+  // the original scoped directive. Do not introduce a blanket feedback cutoff.
+  for (const latest of [
+    'That response was terrible, please take initiative instead.',
+    'That response was terrible — instead of another menu, keep leading the conversation.',
+    'That response was terrible. Could you be more creative instead?',
+  ]) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    const generated=prepared(changed,'best-value',{
+      currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
+    });
+    assert.ok(generated.persona.includes(original),
+      `Genuine same-task correction must retain the original authorized goal: ${latest}`);
+    assert.ok(generated.persona.includes(latest),
+      'Latest corrective instruction must survive into generation guidance');
+  }
+});
+
 test('C-QA4 actual post-routing gate fails closed when optional feedback vanishes',()=>{
   const node=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='sameScopedPreflightFeedback',
     'sameScopedPreflightFeedback') as ts.FunctionDeclaration;
