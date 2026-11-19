@@ -501,7 +501,16 @@ function sourceBoundObjectiveContinuityGuidance(input: {
         const ongoingComplaintOnly =
           /^(?:you|your|this|that|it|no|still|wrong)\b/i.test(latest) &&
           /\b(?:repeated|repeating|repeat|failed|missed|wrong|bad|awful|terrible|not|never|doesn't|don't|didn't|unhelpful|same|worse)\b/i.test(latest);
-        if (priorReplyReference || continuingSameObjective || ongoingComplaintOnly) return false;
+        // Feedback about the prior answer's quality and the way this conversation
+        // is proceeding is still the SAME task. Recognize referential quality
+        // corrections as a category, instead of treating every two-word
+        // imperative as an unrelated new objective.
+        const responseQualityCorrection =
+          /\b(?:again|yourself|repeated|repeating|repetitive|rehash(?:ing)?|interview(?:ing)?|initiative)\b/i.test(latest) ||
+          /\b(?:do|be)\s+better\b/i.test(latest) ||
+          /\b(?:fresh|original|creative)\s+(?:idea|development)\b/i.test(latest) ||
+          /\b(?:ask(?:ing)?\s+(?:me\s+)?questions|keep\s+it\s+interesting)\b/i.test(latest);
+        if (priorReplyReference || continuingSameObjective || ongoingComplaintOnly || responseQualityCorrection) return false;
         // The distinct, multiword instruction or question has its own objective.
         // This does not require a constantly expanding list of task verbs or
         // reject harmless topic words that merely resemble prior-reply cues.
