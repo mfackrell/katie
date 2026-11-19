@@ -493,6 +493,47 @@ export async function getRecentMessages(chatId: string, limit = 20): Promise<Mes
 
 
 /**
+ * Cursor-paginated UI history. Returns newest first from the database and
+ * reverses only the requested window; never fetches an entire long-lived chat.
+ * Created-at ties use the message ID for stable, non-overlapping pages.
+ */
+export async function getMessageHistoryPage(
+  chatId: string,
+  limit = 10,
+  before?: { createdAt: string; id: string },
+): Promise<{ messages: Message[]; hasMore: boolean }> {
+  const client = getSupabaseAdminClient();
+  let query = client.from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId);
+  if (before) {
+    query = query.or(`created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},id.lt.${before.id})`);
+  }
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit + 1)
+    .returns<MessageRow>();
+  if (error) throw new Error(`Failed to load history for chat ${chatId}: ${error.message}`);
+  const rows = data ?? [];
+  return {
+    hasMore: rows.length > limit,
+    messages: rows.slice(0, limit).reverse().map((row: MessageRow) => {
+      const parsed = parseMessageContent(row.content);
+      return {
+        ...toMessage(row),
+        content: parsed.text,
+        ...(parsed.model ? { model: parsed.model } : {}),
+        ...(parsed.assets ? { assets: parsed.assets } : {}),
+        ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+        ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
+      };
+    }),
+  };
+}
+
+
+/**
  * Restore messages between the persisted ITM cursor and the current STM
  * window. This bounded on-demand query avoids re-reading the whole history
  * during every ordinary chat turn. Source data remains unchanged in messages.
