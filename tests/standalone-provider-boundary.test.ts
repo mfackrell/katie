@@ -90,11 +90,11 @@ test('unverified xAI web usage stays uncertain and can never be retransmitted',a
     const send=createAccountingFetch('grok',async()=>{sends++;
       return new Response(JSON.stringify({id:'resp_failed',status:'completed',model:'grok-4.3',output:[{type:'message',content:[]}],usage}));
     },fake.factory);
-    await assert.rejects(runWithStandaloneAccounting(context,()=>
-      send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)})),isStandaloneAccountingError);
+    await runWithStandaloneAccounting(context,()=>
+      send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)}));
     assert.equal(fake.attempts[0].state,'uncertain');
     assert.ok(fake.attempts[0].response_checkpoint,'the original response remains durable');
-    await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)})),isStandaloneAccountingError);
+    await runWithStandaloneAccounting(context,()=>send('https://api.x.ai/v1/responses',{method:'POST',body:JSON.stringify(body)}));
     assert.equal(sends,1);
   }
 });
@@ -175,10 +175,10 @@ test('paused requests do not send; replay returns durable settled response witho
 test('missing receipts retain exposure and block automatic continuation and replay', async () => {
   const fake = fakeLedger(); let sends = 0;
   const send = createAccountingFetch('openai', async () => { sends++; return new Response('{"choices":[]}'); }, fake.factory);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
+  await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request));
   assert.equal(fake.attempts[0].state, 'uncertain');
   assert.ok(fake.attempts[0].response_checkpoint);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
+  await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request));
   assert.equal(sends, 1);
   assert.equal(fake.attempts[0].actual_microusd, undefined);
 });
@@ -329,7 +329,7 @@ test('truncated Anthropic stream never treats initial usage as a final receipt',
   const fake = fakeLedger();
   const start = { type: 'message_start', message: { id: 'partial-receipt', usage: { input_tokens: 100, output_tokens: 1 } } };
   const send = createAccountingFetch('anthropic', async () => new Response(`data: ${JSON.stringify(start)}\n\n`, { headers: { 'content-type': 'text/event-stream' } }), fake.factory);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system: 'help', messages: [{ role: 'user', content: 'hello' }], stream: true }) })), isStandaloneAccountingError);
+  await runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system: 'help', messages: [{ role: 'user', content: 'hello' }], stream: true }) }));
   assert.equal(fake.attempts[0].state, 'uncertain');
   assert.equal(fake.events.includes('settle'), false);
 });
@@ -358,7 +358,7 @@ test('deliberately selected GPT-5.5 Pro uses nonstream Responses through the str
 test('upstream header request ID survives an interrupted response body without a fabricated response ID', async () => {
   const fake = fakeLedger();
   const send = createAccountingFetch('openai', async () => new Response(new ReadableStream({ start(controller) { controller.error(new Error('body interrupted')); } }), { headers: { 'x-request-id': 'observed-upstream-request' } }), fake.factory);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
+  await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request));
   assert.deepEqual(fake.identifiers, [{ requestId: 'observed-upstream-request', responseId: null }]);
   assert.equal(fake.attempts[0].state, 'uncertain');
   assert.equal(fake.attempts[0].actual_microusd, undefined);
@@ -392,9 +392,8 @@ test('an unpriced resolved model retains known tokens and full exposure without 
     sends++;
     return new Response(JSON.stringify({ id: 'unknown-model-response', model: 'gpt-4o-2099-01-01', usage: { prompt_tokens: 100, completion_tokens: 20 } }), { headers: { 'content-type': 'application/json', 'x-request-id': 'unknown-model-request' } });
   }, fake.factory);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), (error: unknown) => {
-    assert.equal((error as { code?: string }).code, 'standalone_resolved_model_unpriced'); return true;
-  });
+  const response=await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request));
+  assert.equal(response.status,200,'provider output can be consumed despite unknown monetary charge');
   const attempt = fake.attempts[0];
   assert.equal(attempt.state, 'uncertain');
   assert.equal(attempt.actual_microusd, null);
@@ -408,7 +407,7 @@ test('an unpriced resolved model retains known tokens and full exposure without 
   assert.ok(attempt.response_checkpoint?.body.includes('unknown-model-response'));
   assert.deepEqual(fake.identifiers.at(-1), { requestId: 'unknown-model-request', responseId: 'unknown-model-response' });
   assert.equal(fake.events.includes('settle'), false);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
+  await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request));
   assert.equal(sends, 1, 'A saved unresolved receipt must not cause another transmission');
 });
 
@@ -494,9 +493,8 @@ for (const scenario of ['one-hour', 'missing-lifetime', 'conflicting-split', 'sc
     const send = createAccountingFetch('anthropic', async () => new Response(JSON.stringify({ id: `claude-${scenario}`, model: 'claude-sonnet-5-5', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 200, ...(split ? { cache_creation: split } : {}), output_tokens: 20 } })), fake.factory);
     const system = scenario === 'one-hour' || scenario === 'conflicting-split' ? claudeCachedSystem('Stable\nDynamic', 'Stable') : 'No provider cache policy';
     const tools = scenario === 'schema-is-not-policy' ? [{ name: 'read_local_file', input_schema: { type: 'object', properties: { cache_control: { const: { type: 'ephemeral', ttl: '5m' } } } } }] : undefined;
-    await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system, ...(tools ? { tools } : {}), messages: [{ role: 'user', content: 'Answer' }] }) })), (error: unknown) => {
-      assert.equal((error as { code?: string }).code, 'standalone_usage_unpriced'); return true;
-    });
+    const delivered=await runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system, ...(tools ? { tools } : {}), messages: [{ role: 'user', content: 'Answer' }] }) }));
+    assert.equal(delivered.status,200,'unpriced cache usage cannot erase provider output');
     const attempt = fake.attempts[0];
     assert.equal(attempt.state, 'uncertain');
     assert.equal(attempt.actual_microusd, null);
@@ -513,7 +511,7 @@ for (const scenario of ['one-hour', 'missing-lifetime', 'conflicting-split', 'sc
 // Capture before per-test transport replacement; all accounting policy stays real.
 const actualAccountingFetch = createAccountingFetch;
 function googleFixture(t: TestContext) {
-  const fake = fakeLedger(true), sent: string[] = [];
+  const fake = fakeLedger(), sent: string[] = [];
   t.mock.method(accountingDispatch, 'createAccountingFetch', (provider: Parameters<typeof createAccountingFetch>[0]) =>
     actualAccountingFetch(provider, async (url, init) => {
       if (String(url).endsWith(':countTokens')) return Response.json({ totalTokens: 100 });
@@ -527,14 +525,14 @@ function googleFixture(t: TestContext) {
   return { ...fake, sent };
 }
 
-test('saved attachment selector approves normalized Google REST bytes and sends that exact quote on resume', async t => {
+test('saved selector dispatches frozen Google REST bytes without accounting approval', async t => {
   const f = googleFixture(t), previous = process.env.GOOGLE_API_KEY;
   process.env.GOOGLE_API_KEY = 'offline-fixture';
   t.after(() => { if (previous === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = previous; });
   const catalog = [{ id: 'saved', fileName: 'budget.pdf', mimeType: 'application/pdf', observedSummary: 'Budget report', summaryCoverage: 'full' as const }];
   const select = () => selectStoredAttachments('Read budget.pdf', catalog, []);
-  await assert.rejects(runWithStandaloneAccounting(context, select), { code: 'standalone_approval_required' });
-  assert.equal(f.sent.length, 0); assert.equal(f.attempts.length, 1);
+  const decision = await runWithStandaloneAccounting(context, select);
+  assert.equal(f.sent.length, 1); assert.equal(f.attempts.length, 1);
   const a = f.attempts[0], quoted = a.prepared_payload as unknown as ReturnType<typeof freezePreparedRequest>;
   assert.equal(a.category, 'attachment-selection');
   assert.deepEqual(quoted.payload.contents, [{ role: 'user', parts: [{ text: JSON.stringify({
@@ -545,8 +543,7 @@ test('saved attachment selector approves normalized Google REST bytes and sends 
   assert.equal(a.preflight_estimate.requestHash, quoted.hash);
   assert.equal(estimatePreparedRequest(quoted, PRICING_SNAPSHOT, { requestHash: quoted.hash, inputTokens: 100 }).reservationMicrousd, a.reserved_microusd);
   // The approval RPC itself is exercised against PostgreSQL in the ledger suite.
-  const approvedHash = a.prepared_hash; a.state = 'reserved';
-  const decision = await runWithStandaloneAccounting(context, select);
+  const approvedHash = a.prepared_hash;
   assert.equal(decision.method, 'summary-selector'); assert.equal(decision.selections[0].attachment.id, 'saved');
   assert.equal(decision.rationale, 'Named saved file.', 'current main attachment diagnostics survive');
   assert.equal(a.state, 'settled'); assert.equal(f.sent.length, 1);
@@ -593,27 +590,29 @@ test('invalid mixed/empty/unscoped function Google inputs fail before estimation
   }
 });
 
-test('cost admission allows a cheap Pro name and pauses an expensive ordinary name; approval uses its historical price after refresh',async()=>{
- for(const [model,inputNanoUsd,shouldPause] of [['fixture-pro','100',false],['fixture-ordinary','1000000',true]] as const){
+test('model pricing is only a preference: both high and low quotes execute and retain historical actual cost',async()=>{
+ for(const [model,inputNanoUsd] of [['fixture-pro','100'],['fixture-ordinary','1000000']] as const){
   const f=fakeLedger();let sends=0;
   const snapshot={...PRICING_SNAPSHOT,version:'fixture-price-v1',models:[{provider:'openai' as const,model,inputNanoUsd,outputNanoUsd:'100',maxContextTokens:100000,maxOutputTokens:1000,source:'fixture'}]};
   let current:PricingSnapshot={...snapshot};
   f.service.loadPricing=async version=>({snapshot:version===snapshot.version?snapshot:current,retrievedAt:new Date().toISOString()});
-  const admit=f.service.admit;f.service.admit=async input=>{const a=await admit(input);a.state=BigInt(input.reservedMicrousd)>5000n?'paused':'reserved';return a;};
   const send=createAccountingFetch('openai',async(url)=>{
-   if(String(url).endsWith('/input_tokens'))return Response.json({input_tokens:100});
-   sends++;return receipt();
+    if(String(url).endsWith('/input_tokens'))return Response.json({input_tokens:100});
+    sends++;return receipt();
   },f.factory);
   const payload={method:'POST',body:JSON.stringify({model,input:'hello',max_output_tokens:10})};
   const execute=()=>runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',payload));
-  if(shouldPause){
-   await assert.rejects(execute(),{code:'standalone_approval_required'});assert.equal(sends,0);
-   const approved=f.attempts[0];assert.equal(approved.pricing_version,snapshot.version);
-   approved.state='reserved';await execute();assert.equal(sends,1);
-   assert.equal(approved.actual_microusd,'100002','receipt uses the v1 rate applicable at dispatch');
-   current={...snapshot,version:'fixture-price-v2',models:[{...snapshot.models[0],inputNanoUsd:'2000000'}]};
-   await execute();assert.equal(sends,1,'settled approval replay does not dispatch');
-  }else{await execute();assert.equal(sends,1);assert.equal(f.attempts[0].state,'settled');}
+  const response=await execute();
+  assert.equal(response.status,200);
+  const saved=f.attempts[0];
+  assert.equal(saved.state,'settled');assert.equal(saved.pricing_version,snapshot.version);
+  assert.equal(sends,1,'no internal per-call threshold can refuse high-quality model dispatch');
+  const actual=saved.actual_microusd;
+  assert.ok(actual!==null && actual!==undefined,'provider usage is reliably priced after execution');
+  current={...snapshot,version:'fixture-price-v2',models:[{...snapshot.models[0],inputNanoUsd:'2000000'}]};
+  await execute();
+  assert.equal(sends,1,'history replay is one shot');
+  assert.equal(saved.actual_microusd,actual,'later catalog repricing never rewrites incurred charge');
  }
 });
 
@@ -629,43 +628,41 @@ test('application storage image URLs are frozen before approval without fetching
  const before=process.env.NEXT_PUBLIC_SUPABASE_URL;process.env.NEXT_PUBLIC_SUPABASE_URL='https://storage.example.test';
  t.after(()=>{if(before===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=before;});
  const bytes=Buffer.alloc(24);Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);bytes.writeUInt32BE(128,16);bytes.writeUInt32BE(128,20);
- let reads=0,sends=0;const f=fakeLedger(true);
+ let reads=0,sends=0;const f=fakeLedger();
  t.mock.method(globalThis,'fetch',async(url:RequestInfo|URL,init?:RequestInit)=>{reads++;assert.equal(String(url),'https://storage.example.test/storage/v1/object/sign/uploads/photo.png?token=fixture');assert.equal(init?.redirect,'error');assert.equal(init?.headers,undefined);return new Response(bytes,{headers:{'content-type':'image/png'}});});
  const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
  const body={model:'gpt-4o',messages:[{role:'user',content:[{type:'image_url',image_url:{url:'https://storage.example.test/storage/v1/object/sign/uploads/photo.png?token=fixture'}}]}],max_tokens:10};
- await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',{method:'POST',body:JSON.stringify(body)})),{code:'standalone_approval_required'});
- assert.equal(reads,1);assert.equal(sends,0);assert.ok(String(f.attempts[0].prepared_payload.serializedBody).includes('data:image/png;base64,'));assert.ok(!String(f.attempts[0].prepared_payload.serializedBody).includes('token=fixture'));
+ await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',{method:'POST',body:JSON.stringify(body)}));
+ assert.equal(reads,1);assert.equal(sends,1,'image is frozen before one paid generation');assert.ok(String(f.attempts[0].prepared_payload.serializedBody).includes('data:image/png;base64,'));assert.ok(!String(f.attempts[0].prepared_payload.serializedBody).includes('token=fixture'));
  body.messages[0].content[0].image_url.url='https://untrusted.example.test/photo.png';
  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'external'},()=>send('https://api.openai.com/v1/chat/completions',{method:'POST',body:JSON.stringify(body)})),isStandaloneAccountingError);
- assert.equal(reads,1,'untrusted URL was never fetched');assert.equal(sends,0);
+ assert.equal(reads,1,'untrusted URL was never fetched');assert.equal(sends,1,'untrusted content cannot dispatch');
 });
 
-test('a changed pending model price creates an unapproved replacement instead of spending on a stale approval',async()=>{
- const f=fakeLedger(true);let sends=0;
+test('subsequent price changes cannot veto a saved provider request or revise settled cost',async()=>{
+ const f=fakeLedger();let sends=0;
  const original:PricingSnapshot={...PRICING_SNAPSHOT,version:'fixture-old',models:[{...PRICING_SNAPSHOT.models[0]}]};
  let current=original;
  f.service.loadPricing=async version=>({snapshot:version===original.version?original:current,retrievedAt:new Date().toISOString()});
- f.service.lookupAttempt=async()=>f.attempts.at(-1)??null;
- f.service.reprice=async(_owner,id,version,estimate)=>{
-  const parent=f.attempts.find(a=>a.id===id)!;
-  const next={...parent,id:'repriced',state:'paused' as const,pricing_version:version,preflight_estimate:estimate,reserved_microusd:String(estimate.reservationMicrousd),supersedes_attempt_id:parent.id,pause_reason:'pricing_updated'};
-  parent.state='cancelled';f.attempts.push(next);return next;
- };
  const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
  const execute=()=>runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request));
- await assert.rejects(execute(),{code:'standalone_approval_required'});
- const old=f.attempts[0],oldEstimate=structuredClone(old.preflight_estimate);old.state='reserved';
+ await execute();
+ const saved=f.attempts[0],immutable=structuredClone(saved);
+ assert.equal(saved.state,'settled');assert.equal(sends,1);
  current={...original,version:'fixture-new',models:[{...original.models[0],inputNanoUsd:'5000'}]};
- await assert.rejects(execute(),{code:'standalone_approval_required'});assert.equal(sends,0);assert.equal(f.attempts.length,2);
- assert.equal(old.state,'cancelled');assert.deepEqual(old.preflight_estimate,oldEstimate);assert.equal(f.attempts[1].pricing_version,current.version);
- f.attempts[1].state='reserved';await execute();assert.equal(sends,1);assert.equal(f.attempts[1].actual_microusd,'700');
+ await execute();
+ assert.equal(sends,1);
+ assert.equal(saved.id,immutable.id);
+ assert.equal(saved.prepared_hash,immutable.prepared_hash);
+ assert.equal(saved.pricing_version,original.version);
+ assert.equal(saved.actual_microusd,immutable.actual_microusd);
 });
 
 test('missing modern OpenAI write counts retain exposure rather than billing writes as zero',async()=>{
  const f=fakeLedger();const snapshot={...PRICING_SNAPSHOT,version:'fixture-missing-write',models:[{provider:'openai' as const,model:'fixture-sol',inputNanoUsd:'1000',outputNanoUsd:'2000',cacheWriteNanoUsd:'1250',maxContextTokens:100000,maxOutputTokens:10000,source:'fixture'}]};
  f.service.loadPricing=async()=>({snapshot,retrievedAt:new Date().toISOString()});
  const send=createAccountingFetch('openai',async()=>new Response(JSON.stringify({id:'missing-write',usage:{input_tokens:100,output_tokens:10}})),f.factory);
- await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify({model:'fixture-sol',input:'hello',max_output_tokens:10})})),{code:'standalone_usage_unpriced'});
+ await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify({model:'fixture-sol',input:'hello',max_output_tokens:10})}));
  assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts[0].actual_microusd,null);assert.equal(f.attempts[0].usage?.inputTokens,100);assert.equal(f.attempts[0].usage?.cacheWriteInputTokens,undefined,'missing write usage must remain unknown for late reconciliation');
 });
 
@@ -729,7 +726,7 @@ test('accepted uncertain exposure replays complete saved output without settleme
 test('accepting exposure never fabricates a missing or incomplete provider result',async()=>{
  const f=fakeLedger();let sends=0;
  const send=createAccountingFetch('openai',async()=>{sends++;throw Error('socket lost');},f.factory);
- await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request)),isStandaloneAccountingError);
+ await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request));
  f.service.uncertainExposureAccepted=async()=>true;
  for(const checkpoint of [null,{status:200,statusText:'OK',headers:[],body:JSON.stringify({choices:[{message:{content:'partial'},finish_reason:null}]})}] as Array<ResponseCheckpoint|null>){
   f.attempts[0].response_checkpoint=checkpoint;
@@ -750,7 +747,7 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
   },f.factory);
   const url=provider==='openai'?'https://api.openai.com/v1/chat/completions':'https://api.anthropic.com/v1/messages';
   const body={method:'POST',body:JSON.stringify({model:provider==='openai'?'gpt-4o':'claude-sonnet-5-5',messages:[{role:'user',content:'hello'}],stream:true})};
-  await assert.rejects(runWithStandaloneAccounting(context,()=>send(url,body)),isStandaloneAccountingError);
+  await runWithStandaloneAccounting(context,()=>send(url,body));
   f.service.uncertainExposureAccepted=async()=>true;
   const unavailable=await runWithStandaloneAccounting({...context,resumed:true},()=>send(url,body));assert.equal(unavailable.status,400);assert.doesNotMatch(await unavailable.text(),/partial/);
   assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
@@ -1080,10 +1077,10 @@ test('Grok malformed reasoning or conflicting totals fail closed without false s
    usage:{prompt_tokens:40308,completion_tokens:382,total_tokens:v.total,
     completion_tokens_details:{reasoning_tokens:v.reasoning}},
   });},f.factory);
-  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'invalid-grok-'+String(v.reasoning)},
+  await runWithStandaloneAccounting({...context,requestId:'invalid-grok-'+String(v.reasoning)},
    ()=>send('https://api.x.ai/v1/chat/completions',{method:'POST',body:JSON.stringify({
     model:'grok-4.7',messages:[{role:'user',content:'x'.repeat(60000)}],max_tokens:4096,
-   })})),isStandaloneAccountingError);
+   })}));
   assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
   assert.equal(f.events.includes('settle'),false);
  }
@@ -1188,10 +1185,10 @@ test('Gemini policy block without complete zero-output evidence holds uncertain 
     promptFeedback:{blockReason:'PROHIBITED_CONTENT'},usageMetadata:usage});
   },f.factory);
   const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'invalid-gemini-block-'+i},()=>send(url,{
+  await runWithStandaloneAccounting({...context,requestId:'invalid-gemini-block-'+i},()=>send(url,{
    method:'POST',body:JSON.stringify({contents:[{role:'user',parts:[{text:'Classify the saved attachment references.'}]}],
     generationConfig:{maxOutputTokens:256}}),
-  })),isStandaloneAccountingError);
+  }));
   assert.equal(paid,1);
   assert.equal(f.attempts[0].state,'uncertain');
   assert.equal(f.attempts[0].actual_microusd,undefined);
@@ -1247,10 +1244,10 @@ test('Anthropic 400 without exact nonbillable proof remains uncertain',async()=>
     if(String(url).endsWith('/count_tokens'))return Response.json({input_tokens:10});
     paid++;return Response.json(reply,{status:400});
   },f.factory);
-  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'anthropic-unproved-'+index},()=>send(
+  await runWithStandaloneAccounting({...context,requestId:'anthropic-unproved-'+index},()=>send(
    'https://api.anthropic.com/v1/messages',{method:'POST',body:JSON.stringify({
      model:'claude-haiku-5-5',max_tokens:64,messages:[{role:'user',content:'Test'}]
-   })})),isStandaloneAccountingError);
+   })}));
   assert.equal(paid,1);
   assert.equal(f.attempts[0].state,'uncertain');
   assert.equal(f.attempts[0].actual_microusd,undefined);
