@@ -683,10 +683,25 @@ export function buildRoutingRegistrySnapshot(
   for (const provider of providers) grouped.set(provider.name, []);
 
   for (const persisted of persistedRows) {
-    const {source_metadata, capability_verified_at, pricing_verified_at, ...row} = persisted;
+    // Construct only the router's approved fields; provenance never leaks.
     const effective: RegistryRoutingModel = {
-      ...row,
-      routing_eligibility: evaluateRegistryEvidence(persisted, nowIso).eligibility
+      provider_name: persisted.provider_name,
+      model_id: persisted.model_id,
+      pricing_status: persisted.pricing_status,
+      capability_status: persisted.capability_status,
+      pricing_input_per_1m: persisted.pricing_input_per_1m,
+      pricing_output_per_1m: persisted.pricing_output_per_1m,
+      routing_eligibility: evaluateRegistryEvidence(persisted, nowIso).eligibility,
+      confidence_tier: persisted.confidence_tier,
+      confidence_score: persisted.confidence_score,
+      supports_text: persisted.supports_text,
+      supports_vision: persisted.supports_vision,
+      supports_web_search: persisted.supports_web_search,
+      supports_image_generation: persisted.supports_image_generation,
+      supports_video: persisted.supports_video,
+      reasoning_tier: persisted.reasoning_tier,
+      speed_tier: persisted.speed_tier,
+      cost_tier: persisted.cost_tier
     };
     const existing = grouped.get(effective.provider_name);
     if (existing) existing.push(effective);
