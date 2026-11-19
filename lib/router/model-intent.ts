@@ -748,6 +748,7 @@ Intent and secondary_intents must use only: ${intents.join("|")}
 - Context may resolve implicit meaning, but cannot convert an explicit creative, technical, informational, or other objective into unsolicited emotional support.
 - Explicit CURRENT instructions outrank historical image discussions, jokes, metaphors, flirtation, and descriptions of images. Naming or admiring a generated image is not a request to generate one.
 - Identify the concrete deliverable in primary_objective FIRST. Cite exact CURRENT-user wording in objective_evidence. Distinguish an explicit creative-image command from a conversational reference to an existing image.
+- Copy objective_evidence directly from CURRENT_USER_MESSAGE with identical Unicode punctuation (including curly apostrophes), capitalization, spacing, and emoji. Do not rewrite, normalize, autocorrect, or paraphrase quoted text. A short exact substring is preferable to a modified full-message quote.
 - If the user explicitly asks for both writing and an image, retain both tasks in primary/secondary intent and secondary_objectives; do not silently discard either.
 - Provide a concise evidence-based selection_justification. It is a decision summary only; do not reveal or produce private chain-of-thought. Limit context_influence to relevant earlier conversational facts.
 - The primary intent must represent the hardest material work required to answer correctly, not merely the final formatting step.
@@ -1011,6 +1012,35 @@ export async function resolveProjectTransition(
   return result.result.transition.action === "same" ? undefined : result.result.transition;
 }
 
+/**
+ * A classifier may replace a curly apostrophe in copied evidence with ASCII.
+ * Restore ONLY the exact slice of the authoritative current user message when
+ * the strings are otherwise identical. Do not accept paraphrases, casing
+ * changes, missing words, or evidence from historical context.
+ *
+ * The downstream exact-substring validator remains the final authority.
+ */
+export function reconcileVerbatimObjectiveEvidence(
+  classification: RequestClassification,
+  currentUserMessage: string
+): RequestClassification {
+  const evidence = classification.decision_evidence;
+  if (!evidence?.objective_evidence?.length) return classification;
+  // Both apostrophe forms occupy one JavaScript UTF-16 code unit, so indices
+  // in the normalized text identify precisely the original source slice.
+  const normalizeApostrophes = (text: string) => text.replace(/[\u2018\u2019]/g, "'");
+  const normalizedSource = normalizeApostrophes(currentUserMessage);
+  const corrected = evidence.objective_evidence.map(quote => {
+    if (currentUserMessage.includes(quote)) return quote;
+    const at = normalizedSource.indexOf(normalizeApostrophes(quote));
+    if (at < 0) return quote;
+    const original = currentUserMessage.slice(at, at + quote.length);
+    return normalizeApostrophes(original) === normalizeApostrophes(quote) ? original : quote;
+  });
+  if (corrected.every((quote, index) => quote === evidence.objective_evidence?.[index])) return classification;
+  return { ...classification, decision_evidence: { ...evidence, objective_evidence: corrected } };
+}
+
 async function classifyIntentWithLLMProviders(
   prompt: string,
   intents: RequestIntent[],
@@ -1165,14 +1195,16 @@ async function classifyIntentWithLLMProviders(
     parse: (raw, sourceLabel) => {
       const parsed = parseIntentClassifierResponse(raw, intents, sourceLabel);
       if (getAccountingScope()?.kind !== "standalone") return parsed;
-      const evidence = parsed.decision_evidence;
+      const verified = reconcileVerbatimObjectiveEvidence(parsed, prompt);
+      const evidence = verified.decision_evidence;
       // A category alone is not a validated assessment of the required quality.
-      // Missing/invalid fields must trigger correction or disclosed fallback.
-      return parsed.intent && parsed.complexity && parsed.response_purpose && parsed.provider_refusal_risk
+      // Missing/invalid fields still trigger correction or disclosed fallback.
+      // Every returned quote MUST match the current user's original characters.
+      return verified.intent && verified.complexity && verified.response_purpose && verified.provider_refusal_risk
         && evidence?.quality_requirements && evidence.primary_objective && evidence.context_influence && evidence.selection_justification
         && evidence.objective_evidence?.length
         && evidence.objective_evidence.every(quote => prompt.includes(quote))
-        ? parsed : null;
+        ? verified : null;
     },
     timeoutMs: options?.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
   });
