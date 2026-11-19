@@ -489,12 +489,23 @@ function sourceBoundObjectiveContinuityGuidance(input: {
         if (!boundary) return false;
         const latest=afterCriticism.slice(boundary.index+boundary[0].length).trim();
         if (!latest) return false;
-        // Referential requests (including "Could you be more creative?") are
-        // corrections to the saved objective, not independently new subjects.
-        if (/\b(?:it|this|that|them|those|same|previous|earlier|again|more|better|initiative|lead|creative|playful|menu|conversation|response|reply|answer|next)\b/i.test(latest)) return false;
-        const independentQuestion=/^(?:what|why|how|where|when|who|which)\b[\s\S]*\?\s*$/i.test(latest);
-        const explicitRequest=/^(?:(?:can|could|would|will)\s+(?:you|we)\b|i\s+(?:need|want|would\s+like)\b|(?:please|now|instead)\b)/i.test(latest);
-        return independentQuestion || explicitRequest;
+        // A separate, self-contained post-feedback request supersedes the old
+        // objective. Only an actual reference to the prior reply or instructions
+        // for the *same* interaction retain continuity. Never discard a topic
+        // merely because words such as "answer" or "next" occur within it.
+        const priorReplyReference =
+          /\b(?:your|this|that)\s+(?:(?:last|previous|earlier|prior)\s+)?(?:reply|response|answer)\b/i.test(latest) ||
+          /\b(?:it|that|this|them|those)\b(?:\s+(?:more|better|clearly|again|instead|this|time))*\s*[.!?]?\s*$/i.test(latest);
+        const continuingSameObjective =
+          /\b(?:take\s+(?:more\s+)?initiative|keep\s+leading|continue\s+leading|lead\s+(?:the|our)\s+(?:conversation|interaction)|be\s+(?:more\s+)?(?:creative|playful|witty)|another\s+menu|no\s+more\s+menus|keep\s+(?:our|the)\s+(?:creative\s+)?conversation|keep\s+going|continue\s+(?:the\s+)?conversation)\b/i.test(latest);
+        const ongoingComplaintOnly =
+          /^(?:you|your|this|that|it|no|still|wrong)\b/i.test(latest) &&
+          /\b(?:repeated|repeating|repeat|failed|missed|wrong|bad|awful|terrible|not|never|doesn't|don't|didn't|unhelpful|same|worse)\b/i.test(latest);
+        if (priorReplyReference || continuingSameObjective || ongoingComplaintOnly) return false;
+        // The distinct, multiword instruction or question has its own objective.
+        // This does not require a constantly expanding list of task verbs or
+        // reject harmless topic words that merely resemble prior-reply cues.
+        return latest.split(/\s+/).length >= 2;
       })()) return "";
   // "Stop rehashing..." can be a direct current-turn instruction even if A
   // correctly emits not_feedback rather than inventing provider attribution.
