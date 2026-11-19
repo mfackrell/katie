@@ -328,6 +328,54 @@ test('C-QA6 feedback punctuation and help-me-understand must respect explicit la
   }
 });
 
+
+test('C-QA7 standalone latest-topic requests do not revive old objectives in either mode',()=>{
+  const f=scenario('C-01');
+  const original=f.history.find(t=>t.role==='user')!.text;
+  // Non-author findings at the actual A+B+C generation builder boundary.
+  // These contain a fresh substantive user task after authenticated criticism,
+  // even though A's applicability is null rather than definitively false.
+  const replacementRequests=[
+    'That response was terrible. What is accrual accounting?',
+    'That response was terrible. Can we talk about accrual accounting instead?',
+    'That response was terrible. I need help understanding accrual accounting instead.',
+    'That response was terrible. Why does depreciation reduce taxable income?',
+    'That response was terrible. Could you compare cash and accrual accounting?',
+  ];
+  for (const latest of replacementRequests) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    for (const mode of ['best-value','best-answer'] as const) {
+      const generated=prepared(changed,mode,{
+        currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
+      });
+      assert.equal(generated.user,latest);
+      assert.ok(!generated.persona.includes(original),
+        \`Independent latest task must not acquire stale creative objective (\${mode}): \${latest}\`);
+      assert.doesNotMatch(generated.persona,/SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY/,
+        \`Fresh topical request must not be recast as old-task feedback: \${latest}\`);
+    }
+  }
+  // The distinct task must not be inferred merely from question punctuation
+  // or the word "instead": referential corrections remain same-objective.
+  for (const latest of [
+    'That response was terrible. Please take initiative instead.',
+    'That response was terrible. Could you be more creative instead?',
+    'That response was terrible. Can you make it better this time?',
+    'That response was terrible. Can you explain that more clearly instead?',
+  ]) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    for (const mode of ['best-value','best-answer'] as const) {
+      const generated=prepared(changed,mode,{
+        currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
+      });
+      assert.ok(generated.persona.includes(original),
+        \`Same-objective correction must keep trusted continuity (\${mode}): \${latest}\`);
+      assert.ok(generated.persona.includes(latest),
+        'Current correction must remain verbatim in generation guidance');
+    }
+  }
+});
+
 test('C-QA4 actual post-routing gate fails closed when optional feedback vanishes',()=>{
   const node=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='sameScopedPreflightFeedback',
     'sameScopedPreflightFeedback') as ts.FunctionDeclaration;
