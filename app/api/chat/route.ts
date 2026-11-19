@@ -1888,7 +1888,8 @@ async function executeChat(request: NextRequest) {
         attachments,
         onProviderSystemPrepared: audit =>
           saveProviderSystemAudit(actorId, chatId, requestId, audit)
-      }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
+      }), routingMode: typeof routingMode === "string" ? routingMode : undefined,
+        previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
     };
 
     const videoRoutingPolicy = resolveVideoRoutingPolicy(attachments.some(requiresGoogleFileSource), overrideProvider);

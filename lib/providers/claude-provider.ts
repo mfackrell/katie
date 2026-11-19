@@ -1,5 +1,6 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
 import { claudeCachedSystem, claudeInputUsage } from "./claude-cache";
+import { ProviderResponseError } from "./response-errors";
 import { nativeToolTurn } from "./native-tools";
 import {
   ChatGenerateParams,
@@ -331,6 +332,7 @@ export class ClaudeProvider implements LlmProvider {
     let buffer = "";
     let text = "";
     let stopReason: string | undefined;
+    let sawMessageStop = false;
     let cacheReadInputTokens: number | undefined;
     let cacheCreationInputTokens: number | undefined;
     let inputTokens: number | undefined;
@@ -398,6 +400,11 @@ export class ClaudeProvider implements LlmProvider {
         return;
       }
 
+      if (event.type === "message_stop") {
+        sawMessageStop = true;
+        return;
+      }
+
       if (event.type === "message_delta") {
         if (event.delta?.stop_reason) {
           stopReason = event.delta.stop_reason;
@@ -431,6 +438,13 @@ export class ClaudeProvider implements LlmProvider {
     const remainder = buffer.trim();
     if (remainder) {
       await processEvent(remainder);
+    }
+    if (!sawMessageStop || !stopReason) {
+      // message_delta is not terminal: never finalize text or initiate a
+      // paid continuation after a dropped Anthropic stream.
+      throw new ProviderResponseError(
+        "Anthropic stream ended without final message_stop and stop reason.",
+        false, "PROVIDER_TERMINAL_MISSING");
     }
 
     return {

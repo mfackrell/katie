@@ -1,4 +1,6 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
+import { planBestAnswerOutputTokens } from "./output-planning";
+import { ProviderResponseError } from "./response-errors";
 import { openAiCacheSettings } from "./openai-cache";
 import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
@@ -235,7 +237,7 @@ function classifyModel(modelId: string): ModelClassification {
 }
 
 function toProviderResponse(
-  response: Pick<ProviderResponse, "text" | "content" | "usage">,
+  response: Pick<ProviderResponse, "text" | "content" | "usage" | "responseStatus" | "incompleteReason" | "providerResponseId" | "finishReason">,
   model: string,
   provider: OpenAiProvider["name"]
 ): ProviderResponse {
@@ -244,7 +246,11 @@ function toProviderResponse(
     model,
     provider,
     content: response.content,
-    usage: response.usage
+    usage: response.usage,
+    responseStatus: response.responseStatus,
+    incompleteReason: response.incompleteReason,
+    providerResponseId: response.providerResponseId,
+    finishReason: response.finishReason
   };
 }
 
@@ -298,20 +304,28 @@ export class OpenAiProvider implements LlmProvider {
       prompt: `IDENTITY:\nYour name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}\n\nCORE_PERSONA: ${params.persona}\n\n${MATH_EXECUTION_PROTOCOL}\n\nUser request:\n${params.user}`
     }, { signal: params.signal, maxRetries: 0 });
 
-    return toProviderResponse({ text: completion.choices[0]?.text ?? "" }, completion.model || selectedModel, this.name);
+    return toProviderResponse({
+      text: completion.choices[0]?.text ?? "",
+      finishReason: completion.choices[0]?.finish_reason ?? undefined
+    }, completion.model || selectedModel, this.name);
   }
 
   private async generateViaChatCompletions(
     selectedModel: string,
     params: ChatGenerateParams
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const completion = await this.client.chat.completions.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params)
     }, { signal: params.signal, maxRetries: 0 });
 
-    return toProviderResponse({ text: completion.choices[0]?.message?.content ?? "" }, completion.model || selectedModel, this.name);
+    return toProviderResponse({
+      text: completion.choices[0]?.message?.content ?? "",
+      finishReason: completion.choices[0]?.finish_reason ?? undefined
+    }, completion.model || selectedModel, this.name);
   }
 
   private async generateViaResponses(
@@ -319,8 +333,10 @@ export class OpenAiProvider implements LlmProvider {
     params: ChatGenerateParams,
     classification: ModelClassification
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const response = await this.client.responses.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_output_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey),
       input: toResponsesInput(params),
       ...(classification.isImageGenerationModel
@@ -338,11 +354,15 @@ export class OpenAiProvider implements LlmProvider {
       {
         text,
         content: contentItems,
+        responseStatus: response.status,
+        incompleteReason: response.incomplete_details?.reason ?? undefined,
+        providerResponseId: response.id,
         usage: response.usage
           ? {
               inputTokens: response.usage.input_tokens,
               outputTokens: response.usage.output_tokens,
-              totalTokens: response.usage.total_tokens
+              totalTokens: response.usage.total_tokens,
+              reasoningTokens: response.usage.output_tokens_details?.reasoning_tokens ?? 0
             }
           : undefined
       },
@@ -356,8 +376,10 @@ export class OpenAiProvider implements LlmProvider {
     params: ChatGenerateParams,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const stream = await this.client.chat.completions.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params),
       stream: true,
@@ -366,10 +388,13 @@ export class OpenAiProvider implements LlmProvider {
 
     let fullText = "";
     let responseModel = selectedModel;
+    let finishReason: string | undefined;
 
     for await (const chunk of stream) {
       responseModel = chunk.model || responseModel;
-      const delta = chunk.choices[0]?.delta?.content ?? "";
+      const choice = chunk.choices[0];
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice?.delta?.content ?? "";
       if (!delta) {
         continue;
       }
@@ -378,7 +403,13 @@ export class OpenAiProvider implements LlmProvider {
       await handlers.onTextDelta?.(delta);
     }
 
-    return toProviderResponse({ text: fullText }, responseModel, this.name);
+    if (!finishReason) {
+      // EOF is not proof a paid Chat Completions stream completed.
+      throw new ProviderResponseError(
+        "Chat Completions stream ended without a provider finish reason.",
+        false, "PROVIDER_TERMINAL_MISSING");
+    }
+    return toProviderResponse({ text: fullText, finishReason }, responseModel, this.name);
   }
 
   private async generateStreamViaResponses(
@@ -387,8 +418,10 @@ export class OpenAiProvider implements LlmProvider {
     classification: ModelClassification,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
+    const plannedOutput = planBestAnswerOutputTokens(params, selectedModel);
     const stream = await this.client.responses.create({
       model: selectedModel,
+      ...(plannedOutput ? { max_output_tokens: plannedOutput } : {}),
       ...openAiCacheSettings(selectedModel, params.promptCacheKey),
       input: toResponsesInput(params),
       stream: true,
@@ -415,16 +448,18 @@ export class OpenAiProvider implements LlmProvider {
         continue;
       }
 
-      if (event.type === "response.completed" || event.type === "response.incomplete") {
+      if (event.type === "response.completed" || event.type === "response.incomplete" ||
+          event.type === "response.failed") {
         completedResponse = getCompletedResponseFromEvent(event);
       }
     }
 
     if (!completedResponse) {
-      // The SDK exposes Responses streaming as raw SSE events. We can reliably build text from
-      // `response.output_text.delta`, but `content` and `usage` are only returned if the final
-      // `response.completed` event includes the full response object.
-      return toProviderResponse({ text: streamedText }, selectedModel, this.name);
+      // A missing terminal event is not a valid completion, even if some
+      // streamed text was received. Never publish an unverified partial answer.
+      throw new ProviderResponseError(
+        "OpenAI streaming ended without a provider terminal response. Billing evidence remains with the accounting ledger.",
+        false, "PROVIDER_TERMINAL_MISSING");
     }
 
     const contentItems = extractOutputItems(completedResponse);
@@ -434,11 +469,15 @@ export class OpenAiProvider implements LlmProvider {
       {
         text,
         content: contentItems,
+        responseStatus: completedResponse.status,
+        incompleteReason: completedResponse.incomplete_details?.reason ?? undefined,
+        providerResponseId: completedResponse.id,
         usage: completedResponse.usage
           ? {
               inputTokens: completedResponse.usage.input_tokens,
               outputTokens: completedResponse.usage.output_tokens,
-              totalTokens: completedResponse.usage.total_tokens
+              totalTokens: completedResponse.usage.total_tokens,
+              reasoningTokens: completedResponse.usage.output_tokens_details?.reasoning_tokens ?? 0
             }
           : undefined
       },
