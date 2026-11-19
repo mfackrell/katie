@@ -185,10 +185,22 @@ test('C-02 positive correction retains the objective without negative-evidence i
 });
 
 test('C-03 correction explicitly rejects the stale performance-review premise',()=>{
-  const f=scenario('C-03');const output=prepared(f,undefined,{currentTurnFeedback:scopedPriorFeedback(f,'negative')});
+  const f=scenario('C-03');
+  // A's conservative classifier does not invent feedback polarity for a
+  // direct imperative "Stop rehashing". C still must fulfill that request
+  // using scoped conversation, without attributing it to a model.
+  const prior=scopedPriorFeedback(f,'negative');
+  const unattributed={
+    ...prior,
+    source:{...prior.source,polarity:'none' as const,correctionExcerpt:null},
+    target:{status:'unattributed' as const,reason:'not_feedback' as const},
+  };
+  const output=prepared(f,undefined,{currentTurnFeedback:unattributed});
   assertObjectiveAndCorrection(output,f);
   assert.match(output.persona,/performance.review|scorecard|interview/i);
   assert.match(output.persona,/avoid|do not|instead|new/i);
+  assert.ok(!output.persona.includes('The user criticized the previous response'),
+    'A neutral, unattributed record must not invent a negative provider evaluation');
   // Independent human QA must additionally judge whether the generated *answer*
   // actually advances something new; lexical no-repeat checks alone cannot.
 });
