@@ -1,4 +1,5 @@
 import { type RoutingEvidence } from "@/lib/router/observed-evidence";
+import type { CurrentTurnFeedbackProvenanceV1 } from "@/lib/router/current-turn-feedback";
 import { getModelPrice } from "@/lib/standalone-accounting/pricing";
 import type { ProjectTransition } from "@/lib/chat/task-progress";
 import { isNonConversationalModel } from "@/lib/models/non-conversational";
@@ -2283,6 +2284,8 @@ export async function chooseRoutingWithLLM(args: {
   timeoutMs?: number;
   routing_mode?: RoutingMode;
   requestEvidence?: RoutingEvidence;
+  /** Current trusted feedback is supplemental; the next responder cannot be its target. */
+  currentTurnFeedback?: CurrentTurnFeedbackProvenanceV1 | null;
   understanding?: InferredRequestClassification | null;
   prompt: string;
   intent: RequestIntent;
@@ -2394,7 +2397,8 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       modality_flags: args.modalityFlags,
       hard_route_context: args.hardRouteContext,
       ...(neutral ? {routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
-        routing_overhead: args.requestEvidence?.overhead ?? {status: "unknown", reason: "No observed control-plane receipts available"}} : {preference_profile: args.preferenceProfile}),
+        routing_overhead: args.requestEvidence?.overhead ?? {status: "unknown", reason: "No observed control-plane receipts available"},
+        ...(args.routing_mode === "best_answer" ? {} : {current_turn_feedback: args.currentTurnFeedback ?? null})} : {preference_profile: args.preferenceProfile}),
       candidates: neutral ? args.candidates.map(candidate => buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup, args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
     })}`,
     parse: (raw) => {
