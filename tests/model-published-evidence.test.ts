@@ -177,44 +177,65 @@ test("a definitive, unsupported model does not become verified from a different 
 });
 
 test("PostgREST numeric-string verified rates survive an ordinary documentation refresh", () => {
+  const verifiedAt = "2026-11-18T19:00:00.000Z";
   const now = "2026-11-18T20:00:00.000Z";
+  const evidence = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
+  const trusted = retainOfficialModelEvidence(syntheticRecord(verifiedAt), undefined, evidence, verifiedAt);
   const prior = {
-    ...syntheticRecord(now),
-    capability_status: "verified",
-    pricing_status: "verified",
-    capability_verified_at: "2026-11-18T19:00:00.000Z",
-    pricing_verified_at: "2026-11-18T19:00:00.000Z",
-    pricing_input_per_1m: "8",
-    pricing_output_per_1m: "40",
-    source_metadata: {
-      capability_evidence_basis: "first_party_model_documentation",
-      capability_verification_source: "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md",
-      pricing_verification_source: "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md"
-    }
+    ...trusted, pricing_input_per_1m: "8", pricing_output_per_1m: "40"
   } as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
   const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
   assert.equal(row.pricing_status, "verified");
   assert.equal(row.pricing_input_per_1m, 8);
   assert.equal(row.pricing_output_per_1m, 40);
   assert.equal(row.routing_eligibility, "verified");
-  assert.equal(row.pricing_verified_at, "2026-11-18T19:00:00.000Z");
+  assert.equal(row.pricing_verified_at, verifiedAt);
+  assert.equal(row.capability_verified_at, verifiedAt);
 });
 
-test("verified numeric rates reject invalid PostgREST values and accept canonical decimal strings", () => {
+test("retained numeric rates require the exact previously documented and approved base-rate provenance", () => {
   const now = "2026-11-18T20:00:00.000Z";
   const evidence = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
   const trusted = retainOfficialModelEvidence(syntheticRecord(now), undefined, evidence, now);
-  for (const [input, output] of [["0.10", "40"], ["8", "40"], [8, 40]] as const) {
-    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: output } as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
+
+  for (const [input, output] of [["8", "40"], ["8.00", "40.0"], [8, 40]] as const) {
+    const prior = {
+      ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: output
+    } as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
     const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
-    assert.equal(row.pricing_status, "verified");
-    assert.equal(row.pricing_input_per_1m, Number(input));
-    assert.equal(row.pricing_output_per_1m, Number(output));
+    assert.equal(row.pricing_status, "verified", String(input));
+    assert.equal(row.pricing_input_per_1m, 8);
+    assert.equal(row.pricing_output_per_1m, 40);
     assert.equal(row.routing_eligibility, "verified");
     assert.equal(row.pricing_verified_at, now);
   }
+
+  const corruptPriorRecords = [
+    { ...trusted, pricing_input_per_1m: "0.10", pricing_output_per_1m: "40" },
+    { ...trusted, pricing_input_per_1m: "8", pricing_output_per_1m: "41" },
+    { ...trusted, pricing_input_per_1m: "9", pricing_output_per_1m: "40" },
+    { ...trusted, source_metadata: { ...trusted.source_metadata, published_base_input_per_1m: 0.1 } },
+    { ...trusted, pricing_input_per_1m: "0.10", source_metadata: {
+      ...trusted.source_metadata, published_base_input_per_1m: 0.1
+    } },
+    { ...trusted, source_metadata: { ...trusted.source_metadata, published_base_output_per_1m: 41 } },
+    { ...trusted, source_metadata: { ...trusted.source_metadata, published_base_input_per_1m: undefined } },
+    { ...trusted, source_metadata: { ...trusted.source_metadata, provider_documented_model_id: "gpt-6-sol" } },
+    { ...trusted, source_metadata: { ...trusted.source_metadata, pricing_tier: "unverified_tier" } },
+    { ...trusted, source_metadata: { ...trusted.source_metadata, price_verified_scope: "unverified_scope" } }
+  ];
+  for (const [index, untrusted] of corruptPriorRecords.entries()) {
+    const row = retainOfficialModelEvidence(syntheticRecord(now),
+      untrusted as unknown as Parameters<typeof retainOfficialModelEvidence>[1], null, now);
+    assert.equal(row.pricing_status, "estimated", "tampered pricing provenance case " + index);
+    assert.equal(row.routing_eligibility, "restricted", "tampered pricing provenance case " + index);
+    assert.equal(row.pricing_verified_at, null, "tampered pricing provenance case " + index);
+    assert.equal(row.capability_verified_at, now, "tampered pricing provenance case " + index);
+  }
+
   for (const input of ["-8", "8e2", "08", "8.", "", "NaN", "Infinity", " 8", null, Number.POSITIVE_INFINITY, Number.NaN]) {
-    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: "40" } as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
+    const prior = { ...trusted, pricing_input_per_1m: input, pricing_output_per_1m: "40" }
+      as unknown as Parameters<typeof retainOfficialModelEvidence>[1];
     const row = retainOfficialModelEvidence(syntheticRecord(now), prior, null, now);
     assert.equal(row.pricing_status, "estimated", String(input));
     assert.equal(row.routing_eligibility, "restricted", String(input));
