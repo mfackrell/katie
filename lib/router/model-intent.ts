@@ -2443,11 +2443,21 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         const explicitUserFeedbackClauses = selectedRationale.flatMap(text =>
           text.split(/[.;\n]|\b(?:but|however|yet)\b/i).map(fragment => fragment.trim())
             .filter(clause => {
-              // Honest absence-of-evidence statements are not praise claims.
+              // Absence of a reaction is not proof of either satisfaction or
+              // dissatisfaction. Preserve explicit absence-of-evidence claims.
               if (/^(?:no|there (?:is|are|was|were) no|without|lack(?:s|ing)?|absence of|missing|unknown|unverified)\b/i.test(clause)) {
                 return false;
               }
-              return /\b(?:users?|customers?|clients?|readers?)\s+(?:(?:explicitly|directly|previously|clearly)\s+)?(?:praised?|liked?|loved?|approved?|endorsed?|criticized?|disliked?|rejected?|complained?|(?:were|was|are|is)\s+(?:not\s+)?satisfied)\b|\b(?:positive|negative|mixed|ambiguous|favorable|unfavorable)\s+(?:(?:user|customer|client)\s+)?(?:feedback|reaction|review|rating)\b|\b(?:user|customer|client)\s+satisfaction\b/i.test(clause);
+              // The selecting model controls the narrative and basis label, not
+              // the facts. Detect user feedback even when its word order is
+              // "user feedback was positive", "user expressed satisfaction",
+              // or "the answer earned praise from the user". Do not infer
+              // feedback from generic claims that users want good answers.
+              const identifiesUser = /\b(?:users?|customers?|clients?|readers?)\b/i.test(clause);
+              const directAssessment = /\b(?:prais(?:e|ed|es|ing)|lik(?:e|ed|es|ing)|lov(?:e|ed|es|ing)|approv(?:e|ed|es|al)|endors(?:e|ed|es|ement)|criticiz(?:e|ed|es|ing)|critici(?:sm|sed|se)|dislik(?:e|ed|es|ing)|reject(?:ed|ion|s)?|complain(?:ed|s|t|ts)?|satisf(?:ied|action)|dissatisf(?:ied|action))\b/i.test(clause);
+              const feedbackNoun = /\b(?:feedback|reactions?|reviews?|ratings?|sentiment|responses?)\b/i.test(clause);
+              const describesOutcome = /\b(?:positive|negative|mixed|ambiguous|favorable|unfavorable|satisfied|dissatisfied)\b/i.test(clause);
+              return identifiesUser && (directAssessment || (feedbackNoun && describesOutcome));
             })
         );
         const explicitUserFeedbackClaim = explicitUserFeedbackClauses.length > 0;
@@ -2473,13 +2483,14 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
           // fields, not just evidence_basis. An ambiguous/negative event cannot
           // support invented satisfaction in selection_justification or fit.
           if (explicitUserFeedbackClauses.some(clause =>
-            /\b(?:praised?|liked?|loved?|approved?|endorsed?|positive\s+(?:user\s+)?(?:feedback|reaction|review)|satisfaction|(?:was|were|is|are)\s+satisfied)\b/i.test(clause) &&
+            /\b(?:positive|favorable|prais(?:e|ed|es|ing)|lik(?:e|ed|es|ing)|lov(?:e|ed|es|ing)|approv(?:e|ed|es|al)|endors(?:e|ed|es|ement)|satisf(?:ied|action))\b/i.test(clause) &&
+            !/\b(?:not|never)\s+(?:fully\s+)?satisfied\b/i.test(clause) &&
             !citedEvents.some(event => event.outcome === "positive"))) return null;
           if (explicitUserFeedbackClauses.some(clause =>
-            /\b(?:criticized?|disliked?|rejected?|complained?|negative\s+(?:user\s+)?(?:feedback|reaction|review)|not\s+satisfied|dissatisfied)\b/i.test(clause) &&
+            /\b(?:negative|unfavorable|criticiz(?:e|ed|es|ing)|critici(?:sm|sed|se)|dislik(?:e|ed|es|ing)|reject(?:ed|ion|s)?|complain(?:ed|s|t|ts)?|dissatisf(?:ied|action))\b|\b(?:not|never)\s+(?:fully\s+)?satisfied\b/i.test(clause) &&
             !citedEvents.some(event => event.outcome === "negative"))) return null;
           if (explicitUserFeedbackClauses.some(clause =>
-            /\b(?:mixed|ambiguous)\s+(?:user\s+)?(?:feedback|reaction|review)\b/i.test(clause) &&
+            /\b(?:mixed|ambiguous)\b/i.test(clause) &&
             !citedEvents.some(event => event.outcome === "ambiguous"))) return null;
           if (/\b(praised?|positive|successful|success|satisfied|satisfaction|approved|liked?|better|good|excellent|accepted|worked)\b/i.test(evidenceDescription) &&
               !citedEvents.some(event => event.outcome === "positive")) return null;
