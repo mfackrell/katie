@@ -595,15 +595,11 @@ export function buildRoutingRegistrySnapshot(
   for (const persisted of persistedRows) {
     const {source_metadata, capability_verified_at, pricing_verified_at, ...row} = persisted;
     const evidence = source_metadata ?? {};
-    // Preserve genuinely independent provider proof, but never treat a missing
-    // documentation marker as evidence that a previously verified claim is safe.
-    const independentProviderProof =
-      evidence.capability_source === "provider" &&
-      evidence.pricing_source === "provider" &&
-      evidence.capability_evidence_basis !== "first_party_model_documentation" &&
-      evidence.pricing_tier !== "standard_base_per_1m" &&
-      evidence.published_base_input_per_1m === undefined &&
-      evidence.published_base_output_per_1m === undefined;
+    // Editable provider/provider labels are not independent producer attestation.
+    // Until a trusted receipt/producer verification contract exists, only the
+    // validated first-party documentation path may retain verified eligibility.
+    // Restricted models remain available to ordinary automatic routing wherever
+    // the existing router permits them; do not change any other eligibility.
     const spec = officialModelSpec(row.provider_name, row.model_id);
     // Validate persisted rates at every read, including after discovery failed
     // and retainOfficialModelEvidence (D3) was never called.
@@ -623,7 +619,7 @@ export function buildRoutingRegistrySnapshot(
     const effective: RegistryRoutingModel = {
       ...row,
       routing_eligibility: row.routing_eligibility === "verified" &&
-        !independentProviderProof && !validDocumentedEvidence
+        !validDocumentedEvidence
         ? "restricted" : row.routing_eligibility
     };
     const existing = grouped.get(effective.provider_name);
