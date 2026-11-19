@@ -34,6 +34,7 @@ import {
 } from "@/lib/models/registry";
 import type { ActorRoutingProfile } from "@/lib/types/chat";
 import { getAccountingScope } from "@/lib/standalone-accounting/context";
+import { deriveCurrentTurnFeedbackProvenance, type CurrentTurnFeedbackProvenanceV1 } from "@/lib/router/current-turn-feedback";
 
 export type RoutingDecision = {
   provider: LlmProvider;
@@ -45,6 +46,8 @@ export type RoutingDecision = {
   explainer?: SelectionExplainer;
   authority?: "llm" | "heuristic" | "override" | "capability" | "fallback";
   intentResolutionReason?: string;
+  /** Read-only, source-bound current feedback for C's later generation integration. */
+  currentTurnFeedback?: CurrentTurnFeedbackProvenanceV1 | null;
 };
 export type ResolvedRoutingIntent = {
   intent: RequestIntent;
@@ -875,6 +878,12 @@ export async function chooseProvider(
   const intent = resolvedIntent.intent;
   const preferredProvider = resolvedIntent.preferredProvider;
   const neutral = getAccountingScope()?.kind === "standalone";
+  // Current feedback may not yet be persisted when selection occurs.
+  // Read from the authenticated request, never from the NEXT model's identity.
+  // Best Answer receives only this optional context field; its selection is untouched.
+  const currentTurnFeedback = neutral && options?.routingRequestId
+    ? await deriveCurrentTurnFeedbackProvenance({message:prompt})
+    : null;
   const actorRoutingProfile = neutral ? undefined : options?.actorRoutingProfile;
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
@@ -1230,7 +1239,8 @@ export async function chooseProvider(
     }
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
-      requestEvidence: neutral ? await resolveRoutingEvidence(llmCandidatesUsed, providers, typeof options?.routingRequestParams === "function" ? await options.routingRequestParams(resolvedIntent) : options?.routingRequestParams, intent, options?.routing_mode !== "best_answer") : undefined,
+      requestEvidence: neutral ? await resolveRoutingEvidence(llmCandidatesUsed, providers, typeof options?.routingRequestParams === "function" ? await options.routingRequestParams(resolvedIntent) : options?.routingRequestParams, intent, options?.routing_mode !== "best_answer", currentTurnFeedback) : undefined,
+      currentTurnFeedback: options?.routing_mode === "best_answer" ? undefined : currentTurnFeedback,
       routing_mode: options?.routing_mode,
       understanding: requestClassification ?? resolvedIntent,
       prompt,
@@ -1348,6 +1358,7 @@ export async function chooseProvider(
   }
 
   const finalDecision = applyPolicyGuardrail(selected);
+  if (currentTurnFeedback) finalDecision.currentTurnFeedback = currentTurnFeedback;
   if (llmSelectionJustification && finalDecision.explainer) {
     finalDecision.explainer.selection_justification = llmSelectionJustification;
   }
