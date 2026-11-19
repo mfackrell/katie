@@ -37,7 +37,7 @@ test("selection aggregation uses trusted feedback before votes and never fabrica
   "async function select(validJudgments,args) {\n"+section+"\nreturn result;\n}\nglobalThis.select=select;",
   {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}
  ).outputText;
- const ctx=vm.createContext({Map,Math});
+ const ctx=vm.createContext({Map,Math,Date,judgeStartMs:Date.now(),judges:[{}, {}, {}],console:{info:()=>{}}});
  vm.runInContext(executable,ctx);
  const ballot=(lane,provider,model)=>({lane,provider:"anthropic",modelId:"judge-"+lane,result:{
   selectedProvider:provider,selectedModel:model,selectionJustification:"qualified",selectionComparisons:[]}});
