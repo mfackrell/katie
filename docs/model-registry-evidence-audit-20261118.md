@@ -103,3 +103,30 @@ Specific provider-account eligibility, endpoint authorization, and real answer q
 still require a smallest-possible paid verification proposal and owner approval.
 The registry can independently verify published specifications; it cannot claim
 unmeasured response quality or guarantee account-level inference solely from listModels().
+
+## First-party documentation checkpoint — 2026-11-19 UTC
+
+Read-only source inspection confirmed the publicly served first-party Markdown pages
+for **eight of nine** configured models. This is a documentation check, not an
+authenticated registry refresh, paid model inference, or proof that the deployed
+server's parser has successfully processed each live HTTP response:
+
+| Source cohort | Public Markdown status | Documented conclusion |
+|---|---|---|
+| `gpt-6.2-astra`, `gpt-6-astra`, `gpt-6.2-sol`, `gpt-6-sol` | Accessible | Exact model IDs, base input/output prices and Responses + Chat endpoint rows found |
+| `gpt-5.5-pro`, `gpt-5.4-pro` | Accessible | Exact model IDs, both snapshot IDs and base prices found; Responses supported, Chat not supported |
+| `claude-opus-5-5`, `claude-sonnet-5-5` | Accessible | Exact IDs and Anthropic Messages identifiers, 1M context, 128K max output, base prices and thinking capabilities found |
+| `claude-fable-5-2` | **Not accessible to this read-only retrieval** | Comparison references in other model pages are **not sufficient** to qualify its own page. Keep unverified; do not fabricate a price check |
+
+The directly inspected URL set is the eight OpenAI/Anthropic first-party pages linked
+in the evidence-backed model table above, with `.md` appended. Pages may change
+independently of this audit; any subsequent scheduled verification must validate
+the actual current response under the parser's exact ID, price and endpoint checks.
+The offline suite now also includes source-shaped multi-model/snapshot fixtures,
+numeric-string positive cases and fail-closed invalid-value cases. A green CI result
+would establish only those offline tests; actual deployed account eligibility and
+billing-specific surcharge controls require their separate acceptance gates.
+
+**Release gate remains:** no automatic inference requalification, no assumption that
+a documented model is authorized for billing, no routing-agent source changes, and
+no merge/deployment without independent review and owner authorization.
