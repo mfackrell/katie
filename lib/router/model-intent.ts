@@ -12,7 +12,7 @@ import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
 import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
 import { recordProviderTrace, runProviderAttemptTrace } from "@/lib/diagnostics/provider-attempt-timing";
-import { getAccountingScope, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, isStandaloneAccountingError, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import { rankControlPlaneByActualCost } from "@/lib/router/control-plane-economics";
 
 export type RoutingMode = "best_answer" | "best_value";
@@ -877,6 +877,10 @@ async function executeControlPlaneJsonTask<T>(args: {
   timeoutMs: number;
   /** Best Value only: max of initial, correction, and one alternate decision-provider attempt. */
   bestValueSelection?: boolean;
+  /** Parallel judges must never share a durable provider-attempt ordinal. */
+  activityOverride?: string;
+  /** Exactly one paid transmission per judge; invalid outputs do not replay. */
+  singleAttempt?: boolean;
 }): Promise<{ result: T; provider: ProviderName; modelId: string } | null> {
   const params = {
     name: "Katie Control Plane",
@@ -884,16 +888,16 @@ async function executeControlPlaneJsonTask<T>(args: {
     summary: "", history: [], user: args.userPrompt,
   };
   const remaining = [...args.decisionProviders];
-  let correctionAvailable = (args.taskName === "routing-rerank" || args.taskName === "intent-classification")
+  let correctionAvailable = !args.singleAttempt && (args.taskName === "routing-rerank" || args.taskName === "intent-classification")
     && getAccountingScope()?.kind === "standalone";
   let correction = "";
-  const maxAttempts = args.bestValueSelection ? 3 : Number.POSITIVE_INFINITY;
+  const maxAttempts = args.singleAttempt ? 1 : args.bestValueSelection ? 3 : Number.POSITIVE_INFINITY;
   let attempted = 0;
   while (remaining.length && attempted < maxAttempts) {
     attempted += 1;
     // Each failed/invalid helper consumes an activity ordinal. Resolve that
     // ordinal again before choosing the next fallback, including on resume.
-    const ranked = await rankControlPlaneByActualCost(remaining, {...params, user: params.user + correction}, undefined, `control_plane_${args.taskName}`);
+    const ranked = await rankControlPlaneByActualCost(remaining, {...params, user: params.user + correction}, undefined, `control_plane_${args.activityOverride ?? args.taskName}`);
     const candidate = ranked[0];
     if (!candidate) break;
     remaining.splice(remaining.indexOf(candidate), 1);
@@ -906,7 +910,7 @@ async function executeControlPlaneJsonTask<T>(args: {
         provider: candidate.provider.name,
         modelId: candidate.modelId,
       }, () => withProviderAttemptTimeout(
-        signal => runWithStandaloneActivity(`control_plane_${args.taskName}`, async () => {
+        signal => runWithStandaloneActivity(`control_plane_${args.activityOverride ?? args.taskName}`, async () => {
           recordProviderTrace("request_preparation_started");
           const answer = await candidate.provider.generate({
             ...params,
@@ -2404,25 +2408,44 @@ For Best Value selections with multiple eligible candidates, REQUIRED additional
 Do not cite direct feedback or verified outcomes unless actually present in the SELECTED provider:model candidate evidence. If evidence_basis_kind is attributed_feedback, cite the exact source_id and faithfully state whether its outcome was positive, negative or ambiguous; mere continued conversation and lack of complaint are not positive outcomes. Verified outcome citations must reference selected-model observations, never another candidate. Where evidence is only inferred, state that comparative outcome quality is unknown. Do not substitute cost for an adequate-quality finding.
 ` : "";
 
-  const result = await executeControlPlaneJsonTask({
-    taskName: "routing-rerank",
-    decisionProviders: eligibleDecisionProviders,
-    userPrompt: `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
-      prompt: args.prompt,
-      intent: args.intent,
-      secondary_intents: args.secondaryIntents ?? [],
-      complexity: args.complexity ?? null,
-      provider_refusal_risk: args.providerRefusalRisk ?? "low",
-      conversation_context: compactConversationContext(args.conversationContext),
-      reroute_context: args.rerouteContext ?? null,
-      modality_flags: args.modalityFlags,
-      hard_route_context: args.hardRouteContext,
-      ...(neutral ? {routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
-        routing_overhead: args.requestEvidence?.overhead ?? {status: "unknown", reason: "No observed control-plane receipts available"},
-        ...(args.routing_mode === "best_answer" ? {} : {current_turn_feedback: args.currentTurnFeedback ?? null})} : {preference_profile: args.preferenceProfile}),
-      candidates: neutral ? args.candidates.map(candidate => buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup, args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
-    })}`,
-    parse: (raw) => {
+  // Select three different judge models, preferring independent providers.
+  // This is a fan-out for EVERY model-selection task, not a serial fallback.
+  const judgeModelPreference: Record<ProviderName, string[]> = {
+    // Models that can follow the strict judge JSON contract. These are judge
+    // preferences only, not a restriction on which answer model may win.
+    openai: ["gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.5", "gpt-5-mini"],
+    anthropic: ["claude-haiku-5-5", "claude-sonnet-5", "claude-opus-5"],
+    google: ["gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"],
+    grok: [],
+  };
+  const judgePool = [...eligibleDecisionProviders].sort((a, b) => {
+    const rank = (candidate: DecisionProviderCandidate) => {
+      const preference = judgeModelPreference[candidate.provider.name];
+      const index = preference.indexOf(candidate.modelId);
+      return index < 0 ? preference.length + 20 : index;
+    };
+    return rank(a) - rank(b);
+  });
+  const judges: DecisionProviderCandidate[] = [];
+  const seenJudgeModels = new Set<string>();
+  const seenJudgeProviders = new Set<ProviderName>();
+  for (const candidate of judgePool) {
+    if (judges.length === 3) break;
+    const key = `${candidate.provider.name}:${candidate.modelId}`;
+    if (seenJudgeProviders.has(candidate.provider.name) || seenJudgeModels.has(key)) continue;
+    judges.push(candidate);
+    seenJudgeModels.add(key);
+    seenJudgeProviders.add(candidate.provider.name);
+  }
+  for (const candidate of judgePool) {
+    if (judges.length === 3) break;
+    const key = `${candidate.provider.name}:${candidate.modelId}`;
+    if (seenJudgeModels.has(key)) continue;
+    judges.push(candidate);
+    seenJudgeModels.add(key);
+  }
+
+  const parseRoutingJudgeResponse = (raw: string) => {
       const trimmed = raw.trim();
       if (!trimmed) {
         return null;
@@ -2547,10 +2570,131 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       // one actual eligible alternative whenever a choice exists.
       if (neutral && args.candidates.length > 1 && selectionComparisons.length === 0) return null;
       return { selectedProvider, selectedModel, selectionJustification, selectionComparisons };
-    },
-    timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
-    bestValueSelection: neutral && (args.routing_mode ?? "best_value") === "best_value"
+  };
+
+  const judgeBrief = `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
+    prompt: args.prompt,
+    intent: args.intent,
+    secondary_intents: args.secondaryIntents ?? [],
+    complexity: args.complexity ?? null,
+    provider_refusal_risk: args.providerRefusalRisk ?? "low",
+    conversation_context: compactConversationContext(args.conversationContext),
+    reroute_context: args.rerouteContext ?? null,
+    modality_flags: args.modalityFlags,
+    hard_route_context: args.hardRouteContext,
+    ...(neutral ? { routing_mode: args.routing_mode ?? "best_value", understanding: args.understanding ?? null,
+      routing_overhead: args.requestEvidence?.overhead ?? { status: "unknown", reason: "No observed control-plane receipts available" },
+      ...(args.routing_mode === "best_answer" ? {} : { current_turn_feedback: args.currentTurnFeedback ?? null }) }
+      : { preference_profile: args.preferenceProfile }),
+    candidates: neutral ? args.candidates.map(candidate =>
+      buildNeutralDecisionEvidence(candidate, args.prompt, args.conversationContext, args.registryLookup,
+        args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
+  })}`;
+
+  // The three-judge fan-out is for normal standalone Katie conversations.
+  // Preserve the existing one-at-a-time decision contract for orchestrated
+  // software-building tasks and when fewer than three eligible judges exist.
+  if (!neutral || judges.length < 3) {
+    const legacy = await executeControlPlaneJsonTask({
+      taskName: "routing-rerank",
+      decisionProviders: eligibleDecisionProviders,
+      userPrompt: judgeBrief,
+      parse: parseRoutingJudgeResponse,
+      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+      bestValueSelection: neutral && (args.routing_mode ?? "best_value") === "best_value",
+    });
+    if (!legacy) return { accepted: false, reason: "all_decision_providers_failed" };
+    return {
+      accepted: true,
+      selected: { providerName: legacy.result.selectedProvider, modelId: legacy.result.selectedModel },
+      ranking: args.candidates.map(candidate => ({
+        providerName: candidate.providerName, modelId: candidate.modelId, score: candidate.prior_score
+      })),
+      decisionProviderName: legacy.provider,
+      decisionModelId: legacy.modelId,
+      selectionJustification: legacy.result.selectionJustification,
+      selectionComparisons: legacy.result.selectionComparisons,
+    };
+  }
+
+  const judgeStartMs = Date.now();
+  const judgeResults = await Promise.allSettled(judges.map((judge, lane) =>
+    executeControlPlaneJsonTask({
+      taskName: "routing-rerank",
+      decisionProviders: [judge],
+      userPrompt: judgeBrief,
+      activityOverride: `routing-rerank_judge_${lane}`,
+      singleAttempt: true,
+      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+      parse: parseRoutingJudgeResponse,
+    })
+  ));
+  // A cancelled/unauthorized owner request is terminal for the whole
+  // operation, even if another judge happened to produce an answer.
+  // A single judge's model refusal is not an owner authorization failure.
+  const fatal = judgeResults.find(result =>
+    result.status === "rejected" &&
+    (isStandaloneAccountingError(result.reason) ||
+      (result.reason instanceof Error && result.reason.name === "AbortError")) &&
+    !(result.reason instanceof Error && "code" in result.reason &&
+      result.reason.code === "standalone_outcome_unknown"));
+  if (fatal?.status === "rejected") throw fatal.reason;
+  const validJudgments = judgeResults.flatMap((result, lane) =>
+    result.status === "fulfilled" && result.value
+      ? [{ ...result.value, lane }] : []);
+  console.info("[RoutingJudges] completed", {
+    requested: judges.length,
+    valid: validJudgments.length,
+    rejected: judgeResults.filter(result => result.status === "rejected").length,
+    // Only judge model IDs, not user content, are logged.
+    judges: judges.map(judge => `${judge.provider.name}:${judge.modelId}`),
   });
+
+  // A supported quality qualification and corroborating independent judges
+  // are more valuable than a bare vote. Any selected model was already checked
+  // against the exact eligible candidate set by the shared parser below.
+  const winners = new Map<string, {
+    key: string; judgments: typeof validJudgments; votes: number; priorScore: number;
+    qualityEvidence: number;
+  }>();
+  for (const judgment of validJudgments) {
+    const key = `${judgment.result.selectedProvider}:${judgment.result.selectedModel}`;
+    const existing = winners.get(key);
+    if (existing) {
+      existing.votes++;
+      existing.judgments.push(judgment);
+    } else {
+      const candidate = args.candidates.find(c =>
+        c.providerName === judgment.result.selectedProvider && c.modelId === judgment.result.selectedModel);
+      const feedback = args.requestEvidence?.candidates[key]?.quality.feedback;
+      // Only explicit task-intent-attributed reactions can change evidence
+      // strength. Delivery receipts are not treated as proof of answer quality.
+      const qualityEvidence = Math.max(-2, Math.min(2,
+        Math.min(2, feedback?.positive ?? 0) - Math.min(2, feedback?.negative ?? 0)));
+      winners.set(key, {
+        key, judgments: [judgment], votes: 1,
+        priorScore: candidate?.prior_score ?? 0, qualityEvidence,
+      });
+    }
+  }
+  // Strong direct feedback can outweigh a 2:1 vote; absent trustworthy
+  // quality observations, independent agreement wins. Scorecard prior scores
+  // are only tie-breakers and never counterfeit observed response quality.
+  const chosen = [...winners.values()].sort((a, b) =>
+    (b.qualityEvidence * 3 + b.votes) - (a.qualityEvidence * 3 + a.votes) ||
+    b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
+  const result = chosen?.judgments
+    .sort((a, b) => a.lane - b.lane)[0] ?? null;
+  console.info("[RoutingJudges] decision", {
+    elapsedMs: Date.now() - judgeStartMs,
+    candidateCount: args.candidates.length,
+    launchedJudges: judges.length,
+    validJudges: validJudgments.length,
+    selected: chosen?.key ?? null,
+    supportingVotes: chosen?.votes ?? 0,
+    qualityEvidence: chosen?.qualityEvidence ?? null,
+  });
+
   if (!result) {
     return { accepted: false, reason: "all_decision_providers_failed" };
   }
