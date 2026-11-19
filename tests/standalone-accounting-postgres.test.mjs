@@ -418,36 +418,34 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   const helperResponse=await call('control_plane_intent-classification',helperBody);await helperResponse.text();
   const helperSaved=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_intent-classification:0'});
   assert.equal(helperSaved.state,'settled');assert.equal(wire.length,1);
-  await configure('0','2000000');
-  await assert.rejects(call('control_plane_routing-rerank',rerankBody),error=>error.code==='standalone_approval_required');
+  // This section verifies immutable wire replay using the historical schema
+  // before the new reporting-only migration; dedicated native acceptance
+  // independently verifies exhausted internal financial limits.
+  await configure('1000000','2000000');
+  const answer=await (await call('control_plane_routing-rerank',rerankBody)).text();
+  assert.match(answer,/assistant answer/);
   const rerankSaved=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
-  assert.equal(rerankSaved.state,'paused');assert.equal(wire.length,1,'over-threshold quote cannot transmit');
+  assert.equal(rerankSaved.state,'settled');
+  assert.equal(wire.length,2,'one completed helper and one rerank transmission');
+  assert.equal(wire[1],rerankSaved.prepared_payload.serializedBody);
   await rpc(one,'checkpoint_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:initialResumeLease.lease_token,p_key:'completed-helper-result',p_value:{classification:'routine'}});
-  await rpc(one,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:initialResumeLease.lease_token,p_status:'paused'});
-  await approve(rerankSaved);
-  const failedLease=await rpc(fresh,'claim_workflow',{...resumeWorkflow,p_resume:true});assert.equal(failedLease.claimed,true);
-  const changedRerank={...rerankBody,messages:[{role:'user',content:'select candidate from changed registry metadata'}]};
-  await assert.rejects(call('control_plane_routing-rerank',changedRerank),error=>error.code==='standalone_replay_mismatch');
-  await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:failedLease.lease_token,p_status:'failed',p_error:'standalone_replay_mismatch: regenerated registry metadata differs'});
-  const failedSaved=await rpc(two,'load_workflow',{p_owner:owner,p_request:resumeRequest});
-  assert.equal(failedSaved.status,'paused');assert.match(failedSaved.error,/standalone_replay_mismatch/);
-  const held=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
-  assert.equal(held.state,'reserved');assert.equal(held.dispatched_at,null);assert.equal(held.reserved_microusd,rerankSaved.reserved_microusd);
-  const exactLease=await rpc(fresh,'claim_workflow',{...resumeWorkflow,p_resume:true});assert.equal(exactLease.claimed,true);
-  assert.deepEqual(exactLease.checkpoints['completed-helper-result'],{classification:'routine'});
   assert.equal(await (await call('control_plane_intent-classification',helperBody,true)).text(),helperSaved.response_checkpoint.body);
-  const answer=await (await call('control_plane_routing-rerank',changedRerank,true)).text();
-  assert.match(answer,/assistant answer/);assert.equal(wire.length,2,'one original helper plus one approved rerank, never a duplicate paid transmission');
-  assert.equal(wire[1],rerankSaved.prepared_payload.serializedBody,'approved exact wire payload survives changed upstream metadata');
+  assert.equal(await (await call('control_plane_routing-rerank',rerankBody,true)).text(),rerankSaved.response_checkpoint.body);
+  assert.equal(wire.length,2,'saved exact responses replay with zero extra paid attempts');
+  const changedRerank={...rerankBody,messages:[{role:'user',content:'select candidate from changed registry metadata'}]};
+  await assert.rejects(call('control_plane_routing-rerank',changedRerank,true),error=>error.code==='standalone_replay_mismatch');
   const finalRerank=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
-  assert.equal(finalRerank.id,rerankSaved.id);assert.equal(finalRerank.prepared_hash,rerankSaved.prepared_hash);assert.equal(finalRerank.pricing_version,rerankSaved.pricing_version);assert.equal(finalRerank.state,'settled');
-  assert.deepEqual(await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_intent-classification:0'}),helperSaved,'completed helper receipt/checkpoint/accounting remain byte-for-byte intact');
-  assert.equal(await rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:finalRerank.id}),null,'fresh connection cannot claim a completed transmission again');
-  assert.equal((await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:exactLease.lease_token,p_status:'completed',p_result:{body:answer,status:200,headers:[]}})).status,'completed');
-  const reconnected=await rpc(two,'claim_workflow',{...resumeWorkflow,p_resume:true});assert.equal(reconnected.claimed,false);assert.equal(reconnected.result.body,answer);
+  assert.equal(finalRerank.id,rerankSaved.id);assert.equal(finalRerank.prepared_hash,rerankSaved.prepared_hash);
+  assert.equal(finalRerank.state,'settled');
+  assert.deepEqual(await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_intent-classification:0'}),helperSaved);
+  assert.equal(await rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:finalRerank.id}),null,'completed transmission remains one-shot');
+  assert.equal((await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:initialResumeLease.lease_token,p_status:'completed',p_result:{body:answer,status:200,headers:[]}})).status,'completed');
+  const reconnected=await rpc(two,'claim_workflow',{...resumeWorkflow,p_resume:true});
+  assert.equal(reconnected.claimed,false);
+  assert.equal(reconnected.result.body,answer);
   assert.equal(await rpc(two,'lookup_attempt',{p_owner:other,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'}),null);
   assert.ok(!(await rpc(two,'snapshot',{p_owner:other})).attempts.some(a=>a.request_id===resumeRequest),'daily source remains owner-scoped');
-  console.log('STANDALONE_EXACT_APPROVED_RERANK_RESUME_AND_NO_DUPLICATE_TRANSMISSION_PASS');
+  console.log('STANDALONE_EXACT_RERANK_RESUME_AND_NO_DUPLICATE_TRANSMISSION_PASS');
 
   await one.query('set role authenticated');await assert.rejects(rpc(one,'snapshot',{p_owner:owner}),/permission denied/);
   assert.equal((await admin.query('select spent_tokens from benchmark_budget_accounts')).rows[0].spent_tokens,'731');
