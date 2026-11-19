@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { officialModelSpec, parseOfficialModelEvidence, fetchOfficialModelEvidence } from "../lib/models/provider-evidence";
-import { computeRoutingEligibility, retainOfficialModelEvidence } from "../lib/models/registry";
+import { buildRoutingRegistrySnapshot, computeRoutingEligibility, retainOfficialModelEvidence } from "../lib/models/registry";
 
 const openaiDoc = [
   "# GPT-6.2 Astra",
@@ -292,4 +292,58 @@ test("first-party model parser contracts cover all accessible documented model c
   assert.ok(changedPrice);
   assert.equal(changedPrice.outputPer1m, 11);
   assert.equal(changedPrice.pricingMatchesApprovedSchedule, false, "changed Sonnet price must fail closed");
+});
+
+test("D4: stale documentation-verified stored row fails closed on routing read without successful refresh", () => {
+  const oldVerification = "2026-11-18T20:00:00.000Z";
+  const now = "2026-11-20T20:00:00.000Z";
+  const evidence = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
+  const verified = retainOfficialModelEvidence(syntheticRecord(oldVerification), undefined, evidence, oldVerification);
+  assert.equal(verified.routing_eligibility, "verified", "initial successful documentation qualification");
+  type ReadRow = Parameters<typeof buildRoutingRegistrySnapshot>[1][number];
+  const row = (changes: Record<string, unknown> = {}): ReadRow =>
+    ({ ...verified, ...changes }) as unknown as ReadRow;
+  const loadWithoutRefresh = (rows: ReadRow[]) =>
+    buildRoutingRegistrySnapshot([{name:"openai"}], rows, now).get("openai")!;
+  // Simulates persisted rows returned despite provider discovery failure or no refresh.
+  // The production DB loader calls this exact function after selecting the stored rows.
+  assert.equal(loadWithoutRefresh([row()])[0].routing_eligibility, "restricted",
+    "a stale stored verified flag cannot survive a failed discovery");
+  assert.equal(loadWithoutRefresh([row({
+    capability_verified_at: "2026-11-19T20:00:00.000Z",
+    pricing_verified_at: "2026-11-19T20:00:00.000Z"
+  })])[0].routing_eligibility, "restricted", "24h boundary must fail closed");
+  assert.equal(loadWithoutRefresh([row({
+    capability_verified_at: "2026-11-19T22:00:00.000Z",
+    pricing_verified_at: "2026-11-19T22:00:00.000Z"
+  })])[0].routing_eligibility, "verified", "current same-model evidence stays verified");
+
+  for (const changes of [
+    {capability_verified_at: null},
+    {pricing_verified_at: null},
+    {capability_verified_at: "not-a-date"},
+    {pricing_verified_at: "2026-11-20T20:00:01.000Z"},
+    {capability_verified_at: "2026-11-19T22:00:00.000Z", pricing_verified_at: oldVerification},
+    {capability_status: "heuristic"},
+    {pricing_status: "estimated"}
+  ]) {
+    assert.equal(loadWithoutRefresh([row(changes)])[0].routing_eligibility, "restricted",
+      "missing/future/invalid/mismatched documentary evidence must not remain verified: " + JSON.stringify(changes));
+  }
+
+  for (const unchanged of ["restricted", "manual_override_only", "disabled"] as const) {
+    assert.equal(loadWithoutRefresh([row({routing_eligibility: unchanged})])[0].routing_eligibility,
+      unchanged, "do not upgrade or rewrite a preexisting policy status");
+  }
+  const oldNonDocumentation = row({
+    source_metadata: {capability_source:"provider", pricing_source:"provider"},
+    capability_verified_at: null, pricing_verified_at: null
+  });
+  assert.equal(loadWithoutRefresh([oldNonDocumentation])[0].routing_eligibility, "verified",
+    "unrelated verified provider policy must not be silently rewritten");
+  const grouped = buildRoutingRegistrySnapshot([{name:"openai"}, {name:"anthropic"}], [row()], now);
+  assert.equal(grouped.get("openai")?.length, 1);
+  assert.deepEqual(grouped.get("anthropic"), []);
+  assert.equal("source_metadata" in grouped.get("openai")![0], false, "no metadata leaking to routing snapshot");
+  assert.equal("capability_verified_at" in grouped.get("openai")![0], false);
 });
