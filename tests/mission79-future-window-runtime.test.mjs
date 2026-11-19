@@ -138,7 +138,7 @@ test('exact production release binding is a separate owner action after recorded
   if(v==null)delete process.env[k];else process.env[k]=v;
  }});
  let owner=true,aliasLive=true;const calls=[],bindHash='f'.repeat(64);
- const record={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
+ const record={projectId,releaseSha,releaseGeneration,deploymentId,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   scopeHash,priorCutoff,cutoff:futureCutoff,authorizationId:approvalId,
   historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
