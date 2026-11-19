@@ -89,19 +89,26 @@ export async function deriveCurrentTurnFeedbackProvenance(input: {
     // Do not skip an intervening user or an incomplete/error assistant message:
     // the critic's target must be the immediate saved predecessor.
     const {data:previousRows,error:previousError}=await db.from("messages")
-      .select("id,role").eq("actor_id",actorId).eq("chat_id",chatId)
+      .select("id,role,model").eq("actor_id",actorId).eq("chat_id",chatId)
       .lt("created_at",current.created_at).order("created_at",{ascending:false}).limit(1);
     if (previousError) return unattributed(source,"missing_receipt",applicableToOngoingObjective);
-    const previous=previousRows as Array<{id:string;role:string}> | null;
+    const previous=previousRows as Array<{id:string;role:string;model:string|null}> | null;
     const last=previous?.[0];
     if (!last || last.role !== "assistant")
       return unattributed(source,"no_prior_completed_reply",applicableToOngoingObjective);
 
     const {data:priorRequestRow,error:requestError}=await db.from("chat_requests")
-      .select("request_id,assistant_message_id").eq("actor_id",actorId).eq("chat_id",chatId)
+      .select("request_id,assistant_message_id,assistant_model,completed_at").eq("actor_id",actorId).eq("chat_id",chatId)
       .eq("assistant_message_id",last.id).eq("status","completed").maybeSingle();
-    const priorRequest=priorRequestRow as {request_id?:string;assistant_message_id?:string} | null;
+    const priorRequest=priorRequestRow as {request_id?:string;assistant_message_id?:string;assistant_model?:string|null;completed_at?:string|null} | null;
     if (requestError || !priorRequest?.request_id || priorRequest.request_id === requestId)
+      return unattributed(source,"missing_receipt",applicableToOngoingObjective);
+    // A later-completed request cannot be the source of criticism authored before
+    // it finished, even if its assistant message was persisted earlier.
+    const completedAt=Date.parse(priorRequest.completed_at ?? "");
+    const startedAt=Date.parse(current.created_at);
+    if (!Number.isFinite(completedAt) || !Number.isFinite(startedAt) ||
+        completedAt > startedAt)
       return unattributed(source,"missing_receipt",applicableToOngoingObjective);
 
     const {data:priorWorkflowRow,error:workflowError}=await db.from("standalone_workflows")
@@ -116,7 +123,11 @@ export async function deriveCurrentTurnFeedbackProvenance(input: {
     const attribution=audit && typeof audit==="object" ? audit as Record<string,unknown> : null;
     const provider=attribution?.provider,model=attribution?.model;
     if (typeof provider!=="string" || !provider.trim() ||
-        typeof model!=="string" || !model.trim())
+        typeof model!=="string" || !model.trim() ||
+        // Three independent persisted records must agree on the producing model.
+        // A stale/wrong audit must never assign praise or criticism elsewhere.
+        !priorRequest.assistant_model || !last.model ||
+        priorRequest.assistant_model !== model || last.model !== model)
       return unattributed(source,"missing_receipt",applicableToOngoingObjective);
     return {
       version:"current-turn-feedback-v1",source,
