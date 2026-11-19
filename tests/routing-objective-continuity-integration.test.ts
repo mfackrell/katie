@@ -231,6 +231,53 @@ test('C-04 explicit new topic does not acquire creative continuation instruction
   assert.doesNotMatch(switched.persona,/Katie, take the lead|Be witty, creative, playful/i);
 });
 
+test('C-QA3 feedback-plus-topic replacement suppresses stale objective in production generation',()=>{
+  const f=scenario('C-01');
+  const changed:Case={...f,current:{...f.current,
+    text:'That response was terrible. Now explain accrual accounting instead.'}};
+  const output=prepared(changed,'best-value',{
+    currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
+  });
+  assert.equal(output.user,changed.current.text);
+  assert.ok(!output.persona.includes(f.history.find(t=>t.role==='user')!.text),
+    'The explicit new accounting task must not inherit the stale creative objective');
+  assert.doesNotMatch(output.persona,/SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY/,
+    'Correction plus a replacement task is a topic switch, not a creative-continuation request');
+});
+
+test('C-QA4 actual post-routing gate fails closed when optional feedback vanishes',()=>{
+  const node=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='sameScopedPreflightFeedback',
+    'sameScopedPreflightFeedback') as ts.FunctionDeclaration;
+  const sameScopedPreflightFeedback=evaluate(
+    node.getText(routeAst).replace('function sameScopedPreflightFeedback','function'),{});
+  const trusted=scopedPriorFeedback(scenario('C-01'),'negative');
+  assert.equal(sameScopedPreflightFeedback(trusted,undefined),false,
+    'Missing optional routing feedback must never erase a real trusted preflight record');
+  assert.equal(sameScopedPreflightFeedback(trusted,null),false);
+  assert.equal(sameScopedPreflightFeedback(trusted,{...trusted,source:{...trusted.source,requestId:'foreign'}}),false);
+  assert.equal(sameScopedPreflightFeedback(trusted,JSON.parse(JSON.stringify(trusted))),true);
+  assert.equal(sameScopedPreflightFeedback(null,undefined),true);
+  const gate=uniqueNode(n=>ts.isCallExpression(n)&&ts.isIdentifier(n.expression)&&
+    n.expression.text==='sameScopedPreflightFeedback',
+    'post-routing feedback gate call') as ts.CallExpression;
+  assert.deepEqual(gate.arguments.map(arg=>arg.getText(routeAst)),
+    ['preflightTurnFeedback','routingDecision.currentTurnFeedback']);
+  const negated=gate.parent;
+  assert.ok(ts.isPrefixUnaryExpression(negated)&&negated.operator===ts.SyntaxKind.ExclamationToken);
+  const statement=negated.parent;
+  assert.ok(ts.isIfStatement(statement),'Mismatch must guard the real routing result');
+  assert.match(statement.thenStatement.getText(routeAst),/return await rejectTracked/,
+    'Untrusted or absent routing evidence must reject before paid generation');
+  const assignment=uniqueNode(n=>ts.isBinaryExpression(n)&&
+    n.operatorToken.kind===ts.SyntaxKind.EqualsToken&&
+    n.left.getText(routeAst)==='currentTurnFeedback',
+    'post-routing currentTurnFeedback assignment') as ts.BinaryExpression;
+  assert.equal(assignment.right.getText(routeAst),'preflightTurnFeedback',
+    'Matching records must preserve the authenticated preflight version');
+  assert.ok(assignment.pos>statement.end,
+    'The trusted record can only be adopted after the mismatch guard');
+});
+
 test('C-05 the latest explicit request to ask questions supersedes old no-questions preference',()=>{
   const f=scenario('C-05');const output=prepared(f);
   assert.match(output.user,/ask me three questions/i);
