@@ -376,6 +376,53 @@ test('C-QA7 standalone latest-topic requests do not revive old objectives in eit
   }
 });
 
+test('C-QA8 latest standalone tasks outrank criticism without erasing referential continuations (both modes)',()=> {
+  const f=scenario('C-01');
+  const original=f.history.find(turn=>turn.role==='user')!.text;
+  // These six observed negative-feedback cases were RED in the merged actual
+  // sourceBoundObjectiveContinuityGuidance function, despite previous C GREEN.
+  // Execute the real prepareCandidateRequest generation builder in both modes.
+  const independentTasks=[
+    'That response was terrible. Explain accrual accounting.',
+    'That response was terrible. Help me understand accrual accounting.',
+    "That response was terrible. Let's discuss accrual accounting instead.",
+    'That response was terrible. Tell me how depreciation works.',
+    'That response was terrible. What is the answer to 2 + 2?',
+    'That response was terrible. When is the next presidential election?',
+  ];
+  for (const latest of independentTasks) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    for (const mode of ['best-value','best-answer'] as const) {
+      const result=prepared(changed,mode,{currentTurnFeedback:scopedPriorFeedback(changed,'negative')});
+      assert.equal(result.user,latest,'Do not rewrite the current user request');
+      assert.doesNotMatch(result.persona,/SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY/,
+        `C-QA8 new-task latest instruction takes precedence (${mode}): ${latest}`);
+      assert.ok(!result.persona.includes(original),
+        `C-QA8 previous creative objective must not be promoted to generation (${mode}): ${latest}`);
+    }
+  }
+  // The opposite branch is essential: a purely referential correction MUST
+  // preserve the existing source-attributed objective, despite punctuation.
+  const continuing=[
+    'That response was terrible. Could you be more creative instead?',
+    'That response was terrible. Can you explain that more clearly instead?',
+    'That response was terrible. Can you make it better this time?',
+    'That response was terrible. Please take initiative instead.',
+    'That response was terrible — instead of another menu, keep leading the conversation.',
+    'That response was terrible. You repeated yourself and failed to take initiative.',
+    'That response was terrible. Could you keep leading the conversation?',
+  ];
+  for (const latest of continuing) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    for (const mode of ['best-value','best-answer'] as const) {
+      const result=prepared(changed,mode,{currentTurnFeedback:scopedPriorFeedback(changed,'negative')});
+      assert.ok(result.persona.includes(original),
+        `C-QA8 genuine same-task feedback must retain original objective (${mode}): ${latest}`);
+      assert.ok(result.persona.includes(latest),'Current correction must not be lost');
+    }
+  }
+});
+
 test('C-QA4 actual post-routing gate fails closed when optional feedback vanishes',()=>{
   const node=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='sameScopedPreflightFeedback',
     'sameScopedPreflightFeedback') as ts.FunctionDeclaration;
