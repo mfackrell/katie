@@ -14,7 +14,7 @@ const priorWindow='7d216bbe-596e-457e-b84d-e07ad1e80365';
 const scopeHash='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
 const priorCutoff='2026-11-18T14:00:00Z';
 const releaseSha='a'.repeat(40),stateHash='b'.repeat(64),ownerId='04ed6c05-a586-4a56-ba81-1b50e378746b';
-const deploymentId='dpl_NativeFixture79';
+const deploymentId='dpl_NativeFixture79',releaseGeneration=1;
 const approvalId='a083ef03-80b0-44ac-9e24-6e66b223f017',futureCutoff='2026-11-18T20:00:00.000Z';
 
 test('expired original mission79 requires separately authenticated, owner-selected cutoff and durable receipt',async t=>{
@@ -26,7 +26,7 @@ test('expired original mission79 requires separately authenticated, owner-select
   if(value==null)delete process.env[key];else process.env[key]=value;
  }});
  let owner=false,stage='authorize',aliasLive=true;const writes=[];
- const base={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
+ const base={projectId,releaseSha,releaseGeneration,deploymentId,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   scopeHash,priorCutoff,cutoff:null,authorizationId:null,
   historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
@@ -51,7 +51,7 @@ test('expired original mission79 requires separately authenticated, owner-select
  const request=body=>new Request('https://synthetic.test/api/projects/organization',{
   method:'POST',headers:{'content-type':'application/json','origin':'https://synthetic.test'},body:JSON.stringify(body)
  });
- const correct={trialAction:'authorize_mission79_future_window',projectId,releaseSha,
+ const correct={trialAction:'authorize_mission79_future_window',projectId,releaseSha,releaseGeneration,deploymentId,
   missionId,assignmentId,authorizationId:approvalId,cutoff:futureCutoff,stateHash};
  assert.equal((await read()).status,403);
  assert.equal((await POST(request(correct))).status,403);
@@ -162,7 +162,7 @@ test('exact production release binding is a separate owner action after recorded
  const {POST}=mod('@/app/api/projects/organization/route');
  const request=data=>new Request('https://katie.example.test/api/projects/organization',
   {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
- const payload={trialAction:'bind_mission79_release',projectId,releaseSha,missionId,assignmentId,stateHash:bindHash};
+ const payload={trialAction:'bind_mission79_release',projectId,releaseSha,releaseGeneration,deploymentId,missionId,assignmentId,stateHash:bindHash};
  owner=false;assert.equal((await POST(request(payload))).status,403);owner=true;
  assert.equal((await POST(request({...payload,releaseSha:'c'.repeat(40)}))).status,409);
  assert.equal((await POST(request({...payload,stateHash:'0'.repeat(64)}))).status,409);
@@ -232,7 +232,7 @@ test('real first-party owner auth and independently resolved production alias ga
   }
   throw Error('Unexpected external request '+host);
  };
- const offer={projectId,stage:'authorize',status:'blocked',missionStatus:'blocked',
+ const offer={projectId,stage:'authorize',releaseGeneration,deploymentId,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   authorizationId:null,releaseSha,scopeHash,priorCutoff,cutoff:null,
   historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,stateHash};
@@ -249,7 +249,7 @@ test('real first-party owner auth and independently resolved production alias ga
   '@/lib/data/persistence-store':{getMessages:async()=>[]},
  });
  const {POST}=load('@/app/api/projects/organization/route');
- const payload={trialAction:'authorize_mission79_future_window',projectId,releaseSha,
+ const payload={trialAction:'authorize_mission79_future_window',projectId,releaseSha,releaseGeneration,deploymentId,
   missionId,assignmentId,authorizationId:approvalId,cutoff:futureCutoff,stateHash};
  const req=()=>new Request('https://katie.example.test/api/projects/organization',{
   method:'POST',headers:{Origin:'https://katie.example.test','Content-Type':'application/json',
@@ -290,7 +290,7 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
   }
   throw Error('Unexpected auth/release identity fetch '+dest);
  };
- const saved={projectId,stage:'authorized',status:'blocked',missionStatus:'blocked',
+ const saved={projectId,stage:'authorized',releaseGeneration,deploymentId,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   authorizationId:approvalId,releaseSha,scopeHash,priorCutoff,cutoff:futureCutoff,
   historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
@@ -316,7 +316,7 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
   '@/lib/data/persistence-store':{getMessages:async()=>[]},
  });
  const {POST}=module('@/app/api/projects/organization/route');
- const input={trialAction:'bind_mission79_release',projectId,releaseSha,missionId,assignmentId,stateHash:bindHash};
+ const input={trialAction:'bind_mission79_release',projectId,releaseSha,releaseGeneration,deploymentId,missionId,assignmentId,stateHash:bindHash};
  const req=(origin='https://katie.example.test')=>new Request('https://katie.example.test/api/projects/organization',{
   method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Authorization:'Bearer original-owner-test'},
   body:JSON.stringify(input)});
@@ -422,7 +422,7 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
  });
  const context=await browser.newContext({timezoneId:'UTC'});
  const page=await context.newPage();
- const base={projectId,releaseSha,status:'blocked',missionStatus:'blocked',
+ const base={projectId,releaseSha,releaseGeneration,deploymentId,status:'blocked',missionStatus:'blocked',
   sourceMissionId:sourceId,missionId,assignmentId,priorWindowId:priorWindow,
   scopeHash,priorCutoff,cutoff:null,authorizationId:null,
   historicalMissions:79,maxMissions:96,tokenAllowance:600000,nodeCount:13,
@@ -472,7 +472,7 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
     await page.waitForFunction(()=>window.refreshCount===0&&document.body.textContent.includes('Verifying exact released authority'),{timeout:12000});
     assert.equal(posts.length,1,'Double click must not bind release twice');
     assert.equal(posts[0].method,'POST');assert.equal(posts[0].headers.authorization,'Bearer actual-ui-test-owner');
-    assert.deepEqual(posts[0].body,{trialAction:'bind_mission79_release',projectId,releaseSha,
+    assert.deepEqual(posts[0].body,{trialAction:'bind_mission79_release',projectId,releaseSha,releaseGeneration,deploymentId,
      missionId,assignmentId,stateHash});
     releaseResponse();
     await page.getByText('Exact release binding is recorded.').waitFor({timeout:12000});
@@ -499,6 +499,7 @@ test('real Chromium original mission79 owner cutoff and separate exact-release b
      assert.equal(sent.headers.authorization,'Bearer actual-ui-test-owner');
      assert.equal(sent.body.trialAction,'authorize_mission79_future_window');
      assert.equal(sent.body.projectId,projectId);assert.equal(sent.body.releaseSha,releaseSha);
+     assert.equal(sent.body.releaseGeneration,releaseGeneration);assert.equal(sent.body.deploymentId,deploymentId);
      assert.equal(sent.body.missionId,missionId);assert.equal(sent.body.assignmentId,assignmentId);
      assert.equal(sent.body.stateHash,stateHash);
      assert.equal(sent.body.cutoff,futureCutoff);
