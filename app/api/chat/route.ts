@@ -1936,7 +1936,7 @@ async function executeChat(request: NextRequest) {
 
     const prepareCandidateRequest = (selectedModelId: string, context: Awaited<ReturnType<typeof prepareGenerationContext>>, classification: ResolvedRoutingIntent | undefined, forReview = false) => {
       const { creativeTextNarrativeRequest, responsePolicy, taskProgressContext, resumptionContext, visualContinuity } = context;
-      const objectiveContinuityGuidance = forReview ? "" : sourceBoundObjectiveContinuityGuidance({
+      const objectiveContinuityGuidance = forReview || typeof sourceBoundObjectiveContinuityGuidance !== "function" ? "" : sourceBoundObjectiveContinuityGuidance({
         feedback:currentTurnFeedback,requestId,message,history,
         intent:classification?.intent ?? resolvedRequestIntent,
       });
