@@ -17,6 +17,7 @@ import {
   KeyboardEvent,
   MouseEvent as ReactMouseEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   memo,
   useCallback,
@@ -848,6 +849,12 @@ export function ChatPanel({
   const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
+  const [visibleHistoryCount, setVisibleHistoryCount] = useState(10);
+  const [hasOlderHistory, setHasOlderHistory] = useState(false);
+  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
+  const [olderHistoryError, setOlderHistoryError] = useState("");
+  const historyRequestInFlight = useRef(false);
+  const pendingHistoryScrollAnchor = useRef<{ height: number; top: number } | null>(null);
   const [input, setInput] = useState("");
   const composerValueRef = useRef("");
   const [composerResetVersion, resetComposerInput] = useState(0);
@@ -1151,7 +1158,64 @@ export function ChatPanel({
     };
   }, [chatId]);
 
-  useEffect(()=>{if(isHydratingMessages)return;const frame=requestAnimationFrame(()=>{try{const saved=window.sessionStorage.getItem(`katie.scroll.v1.${chatId}`);if(saved&&messagesContainerRef.current)messagesContainerRef.current.scrollTop=Number(saved);}catch{}});return()=>cancelAnimationFrame(frame);},[chatId,isHydratingMessages]);
+  // The initial bounded history window opens at the newest message, not a stale
+  // absolute scroll offset from an older (potentially 1,500-message) DOM.
+  useEffect(() => {
+    if (isHydratingMessages) return;
+    const frame = requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chatId, isHydratingMessages]);
+
+  // Prepending a history page must not push the messages the user is reading
+  // downward or trigger the ordinary follow-to-bottom behavior.
+  useLayoutEffect(() => {
+    const anchor = pendingHistoryScrollAnchor.current;
+    if (!anchor) return;
+    pendingHistoryScrollAnchor.current = null;
+    const container = messagesContainerRef.current;
+    if (container) container.scrollTop = anchor.top + container.scrollHeight - anchor.height;
+  }, [messages, visibleHistoryCount]);
+
+  const loadOlderHistory = useCallback(async () => {
+    if (historyRequestInFlight.current || !hasOlderHistory || isHydratingMessages) return;
+    const visible = messages.slice(-visibleHistoryCount);
+    const oldest = visible[0];
+    const container = messagesContainerRef.current;
+    if (!oldest?.createdAt || !oldest.id || !container) return;
+    historyRequestInFlight.current = true;
+    setLoadingOlderHistory(true);
+    setOlderHistoryError("");
+    try {
+      const params = new URLSearchParams({
+        chatId, limit: "20", beforeCreatedAt: oldest.createdAt, beforeId: oldest.id,
+      });
+      const response = await fetch(`/api/messages?${params.toString()}`, { cache: "no-store" });
+      const page = await response.json() as { messages?: Message[]; hasMore?: boolean; error?: string };
+      if (!response.ok || !Array.isArray(page.messages)) throw new Error(page.error ?? "History unavailable.");
+      if (composerChatRef.current !== chatId) return;
+      if (page.messages.length === 0) { setHasOlderHistory(false); return; }
+      pendingHistoryScrollAnchor.current = { height: container.scrollHeight, top: container.scrollTop };
+      setMessages(current => {
+        const byId = new Map(current.map(row => [row.id, row]));
+        for (const row of page.messages!) byId.set(row.id, row);
+        return [...byId.values()].sort((a,b) => {
+          const dateOrder = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+          return dateOrder || a.id.localeCompare(b.id);
+        });
+      });
+      setVisibleHistoryCount(current => current + page.messages!.length);
+      setHasOlderHistory(Boolean(page.hasMore));
+    } catch (error) {
+      if (composerChatRef.current === chatId) setOlderHistoryError(error instanceof Error ? error.message : "History unavailable.");
+    } finally {
+      historyRequestInFlight.current = false;
+      if (composerChatRef.current === chatId) setLoadingOlderHistory(false);
+    }
+  }, [chatId, messages, visibleHistoryCount, hasOlderHistory, isHydratingMessages]);
+
 
   // Follow growing central response only when the reader is already near the bottom.
   useEffect(() => {
@@ -1173,6 +1237,12 @@ export function ChatPanel({
 
     async function fetchMessages() {
       abortControllerRef.current?.abort();
+      setVisibleHistoryCount(10);
+      setHasOlderHistory(false);
+      setLoadingOlderHistory(false);
+      setOlderHistoryError("");
+      historyRequestInFlight.current = false;
+      pendingHistoryScrollAnchor.current = null;
       setMeta(null);
       setSelectionExplainer(null);
       setIsRoutingSelectionInFlight(false);
@@ -1205,10 +1275,10 @@ export function ChatPanel({
       }
 
       try {
-        const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`, {
+        const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&limit=10`, {
           cache: "no-store",
         });
-        const payload = (await response.json()) as { messages?: Message[]; error?: string };
+        const payload = (await response.json()) as { messages?: Message[]; hasMore?: boolean; error?: string };
 
         if (!response.ok) {
           throw new Error(payload.error ?? "Failed to load messages.");
@@ -1216,6 +1286,7 @@ export function ChatPanel({
 
         if (!cancelled) {
           const nextMessages = payload.messages ?? [];
+          setHasOlderHistory(Boolean(payload.hasMore));
           setMessages(nextMessages);
           setMessagesByChatId((current) => ({ ...current, [chatId]: nextMessages }));
           setIsHydratingMessages(false);
@@ -3275,7 +3346,12 @@ export function ChatPanel({
 
       <section
         ref={messagesContainerRef}
-        onScroll={event=>{try{window.sessionStorage.setItem(`katie.scroll.v1.${chatId}`,String(event.currentTarget.scrollTop));}catch{}}}
+        onScroll={event => {
+          const container = event.currentTarget;
+          if (container.scrollTop < 120 && hasOlderHistory && !historyRequestInFlight.current) {
+            void loadOlderHistory();
+          }
+        }}
         className="relative min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 pb-5 overscroll-contain sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
         {isHydratingMessages ? (
@@ -3291,7 +3367,14 @@ export function ChatPanel({
             </p>
           </div>
         ) : null}
-        {messages.map((message) => (
+        {hasOlderHistory || loadingOlderHistory || olderHistoryError ? (
+          <div className="flex justify-center py-1 text-xs text-zinc-400" role="status">
+            {loadingOlderHistory ? "Loading older messages…" :
+              olderHistoryError ? <button type="button" onClick={() => void loadOlderHistory()} className="underline">Retry loading older messages</button> :
+              "Scroll up to load older messages"}
+          </div>
+        ) : null}
+        {messages.slice(-visibleHistoryCount).map((message) => (
           <div
             key={message.id} id={`message-${message.id}`}
             className={[
