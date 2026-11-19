@@ -391,3 +391,29 @@ test('A-QA3 foreign-source praise in justification cannot contaminate a genuinel
   assert.equal(returned[0]?.text,forged);
   assert.equal(result.accepted,false,'another candidate\'s event is not a citation for the selected model');
 });
+
+
+test('A-QA3 cited negative or ambiguous events cannot become praise in justification',async()=>{
+  for(const polarity of ['negative','ambiguous'] as const){
+    const parsed=JSON.parse(selectionJson('gpt-5-mini',
+      polarity==='negative' ? 'User criticized model; source-mini' :
+        'Mixed response, ambiguous outcome; source-mini','attributed_feedback'));
+    parsed.selection_justification='User praised gpt-5-mini and was satisfied with it.';
+    const forged=JSON.stringify(parsed);
+    const {result,returned}=await executeSelectionCase([forged],
+      bestValueSourceEvidence(polarity));
+    assert.equal(returned[0]?.text,forged);
+    assert.equal(result.accepted,false,polarity+' cannot support a claimed positive judgment');
+  }
+});
+
+test('A-QA3 relabeled user praise in selected-fit field is rejected',async()=>{
+  const parsed=JSON.parse(selectionJson('gpt-5-mini',
+    'Documented text capability only.','documented_capability'));
+  parsed.quality_qualification.selected_fit='User praised gpt-5-mini from source-other.';
+  const forged=JSON.stringify(parsed);
+  const {result,returned}=await executeSelectionCase([forged],
+    bestValueSourceEvidence(null,'positive'));
+  assert.equal(returned[0]?.text,forged);
+  assert.equal(result.accepted,false);
+});
