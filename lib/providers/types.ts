@@ -143,6 +143,8 @@ export interface ChatGenerateParams {
   summary: string;
   user: string;
   history: { role: "user" | "assistant"; content: string }[];
+  /** Trusted server-selected routing mode; never accepted as a browser authority. */
+  routingMode?: "best_answer" | "best_value";
   requestIntent?: string;
   secondaryIntents?: string[];
   modelId?: string;
@@ -160,6 +162,10 @@ export interface ProviderResponse {
   model: string;
   provider: "openai" | "google" | "grok" | "anthropic";
   finishReason?: string;
+  /** Provider-declared terminal status and reason; not derived from visible output. */
+  responseStatus?: string;
+  incompleteReason?: string;
+  providerResponseId?: string;
   truncated?: boolean;
   continuationCount?: number;
   researchEvidence?: ResearchEvidenceBundle;

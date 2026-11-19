@@ -10,6 +10,7 @@ import { OWNER_SELECTED_UNCACHED, ownerSelectedUncachedEstimate, proposeSelected
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
 import { isBoundedGrokWebRequest, boundedGrokWebCostFromReceipt, GROK_BOUNDED_WEB_POLICY_VERSION } from './grok-web-search';
 import type { ResponseCheckpoint } from './types';
+import { summarizeProviderOutcome } from '@/lib/providers/response-diagnostics';
 
 const hosts: Record<AccountingProvider, string> = { openai: 'api.openai.com', anthropic: 'api.anthropic.com', google: 'generativelanguage.googleapis.com', grok: 'api.x.ai' };
 const activeTransmissions = new Map<string, AbortController>();
@@ -444,8 +445,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       // reviewed applicability leaves actual cost unknown, even with full tokens.
       const billedModel = receipt.resolvedModel ?? prepared.model;
       const price = getModelPrice(provider, billedModel,pricing);
+      const outcome = summarizeProviderOutcome(checkpoint.body, provider, prepared.endpoint,
+        prepared.payload.stream === true || /:streamGenerateContent(?:[?]|$)/.test(prepared.endpoint), checkpoint.status);
       const evidence = { kind: 'provider_receipt', requestHash: prepared.hash, httpStatus: checkpoint.status, pricingVersion: pricing.version,
         requestedModel: prepared.model, resolvedModel: receipt.resolvedModel, pricedModel: price ? billedModel : null, pricingUnknown: !price,
+        providerOutcome: {...outcome, requestedOutputAllowance: estimate.outputAllowance,
+          endpoint: prepared.endpoint, transmissionStage: context.activity ?? 'standalone',
+          identicalReplaySafe: outcome.normalizedFailureReason !== 'OUTPUT_TOKEN_EXHAUSTED'},
         ...(provider === 'anthropic' ? { cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
       const inputDetails=(receipt.raw.input_tokens_details??receipt.raw.prompt_tokens_details) as Record<string,unknown>|undefined;
       if(provider==='openai'&&price?.cacheWriteNanoUsd&&typeof inputDetails?.cache_write_tokens!=='number'){

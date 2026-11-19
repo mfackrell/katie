@@ -1,4 +1,5 @@
 import { googleGenerateContent, googleGenerateContentStream } from "./google-transport";
+import { planBestAnswerOutputTokens } from "./output-planning";
 import { nativeToolTurn } from "./native-tools";
 import { assertProviderOutput, inspectGoogleStatus } from "./response-errors";
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
@@ -183,6 +184,7 @@ export class GoogleProvider implements LlmProvider {
       ? parsedModel.thinkingLevelInput ?? "medium"
       : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
+    const plannedOutput = isImageTask ? undefined : planBestAnswerOutputTokens(params, selectedModel, "google");
     const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
     const baseSystemInstruction = buildSystemInstruction(isImageTask ? compactImageGenerationContext(params) : params);
     const systemInstructionBase = isImageTask
@@ -203,6 +205,7 @@ export class GoogleProvider implements LlmProvider {
         config: {
           abortSignal: params.signal,
           systemInstruction,
+          ...(plannedOutput ? { maxOutputTokens: plannedOutput } : {}),
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
           ...(isImageTask ? { imageConfig: { imageSize: "1K" as const } } : {}),
           ...(thinkingLevelInput
@@ -266,6 +269,7 @@ export class GoogleProvider implements LlmProvider {
       ? parsedModel.thinkingLevelInput ?? "medium"
       : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
+    const plannedOutput = isImageTask ? undefined : planBestAnswerOutputTokens(params, selectedModel, "google");
     const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
     const baseSystemInstruction = buildSystemInstruction(isImageTask ? compactImageGenerationContext(params) : params);
     const systemInstructionBase = isImageTask
@@ -286,6 +290,7 @@ export class GoogleProvider implements LlmProvider {
         config: {
           abortSignal: params.signal,
           systemInstruction,
+          ...(plannedOutput ? { maxOutputTokens: plannedOutput } : {}),
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
           ...(isImageTask ? { imageConfig: { imageSize: "1K" as const } } : {}),
           ...(thinkingLevelInput

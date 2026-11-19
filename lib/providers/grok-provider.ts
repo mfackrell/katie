@@ -1,4 +1,5 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
+import { planBestAnswerOutputTokens } from "./output-planning";
 import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
 import { nativeToolTurn } from "./native-tools";
 import { requireAgentResearch } from "@/lib/agents/policy";
@@ -595,10 +596,13 @@ ${getKatieReasoningExplainerStatement()}` }
         systemMessages: messages.filter(entry => entry.role === "system")
           .map(entry => typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content)),
       });
+      const plannedOutput = params.boundedFrameObservations ? undefined :
+        planBestAnswerOutputTokens(params, selectedModel, "grok");
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
         messages,
-        ...(params.boundedFrameObservations ? { max_tokens: 6000 } : {}),
+        ...(params.boundedFrameObservations ? { max_tokens: 6000 } :
+          plannedOutput ? { max_tokens: plannedOutput } : {}),
       }, { maxRetries: 0, timeout: 180_000, signal: params.signal });
       if (submittedImageCount) {
         console.info("[GrokProvider] xAI acknowledged multimodal request", {
@@ -609,7 +613,11 @@ ${getKatieReasoningExplainerStatement()}` }
 
       return {
         text: completion.choices[0]?.message?.content ?? "",
-        ...(params.boundedFrameObservations ? { truncated: completion.choices[0]?.finish_reason === "length" } : {}),
+        // Preserve bounded video-frame truncation; ordinary chat exposes the
+        // settled finish reason so exhausted paid requests cannot be repeated.
+        ...(params.boundedFrameObservations
+          ? { truncated: completion.choices[0]?.finish_reason === "length" }
+          : { finishReason: completion.choices[0]?.finish_reason ?? undefined }),
         model: completion.model || selectedModel,
         provider: this.name
       };

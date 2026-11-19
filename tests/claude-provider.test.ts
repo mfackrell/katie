@@ -243,6 +243,7 @@ test("Claude sends rendered website images on both normal and streaming requests
     return body.stream ? sseResponse([
       { type: "content_block_delta", delta: { type: "text_delta", text: "Visual review" } },
       { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
     ]) : jsonResponse({ content: [{ type: "text", text: "Visual review" }], stop_reason: "end_turn" });
   }) as typeof fetch;
   try {
@@ -271,6 +272,7 @@ for (const streaming of [false, true]) {
         { type: 'message_start', message: { usage } },
         { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Done' } },
         { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } },
+        { type: 'message_stop' },
       ]) : jsonResponse({ content: [{ type: 'text', text: 'Done' }], stop_reason: 'end_turn', usage });
     }) as typeof fetch;
     try {
@@ -558,4 +560,26 @@ test("Nov 3 nine-turn production replay uses actor guidance without extra conver
   } finally {
     globalThis.fetch = priorFetch;
   }
+});
+
+// Anthropic message_delta carries stop_reason but can precede a dropped stream.
+// Reject before final response/another charged pass if message_stop never arrived.
+test("ClaudeProvider rejects interrupted message_delta without retrying the paid pass", async () => {
+  const originalFetch = globalThis.fetch;
+  let dispatched = 0;
+  globalThis.fetch = (async () => {
+    dispatched += 1;
+    return sseResponse([
+      { type: "message_start", message: { usage: { input_tokens: 8, output_tokens: 0 } } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: "Unfinished response" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+    ]);
+  }) as typeof fetch;
+  try {
+    const provider = new ClaudeProvider("offline-test-key");
+    await assert.rejects(provider.generateStream(baseParams, {}),
+      (error: unknown) => error instanceof Error && "code" in error &&
+        error.code === "PROVIDER_TERMINAL_MISSING");
+    assert.equal(dispatched, 1, "a dropped stream cannot trigger paid continuation");
+  } finally { globalThis.fetch = originalFetch; }
 });
