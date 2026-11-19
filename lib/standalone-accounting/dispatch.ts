@@ -9,6 +9,7 @@ import { cachedWorkflowValue } from './workflow';
 import { OWNER_SELECTED_UNCACHED, ownerSelectedUncachedEstimate, proposeSelectedModelUncached } from './owner-cache-authorization';
 import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
 import { isBoundedGrokWebRequest, boundedGrokWebCostFromReceipt, GROK_BOUNDED_WEB_POLICY_VERSION } from './grok-web-search';
+import { bindProviderTraceRecorder, readProviderResponseText, recordProviderTrace, safeFailureDetails, safeHttpErrorCode, traceAttemptIdentity } from '@/lib/diagnostics/provider-attempt-timing';
 import type { ResponseCheckpoint } from './types';
 import { summarizeProviderOutcome } from '@/lib/providers/response-diagnostics';
 
@@ -35,6 +36,7 @@ function failure(code: string, message: string): StandaloneAccountingError { ret
  * A non-retryable HTTP error lets the caller choose its existing safe fallback.
  * Replaying it never transmits the uncertain operation again. */
 function unavailableUncertainResponse(): Response {
+  recordProviderTrace('local_synthetic_response', {httpStatus: 400, failureCategory: 'unknown_outcome'});
   return Response.json({error:{type:'uncertain_exposure_retained',message:'The previous provider outcome is unavailable. Its full exposure is authorized and retained. This operation was not retransmitted; use the next safe fallback.'}},{status:400,headers:{'x-katie-uncertain-exposure':'retained'}});
 }
 /** Anthropic documents definitive rejected API requests as nonbillable.
@@ -301,8 +303,10 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     // Capture candidate preparation before allocating an ordinal or touching the ledger.
     if (isCapturingControlPlanePreparation()) captureControlPlanePreparation(prepareStandaloneRequest(provider, model, url.pathname, payload));
     const { attemptKey } = nextStandaloneAttempt()!;
+    traceAttemptIdentity({ attemptKey, endpoint: url.pathname });
     const ledger = ledgerFactory();
     let attempt = await ledger.lookupAttempt(context.userId, context.requestId, attemptKey);
+    if (attempt) traceAttemptIdentity({attemptId: attempt.id});
     let pricing = await loadStandalonePricing(ledger, attempt?.pricing_version);
     await ledger.registerPricing(pricing.version, pricing);
     let ownerSelectedUncached = (attempt?.preflight_estimate as StandaloneEstimate | undefined)?.ownerApprovalRequired === OWNER_SELECTED_UNCACHED;
@@ -338,6 +342,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
           || prepared.model !== model && !attempt.supersedes_attempt_id) throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
       }
     }
+    recordProviderTrace('request_preparation_completed');
     if (ownerSelectedUncached && (prepared.provider !== 'openai' ||
       prepared.payload.prompt_cache_key !== undefined || prepared.payload.prompt_cache_retention !== undefined)) {
       throw failure('replay_mismatch', 'Owner-approved uncached preparation must not include unreviewed cache metadata.');
@@ -433,10 +438,12 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       }
       const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || /:streamGenerateContent(?:[?]|$)/.test(prepared.endpoint), prepared.payload, getModelPrice(provider,prepared.model,pricing)?.imageOutputTokensPerImage??0);
       if (!receipt) {
+        recordProviderTrace('provider_receipt_missing', {failureCategory: 'receipt_reconciliation_failure'});
         await ledger.markUncertain(context.userId, attemptId, 'Response received without supported complete provider usage and receipt; reservation remains held.');
         if(await ledger.uncertainExposureAccepted(context.userId,attemptId))return;
         throw failure('outcome_unknown', 'Provider usage is incomplete. Spending exposure remains reserved; automatic continuation stopped.');
       }
+      recordProviderTrace('provider_receipt_observed');
       const receiptHeaders = new Headers(checkpoint.headers);
       await ledger.recordProviderIdentifiers(context.userId, attemptId, receiptHeaders.get('request-id') ?? receiptHeaders.get('x-request-id') ?? receiptHeaders.get('x-goog-request-id'), receipt.responseId);
       const usage:Record<string,unknown> = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, imageOutputTokens: receipt.imageOutputTokens, cachedInputTokens: receipt.cached,
@@ -489,6 +496,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       }
       await ledger.settle({ ownerId: context.userId, attemptId, provider, providerReceiptId: receipt.id,
         actualMicrousd, usage, evidence:finalEvidence });
+      recordProviderTrace('provider_receipt_settled');
     };
     if (attempt?.state === 'uncertain') {
       // Only durable server authority can acknowledge exposure. Never claim
@@ -506,6 +514,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       preparedHash: prepared.hash, preparedPayload: prepared as unknown as Record<string, unknown>, pricingVersion: pricing.version, provider, model,
       reservedMicrousd: estimate.reservationMicrousd, category: context.activity ?? 'standalone',
       preflightEstimate: estimate, estimatorVersion: estimate.estimatorVersion, reason: context.reason ?? context.activity ?? 'Standalone provider request' });
+    traceAttemptIdentity({attemptId: attempt.id});
     if (attempt.state === 'paused') throw Object.assign(failure('approval_required', 'This prepared provider request is paused for spending approval.'), { attemptId: attempt.id });
     if (signal?.aborted) { await ledger.cancel(context.userId, attempt.id); throw failure('cancelled', 'Provider request was cancelled before dispatch.'); }
     const claimed = await ledger.claimDispatch(context.userId, attempt.id);
@@ -520,6 +529,12 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const transmissionTimeoutMs = Math.max(1, Math.floor(configuredTimeout));
     const timeoutSignal = AbortSignal.timeout(transmissionTimeoutMs);
     const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), timeoutSignal]);
+    const traceAbort = bindProviderTraceRecorder();
+    const onTransmissionAbort = () => traceAbort('cancellation_requested', {
+      cancellationReason: timeoutSignal.aborted ? 'transport_deadline' : controller.signal.aborted ? 'owner' : 'parent_signal',
+      timeoutSource: timeoutSignal.aborted ? 'transmission' : 'upstream',
+    });
+    transmissionSignal.addEventListener('abort', onTransmissionAbort, {once: true});
     const activeKey = `${context.userId}:${attempt.id}`;
     activeTransmissions.set(activeKey, controller);
     let pollingCancellation = false;
@@ -533,9 +548,17 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     cancellationPoll.unref();
     try {
       // Serialize only the frozen, authorized value. Callbacks cannot mutate it.
+      recordProviderTrace('dispatch_initiated');
       const response = await transport(url, { ...init, method, headers, body: prepared.serializedBody, signal: transmissionSignal, redirect: 'manual' });
+      recordProviderTrace('response_headers_received', {httpStatus: response.status});
       await ledger.recordProviderIdentifiers(context.userId, attempt.id, response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? response.headers.get('x-goog-request-id'), null);
-      const body = await response.text();
+      const body = await readProviderResponseText(response);
+      if (!response.ok) recordProviderTrace('provider_http_rejection', {
+        httpStatus: response.status,
+        errorCode: safeHttpErrorCode(body),
+        failureCategory: response.status === 429 ? 'provider_rate_limit' :
+          response.status >= 500 ? 'provider_internal_error' : 'provider_http_rejection',
+      });
       const checkpoint: ResponseCheckpoint = { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()], body };
       await ledger.checkpointResponse(context.userId, attempt.id, checkpoint);
       await reconcile(checkpoint, attempt.id);
@@ -543,6 +566,12 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if(reconciled?.state==='uncertain'&&!safeUncertainCheckpoint(checkpoint,provider,prepared.endpoint))return unavailableUncertainResponse();
       return restore(checkpoint);
     } catch (error) {
+      if (transmissionSignal.aborted && (error === transmissionSignal.reason ||
+          error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) {
+        // Transport promise observed abort; this does NOT prove remote cancellation.
+        recordProviderTrace('cancellation_acknowledged');
+      }
+      recordProviderTrace('attempt_failed', safeFailureDetails(error));
       const timedOut = timeoutSignal.aborted;
       const timeoutError = timedOut && transmissionPolicy.timeoutCode
         ? failure(transmissionPolicy.timeoutCode, policyText(
@@ -558,12 +587,14 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         : error instanceof StandaloneAccountingError
           ? error.message
           : 'Transmission or response reconciliation did not complete; reservation remains held.';
-      await ledger.markUncertain(context.userId, attempt.id, uncertaintyReason).catch(() => undefined);
+      const markedUncertain = await ledger.markUncertain(context.userId, attempt.id, uncertaintyReason)
+        .then(() => true).catch(() => false);
+      if (markedUncertain) recordProviderTrace('attempt_uncertain', {failureCategory: 'unknown_outcome'});
       if (timeoutError) throw Object.assign(timeoutError, { cause: error, attemptId: attempt.id });
       if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))return unavailableUncertainResponse();
       if (error instanceof StandaloneAccountingError) throw Object.assign(error, { attemptId: attempt.id });
       throw Object.assign(failure('outcome_unknown', 'The provider outcome is uncertain. Spending exposure remains reserved; automatic retry stopped.'), { cause: error, attemptId: attempt.id });
-    } finally { clearInterval(cancellationPoll); activeTransmissions.delete(activeKey); }
+    } finally { transmissionSignal.removeEventListener('abort', onTransmissionAbort); clearInterval(cancellationPoll); activeTransmissions.delete(activeKey); }
   };
 }
 
