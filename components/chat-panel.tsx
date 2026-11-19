@@ -3371,7 +3371,7 @@ export function ChatPanel({
           <div className="flex justify-center py-1 text-xs text-zinc-400" role="status">
             {loadingOlderHistory ? "Loading older messages…" :
               olderHistoryError ? <button type="button" onClick={() => void loadOlderHistory()} className="underline">Retry loading older messages</button> :
-              "Scroll up to load older messages"}
+              <button type="button" onClick={() => void loadOlderHistory()} className="underline">Load older messages</button>}
           </div>
         ) : null}
         {messages.slice(-visibleHistoryCount).map((message) => (
