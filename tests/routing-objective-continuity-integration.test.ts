@@ -254,9 +254,9 @@ test('C-10 unrelated actors and chats cannot enter actual scoped context assembl
   assert.doesNotMatch(routingContext(scoped),/Be witty, creative, playful|journal, an interview/);
 });
 
-test('C-11 paused uncertain request resumes original request once without new dispatch',async()=>{
+test('C-11 pending uncertain request resumes original workflow once with objective and correction',async()=>{
   const f=scenario('C-11');assert.equal(f.provider_state?.status,'uncertain');
-  let checks=0,resumptions=0,paidCalls=0;
+  let checks=0,resumptions=0;
   const savedObjective=f.history.find(x=>x.role==='user')!.text;
   const savedCorrection=f.current.text;
   const recovered=await recoverLateRoutingResponse({
@@ -266,7 +266,9 @@ test('C-11 paused uncertain request resumes original request once without new di
   });
   const body=await recovered!.json() as {objective:string;correction:string};
   assert.equal(body.objective,savedObjective);assert.equal(body.correction,savedCorrection);
-  assert.equal(checks,1);assert.equal(resumptions,1);assert.equal(paidCalls,0);
+  assert.equal(checks,1);assert.equal(resumptions,1);
+  // This is the browser resume seam; B-owned provider receipt/charge tests must
+  // independently establish that resuming does not retransmit an uncertain call.
 });
 
 test('C-12 Best Answer and Best Value carry identical objective/correction source, not selection policy',()=>{
@@ -283,7 +285,7 @@ test('C-13 explicit image-generation intent suppresses narrative continuation',(
   assert.match(f.current.text,/Generate a picture/);
 });
 
-test('C-14 saved completed request does not auto-resume or create a second publication',async()=>{
+test('C-14 saved completed request never triggers browser auto-resume',async()=>{
   const f=scenario('C-14');assert.equal(f.provider_state?.existing_final_message_saved,true);
   let resumptions=0,reads=0;
   const result=await recoverLateRoutingResponse({
@@ -292,4 +294,6 @@ test('C-14 saved completed request does not auto-resume or create a second publi
     wait:async()=>{throw Error('Completed request must not be polled repeatedly');},cancelled:()=>false,maxChecks:3,
   });
   assert.equal(result,null);assert.equal(reads,1);assert.equal(resumptions,0);
+  // No provider dispatch/cost accounting is exercised by this browser-only seam;
+  // retain B's independent durable receipt and replay acceptance as a separate gate.
 });
