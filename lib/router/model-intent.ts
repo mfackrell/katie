@@ -2591,6 +2591,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
   })}`;
 
+  const judgeStartMs = Date.now();
   const judgeResults = await Promise.allSettled(judges.map((judge, lane) =>
     executeControlPlaneJsonTask({
       taskName: "routing-rerank",
@@ -2658,6 +2659,15 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
   const result = chosen?.judgments
     .sort((a, b) => a.lane - b.lane)[0] ?? null;
+  console.info("[RoutingJudges] decision", {
+    elapsedMs: Date.now() - judgeStartMs,
+    candidateCount: args.candidates.length,
+    launchedJudges: judges.length,
+    validJudges: validJudgments.length,
+    selected: chosen?.key ?? null,
+    supportingVotes: chosen?.votes ?? 0,
+    qualityEvidence: chosen?.qualityEvidence ?? null,
+  });
 
   if (!result) {
     return { accepted: false, reason: "all_decision_providers_failed" };
