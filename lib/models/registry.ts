@@ -250,6 +250,13 @@ type PriorPublishedSnapshot = TrustedPricingSnapshot & Pick<ModelRegistryRecord,
   "supports_web_search" | "supports_image_generation" | "supports_video" |
   "reasoning_tier" | "speed_tier" | "cost_tier">;
 
+/** PostgREST may serialize PostgreSQL numeric rates as strings; reject non-decimal or nonfinite values. */
+function verifiedNumericRate(value: unknown): number | null {
+  if (typeof value !== "number" && !(typeof value === "string" && /^(?:0|[1-9]\\d*)(?:\\.\\d+)?$/.test(value))) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function freshOfficialEvidence(date: string | null | undefined, nowIso: string): boolean {
   const timestamp = Date.parse(date ?? "");
   const now = Date.parse(nowIso);
@@ -296,12 +303,11 @@ export function retainOfficialModelEvidence(
     if (prior.pricing_status === "verified" &&
         meta.pricing_verification_source === spec.documentUrl &&
         freshOfficialEvidence(prior.pricing_verified_at, nowIso) &&
-        typeof prior.pricing_input_per_1m === "number" &&
-        typeof prior.pricing_output_per_1m === "number" &&
-        prior.pricing_input_per_1m >= 0 && prior.pricing_output_per_1m >= 0) {
+        verifiedNumericRate(prior.pricing_input_per_1m) !== null &&
+        verifiedNumericRate(prior.pricing_output_per_1m) !== null) {
       row.pricing_status = "verified";
-      row.pricing_input_per_1m = prior.pricing_input_per_1m;
-      row.pricing_output_per_1m = prior.pricing_output_per_1m;
+      row.pricing_input_per_1m = verifiedNumericRate(prior.pricing_input_per_1m);
+      row.pricing_output_per_1m = verifiedNumericRate(prior.pricing_output_per_1m);
       row.pricing_verified_at = prior.pricing_verified_at;
     } else {
       row.source_metadata = {
