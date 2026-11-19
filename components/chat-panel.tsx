@@ -401,6 +401,36 @@ function clearPendingChatRequest(chatId: string): void {
   window.localStorage.removeItem(pendingChatRequestStorageKey(chatId));
 }
 
+/**
+ * The existing request must be confirmed completed and saved before its
+ * browser-side duplicate-send lock is released. Never infer completion from
+ * age, a displayed provisional answer, or a missing receipt.
+ */
+async function isSavedChatRequestComplete(
+  chatId: string,
+  requestId: string,
+  bearer?: string | null,
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `/api/chat/status?requestId=${encodeURIComponent(requestId)}&chatId=${encodeURIComponent(chatId)}`,
+      { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
+    );
+    if (!response.ok) return false;
+    const payload = await response.json() as {
+      requestId?: string; chatId?: string; status?: string;
+      workflowStatus?: string | null; assistantMessageId?: string | null;
+    };
+    return payload.requestId === requestId &&
+      payload.chatId === chatId &&
+      payload.status === "completed" &&
+      payload.workflowStatus === "completed" &&
+      Boolean(payload.assistantMessageId);
+  } catch {
+    return false;
+  }
+}
+
 function waitForRecoveryPoll(ms = MOBILE_RECOVERY_POLL_INTERVAL_MS): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -884,6 +914,37 @@ export function ChatPanel({
     return()=>window.clearTimeout(timer);
   },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
+  // A saved answer may appear while the streaming connection is still open.
+  // Release the composer once the *server* confirms terminal completion;
+  // no page refresh, duplicate request, or accounting-guess is needed.
+  useEffect(() => {
+    if (!loading || !answerDisplayed || !chatId) return;
+    let cancelled = false;
+    let busy = false;
+    const check = async () => {
+      if (cancelled || busy || composerChatRef.current !== chatId) return;
+      const pending = readPendingChatRequest(chatId);
+      if (!pending?.requestId) return;
+      busy = true;
+      try {
+        const bearer = await ownerSessionBearer();
+        const completed = await isSavedChatRequestComplete(chatId, pending.requestId, bearer);
+        if (cancelled || composerChatRef.current !== chatId || !completed) return;
+        // Never clear a newer request whose ID changed during the probe.
+        if (readPendingChatRequest(chatId)?.requestId !== pending.requestId) return;
+        clearPendingChatRequest(chatId);
+        setStatusMessage("Answer saved. Ready for your next message.");
+        // The completed stream no longer needs to hold the composer busy.
+        // Its existing finally handler releases the loading state.
+        abortControllerRef.current?.abort();
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = window.setInterval(() => { void check(); }, 2_000);
+    void check();
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [chatId, loading, answerDisplayed]);
   const [answerDisplayed, setAnswerDisplayed] = useState(false);
   const accountingResumeInFlight = useRef(false);
   const [accountingResumeFailure, setAccountingResumeFailure] = useState("");
@@ -1778,9 +1839,17 @@ export function ChatPanel({
     }
     // A transport interruption cannot authorize a new request ID for the
     // same unresolved chat. Keep the original saved receipt recoverable.
-    if (readPendingChatRequest(chatId)) {
-      setStatusMessage("The previous request has not been verified complete. Katie will check its saved status; do not resend.");
-      return;
+    const previousPending = readPendingChatRequest(chatId);
+    if (previousPending) {
+      setStatusMessage("Checking whether the previous request has finished…");
+      const bearer = await ownerSessionBearer().catch(() => null);
+      const finished = Boolean(previousPending.requestId) &&
+        await isSavedChatRequestComplete(chatId, previousPending.requestId!, bearer);
+      if (!finished || readPendingChatRequest(chatId)?.requestId !== previousPending.requestId) {
+        setStatusMessage("The previous request is not yet verified complete. Katie will keep checking its original status; no duplicate request was sent.");
+        return;
+      }
+      clearPendingChatRequest(chatId);
     }
     const latestComposerText = composerValueRef.current.trim();
     if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!reactionContent && !canSendForText(latestComposerText))) {
