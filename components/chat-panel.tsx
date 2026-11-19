@@ -914,6 +914,7 @@ export function ChatPanel({
     return()=>window.clearTimeout(timer);
   },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
+  const [answerDisplayed, setAnswerDisplayed] = useState(false);
   // A saved answer may appear while the streaming connection is still open.
   // Release the composer once the *server* confirms terminal completion;
   // no page refresh, duplicate request, or accounting-guess is needed.
@@ -945,7 +946,6 @@ export function ChatPanel({
     void check();
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [chatId, loading, answerDisplayed]);
-  const [answerDisplayed, setAnswerDisplayed] = useState(false);
   const accountingResumeInFlight = useRef(false);
   const [accountingResumeFailure, setAccountingResumeFailure] = useState("");
   useEffect(() => {
