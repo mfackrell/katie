@@ -762,7 +762,24 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('release savepoint before_binding_objective_tamper');
    await first.query('set role service_role');
   }
-  console.log('MISSION79_BIND_PENDING_PROVIDER_AND_OBJECTIVE_DRIFT_NEGATIVES_PASS');
+  await first.query('savepoint before_binding_specification_tamper');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set spec=jsonb_set(spec,'{milestones,0,instruction}',to_jsonb('Unapproved management milestone'::text)) where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await verifyBindingUnchanged('Approved specification drift before binding');
+  }finally{
+   await first.query('rollback to savepoint before_binding_specification_tamper');
+   await first.query('release savepoint before_binding_specification_tamper');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_BIND_PENDING_PROVIDER_OBJECTIVE_AND_SPEC_DRIFT_NEGATIVES_PASS');
   const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
   await first.query('savepoint stale_owner_binding_generation');
   try{
@@ -867,7 +884,14 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query("set local session_replication_role = 'origin'");
    await first.query('set role service_role');
   });
-  console.log('MISSION79_LEASE_PENDING_PROVIDER_AND_OBJECTIVE_DRIFT_NEGATIVES_PASS');
+  await beforeLeaseNegative('Approved milestone drift before lease',async()=>{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set spec=jsonb_set(spec,'{milestones,0,instruction}',to_jsonb('Unapproved management milestone'::text)) where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+  });
+  console.log('MISSION79_LEASE_PENDING_PROVIDER_OBJECTIVE_AND_SPEC_DRIFT_NEGATIVES_PASS');
   const oldContinuationClaim=await isolatedNegativeClaim(priorRelease);
   assert.notEqual(oldContinuationClaim?.job?.id,originalJob.id,
    'Historical continuation release must never reclaim owner-renewed mission79');
@@ -1031,6 +1055,42 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   }finally{
    await first.query('rollback to savepoint terminal_failed_pending_open');
    await first.query('release savepoint terminal_failed_pending_open');
+  }
+  // The original provider may return after its authorized cutoff and lease
+  // expired. Exact previously admitted receipt can resolve without creating
+  // another request, a new lease or any paid inference; CLOSE then proceeds.
+  await first.query('savepoint late_provider_receipt_after_cutoff');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set deadline=clock_timestamp()-interval '2 minutes' where id=$1",[project]);
+   await first.query("update project_provider_execution set deadline=clock_timestamp()-interval '2 minutes' where project_id=$1",[project]);
+   await first.query("update agent_missions set deadline=clock_timestamp()-interval '2 minutes',status='blocked' where id=$1",[scheduled.missionId]);
+   await first.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[originalJob.id]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await pendingRequestFixture();
+   const req=(await first.query('select id,execution_attempt,operation,request_hash,resolved_at from project_provider_requests where project_id=$1 and resolved_at is null',[project])).rows[0];
+   assert.ok(req&&req.resolved_at===null);
+   const settle=[originalJob.id,req.execution_attempt,req.id,req.operation,req.request_hash,null,'Native recorded inference reply'];
+   assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    [originalJob.id,req.execution_attempt,randomUUID(),req.operation,req.request_hash,null,'Wrong request identity'])).rows[0].ok,false);
+   assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',settle)).rows[0].ok,true,
+    'Exact already-admitted response must settle after cutoff and expired lease');
+   assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',settle)).rows[0].ok,false,
+    'Receipt settlement must be one-time');
+   assert.equal((await first.query('select project_provider_request_pending($1) pending',[project])).rows[0].pending,false);
+   const recorded=(await first.query('select resolved_at,provider_receipt from project_provider_requests where id=$1',[req.id])).rows[0];
+   assert.ok(recorded.resolved_at);assert.equal(recorded.provider_receipt,'Native recorded inference reply');
+   await first.query('reset role');
+   const closed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+   assert.equal(closed.state,'closed','Settled response permits release coordination');
+   console.log('MISSION79_LATE_PROVIDER_RECEIPT_EXACT_ONE_TIME_SETTLEMENT_PASS');
+  }finally{
+   await first.query('rollback to savepoint late_provider_receipt_after_cutoff');
+   await first.query('release savepoint late_provider_receipt_after_cutoff');
+   await first.query('set role service_role');
   }
   console.log('MISSION79_PROVIDER_PENDING_SEALS_BOTH_GATE_TRANSITIONS_PASS');
   assert.equal(settledGate.state,'closed',

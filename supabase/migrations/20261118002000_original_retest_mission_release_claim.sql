@@ -375,6 +375,7 @@ returns boolean language sql stable security definer set search_path=public,pg_t
   where p.id=p_project
    and p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
    and p.approved_hash=r.scope_hash and p.approval_hash=r.scope_hash
+   and p.spec is not distinct from proposal.spec
    and p.spec->'allowedPaths'=proposal.spec->'allowedPaths'
    and proposal.spec->'allowedPaths'=to_jsonb(array[
     'app/milestone-3-tic-tac-toe/',
@@ -1164,6 +1165,77 @@ $m79_finalize$);
  -- still invoke the single-argument claim RPC; all other projects are intact.
  execute replace(legacy,proof,'false');
 end $epoch_claim_patch$;
+
+-- Settle ONLY a previously recorded exact original mission79 request.
+-- Arrival after lease/cutoff is not a fresh provider admission or inference.
+-- The original provider RPC's deadline checks remain unchanged for ALL new
+-- requests and every other project. Service role and the global state lock
+-- remain mandatory; a duplicate or mismatched settlement returns false.
+do $mission79_late_provider_receipt$
+declare body text;anchor text:='perform pg_advisory_xact_lock(hashtextextended(''katie.mission.state'',0));';
+ replacement text:=$early$perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ if p_receipt is not null and p_scope is null
+  and p_job='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid then
+  if p_request is null or p_attempt is null or p_operation not in ('model-list','inference')
+   or p_hash is null or p_hash !~ '^[0-9a-f]{64}
+ public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
+ public.claim_mission_work_release_epoch(text,bigint,text)
+ from public,anon,authenticated,service_role;
+grant execute on function
+ public.project_org_retest_release_epoch(uuid,text),
+ public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
+ public.claim_mission_work_release_epoch(text,bigint,text) to service_role;
+
+revoke all on function
+ public.project_org_retest_exact_scope_grants(uuid),
+ public.project_org_retest_original_owner_lineage(uuid),
+ public.project_org_retest_future_window_offer(uuid,uuid,text),
+ public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
+ public.project_org_retest_renewed_assignment(uuid,uuid)
+ from public,anon,authenticated,service_role;
+grant execute on function
+ public.project_org_retest_exact_scope_grants(uuid),
+ public.project_org_retest_original_owner_lineage(uuid),
+ public.project_org_retest_future_window_offer(uuid,uuid,text),
+ public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
+ public.project_org_retest_renewed_assignment(uuid,uuid)
+ to service_role;
+
+revoke all on function
+ public.project_org_retest_claim_release_authorized(uuid,text),
+ public.project_org_retest_claim_release_offer(uuid,uuid,text),
+ public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)
+ from public,anon,authenticated,service_role;
+grant execute on function
+ public.project_org_retest_claim_release_authorized(uuid,text),
+ public.project_org_retest_claim_release_offer(uuid,uuid,text),
+ public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)
+ to service_role;
+commit;
+
+   or length(p_receipt) not between 1 and 256 then return false;end if;
+  update project_provider_requests request
+   set provider_receipt=p_receipt,resolved_at=clock_timestamp()
+   from mission_assignments j join agent_missions m on m.id=j.mission_id
+   where request.id=p_request
+    and j.id=p_job and j.mission_id=m.id
+    and m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    and m.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    and request.project_id=m.project_id
+    and request.mission_id=m.id and request.assignment_id=j.id
+    and request.worker_id=j.agent_id
+    and request.execution_attempt=p_attempt
+    and request.operation=p_operation and request.request_hash=p_hash
+    and request.resolved_at is null;
+  return found;
+ end if;$early$;
+begin
+ body:=pg_get_functiondef('public.project_provider_request(uuid,text,uuid,text,text,text,text)'::regprocedure);
+ if (length(body)-length(replace(body,anchor,'')))/length(anchor)<>1
+  or strpos(body,'return project_provider_request_before_director_recovery(')=0
+ then raise exception 'Installed provider request source changed; no late receipt patch';end if;
+ execute replace(body,anchor,replacement);
+end $mission79_late_provider_receipt$;
 
 revoke all on function
  public.project_org_retest_release_epoch(uuid,text),
