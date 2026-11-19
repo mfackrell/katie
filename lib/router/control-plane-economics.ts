@@ -44,25 +44,31 @@ export async function rankControlPlaneByActualCost(
         // Transport replays the saved response or dispatches its exact preparation.
         return [candidate, ...candidates.filter(c => c !== candidate)];
       }
-      const verifiedNonbillableRejection =
-        saved.state === 'settled' &&
+      const verifiedNonbillableRejection = saved.state === 'settled' &&
         saved.actual_microusd === '0' &&
         saved.usage?.nonbillableRejected === true &&
         saved.evidence?.kind === 'provider_rejection' &&
         saved.evidence?.rejectionReason === 'insufficient_prepaid_balance' &&
         saved.evidence?.httpStatus === 400 &&
         saved.response_checkpoint?.status === 400;
-      if (!verifiedNonbillableRejection || skipped === maxRejectedReplays) {
-        throw Object.assign(new Error('The saved control-plane provider/model is no longer available for exact resume.'), {code:'standalone_saved_helper_unavailable',terminal:true});
+      // A complete or merely in-flight helper cannot be reassigned to another
+      // model: it could discard a saved answer or duplicate a live transmission.
+      // An explicitly uncertain attempt may safely try a *different* qualified
+      // provider in a NEW ordinal without retransmitting its original request.
+      if (!verifiedNonbillableRejection && saved.state !== 'uncertain') {
+        throw Object.assign(new Error('The saved control-plane provider/model is no longer available for exact resume.'),
+          {code:'standalone_saved_helper_unavailable',terminal:true});
       }
-      // This attempt has conclusively finished without billing or output.
-      // Consume its original ordinal, then restore the next saved attempt;
-      // never assign a replacement model to the same attempt key.
+      if (skipped === maxRejectedReplays)
+        throw Object.assign(new Error('Saved helper replay exceeds bounded recovery window.'), {code:'standalone_saved_helper_unavailable',terminal:true});
+      // Keep the old saved attempt and its financial/technical evidence intact.
+      // Use a distinct ordinal for the next capability-qualified candidate.
       runWithStandaloneActivity(activity, () => nextStandaloneAttempt());
     }
   }
   const pricing = snapshot ?? await loadStandalonePricing(createStandaloneLedger());
   const priced: Array<{candidate: Candidate; cost: bigint; index: number}> = [];
+  const unpriced: Candidate[] = [];
   for (const [index, candidate] of candidates.entries()) {
     const capture: {prepared?: FrozenPreparedRequest} = {};
     try {
@@ -73,15 +79,16 @@ export async function rankControlPlaneByActualCost(
       if (!capture.prepared) continue;
     }
     const prepared = capture.prepared;
-    if (!prepared || prepared.provider !== candidate.provider.name || prepared.model !== candidate.modelId) continue;
+    if (!prepared || prepared.provider !== candidate.provider.name || prepared.model !== candidate.modelId) { unpriced.push(candidate); continue; }
     const quote = estimatePreparedRequest(prepared, pricing);
-    if (quote.status !== 'estimated' || quote.reservationMicrousd === null) continue;
+    if (quote.status !== 'estimated' || quote.reservationMicrousd === null) { unpriced.push(candidate); continue; }
     priced.push({candidate, cost: BigInt(quote.reservationMicrousd), index});
   }
   // All candidates already satisfy the same strict decision-task capability
   // contract. Actual input, adapter instructions and finite output are priced;
   // curated order is only a tie breaker. Normal admission still guards dispatch.
-  return priced.sort((a,b) => a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : a.index-b.index).map(x => x.candidate);
+  // Prices can guide preference, but cannot eliminate a quality-qualified model.
+  return [...priced.sort((a,b) => a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : a.index-b.index).map(x => x.candidate), ...unpriced];
 }
 
 /** No transmission, reservation, attempt ordinal, or receipt is created. */
