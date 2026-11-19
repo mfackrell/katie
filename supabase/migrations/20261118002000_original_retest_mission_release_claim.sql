@@ -1222,12 +1222,12 @@ $m79_finalize$);
  -- The inherited claimant starts its lease at transaction-start now(),
  -- which may already be expired following a long PostgreSQL lock wait.
  if (length(epoch_body)-length(replace(epoch_body,
-  "lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now()",'')))
-  /length("lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now()")<>1
+  $oldlease$lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now()$oldlease$,'')))
+  /length($oldlease$lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now()$oldlease$)<>1
  then raise exception 'Unexpected original lease timestamp source';end if;
  epoch_body:=replace(epoch_body,
-  "lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now()",
-  "lease_until=clock_timestamp()+interval '6 minutes',heartbeat_at=clock_timestamp(),updated_at=clock_timestamp()");
+  $oldlease$lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now()$oldlease$,
+  $newlease$lease_until=clock_timestamp()+interval '6 minutes',heartbeat_at=clock_timestamp(),updated_at=clock_timestamp()$newlease$);
  -- The first release predicate is evaluated before waiting on the managed
  -- agent row lock. Recheck on the UPDATE statement itself, after locks, using
  -- clock_timestamp() inside the exact owner-source epoch predicate.
