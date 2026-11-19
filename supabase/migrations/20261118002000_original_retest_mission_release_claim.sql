@@ -1292,6 +1292,54 @@ begin
  execute replace(body,anchor,replacement);
 end $mission79_late_provider_receipt$;
 
+
+-- Mission79 decision authorization must be checked against wall-clock time
+-- AFTER the existing mission-state advisory lock is obtained. The inherited
+-- project_org_principal uses now(), which freezes at transaction start and
+-- could admit a decision that waited past the actual owner cutoff or lease.
+-- Patch only this exact original assignment; preserve the entire inherited
+-- principal definition and all ordinary-project behavior.
+do $mission79_postlock_decision_clock$
+declare
+ body text;
+ anchor text:='perform pg_advisory_xact_lock(hashtextextended(''katie.mission.state'',0));';
+ replacement text:=$postlock$perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ if p_job='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid then
+  -- Volatile clock_timestamp is read only AFTER the advisory lock returns;
+  -- transaction-start now() is intentionally insufficient here.
+  if not exists(
+   select 1 from mission_assignments j
+   join agent_missions m on m.id=j.mission_id
+   where j.id=p_job and j.lease=p_lease and p_lease is not null
+    and m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    and m.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    and j.status='running' and m.status='running'
+    and j.lease_until>clock_timestamp()
+  ) then raise exception 'Mission79 worker lease expired after mission-state lock';end if;
+  if not exists(
+   select 1 from mission_assignments j
+   join agent_missions m on m.id=j.mission_id
+   join work_projects p on p.id=m.project_id
+   join project_retest_future_window_receipts q on q.project_id=p.id
+   join project_organization_nodes n0 on n0.id::text=j.payload->>'organizationNodeId'
+    and n0.project_id=p.id and n0.agent_id=j.agent_id
+   where j.id=p_job and j.lease=p_lease
+    and m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    and p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    and q.mission_id=m.id and q.assignment_id=j.id
+    and p.active_mission_id=m.id and p.status='running'
+    and q.cutoff=p.deadline and q.cutoff=m.deadline
+    and q.cutoff>clock_timestamp() and p.deadline>clock_timestamp()
+    and m.deadline>clock_timestamp() and n0.deadline>clock_timestamp()
+  ) then raise exception 'Mission79 owner cutoff expired after mission-state lock';end if;
+ end if;$postlock$;
+begin
+ body:=pg_get_functiondef('public.project_org_principal(uuid,uuid)'::regprocedure);
+ if (length(body)-length(replace(body,anchor,'')))/length(anchor)<>1
+ then raise exception 'Inherited management principal lock contract changed';end if;
+ execute replace(body,anchor,replacement);
+end $mission79_postlock_decision_clock$;
+
 revoke all on function
  public.project_org_retest_release_epoch(uuid,text),
  public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
