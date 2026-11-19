@@ -417,3 +417,49 @@ test('A-QA3 relabeled user praise in selected-fit field is rejected',async()=>{
   assert.equal(returned[0]?.text,forged);
   assert.equal(result.accepted,false);
 });
+
+
+test('A-QA3 wording variants cannot launder unsourced user praise through capability labels',async()=>{
+  const claims=[
+    'User feedback was positive for gpt-5-mini',
+    'The user expressed satisfaction with gpt-5-mini',
+    'The previous completion earned explicit praise from the user',
+  ];
+  for(const claim of claims){
+    for(const field of ['evidence_basis','selection_justification','selected_fit'] as const){
+      const parsed=JSON.parse(selectionJson('gpt-5-mini',
+        'Documented text support; no verified outcome.','documented_capability'));
+      if(field==='selection_justification') parsed.selection_justification=claim;
+      else parsed.quality_qualification[field]=claim;
+      const forged=JSON.stringify(parsed);
+      const {result,returned}=await executeSelectionCase([forged],
+        bestValueSourceEvidence(null,'positive'));
+      assert.equal(returned[0]?.text,forged,
+        field+' must return actual JSON for: '+claim);
+      assert.equal(returned.length,3,
+        field+' must reject on all bounded parser attempts: '+claim);
+      assert.equal(result.accepted,false,
+        field+' cannot claim other-model praise: '+claim);
+    }
+  }
+});
+
+test('A-QA3 feedback wording and polarity must match the selected model, including justification',async()=>{
+  const source=bestValueSourceEvidence('negative');
+  const parsed=JSON.parse(selectionJson('gpt-5-mini',
+    'User criticized selected model; source-mini','attributed_feedback'));
+  parsed.selection_justification='User feedback was positive for gpt-5-mini';
+  const falsePositive=JSON.stringify(parsed);
+  const rejected=await executeSelectionCase([falsePositive],source);
+  assert.equal(rejected.returned[0]?.text,falsePositive);
+  assert.equal(rejected.result.accepted,false,
+    'negative direct feedback cannot justify positive claims under a different word order');
+  assert.equal(rejected.returned.length,3);
+
+  const honest=selectionJson('gpt-5-mini',
+    'User feedback was negative for gpt-5-mini; source-mini','attributed_feedback');
+  const accepted=await executeSelectionCase([honest],source);
+  assert.equal(accepted.returned.length,1);
+  assert.equal(accepted.result.accepted,true,
+    'honest cited negative feedback should remain eligible for comparison');
+});
