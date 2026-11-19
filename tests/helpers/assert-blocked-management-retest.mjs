@@ -1253,17 +1253,12 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const originalFutureReceipt=(await first.query(
    'select cutoff,organization_hash,authorization_id from project_retest_future_window_receipts where project_id=$1',[project])).rows[0];
   const originalLeaseUntil=(await first.query(
-   'select lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0].lease_until;
+   'select lease_until::text lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0].lease_until;
   const receiptHash=async()=> (await first.query(
    "select md5((select to_jsonb(q)::text from project_retest_future_window_receipts q where q.project_id=$1)||"+
    "(select to_jsonb(b)::text from project_retest_claim_release_receipts b where b.project_id=$1)) h",
    [project])).rows[0].h;
   const originalReceiptHash=await receiptHash();
-  const raceCommands=JSON.stringify([{action:'plan',purpose:'Preserve the approved plan',
-   direction:'Continue existing approved delivery and independent QA',
-   outcomes:[{criterion:'Existing approved plan remains valid',verification:'Current source authority and plan are unchanged'}],
-   milestones:[{objective:'Only the owner-approved original milestone'}],
-   organizations:['game_delivery','independent_qa']}]);
   // These are deterministic no-network management commands, not inference.
   // Use existing saved plan contents so a successful pre-expiry decision has
   // a legitimate shape rather than relying on input validation failure.
