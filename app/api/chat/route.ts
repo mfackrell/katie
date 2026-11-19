@@ -472,7 +472,7 @@ function sourceBoundObjectiveContinuityGuidance(input: {
       feedback.source.textExcerpt!==message.slice(0,600) ||
       feedback.applicableToOngoingObjective===false) return "";
   // Latest explicit subject/modality change outranks a former conversation goal.
-  if (intent==="image-generation" || intent==="video-generation" ||
+  if (intent==="image-generation" ||
       /^(?:\s*)(?:new topic\s*:|change of subject\s*:|switching (?:topics|gears)\s*:)/i.test(message) ||
       /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message)) return "";
   if (feedback.target.status!=="attributed" ||
