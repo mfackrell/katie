@@ -269,7 +269,8 @@ async function executeSelectionCase(responses: string[], evidenceData = bestValu
       routing_mode:'best_value',prompt:'Continue our creative conversation with initiative.',
       intent:'assistant-reflection',modalityFlags:{has_images:false,has_video_input:false},
       hardRouteContext:{hard_rule_applied:false,rule:'none'},preferenceProfile:{},
-      candidates,decisionProviders,registryLookup:registeredModels(),
+      candidates,decisionProviders,registryLookup:new Map(
+        (registeredModels().get('openai')??[]).map(item=>['openai:'+item.model_id,item])),
       requestEvidence:evidenceData
     } as unknown as Parameters<typeof chooseRoutingWithLLM>[0]));
     assert.equal(returned.length,attempt,'each attempted model must return its mocked JSON');
@@ -289,7 +290,7 @@ test('A-QA1 wrong-model praise is rejected, and a corrected documented selection
   assert.equal(returned[0].text,wrong,'the original wrong-source selection reached the parser');
   assert.equal(returned[1].corrected,true,'second request carried correction instructions');
   assert.equal(result.accepted,true,'valid documented-capability correction must be accepted');
-  assert.equal(result.accepted ? result.selectedModel : null,'gpt-5-mini');
+  assert.equal(result.accepted ? result.selected.modelId : null,'gpt-5-mini');
 });
 
 test('A-QA1 same-model negative and ambiguous evidence cannot be described as praise',async()=>{
@@ -317,6 +318,7 @@ test('A-QA1 true selected-model positive evidence can qualify a cited selection'
 test('A-QA1 actual invalid JSON is bounded to 3 decisions with one correction',async()=>{
   const {result,returned}=await executeSelectionCase(['{not-json']);
   assert.equal(result.accepted,false);
+  if(result.accepted) assert.fail('An invalid selection must fail closed');
   assert.equal(result.reason,'all_decision_providers_failed');
   assert.equal(returned.length,3,'initial, one retry, and one alternate only');
   assert.deepEqual(returned.map(x=>x.modelId),['gpt-5-mini','gpt-5-mini','gpt-5.4']);
@@ -327,6 +329,7 @@ test('A-QA1 actual JSON with an ineligible provider:model pair is bounded to 3',
   const invalid=selectionJson('nonexistent-model','Documented support','documented_capability');
   const {result,returned}=await executeSelectionCase([invalid]);
   assert.equal(result.accepted,false);
+  if(result.accepted) assert.fail('An invalid selection must fail closed');
   assert.equal(result.reason,'all_decision_providers_failed');
   assert.equal(returned.length,3);
   assert.ok(returned.every(x=>x.text===invalid),'valid JSON with invalid model was returned');
