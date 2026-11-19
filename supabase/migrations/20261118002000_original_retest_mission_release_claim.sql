@@ -121,6 +121,8 @@ create table public.project_retest_claim_release_receipts (
  prior_release_sha text not null check(prior_release_sha ~ '^[a-f0-9]{40}$'),
  retest_release_sha text not null check(retest_release_sha ~ '^[a-f0-9]{40}$'),
  bound_release_sha text not null check(bound_release_sha ~ '^[a-f0-9]{40}$' and bound_release_sha<>prior_release_sha),
+ bound_deployment_id text not null check(bound_deployment_id ~ '^dpl_[A-Za-z0-9]+$'),
+ bound_release_generation bigint not null check(bound_release_generation>0),
  scope_hash text not null check(scope_hash ~ '^[a-f0-9]{64}$'),
  cutoff timestamptz not null,
  historical_missions integer not null check(historical_missions=79),
@@ -723,7 +725,12 @@ begin
    or not project_org_retest_renewed_assignment(m.id,j.id)
   then raise exception 'Recorded future window state or production SHA changed';end if;
   st:=case when b.project_id is not null then 'bound' else 'authorized' end;
-  if st='bound' and (b.bound_release_sha is distinct from p_release or p.status<>'running' or m.status<>'running')
+  if st='bound' and (b.bound_release_sha is distinct from p_release or p.status<>'running' or m.status<>'running'
+   or not exists(select 1 from project_retest_production_release_gate gate
+      where gate.project_id=p.id and gate.state='active'
+       and gate.release_sha=b.bound_release_sha
+       and gate.deployment_id=b.bound_deployment_id
+       and gate.generation=b.bound_release_generation))
    then raise exception 'Already-bound exact release changed';end if;
   if st='authorized' and (p.status<>'blocked' or m.status<>'blocked')
    then raise exception 'Recorded window may not auto-restart management';end if;
@@ -926,6 +933,11 @@ begin
  then raise exception 'Historical mission 79 or approved renewed source changed';end if;
  if b.project_id is not null then
   if b.bound_release_sha is distinct from p_release or m.status<>'running' or p.status<>'running'
+   or not exists(select 1 from project_retest_production_release_gate gate
+      where gate.project_id=p.id and gate.state='active'
+       and gate.release_sha=b.bound_release_sha
+       and gate.deployment_id=b.bound_deployment_id
+       and gate.generation=b.bound_release_generation)
   then raise exception 'Already bound mission release state changed';end if;
   return jsonb_build_object('projectId',p.id,'stage','bound','releaseSha',p_release,
     'missionId',m.id,'assignmentId',j.id,'authorizationId',q.authorization_id,
@@ -992,21 +1004,24 @@ begin
  where id=p_mission and project_id=p.id and status='blocked';
  insert into project_retest_claim_release_receipts(
   project_id,owner_id,window_id,source_mission_id,mission_id,assignment_id,
-  prior_release_sha,retest_release_sha,bound_release_sha,scope_hash,
-  cutoff,historical_missions,bound_at)
+  prior_release_sha,retest_release_sha,bound_release_sha,bound_deployment_id,
+  bound_release_generation,scope_hash,cutoff,historical_missions,bound_at)
  values(p.id,p_owner,q.authorization_id,r.source_mission_id,p_mission,p_assignment,
-  r.prior_release_sha,r.release_sha,p_release,p.approved_hash,q.cutoff,79,stamp);
+  r.prior_release_sha,r.release_sha,p_release,p_deployment,p_epoch,
+  p.approved_hash,q.cutoff,79,stamp);
  if not project_org_retest_claim_release_authorized(p.id,p_release)
  then raise exception 'Recorded source-bound release failed original protection gates';end if;
  insert into project_events(project_id,event,data) values(p.id,'mission79_new_window_release_bound',
   jsonb_build_object('ownerId',p_owner,'newOwnerWindowId',q.authorization_id,
    'sourceMissionId',r.source_mission_id,'missionId',p_mission,
-   'assignmentId',p_assignment,'releaseSha',p_release,'newCutoff',q.cutoff,
+   'assignmentId',p_assignment,'releaseSha',p_release,
+   'deploymentId',p_deployment,'generation',p_epoch,'newCutoff',q.cutoff,
    'originalCutoff',r.cutoff,'scopeHash',p.approved_hash,
    'historicalMissions',79,'maxMissions',96,'tokenAllowance',600000,
    'boundAt',stamp));
  return jsonb_build_object('projectId',p.id,'stage','bound','releaseSha',p_release,
    'missionId',p_mission,'assignmentId',p_assignment,
+   'deploymentId',p_deployment,'releaseGeneration',p_epoch,
    'authorizationId',q.authorization_id,'cutoff',q.cutoff,
    'scopeHash',p.approved_hash,'historicalMissions',79,'maxMissions',96,
    'tokenAllowance',600000,'boundAt',stamp,'existing',false);
@@ -1038,7 +1053,11 @@ create function public.project_org_retest_claim_release_authorized_epoch(
   and exists(select 1 from public.project_retest_production_release_gate g
    where g.project_id=p_project and g.release_sha=p_release
     and g.state='active' and g.alias_name='katie-mu.vercel.app'
-    and g.generation=p_generation and g.deployment_id=p_deployment);
+    and g.generation=p_generation and g.deployment_id=p_deployment
+    and exists(select 1 from project_retest_claim_release_receipts receipt
+     where receipt.project_id=p_project and receipt.bound_release_sha=p_release
+      and receipt.bound_release_generation=p_generation
+      and receipt.bound_deployment_id=p_deployment));
 $fn$;
 
 -- Clone the installed, source-qualified production claim implementation,
@@ -1097,6 +1116,7 @@ begin
   and m79.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
   and j79.mission_id=m79.id and receipt.mission_id=m79.id
   and receipt.assignment_id=j79.id and receipt.bound_release_sha=p_release
+  and receipt.bound_release_generation=p_epoch and receipt.bound_deployment_id=p_deployment
   and fence.release_sha=p_release and fence.generation=p_epoch
   and fence.deployment_id=p_deployment and fence.state='active'
   and fence.alias_name='katie-mu.vercel.app'
