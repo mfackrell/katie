@@ -1092,6 +1092,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('savepoint late_provider_receipt_after_cutoff');
   try{
    await first.query('reset role');
+   // The preceding settled-attempt test left the gate CLOSED. Restore its
+   // active generation inside this rolled-back fixture before testing CLOSE.
+   const openedForLateReply=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+    [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
+   assert.equal(openedForLateReply.state,'active');
    await first.query("set local session_replication_role = 'replica'");
    await first.query("update work_projects set deadline=clock_timestamp()-interval '2 minutes' where id=$1",[project]);
    await first.query("update project_provider_execution set deadline=clock_timestamp()-interval '2 minutes' where project_id=$1",[project]);
