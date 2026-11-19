@@ -513,7 +513,7 @@ export async function getMessageHistoryPage(
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit + 1)
-    .returns<MessageRow[]>();
+    .returns<MessageRow>();
   if (error) throw new Error(`Failed to load history for chat ${chatId}: ${error.message}`);
   const rows = data ?? [];
   return {
