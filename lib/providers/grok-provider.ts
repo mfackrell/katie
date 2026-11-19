@@ -613,7 +613,11 @@ ${getKatieReasoningExplainerStatement()}` }
 
       return {
         text: completion.choices[0]?.message?.content ?? "",
-        ...(params.boundedFrameObservations ? { truncated: completion.choices[0]?.finish_reason === "length" } : {}),
+        // Preserve bounded video-frame truncation; ordinary chat exposes the
+        // settled finish reason so exhausted paid requests cannot be repeated.
+        ...(params.boundedFrameObservations
+          ? { truncated: completion.choices[0]?.finish_reason === "length" }
+          : { finishReason: completion.choices[0]?.finish_reason ?? undefined }),
         model: completion.model || selectedModel,
         provider: this.name
       };

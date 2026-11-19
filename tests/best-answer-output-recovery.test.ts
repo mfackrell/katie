@@ -6,6 +6,8 @@ import { assertProviderOutput, ProviderResponseError } from "../lib/providers/re
 import { runWithRefusalFallback } from "../lib/router/refusal-detection";
 import { estimatePreparedRequest, prepareStandaloneRequest } from "../lib/standalone-accounting/estimate";
 import type { ChatGenerateParams, ProviderResponse } from "../lib/providers/types";
+import { OpenAiProvider } from "../lib/providers/openai-provider";
+import { GrokProvider } from "../lib/providers/grok-provider";
 
 const twenty = Array.from({length: 20}, (_, i) =>
   `${i + 1}. Evaluate the independently verified executive qualification, challenge unsupported claims, and recommend corrections from a private equity operating partner perspective.`).join("\n");
@@ -127,4 +129,120 @@ test("other providers and HTTP rejection remain separately classified", () => {
   assert.equal(summarizeProviderOutcome(JSON.stringify({error:{code:"context_length_exceeded"}}),
     "openai","/v1/responses",false,400).normalizedFailureReason,"CONTEXT_CAPACITY_EXHAUSTED");
   assert.equal(summarizeProviderOutcome("","openai","/v1/responses",false,504).normalizedFailureReason,"TIMEOUT");
+});
+
+// B1: Fake the SDK client; no provider API, paid inference, or live billing.
+test("OpenAI and Grok Chat Completions length cannot repeat empty or partial paid answers", async () => {
+  for (const providerName of ["openai", "grok"] as const) {
+    for (const partialText of ["", "unfinished executive review"]) {
+      const modelId = providerName === "openai" ? "gpt-4o" : "grok-4.7";
+      const provider = providerName === "openai" ? new OpenAiProvider("offline")
+        : new GrokProvider("offline");
+      if (providerName === "grok") provider.listModels = async () => [modelId];
+      let transmissions = 0;
+      Reflect.set(provider, "client", { chat: { completions: { create: async () => {
+        transmissions += 1;
+        return { model:modelId, choices:[{ finish_reason:"length",
+          message:{role:"assistant",content:partialText} }] };
+      } } } });
+      await assert.rejects(runWithRefusalFallback({
+        attempts:["same-paid-attempt"],
+        runAttempt:async()=>provider.generate({...base,user:"Finish the review.",modelId}),
+        shouldRetryRefusal:true,detectRefusal:()=>false,
+        rerouteOnError:async()=>{throw Error("exhaustion cannot reroute or repeat");}
+      }), (error:unknown)=>error instanceof ProviderResponseError &&
+        error.code==="OUTPUT_TOKEN_EXHAUSTED" && error.retryable===false);
+      assert.equal(transmissions,1,providerName+" must not dispatch twice");
+    }
+  }
+});
+
+test("Chat Completions stop is propagated and the answer remains usable", async () => {
+  for (const providerName of ["openai","grok"] as const) {
+    const modelId = providerName === "openai" ? "gpt-4o" : "grok-4.7";
+    const provider = providerName === "openai" ? new OpenAiProvider("offline")
+      : new GrokProvider("offline");
+    if (providerName === "grok") provider.listModels = async () => [modelId];
+    Reflect.set(provider,"client",{chat:{completions:{create:async()=>
+      ({model:modelId,choices:[{finish_reason:"stop",
+        message:{role:"assistant",content:"The assessment is complete."}}]})}}});
+    const reply=await provider.generate({...base,user:"Finish.",modelId});
+    assert.equal(reply.finishReason,"stop");
+    assert.doesNotThrow(()=>assertProviderOutput(reply));
+  }
+});
+
+test("Grok bounded video-frame truncation remains observable without changing ordinary chat safety", async () => {
+  const grok=new GrokProvider("offline");
+  grok.listModels=async()=>["grok-4.7"];
+  Reflect.set(grok,"client",{chat:{completions:{create:async()=>({
+    model:"grok-4.7",choices:[{finish_reason:"length",message:{content:"frame partial"}}]
+  })}}});
+  const reply=await grok.generate({...base,modelId:"grok-4.7",boundedFrameObservations:true});
+  assert.equal(reply.truncated,true);
+  assert.equal(reply.finishReason,undefined);
+});
+
+test("OpenAI Chat Completions stream rejects length or missing finish reason without retransmission", async () => {
+  for (const finishReason of ["length","stop",null] as const) {
+    for (const value of ["","Partial assessment"]) {
+      const provider = new OpenAiProvider("offline");
+      let transmissions=0;
+      Reflect.set(provider,"client",{chat:{completions:{create:async()=>{
+        transmissions += 1;
+        return { async *[Symbol.asyncIterator]() {
+          yield {model:"gpt-4o",choices:[{delta:{content:value},finish_reason:null}]};
+          if (finishReason) yield {model:"gpt-4o",
+            choices:[{delta:{},finish_reason:finishReason}]};
+        }};
+      }}}});
+      const run=()=>runWithRefusalFallback({
+        attempts:["same-stream"],
+        runAttempt:async()=>provider.generateStream({...base,user:"Finish.",modelId:"gpt-4o"},{onTextDelta:()=>{}}),
+        shouldRetryRefusal:true,detectRefusal:()=>false
+      });
+      if (finishReason === "stop" && value) {
+        const {result}=await run();
+        assert.equal(result.finishReason,"stop");
+      } else {
+        const expected=finishReason===null ? "PROVIDER_TERMINAL_MISSING" :
+          finishReason==="length" ? "OUTPUT_TOKEN_EXHAUSTED" : "COMPLETED_EMPTY_RESPONSE";
+        await assert.rejects(run(),(error:unknown)=>error instanceof ProviderResponseError &&
+          error.code===expected && error.retryable===false);
+      }
+      assert.equal(transmissions,1,"stream completion is not retried");
+    }
+  }
+});
+
+test("Anthropic SSE diagnostics require message_stop beyond message_delta", () => {
+  const events = [
+    { type:"message_start",message:{usage:{input_tokens:10,output_tokens:0}} },
+    { type:"content_block_delta",delta:{type:"text_delta",text:"Unfinished private review"} },
+    { type:"message_delta",delta:{stop_reason:"end_turn"},usage:{output_tokens:7} }
+  ];
+  const toSse=(arr:unknown[])=>arr.map(v=>"data: "+JSON.stringify(v)+"\n\n").join("");
+  const partial=summarizeProviderOutcome(toSse(events),"anthropic","/v1/messages",true,200);
+  const doneOnly=summarizeProviderOutcome(toSse(events)+"data: [DONE]\n\n",
+    "anthropic","/v1/messages",true,200);
+  const completed=summarizeProviderOutcome(toSse([...events,{type:"message_stop"}]),
+    "anthropic","/v1/messages",true,200);
+  assert.equal(partial.streamComplete,false);
+  assert.equal(doneOnly.streamComplete,false,"Anthropic has no [DONE] terminal");
+  assert.equal(completed.streamComplete,true);
+  assert.equal(completed.providerFinishReason,"end_turn");
+  assert.doesNotMatch(JSON.stringify(partial),/Unfinished private review/);
+});
+
+test("Grok Chat Completions SSE diagnostics classify length with partial visible text", () => {
+  const chunks=[
+    {choices:[{delta:{content:"partial"},finish_reason:null}]},
+    {choices:[{delta:{},finish_reason:"length"}]},
+  ];
+  const body=chunks.map(v=>"data: "+JSON.stringify(v)+"\n\n").join("")+"data: [DONE]\n\n";
+  const result=summarizeProviderOutcome(body,"grok","/v1/chat/completions",true,200);
+  assert.equal(result.streamComplete,true);
+  assert.equal(result.providerFinishReason,"length");
+  assert.equal(result.normalizedFailureReason,"OUTPUT_TOKEN_EXHAUSTED");
+  assert.equal(result.hasVisibleOutput,true);
 });

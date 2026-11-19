@@ -18,9 +18,21 @@ export function assertProviderOutput(result: ProviderResponse): void {
       "The model's response was stopped by provider safety filtering.", false, "PROVIDER_REFUSAL");
     throw new ProviderResponseError("The provider reported an incomplete answer.", false, "PROVIDER_INCOMPLETE");
   }
+  // Chat Completions length is a settled, paid incomplete response, even
+  // when some visible text was streamed. Never classify it as retryable.
+  if ((result.provider === "openai" || result.provider === "grok") &&
+      result.finishReason === "length")
+    throw new ProviderResponseError(
+      "The model reached its output limit without completing. Do not repeat this paid attempt.",
+      false, "OUTPUT_TOKEN_EXHAUSTED");
+  if ((result.provider === "openai" || result.provider === "grok") &&
+      result.finishReason === "content_filter")
+    throw new ProviderResponseError("Provider content filtering stopped the answer.", false, "PROVIDER_REFUSAL");
   if (result.content?.some(part => /^(?:refusal|output_refusal)$/i.test(part.type)))
     throw new ProviderResponseError("The provider declined this request.", false, "PROVIDER_REFUSAL");
-  if (result.responseStatus === "completed" && !result.text?.trim() &&
+  const settledCompletion = result.responseStatus === "completed" ||
+    ((result.provider === "openai" || result.provider === "grok") && result.finishReason === "stop");
+  if (settledCompletion && !result.text?.trim() &&
       !result.content?.some(part => /image|video|audio/i.test(part.type) || Boolean(part.text?.trim())))
     throw new ProviderResponseError(
       "The provider completed without any visible answer or usable media.", false, "COMPLETED_EMPTY_RESPONSE");

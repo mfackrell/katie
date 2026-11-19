@@ -52,32 +52,38 @@ export function summarizeProviderOutcome(
 ): ProviderOutcomeDiagnostic {
   // Provider and endpoint are deliberately not persisted with arbitrary
   // response text; the surrounding accounting receipt already binds both.
-  void provider;
   void endpoint;
   let terminal: Record<string, unknown> = {};
-  let sawDone = !streaming, sawText = false;
+  let sawDone = !streaming, sawText = false, sawAnthropicFinalDelta = false;
   try {
     if (!streaming) terminal = record(JSON.parse(body));
     else for (const block of body.replace(/\r\n/g, "\n").split("\n\n")) {
       const data = block.split("\n").filter(line => line.startsWith("data:"))
         .map(line => line.slice(5).trim()).join("\n");
-      if (data === "[DONE]") { sawDone = true; continue; }
+      // [DONE] is an OpenAI/xAI SSE marker, not an Anthropic messages terminal.
+      if (data === "[DONE]") { if (provider !== "anthropic") sawDone = true; continue; }
       if (!data) continue;
       const event = record(JSON.parse(data));
       if (containsVisibleText(event)) sawText = true;
       const kind = event.type;
-      if (kind === "response.completed" || kind === "response.incomplete" ||
-          kind === "response.failed" || kind === "message_stop" || kind === "message_delta")
-        { terminal = record(event.response ?? event); sawDone = true; }
-      else if (Array.isArray(event.choices) || event.candidates || event.usageMetadata) terminal = event;
+      if (kind === "response.completed" || kind === "response.incomplete" || kind === "response.failed") {
+        terminal = record(event.response ?? event); sawDone = true;
+      } else if (kind === "message_delta") {
+        // Anthropic's final delta includes stop reason/usage, but isn't final.
+        terminal = event;
+        sawAnthropicFinalDelta = typeof record(event.delta).stop_reason === "string";
+      } else if (kind === "message_stop") {
+        if (provider !== "anthropic" || sawAnthropicFinalDelta) sawDone = true;
+        if (!Object.keys(terminal).length) terminal = event;
+      } else if (Array.isArray(event.choices) || event.candidates || event.usageMetadata) terminal = event;
     }
-  } catch { /* malformed bodies never become persisted raw payloads */ }
+  } catch { if (streaming) sawDone = false; /* malformed streams cannot prove completion */ }
   const status = known(terminal.status, statuses);
   const incomplete = known(record(terminal.incomplete_details).reason, reasons);
   const choice = (Array.isArray(terminal.choices) ? terminal.choices : [])[0];
   const candidate = (Array.isArray(terminal.candidates) ? terminal.candidates : [])[0];
   const finish = known(record(choice).finish_reason ?? record(candidate).finishReason ??
-    terminal.stop_reason, finishes);
+    terminal.stop_reason ?? record(terminal.delta).stop_reason, finishes);
   const usage = record(terminal.usage);
   const reasoning = nonnegative(record(usage.output_tokens_details).reasoning_tokens ??
     record(usage.completion_tokens_details).reasoning_tokens ??
@@ -104,6 +110,6 @@ export function summarizeProviderOutcome(
   else if (status === "completed" && !visible) failure = "NO_VISIBLE_OUTPUT";
   return {providerResponseStatus: status, providerFinishReason: finish,
     providerIncompleteReason: incomplete, reasoningTokens: reasoning,
-    hasVisibleOutput: visible, streamComplete: sawDone || status === "completed" || status === "incomplete",
+    hasVisibleOutput: visible, streamComplete: sawDone,
     normalizedFailureReason: failure, safeProviderErrorCode: errorCode};
 }

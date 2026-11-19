@@ -237,7 +237,7 @@ function classifyModel(modelId: string): ModelClassification {
 }
 
 function toProviderResponse(
-  response: Pick<ProviderResponse, "text" | "content" | "usage" | "responseStatus" | "incompleteReason" | "providerResponseId">,
+  response: Pick<ProviderResponse, "text" | "content" | "usage" | "responseStatus" | "incompleteReason" | "providerResponseId" | "finishReason">,
   model: string,
   provider: OpenAiProvider["name"]
 ): ProviderResponse {
@@ -249,7 +249,8 @@ function toProviderResponse(
     usage: response.usage,
     responseStatus: response.responseStatus,
     incompleteReason: response.incompleteReason,
-    providerResponseId: response.providerResponseId
+    providerResponseId: response.providerResponseId,
+    finishReason: response.finishReason
   };
 }
 
@@ -303,7 +304,10 @@ export class OpenAiProvider implements LlmProvider {
       prompt: `IDENTITY:\nYour name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}\n\nCORE_PERSONA: ${params.persona}\n\n${MATH_EXECUTION_PROTOCOL}\n\nUser request:\n${params.user}`
     }, { signal: params.signal, maxRetries: 0 });
 
-    return toProviderResponse({ text: completion.choices[0]?.text ?? "" }, completion.model || selectedModel, this.name);
+    return toProviderResponse({
+      text: completion.choices[0]?.text ?? "",
+      finishReason: completion.choices[0]?.finish_reason ?? undefined
+    }, completion.model || selectedModel, this.name);
   }
 
   private async generateViaChatCompletions(
@@ -318,7 +322,10 @@ export class OpenAiProvider implements LlmProvider {
       messages: toChatMessages(params)
     }, { signal: params.signal, maxRetries: 0 });
 
-    return toProviderResponse({ text: completion.choices[0]?.message?.content ?? "" }, completion.model || selectedModel, this.name);
+    return toProviderResponse({
+      text: completion.choices[0]?.message?.content ?? "",
+      finishReason: completion.choices[0]?.finish_reason ?? undefined
+    }, completion.model || selectedModel, this.name);
   }
 
   private async generateViaResponses(
@@ -381,10 +388,13 @@ export class OpenAiProvider implements LlmProvider {
 
     let fullText = "";
     let responseModel = selectedModel;
+    let finishReason: string | undefined;
 
     for await (const chunk of stream) {
       responseModel = chunk.model || responseModel;
-      const delta = chunk.choices[0]?.delta?.content ?? "";
+      const choice = chunk.choices[0];
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice?.delta?.content ?? "";
       if (!delta) {
         continue;
       }
@@ -393,7 +403,13 @@ export class OpenAiProvider implements LlmProvider {
       await handlers.onTextDelta?.(delta);
     }
 
-    return toProviderResponse({ text: fullText }, responseModel, this.name);
+    if (!finishReason) {
+      // EOF is not proof a paid Chat Completions stream completed.
+      throw new ProviderResponseError(
+        "Chat Completions stream ended without a provider finish reason.",
+        false, "PROVIDER_TERMINAL_MISSING");
+    }
+    return toProviderResponse({ text: fullText, finishReason }, responseModel, this.name);
   }
 
   private async generateStreamViaResponses(
