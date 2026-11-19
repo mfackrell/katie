@@ -31,10 +31,10 @@ test('current-turn feedback distinguishes praise, criticism, mixed feedback and 
   assert.equal(classifyCurrentTurnFeedback('Continue the conversation without menus.').polarity,'none');
 });
 
-function fakeDatabase(options?:{lastRole?:string;priorStatus?:string;priorActor?:string;currentExists?:boolean}){
+function fakeDatabase(options?:{lastRole?:string;priorStatus?:string;priorActor?:string;currentExists?:boolean; priorCompletedAt?:string|null; savedModel?:string; requestModel?:string; auditModel?:string}){
   const rows:Record<string,unknown>={
     standalone_workflows:{created_at:'2026-11-18T22:10:00.000Z'},
-    chat_requests:{request_id:'req-previous',assistant_message_id:'assistant-previous'}
+    chat_requests:{request_id:'req-previous',assistant_message_id:'assistant-previous',assistant_model:options?.requestModel??'gpt-5-mini',completed_at:options?.priorCompletedAt===undefined?'2026-11-18T22:09:59.000Z':options.priorCompletedAt}
   };
   const seen:Array<{table:string;eq:Array<[string,unknown]>;lt:Array<[string,unknown]>}>=[];
   const db={from:(table:string)=>{
@@ -44,10 +44,10 @@ function fakeDatabase(options?:{lastRole?:string;priorStatus?:string;priorActor?
       select:()=>query,eq:(key:string,val:unknown)=>{state.eq.push([key,val]);return query;},
       lt:(key:string,val:unknown)=>{state.lt.push([key,val]);return query;},
       order:()=>query,
-      limit:async()=>({data:table==='messages'?[{id:'assistant-previous',role:options?.lastRole??'assistant'}]:[],error:null}),
+      limit:async()=>({data:table==='messages'?[{id:'assistant-previous',role:options?.lastRole??'assistant',model:options?.savedModel??'gpt-5-mini'}]:[],error:null}),
       maybeSingle:async()=>({data:table==='standalone_workflows'
         ? state.eq.some(([key,val])=>key==='request_id'&&val==='req-previous')
-          ? {status:'completed',checkpoints:{'routing-delivery-audit:v1':{provider:'openai',model:'gpt-5-mini',classifiedIntent:'social-emotional'}}}
+          ? {status:'completed',checkpoints:{'routing-delivery-audit:v1':{provider:'openai',model:options?.auditModel??'gpt-5-mini',classifiedIntent:'social-emotional'}}}
           : options?.currentExists===false?null:rows.standalone_workflows
         : table==='chat_requests' && options?.priorStatus==='failed'?null:rows[table]??null,error:null}),
     };
@@ -88,6 +88,28 @@ test('prior user turn or unverified prior assistant cannot become an invented fe
     }finally{q.mock.restore();}
   }
   assert.equal(await deriveCurrentTurnFeedbackProvenance({message:'That was great.'}),null);
+});
+
+test('feedback provenance rejects late completion and mismatched saved/delivery models',async()=>{
+  const invalid=[
+    {priorCompletedAt:'2026-11-18T22:10:01.000Z'}, // response completed after current request began
+    {priorCompletedAt:null},                       // cannot establish settled ordering
+    {savedModel:'gpt-5.4'},                        // saved assistant disagrees with receipt
+    {requestModel:'gpt-5.4'},                      // completed request disagrees with audit
+    {auditModel:'gpt-5.4'},                        // audit disagrees with saved reply
+  ];
+  for(const opts of invalid){
+    const {db}=fakeDatabase(opts);
+    const q=mock.method(admin,'getSupabaseAdminClient',()=>db as unknown as ReturnType<typeof admin.getSupabaseAdminClient>);
+    try{
+      const feedback=await runWithStandaloneAccounting(owner,()=>deriveCurrentTurnFeedbackProvenance({
+        message:'Katie, that was terrible. You repeated yourself and failed to take initiative.'
+      }));
+      assert.equal(feedback?.target.status,'unattributed',JSON.stringify(opts));
+      assert.equal(feedback?.target.status==='unattributed' ? feedback.target.reason : '',
+        'missing_receipt',JSON.stringify(opts));
+    }finally{q.mock.restore();}
+  }
 });
 
 test('Best Value consumes current negative feedback only for the producing model',async()=>{
