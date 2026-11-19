@@ -62,7 +62,7 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
   // images cannot inherit one another's job or approval on workflow replay.
   const attemptKey='qwen-still:'+sourceHash+':'+digest(userPrompt);
   const ledger=(deps.ledgerFactory??createStandaloneLedger)();
-  if(!await ledger.authorizeScope(context.userId,context.actorId,context.chatId))throw failure('scope_denied','Standalone image spending authorization denied.');
+  if(!await ledger.authorizeScope(context.userId,context.actorId,context.chatId))throw failure('scope_denied','Standalone image owner authorization denied.');
   let attempt=await ledger.lookupAttempt(context.userId,context.requestId,attemptKey);
   const estimate={status:'estimated',requestHash:prepared.hash,pricingVersion:policy.version,estimatorVersion:policy.version,
     reservationMicrousd:policy.reservationMicrousd,estimatedCostMicrousd:policy.reservationMicrousd,currency:'USD',isCeiling:false,
@@ -80,7 +80,6 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
       reason:'Bounded Qwen still-image observation; estimated infrastructure exposure'});
   }
   const annotate=(error:Error)=>Object.assign(error,{attemptId:attempt!.id});
-  if(attempt.state==='paused')throw annotate(failure('approval_required','Qwen image analysis is paused for spending approval.'));
   const checkActive=async()=>{
     if(context.signal?.aborted)throw annotate(failure('runpod_in_progress','Qwen analysis was interrupted. Its existing job is retained; resume polls it without resubmitting.'));
     if(!await ledger.authorizeScope(context.userId,context.actorId,context.chatId))throw annotate(failure('scope_denied','Standalone image access was revoked.'));
@@ -99,7 +98,7 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
     if(attempt.response_checkpoint.status!==200)throw new Error('RunPod rejected this saved image submission; it was not resent.');
     return observation(savedJob(attempt)!,sourceHash);
   }
-  if(attempt.state==='uncertain'&&attempt.response_checkpoint&&await ledger.uncertainExposureAccepted(context.userId,attempt.id)){
+  if(attempt.state==='uncertain'&&attempt.response_checkpoint){
     deps.onStatus?.('Using saved Qwen observation');
     if(attempt.response_checkpoint.status!==200)throw new Error('The acknowledged saved Qwen rejection cannot provide output; separate image escalation is required.');
     return observation(savedJob(attempt)!,sourceHash);
@@ -108,8 +107,8 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
   let jobId=attempt.provider_request_id;
   if(jobId&&!JOB_ID.test(jobId))throw annotate(failure('runpod_job_mismatch','Saved Qwen job identifier is invalid.'));
   if(!jobId){
-    if(attempt.state==='uncertain'&&await ledger.uncertainExposureAccepted(context.userId,attempt.id))throw new Error('The owner accepted the unknown Qwen submission exposure. No Qwen output is available and this attempt will not be resent; separate image escalation is required.');
-    if(attempt.state!=='reserved')throw annotate(failure('outcome_unknown','Qwen submission may already have been sent, but no job identity was saved. The reservation remains held; it will not be resubmitted.'));
+    if(attempt.state==='uncertain')throw new Error('Original Qwen submission outcome unknown. It will not be resent; a different authorized provider can continue.');
+    if(attempt.state!=='reserved'&&attempt.state!=='paused')throw annotate(failure('outcome_unknown','Qwen submission may already have been sent; it will not be resubmitted.'));
     await checkActive();
     const claimed=await ledger.claimDispatch(context.userId,attempt.id);
     if(!claimed)throw annotate(failure('dispatch_conflict','Qwen image analysis cannot be submitted again. Refresh the saved job state.'));
@@ -150,7 +149,7 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
         errorCode:error&&typeof error==='object'&&'code' in error&&typeof error.code==='string'?error.code:null,
       });
       await ledger.markUncertain(context.userId,attempt.id,'Qwen submission outcome or job registration is unknown; fixed infrastructure exposure remains held.').catch(()=>{});
-      if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))throw new Error('Qwen outcome is unknown; the full reserved exposure is authorized and retained. This attempt will not be resent; separate image escalation is required.');
+      // Uncertainty is reported; no owner spending approval is needed for a different authorized provider.
       throw annotate(failure('outcome_unknown','Qwen submission outcome is unknown. The full reservation is retained and this attempt will not be resubmitted.'));
     }
   }
