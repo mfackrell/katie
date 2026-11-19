@@ -322,6 +322,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [originalJob.id]);
   await first.query('set role service_role');
   const executionRelease='d'.repeat(40),unboundRelease='e'.repeat(40);
+  // All release-gate transitions must present the caller-observed generation.
+  // The five-argument SQL guard independently rechecks it under the state lock.
+  const setGate=async(args,observedGeneration)=>{
+   const actual=(await first.query('select coalesce((select generation from project_retest_production_release_gate where project_id=$1),0)::bigint g',[args[0]])).rows[0].g;
+   const expected=observedGeneration??Number(actual);
+   return first.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5) g',[...args,expected]);
+  };
   // Negative release probes must not leave unrelated fixture workers leased:
   // doing so fills the unchanged three-worker global cap before mission 79.
   const releaseEpoch=async release=>(await first.query(
@@ -425,12 +432,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   // open the canonical production epoch only after verifying READY on alias.
   // All gate transitions here are in disposable native PostgreSQL.
   await first.query('set role service_role');
-  await rejected(()=>first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+  await rejected(()=>setGate(
    [project,executionRelease,'dpl_NativeFixture79','active']),/permission denied/i);
   await first.query('reset role');
-  const activeGate=(await first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+  const activeGate=(await setGate(
    [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
   assert.equal(activeGate.state,'active');
   const activeEpoch=(await first.query('select project_org_retest_release_epoch($1,$2) e',
@@ -604,8 +609,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('savepoint stale_owner_offer_generation');
   try{
    await first.query('reset role');
-   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','closed']);
-   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','active']);
+   await setGate([project,executionRelease,'dpl_NativeFixture79','closed']);
+   await setGate([project,executionRelease,'dpl_NativeFixture79','active']);
    await first.query('set role service_role');
    await rejected(approve,/Observed canonical release epoch or deployment changed under owner write lock/i);
    const reopenedOffer=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) o',offerArgs)).rows[0].o;
@@ -784,8 +789,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('savepoint stale_owner_binding_generation');
   try{
    await first.query('reset role');
-   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','closed']);
-   await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',[project,executionRelease,'dpl_NativeFixture79','active']);
+   await setGate([project,executionRelease,'dpl_NativeFixture79','closed']);
+   await setGate([project,executionRelease,'dpl_NativeFixture79','active']);
    await first.query('set role service_role');
    await rejected(bind,/Observed canonical release epoch or deployment changed under binding lock/i);
   }finally{
@@ -793,6 +798,30 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('release savepoint stale_owner_binding_generation');
    await first.query('set role service_role');
   }
+  // A delayed operator request from an earlier CLOSE/OPEN generation must
+  // not apply to the newer gate even for an identical SHA/deployment.
+  await first.query('savepoint stale_operator_generation_replay');
+  try{
+   await first.query('reset role');
+   const initial=(await first.query('select generation,state from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
+   const close=(await setGate([project,executionRelease,'dpl_NativeFixture79','closed'],Number(initial.generation))).rows[0].g;
+   assert.equal(close.state,'closed');
+   const reopened=(await setGate([project,executionRelease,'dpl_NativeFixture79','active'],Number(initial.generation)+1)).rows[0].g;
+   assert.equal(reopened.state,'active');
+   const beforeReplay=(await first.query('select generation,state,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
+   const eventCount=(await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_release_gate_transition'",[project])).rows[0].n;
+   await rejected(()=>setGate([project,executionRelease,'dpl_NativeFixture79','closed'],Number(initial.generation)),
+    /Observed release gate generation changed under operator lock/i);
+   await rejected(()=>setGate([project,executionRelease,'dpl_NativeFixture79','active'],Number(initial.generation)+1),
+    /Observed release gate generation changed under operator lock/i);
+   assert.deepEqual((await first.query('select generation,state,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0],beforeReplay);
+   assert.equal((await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_release_gate_transition'",[project])).rows[0].n,eventCount);
+  }finally{
+   await first.query('rollback to savepoint stale_operator_generation_replay');
+   await first.query('release savepoint stale_operator_generation_replay');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_STALE_OPERATOR_GENERATION_REPLAY_REJECTED_PASS');
   console.log('MISSION79_STALE_OWNER_BINDING_EPOCH_REJECTED_PASS');
   await scopeGrantNegative('grant changed between release offer and binding',
    "update project_organization_scope_grants set paths=array['tests/changed-before-binding/'] where node_id=$1",
@@ -891,7 +920,18 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query("set local session_replication_role = 'origin'");
    await first.query('set role service_role');
   });
-  console.log('MISSION79_LEASE_PENDING_PROVIDER_OBJECTIVE_AND_SPEC_DRIFT_NEGATIVES_PASS');
+  await beforeLeaseNegative('Saved director agent drift before lease',async()=>{
+   const other=(await first.query(
+    "select (x->>'id')::uuid id from agent_missions m cross join lateral jsonb_array_elements(m.team) x where m.id=$1 and (x->>'id')::uuid<>(select agent_id from mission_assignments where id=$2) limit 1",
+    [scheduled.missionId,originalJob.id])).rows[0]?.id;
+   assert.ok(other,'Fixture must have an alternative eligible mission-team member to test the agent-binding attack');
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query('update mission_assignments set agent_id=$2 where id=$1',[originalJob.id,other]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+  });
+  console.log('MISSION79_LEASE_PENDING_PROVIDER_OBJECTIVE_SPEC_AND_AGENT_DRIFT_NEGATIVES_PASS');
   const oldContinuationClaim=await isolatedNegativeClaim(priorRelease);
   assert.notEqual(oldContinuationClaim?.job?.id,originalJob.id,
    'Historical continuation release must never reclaim owner-renewed mission79');
@@ -905,7 +945,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    const gateBefore=(await first.query('select state,generation,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
    const receiptBefore=(await first.query('select bound_release_sha,bound_release_generation,bound_deployment_id from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0];
    await first.query('reset role');
-   await rejected(()=>first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   await rejected(()=>setGate(
     [project,executionRelease,'dpl_NativeFixture79','closed']),
     /Bound original mission79 is unleased/i);
    assert.deepEqual((await first.query('select state,generation,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0],gateBefore);
@@ -954,7 +994,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    // Terminally expired, zero-attempt mission now permits the trusted
    // coordinator's exact CLOSE, without creating a replacement grant.
    await first.query('reset role');
-   const afterExpiryClose=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   const afterExpiryClose=(await setGate(
     [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
    assert.equal(afterExpiryClose.state,'closed');
    await first.query('set role service_role');
@@ -1020,7 +1060,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     assert.deepEqual((await first.query('select calls,reserved_tokens,actual_tokens from agent_missions where id=$1',[scheduled.missionId])).rows[0],callsBefore,
      'Terminal settlement must not change paid-call evidence');
     await first.query('reset role');
-    const closed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+    const closed=(await setGate(
      [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
     assert.equal(closed.state,'closed','No stranded release gate after terminal settlement');
     console.log('MISSION79_'+scenario.toUpperCase()+'_ORIGINAL_ATTEMPT_SETTLEMENT_PASS');
@@ -1037,15 +1077,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'select state,generation from project_retest_production_release_gate where project_id=$1',
    [project])).rows[0];
   await first.query('reset role');
-  await rejected(()=>first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+  await rejected(()=>setGate(
    [project,executionRelease,'dpl_NativeFixture79','closed']),
    /Undrained owner-renewed worker attempt/i);
   await first.query('savepoint expired_mission79_claim');
   await first.query("update mission_assignments set status='queued',lease=null,lease_until=null where id=$1",
    [originalJob.id]);
-  await rejected(()=>first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
+  await rejected(()=>setGate(
    [project,executionRelease,'dpl_NativeFixture79','closed']),
    /Undrained owner-renewed worker attempt/i);
   await first.query('rollback to savepoint expired_mission79_claim');
@@ -1061,7 +1099,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   try{
    await pendingRequestFixture();
    await first.query('reset role');
-   await rejected(()=>first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   await rejected(()=>setGate(
     [project,executionRelease,'dpl_NativeFixture79','closed']),
     /Undrained owner-renewed worker attempt or unresolved provider request/i);
    assert.equal((await first.query('select state from project_retest_production_release_gate where project_id=$1',[project])).rows[0].state,'active');
@@ -1069,13 +1107,13 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('rollback to savepoint terminal_failed_pending_request');
    await first.query('release savepoint terminal_failed_pending_request');
   }
-  const settledGate=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+  const settledGate=(await setGate(
    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
   await first.query('savepoint terminal_failed_pending_open');
   try{
    await pendingRequestFixture();
    await first.query('reset role');
-   await rejected(()=>first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',
+   await rejected(()=>setGate(
     [project,executionRelease,'dpl_NativeFixture79','active']),
     /Undrained owner-renewed worker attempt or unresolved provider request/i);
    assert.equal((await first.query('select state from project_retest_production_release_gate where project_id=$1',[project])).rows[0].state,'closed');
@@ -1091,7 +1129,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('reset role');
    // The preceding settled-attempt test left the gate CLOSED. Restore its
    // active generation inside this rolled-back fixture before testing CLOSE.
-   const openedForLateReply=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   const openedForLateReply=(await setGate(
     [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
    assert.equal(openedForLateReply.state,'active');
    await first.query("set local session_replication_role = 'replica'");
@@ -1119,7 +1157,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('set role service_role');
    assert.ok(recorded.resolved_at);assert.equal(recorded.provider_receipt,'Native recorded inference reply');
    await first.query('reset role');
-   const closed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+   const closed=(await setGate(
     [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
    assert.equal(closed.state,'closed','Settled response permits release coordination');
    console.log('MISSION79_LATE_PROVIDER_RECEIPT_EXACT_ONE_TIME_SETTLEMENT_PASS');

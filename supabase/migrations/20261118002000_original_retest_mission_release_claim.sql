@@ -36,7 +36,7 @@ $fn$;
 -- production promotions must follow CLOSE -> PROMOTE -> OPEN. Never register
 -- a SHA based only on VERCEL_GIT_COMMIT_SHA reported by a stale runtime.
 create function public.project_org_retest_set_release_gate(
- p_project uuid,p_release text,p_deployment text,p_action text
+ p_project uuid,p_release text,p_deployment text,p_action text,p_expected_generation bigint
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 declare g project_retest_production_release_gate;p work_projects;stamp timestamptz;
 begin
@@ -44,6 +44,10 @@ begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
  select * into p from work_projects where id=p_project for update;
  select * into g from project_retest_production_release_gate where project_id=p_project for update;
+ if p_expected_generation is null or p_expected_generation<0
+  or (g.project_id is null and p_expected_generation<>0)
+  or (g.project_id is not null and g.generation is distinct from p_expected_generation)
+ then raise exception 'Observed release gate generation changed under operator lock';end if;
  if p.id is null or p.id is distinct from 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
   or p_release is null or p_release !~ '^[0-9a-f]{40}$'
   or p_deployment is null or p_deployment !~ '^dpl_[A-Za-z0-9]+$'
@@ -121,7 +125,7 @@ end
 $fn$;
 revoke all on function
  public.project_org_retest_active_release(uuid,text),
- public.project_org_retest_set_release_gate(uuid,text,text,text)
+ public.project_org_retest_set_release_gate(uuid,text,text,text,bigint)
  from public,anon,authenticated,service_role;
 grant execute on function public.project_org_retest_active_release(uuid,text)
  to service_role;
@@ -607,6 +611,9 @@ create function public.project_org_retest_renewed_assignment(
   and j.payload=(select old_assignment.payload from mission_assignments old_assignment
     where old_assignment.id='cd81b57d-0812-485c-b8f6-d658aa80186f'::uuid
       and old_assignment.mission_id=r.source_mission_id)
+  and j.agent_id=(select historical_assignment.agent_id from mission_assignments historical_assignment
+    where historical_assignment.id='cd81b57d-0812-485c-b8f6-d658aa80186f'::uuid
+      and historical_assignment.mission_id=r.source_mission_id)
   and project_org_retest_original_owner_lineage(p.id)
  and project_org_scope_ratification_state(p.id)=q.organization_hash
   and (select count(*) from project_organization_contract_changes c
