@@ -300,20 +300,44 @@ export function retainOfficialModelEvidence(
     row.speed_tier = prior.speed_tier;
     row.cost_tier = prior.cost_tier;
     row.source_metadata = { ...fresh.source_metadata, ...meta };
+    // A parseable prior price is NOT proof of its economic provenance. Only retain
+    // pricing when BOTH stored rates still equal the originally captured first-party
+    // published Standard base rates AND this exact model's approved source schedule.
+    // This also rejects coordinated corruption of stored prices and provenance.
+    const retainedInput = verifiedNumericRate(prior.pricing_input_per_1m);
+    const retainedOutput = verifiedNumericRate(prior.pricing_output_per_1m);
+    const documentedInput = verifiedNumericRate(meta.published_base_input_per_1m);
+    const documentedOutput = verifiedNumericRate(meta.published_base_output_per_1m);
+    const pricingProvenanceMatches =
+      meta.provider_documented_model_id === spec.modelId &&
+      meta.pricing_tier === "standard_base_per_1m" &&
+      meta.price_verified_scope === "published_base_standard_rates_only" &&
+      documentedInput === spec.expectedInputPer1m &&
+      documentedOutput === spec.expectedOutputPer1m &&
+      retainedInput !== null && retainedOutput !== null &&
+      retainedInput === documentedInput &&
+      retainedOutput === documentedOutput;
     if (prior.pricing_status === "verified" &&
         meta.pricing_verification_source === spec.documentUrl &&
         freshOfficialEvidence(prior.pricing_verified_at, nowIso) &&
-        verifiedNumericRate(prior.pricing_input_per_1m) !== null &&
-        verifiedNumericRate(prior.pricing_output_per_1m) !== null) {
+        pricingProvenanceMatches) {
       row.pricing_status = "verified";
-      row.pricing_input_per_1m = verifiedNumericRate(prior.pricing_input_per_1m);
-      row.pricing_output_per_1m = verifiedNumericRate(prior.pricing_output_per_1m);
+      row.pricing_input_per_1m = retainedInput;
+      row.pricing_output_per_1m = retainedOutput;
       row.pricing_verified_at = prior.pricing_verified_at;
     } else {
+      row.pricing_status = fresh.pricing_status;
+      row.pricing_input_per_1m = fresh.pricing_input_per_1m;
+      row.pricing_output_per_1m = fresh.pricing_output_per_1m;
+      row.pricing_verified_at = null;
       row.source_metadata = {
         ...row.source_metadata,
+        pricing_source: fresh.source_metadata.pricing_source,
         previous_pricing_verified_at: prior.pricing_verified_at,
-        pricing_revalidation_status: "requires_current_first_party_evidence"
+        pricing_revalidation_status: "requires_current_first_party_evidence",
+        ...(!pricingProvenanceMatches && prior.pricing_status === "verified"
+          ? { pricing_retention_rejection: "stored_rate_or_first_party_provenance_mismatch" }
+          : {})
       };
     }
   }
