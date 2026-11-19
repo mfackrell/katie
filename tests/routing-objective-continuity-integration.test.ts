@@ -80,7 +80,11 @@ const buildGenerationParams=evaluate(build.getText(routeAst).replace('function b
 });
 
 /** Execute actual prepareCandidateRequest from the production chat route. */
-function prepared(f:Case, mode=f.mode??'best-answer', overrides:{responsePurpose?:'conversation'|'deliverable'}={}) {
+function prepared(f:Case, mode=f.mode??'best-answer', overrides:{
+  responsePurpose?:'conversation'|'deliverable';
+  /** A-owned, v1 source-attributed routing-result field, supplied only in this C-consumer fixture. */
+  currentTurnFeedback?:unknown;
+}={}) {
   const history=f.history.map(turn=>({
     id:turn.id,role:turn.role,content:turn.text,
     ...(turn.model?{model:turn.model}:{}),
@@ -107,6 +111,7 @@ function prepared(f:Case, mode=f.mode??'best-answer', overrides:{responsePurpose
     resolvedRequestIntent:'assistant-reflection',buildGenerationParams,
     saveProviderSystemAudit:async()=>{throw Error('No provider audit writes permitted in offline test');},
     routingMode:mode==='best-answer'?'best_answer':'best_value',
+    currentTurnFeedback:overrides.currentTurnFeedback,
   };
   const candidate=evaluate(routeExpression('prepareCandidateRequest'),environment);
   const generated=candidate('offline-fixture-model',context,{intent:'assistant-reflection'});
@@ -198,15 +203,39 @@ test('C-07 open-ended creative personal chat does not force a fictional-scene ro
   assert.equal(policy.generationInstruction,null);
 });
 
-test('C-08 current feedback binds to the preceding settled assistant, never the new selected model',()=>{
-  const f=scenario('C-08');const ctx=routingContext(f);
+test('C-08 v1 feedback provenance must reach generation as prior settled source, not next model',()=>{
+  const f=scenario('C-08');
   const prior=f.history.find(x=>x.role==='assistant')!;
-  assert.match(ctx,/gpt-5\.6-luna/);
-  assert.ok(ctx.includes(prior.id),'Routing context must carry prior assistant message ID for attribution');
-  assert.ok(ctx.includes(prior.request_id!),'Routing context must carry prior settled request ID');
-  assert.ok(ctx.includes(prior.provider!),'Routing context must carry the previous provider');
-  assert.ok(!ctx.includes(f.selected_next!.model),'The next model must not become the feedback target');
-  assert.match(f.current.text,/failed to take initiative/);
+  // Synthetic A-result input tests only C's actual production generation consumer.
+  // It is NOT evidence that Agent A's unimplemented producer can attribute feedback.
+  const sourceLinkedFeedback={
+    version:'current-turn-feedback-v1' as const,
+    source:{
+      requestId:'current-request',userMessageId:f.current.id,
+      textExcerpt:f.current.text,polarity:'negative' as const,
+      dimension:'objective_fidelity' as const,correctionExcerpt:f.current.text,
+    },
+    target:{
+      status:'attributed' as const,assistantMessageId:prior.id,
+      priorRequestId:prior.request_id!,provider:prior.provider!,model:prior.model!,
+      priorIntent:'social-emotional',basis:'settled_scoped_saved_reply' as const,
+    },
+    applicableToOngoingObjective:null,
+  };
+  assert.equal(sourceLinkedFeedback.target.model,f.expect.feedback_target_model);
+  assert.notEqual(sourceLinkedFeedback.target.model,f.selected_next!.model,
+    'Fixture must distinguish criticized prior model from next selected responder');
+  const result=prepared(f,'best-value',{currentTurnFeedback:sourceLinkedFeedback});
+  const guidance=result.persona;
+  // Inspect the actual production prepareCandidateRequest execution; never
+  // count fixture-shape validation as successful source-to-generator integration.
+  assert.ok(guidance.includes(f.current.text),'Current exact correction must reach generation guidance');
+  assert.ok(guidance.includes(f.history.find(x=>x.role==='user')!.text),
+    'Source-linked prior user objective must reach generation guidance');
+  assert.match(guidance,/previous|prior|attribut|feedback|correct/i,
+    'Generation must receive explicit correction context separate from generic conversation history');
+  assert.ok(!guidance.includes(f.selected_next!.model),
+    'Do not claim the newly selected responder authored the criticized answer');
 });
 
 test('C-09 feedback without a completed prior assistant has no invented attribution',()=>{
