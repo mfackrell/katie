@@ -476,9 +476,11 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   if (intent==="image-generation" ||
       /^(?:\s*)(?:new topic\s*:|change of subject\s*:|switching (?:topics|gears)\s*:)/i.test(message) ||
       /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message) ||
-      // Clear replacement tasks introduced after criticism override a prior objective.
-      // A negative verdict about the last answer does not authorize stale-task revival.
-      /(?:^|[.!?;]\s+)(?:now|instead)\s+(?:explain|define|summarize|calculate|translate|compare|outline|research|analy[sz]e|draft|write|describe|show|list|create|tell\s+me\s+about|give\s+me)\b/i.test(message)) return "";
+      // A later self-contained request (including polite or reordered forms)
+      // outranks the previous objective, even if this turn also criticizes the
+      // settled prior answer. "Please take initiative instead" is still a
+      // same-objective correction and must not trigger this task guard.
+      /(?:^|[.!?;]\s+)(?:(?:now|instead|please)\s*,?\s*|(?:can|could|would|will)\s+you\s+(?:please\s+)?)*(?:explain|define|summarize|calculate|translate|compare|outline|research|analy[sz]e|draft|write|describe|show|list|create|tell\s+me\s+about|give\s+me)\b/i.test(message)) return "";
   // "Stop rehashing..." can be a direct current-turn instruction even if A
   // correctly emits not_feedback rather than inventing provider attribution.
   // In that case use only the same scoped history, without naming a model.
