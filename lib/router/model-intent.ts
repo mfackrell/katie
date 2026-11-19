@@ -2410,10 +2410,26 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
 
   // Select three different judge models, preferring independent providers.
   // This is a fan-out for EVERY model-selection task, not a serial fallback.
+  const judgeModelPreference: Record<ProviderName, string[]> = {
+    // Models that can follow the strict judge JSON contract. These are judge
+    // preferences only, not a restriction on which answer model may win.
+    openai: ["gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.5", "gpt-5-mini"],
+    anthropic: ["claude-haiku-5-5", "claude-sonnet-5", "claude-opus-5"],
+    google: ["gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"],
+    grok: [],
+  };
+  const judgePool = [...eligibleDecisionProviders].sort((a, b) => {
+    const rank = (candidate: DecisionProviderCandidate) => {
+      const preference = judgeModelPreference[candidate.provider.name];
+      const index = preference.indexOf(candidate.modelId);
+      return index < 0 ? preference.length + 20 : index;
+    };
+    return rank(a) - rank(b);
+  });
   const judges: DecisionProviderCandidate[] = [];
   const seenJudgeModels = new Set<string>();
   const seenJudgeProviders = new Set<ProviderName>();
-  for (const candidate of eligibleDecisionProviders) {
+  for (const candidate of judgePool) {
     if (judges.length === 3) break;
     const key = `${candidate.provider.name}:${candidate.modelId}`;
     if (seenJudgeProviders.has(candidate.provider.name) || seenJudgeModels.has(key)) continue;
@@ -2421,7 +2437,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     seenJudgeModels.add(key);
     seenJudgeProviders.add(candidate.provider.name);
   }
-  for (const candidate of eligibleDecisionProviders) {
+  for (const candidate of judgePool) {
     if (judges.length === 3) break;
     const key = `${candidate.provider.name}:${candidate.modelId}`;
     if (seenJudgeModels.has(key)) continue;
