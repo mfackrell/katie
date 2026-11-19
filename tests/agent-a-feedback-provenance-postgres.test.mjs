@@ -69,41 +69,7 @@ test('Agent A native PG predecessor scope and settlement-time attribution predic
       const execute=async(limit=0)=>{
         const valid=(name)=>{assert.match(name,/^[a-z_]+$/);return name};
         const projection=columns.split(',').map(name=>valid(name.trim())).join(',');
-        const where=terms.map((item,index)=>valid(item.field)+item.operator+'
-    assert.equal((await priorReceipt())?.assistant_model,'gpt-5-mini');
-    assert.equal((await workflow())?.checkpoints?.['routing-delivery-audit:v1']?.model,'gpt-5-mini');
-    assert.ok(new Date((await priorReceipt()).completed_at)<=new Date(now),'settled before criticism');
-    assert.equal(await recent('different-actor'),null,'other actors excluded');
-    assert.equal(await recent(actor,'different-chat'),null,'other chats excluded');
-    assert.equal(await priorReceipt(actor,'different-chat'),null,'wrong-chat receipt excluded');
-    assert.equal(await workflow('different-owner'),null,'wrong owner excluded');
-    assert.equal(await workflow(owner,'different-actor'),null,'wrong actor excluded');
-    await db.query("update chat_requests set completed_at='2026-11-18T22:10:01Z' where request_id='prior'");
-    assert.ok(new Date((await priorReceipt()).completed_at)>new Date(now),
-      'late completion must be rejected by app time comparison');
-    assert.equal((await criticize()).target.status,'unattributed',
-      'real PG late-completion record must fail closed through production producer');
-    await db.query("update chat_requests set completed_at='2026-11-18T22:09:59Z' where request_id='prior'");
-    await db.query('insert into messages values($1,$2,$3,$4,$5,$6)',
-      ['intervening-user',actor,chat,'user',null,'2026-11-18T22:09:59.500Z']);
-    assert.equal((await recent())?.role,'user','intervening user is immediate predecessor');
-    assert.equal((await criticize()).target.status,'unattributed',
-      'real PG intervening user stops production predecessor attribution');
-    await db.query('insert into messages values($1,$2,$3,$4,$5,$6)',
-      ['future-assistant',actor,chat,'assistant','gpt-5.4','2026-11-18T22:10:01Z']);
-    assert.equal((await recent())?.id,'intervening-user',
-      'newer replies must not become past feedback targets');
-  }finally{
-    if(db) await db.end().catch(()=>{});
-    if(started){
-      const r=spawnSync(join(bin,'pg_ctl'),['-D',data,'-m','immediate','-w','stop'],
-        {encoding:'utf8',timeout:30000});
-      assert.equal(r.status,0,r.stderr||r.error?.message);
-    }
-    rmSync(root,{recursive:true,force:true});
-  }
-});
-+(index+1)).join(' and ');
+        const where=terms.map((item,index)=>valid(item.field)+item.operator+'$'+(index+1)).join(' and ');
         const ordering=sort.length?' order by '+sort.map(x=>valid(x.field)+(x.desc?' desc':' asc')).join(','):'';
         const query='select '+projection+' from '+valid(table)+(where?' where '+where:'')+
           ordering+(limit?' limit '+limit:'');
@@ -150,10 +116,14 @@ test('Agent A native PG predecessor scope and settlement-time attribution predic
     await db.query("update chat_requests set completed_at='2026-11-18T22:10:01Z' where request_id='prior'");
     assert.ok(new Date((await priorReceipt()).completed_at)>new Date(now),
       'late completion must be rejected by app time comparison');
+    assert.equal((await criticize()).target.status,'unattributed',
+      'real PostgreSQL late completion must fail closed via the production producer');
     await db.query("update chat_requests set completed_at='2026-11-18T22:09:59Z' where request_id='prior'");
     await db.query('insert into messages values($1,$2,$3,$4,$5,$6)',
       ['intervening-user',actor,chat,'user',null,'2026-11-18T22:09:59.500Z']);
     assert.equal((await recent())?.role,'user','intervening user is immediate predecessor');
+    assert.equal((await criticize()).target.status,'unattributed',
+      'real PostgreSQL intervening user must prevent stale target attribution');
     await db.query('insert into messages values($1,$2,$3,$4,$5,$6)',
       ['future-assistant',actor,chat,'assistant','gpt-5.4','2026-11-18T22:10:01Z']);
     assert.equal((await recent())?.id,'intervening-user',
