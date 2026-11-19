@@ -1100,7 +1100,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query("set local session_replication_role = 'origin'");
    await first.query('set role service_role');
    await pendingRequestFixture();
+   await first.query('reset role'); // Private receipt table: read only under disposable postgres.
    const req=(await first.query('select id,execution_attempt,operation,request_hash,resolved_at from project_provider_requests where project_id=$1 and resolved_at is null',[project])).rows[0];
+   await first.query('set role service_role');
    assert.ok(req&&req.resolved_at===null);
    const settle=[originalJob.id,req.execution_attempt,req.id,req.operation,req.request_hash,null,'Native recorded inference reply'];
    assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
@@ -1110,7 +1112,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',settle)).rows[0].ok,false,
     'Receipt settlement must be one-time');
    assert.equal((await first.query('select project_provider_request_pending($1) pending',[project])).rows[0].pending,false);
+   await first.query('reset role');
    const recorded=(await first.query('select resolved_at,provider_receipt from project_provider_requests where id=$1',[req.id])).rows[0];
+   await first.query('set role service_role');
    assert.ok(recorded.resolved_at);assert.equal(recorded.provider_receipt,'Native recorded inference reply');
    await first.query('reset role');
    const closed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
