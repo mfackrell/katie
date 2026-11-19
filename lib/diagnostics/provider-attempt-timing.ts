@@ -140,6 +140,8 @@ const SAFE_CODES = new Set([
   "standalone_outcome_unknown", "standalone_cancelled", "standalone_receipt_conflict",
   "standalone_usage_unpriced", "standalone_time_budget_exhausted",
   "standalone_approval_required", "standalone_context_missing",
+  "OUTPUT_TOKEN_EXHAUSTED", "OUTPUT_LIMIT", "PROVIDER_INCOMPLETE", "PROVIDER_STOPPED_RESPONSE",
+  "COMPLETED_EMPTY_RESPONSE", "EMPTY_RESPONSE", "PROVIDER_FAILURE", "METADATA_ONLY_RESPONSE", "PROVIDER_REFUSAL",
 ]);
 function safeCode(value: unknown): string | undefined {
   const result = safeValue(value, 64);
@@ -203,6 +205,14 @@ export function safeFailureDetails(error: unknown): TraceDetails {
   if (code === "standalone_outcome_unknown" || code === "standalone_receipt_conflict" || code === "standalone_usage_unpriced" || code === "uncertain_exposure_retained") {
     failureCategory = code === "standalone_outcome_unknown" || code === "uncertain_exposure_retained"
       ? "unknown_outcome" : "receipt_reconciliation_failure";
+  } else if (code === "standalone_time_budget_exhausted") {
+    failureCategory = "local_timeout";
+  } else if (code === "PROVIDER_INCOMPLETE" || code === "PROVIDER_STOPPED_RESPONSE" ||
+      code === "OUTPUT_TOKEN_EXHAUSTED" || code === "OUTPUT_LIMIT" || code === "COMPLETED_EMPTY_RESPONSE" ||
+      code === "EMPTY_RESPONSE" || code === "PROVIDER_FAILURE" || code === "METADATA_ONLY_RESPONSE") {
+    failureCategory = "incomplete_response";
+  } else if (item.name === "SyntaxError") {
+    failureCategory = "response_parsing_failure";
   } else if (code === "standalone_cancelled" || item.name === "AbortError" || code === "ABORT_ERR") {
     failureCategory = "local_cancellation";
   } else if (code === "ETIMEDOUT" || item.name === "TimeoutError") {
