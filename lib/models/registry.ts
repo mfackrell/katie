@@ -574,16 +574,106 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
   return outcomes;
 }
 
+export type RegistryEligibilityEvidence = Pick<ModelRegistryRecord,
+  "provider_name" | "model_id" | "routing_eligibility" | "capability_status" |
+  "pricing_status" | "capability_verified_at" | "pricing_verified_at"> & {
+    pricing_input_per_1m: unknown;
+    pricing_output_per_1m: unknown;
+    source_metadata: Record<string, unknown> | null;
+  };
+
+export type RegistryDiagnosticRow = RegistryEligibilityEvidence & {
+  is_active: boolean;
+  discovery_status: string;
+  reasoning_tier: ModelRegistryRecord["reasoning_tier"];
+  supports_text: boolean | null;
+  failure_reason: string | null;
+};
+
+/** The one read-time verified-admission decision used by both routing and diagnostics. */
+export function evaluateRegistryEvidence(
+  persisted: RegistryEligibilityEvidence,
+  nowIso: string
+): { eligibility: RoutingEligibility; evidence_reason: string | null } {
+  if (persisted.routing_eligibility !== "verified") {
+    return { eligibility: persisted.routing_eligibility, evidence_reason: null };
+  }
+  const evidence = persisted.source_metadata ?? {};
+  const spec = officialModelSpec(persisted.provider_name, persisted.model_id);
+  // The two mutable provider/provider labels are never a producer attestation.
+  if (!spec || evidence.capability_evidence_basis !== "first_party_model_documentation" ||
+      evidence.capability_source !== "provider_documentation" ||
+      evidence.pricing_source !== "provider_documentation") {
+    return { eligibility: "restricted", evidence_reason: "unattested_or_invalid_first_party_provenance" };
+  }
+  if (persisted.capability_status !== "verified" || persisted.pricing_status !== "verified") {
+    return { eligibility: "restricted", evidence_reason: "capability_or_pricing_not_verified" };
+  }
+  if (!freshOfficialEvidence(persisted.capability_verified_at, nowIso) ||
+      !freshOfficialEvidence(persisted.pricing_verified_at, nowIso)) {
+    return { eligibility: "restricted", evidence_reason: "first_party_evidence_stale_or_invalid" };
+  }
+  if (!hasApprovedPublishedPriceProvenance(
+    spec, persisted.pricing_input_per_1m, persisted.pricing_output_per_1m, evidence
+  )) {
+    return { eligibility: "restricted", evidence_reason: "first_party_model_or_price_provenance_mismatch" };
+  }
+  return { eligibility: "verified", evidence_reason: null };
+}
+
 type RegistryRoutingEvidenceRow = RegistryRoutingModel & Pick<ModelRegistryRecord,
   "source_metadata" | "capability_verified_at" | "pricing_verified_at">;
 
-/**
- * Fail closed on stale first-party documentation at the READ boundary, not only
- * during successful discovery. An upstream failure must never keep old published
- * claims eligible as freshly verified. Non-documentation eligibility is unchanged.
- *
- * Pure and shared by the database reader and deterministic no-refresh tests.
- */
+/** Protected diagnostic display built from exactly the router's read-time eligibility. */
+export function buildRegistryDiagnostic(row: RegistryDiagnosticRow, nowIso: string) {
+  const now = Date.parse(nowIso);
+  const { eligibility, evidence_reason } = evaluateRegistryEvidence(row, nowIso);
+  const ageHours = (value: string | null): number | null => {
+    const timestamp = Date.parse(value ?? "");
+    return Number.isFinite(timestamp) && timestamp <= now
+      ? Math.round((now - timestamp) / 36000) / 100 : null;
+  };
+  const capabilityAge = ageHours(row.capability_verified_at);
+  const pricingAge = ageHours(row.pricing_verified_at);
+  const meta = row.source_metadata ?? {};
+  const reasons = [
+    ...(!row.is_active ? [row.failure_reason || "not_active_or_quarantined"] : []),
+    ...(evidence_reason ? [evidence_reason] : []),
+    ...(row.capability_status !== "verified" ? ["capabilities_not_authoritatively_verified"] : []),
+    ...(row.pricing_status !== "verified" ? ["pricing_not_authoritatively_verified"] : []),
+    ...(row.is_active && eligibility === "manual_override_only" ? ["manual_override_required"] : []),
+    ...(row.is_active && eligibility === "disabled" ? ["explicitly_disabled"] : [])
+  ];
+  return {
+    provider: row.provider_name,
+    model_id: row.model_id,
+    discovered: row.discovery_status === "discovered",
+    active: row.is_active,
+    capability_status: row.capability_status,
+    pricing_status: row.pricing_status,
+    routing_eligibility: eligibility,
+    persisted_routing_eligibility: row.routing_eligibility,
+    reasoning_tier: row.reasoning_tier,
+    manual_selection_visible: row.is_active,
+    ordinary_text_candidate: row.is_active && row.supports_text === true &&
+      (eligibility === "verified" || eligibility === "restricted"),
+    complex_text_documented: row.is_active && row.supports_text === true &&
+      row.reasoning_tier === "high" && row.capability_status === "verified" &&
+      eligibility === "verified",
+    capability_age_hours: capabilityAge,
+    pricing_age_hours: pricingAge,
+    capability_source: meta.capability_verification_source ?? meta.capability_source ?? "unknown",
+    pricing_source: meta.pricing_verification_source ?? meta.pricing_source ?? "unknown",
+    endpoint_support: meta.supported_endpoints ?? "unverified",
+    context_window_tokens: meta.context_window_tokens ?? null,
+    max_output_tokens: meta.max_output_tokens ?? null,
+    price_scope: meta.price_verified_scope ?? null,
+    inference_account_verified: meta.inference_account_verified === true,
+    status_reasons: reasons.length ? reasons : ["eligible_subject_to_endpoint_and_spending_controls"]
+  };
+}
+
+/** Source-bound, verified and restricted eligibility policy is unchanged by diagnostics. */
 export function buildRoutingRegistrySnapshot(
   providers: readonly Pick<LlmProvider, "name">[],
   persistedRows: readonly RegistryRoutingEvidenceRow[],
@@ -594,33 +684,9 @@ export function buildRoutingRegistrySnapshot(
 
   for (const persisted of persistedRows) {
     const {source_metadata, capability_verified_at, pricing_verified_at, ...row} = persisted;
-    const evidence = source_metadata ?? {};
-    // Editable provider/provider labels are not independent producer attestation.
-    // Until a trusted receipt/producer verification contract exists, only the
-    // validated first-party documentation path may retain verified eligibility.
-    // Restricted models remain available to ordinary automatic routing wherever
-    // the existing router permits them; do not change any other eligibility.
-    const spec = officialModelSpec(row.provider_name, row.model_id);
-    // Validate persisted rates at every read, including after discovery failed
-    // and retainOfficialModelEvidence (D3) was never called.
-    const validDocumentedEvidence = Boolean(
-      spec &&
-      evidence.capability_evidence_basis === "first_party_model_documentation" &&
-      evidence.capability_source === "provider_documentation" &&
-      evidence.pricing_source === "provider_documentation" &&
-      row.capability_status === "verified" &&
-      row.pricing_status === "verified" &&
-      freshOfficialEvidence(capability_verified_at, nowIso) &&
-      freshOfficialEvidence(pricing_verified_at, nowIso) &&
-      hasApprovedPublishedPriceProvenance(
-        spec, row.pricing_input_per_1m, row.pricing_output_per_1m, evidence
-      )
-    );
     const effective: RegistryRoutingModel = {
       ...row,
-      routing_eligibility: row.routing_eligibility === "verified" &&
-        !validDocumentedEvidence
-        ? "restricted" : row.routing_eligibility
+      routing_eligibility: evaluateRegistryEvidence(persisted, nowIso).eligibility
     };
     const existing = grouped.get(effective.provider_name);
     if (existing) existing.push(effective);
