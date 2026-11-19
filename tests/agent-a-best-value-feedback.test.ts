@@ -335,3 +335,59 @@ test('A-QA1 actual JSON with an ineligible provider:model pair is bounded to 3',
   assert.ok(returned.every(x=>x.text===invalid),'valid JSON with invalid model was returned');
   assert.deepEqual(returned.map(x=>x.modelId),['gpt-5-mini','gpt-5-mini','gpt-5.4']);
 });
+
+
+test('A-QA3 fabricated praise cannot be laundered as documented capability evidence',async()=>{
+  const forged=selectionJson('gpt-5-mini',
+    'User praised gpt-5-mini based on source-other','documented_capability');
+  const {result,returned}=await executeSelectionCase([forged],
+    bestValueSourceEvidence(null,'positive'));
+  assert.equal(returned[0]?.text,forged,'actual forged decision JSON must reach the parser');
+  assert.equal(returned.length,3,'false attribution must be rejected at each bounded attempt');
+  assert.equal(result.accepted,false,'another model\'s positive event is not selected-model documentation');
+});
+
+test('A-QA3 fabricated satisfaction in selection justification is rejected even with innocent evidence basis',async()=>{
+  const parsed=JSON.parse(selectionJson('gpt-5-mini',
+    'Documented text capability only; outcome quality unverified.','documented_capability'));
+  parsed.selection_justification='User praised gpt-5-mini based on source-other.';
+  const forged=JSON.stringify(parsed);
+  const {result,returned}=await executeSelectionCase([forged],
+    bestValueSourceEvidence(null,'positive'));
+  assert.equal(returned[0]?.text,forged);
+  assert.equal(returned.length,3,'justification-only fabrication must be checked too');
+  assert.equal(result.accepted,false);
+});
+
+test('A-QA3 explicit negative or mixed user reactions cannot be relabeled as model documentation',async()=>{
+  for(const claim of ['Negative user feedback based on source-other.',
+    'Mixed user feedback based on source-other.']){
+    const forged=selectionJson('gpt-5-mini',claim,'documented_capability');
+    const {result,returned}=await executeSelectionCase([forged],
+      bestValueSourceEvidence(null,'negative'));
+    assert.equal(returned[0]?.text,forged);
+    assert.equal(result.accepted,false,claim);
+  }
+});
+
+test('A-QA3 honest documented capability and explicit absence of feedback remain valid',async()=>{
+  for(const statement of ['Documented text support; comparative quality unverified.',
+    'No user praise has been recorded; only text capability is documented.']){
+    const honest=selectionJson('gpt-5-mini',statement,'documented_capability');
+    const {result,returned}=await executeSelectionCase([honest],
+      bestValueSourceEvidence(null,'positive'));
+    assert.equal(returned.length,1,statement);
+    assert.equal(result.accepted,true,statement);
+  }
+});
+
+test('A-QA3 foreign-source praise in justification cannot contaminate a genuinely positive selected-model event',async()=>{
+  const parsed=JSON.parse(selectionJson('gpt-5-mini',
+    'User praised selected model; source-mini','attributed_feedback'));
+  parsed.selection_justification='User praised gpt-5.4 according to source-other.';
+  const forged=JSON.stringify(parsed);
+  const {result,returned}=await executeSelectionCase([forged],
+    bestValueSourceEvidence('positive','positive'));
+  assert.equal(returned[0]?.text,forged);
+  assert.equal(result.accepted,false,'another candidate\'s event is not a citation for the selected model');
+});
