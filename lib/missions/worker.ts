@@ -1,3 +1,4 @@
+import {verifyMission79ActiveProductionSha} from '@/lib/projects/mission79-active-release';
 import {executeManagementClaim,ManagementCommandRejection,directorRecoveryRelease} from '@/lib/projects/organization';
 import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
@@ -376,9 +377,49 @@ export async function runMissionBatch(model=missionModel){
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  const release=process.env.VERCEL_ENV==='production'?process.env.VERCEL_GIT_COMMIT_SHA:null;
+ if(process.env.VERCEL_ENV==='production'&&(!release||!/^[0-9a-f]{40}$/.test(release))){
+  console.error('[Missions] Missing valid production release SHA; fail closed before any worker claim');
+  return {claimed:0,outcomes:[],releaseFence:'missing_production_release'};
+ }
+ // Mission79's special release is valid only while the privileged release
+ // coordinator has the matching SQL epoch OPEN and the canonical Vercel alias
+ // still actually serves that SHA. This read-only preflight is NOT a
+ // substitute for the separately locked SQL release fence at claim time.
+ let observedReleaseGeneration=0;
+ let releaseFence:string|undefined;
+ if(release){
+  let mission79Epoch:{generation:number;active:boolean;deploymentId:string|null}|null=null;
+  try{
+   const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
+    p_project:'fe9d2658-41e3-44c1-ae8e-a0cba98371fe',p_release:release,
+   });
+   if(!epoch||!Number.isSafeInteger(epoch.generation)||epoch.generation<0
+    ||typeof epoch.active!=='boolean'||(epoch.deploymentId!==null&&typeof epoch.deploymentId!=='string'))
+    throw Error('Invalid original mission79 release epoch response');
+   mission79Epoch=epoch;
+  }catch{
+   console.error('[Missions] Original mission79 release epoch unavailable; denying its claim');
+   releaseFence='release_epoch_unavailable';
+  }
+  if(mission79Epoch){
+   observedReleaseGeneration=mission79Epoch.generation;
+   if(mission79Epoch.active&&(mission79Epoch.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID
+    ||!await verifyMission79ActiveProductionSha(release))){
+    console.warn('[Missions] Original mission79 release epoch is no longer the canonical production alias');
+    observedReleaseGeneration=0;
+    releaseFence='canonical_alias_changed';
+   }
+  }
+  // Epoch zero cannot authorize mission79 in the PostgreSQL-bound claim RPC.
+  // Do not starve ordinary project leases when only this release proof fails.
+  // Never fall back to the unrestricted/legacy claim RPC.
+ }
  for(let i=0;i<3;i++){
   const claim=release
-   ?await rpc<Claim|null>('claim_mission_work_release',{p_release:release})
+   ?await rpc<Claim|null>('claim_mission_work_release_epoch',{
+    p_release:release,p_epoch:observedReleaseGeneration,
+    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??'',
+   })
    :await rpc<Claim|null>('claim_mission_work');
   if(!claim)break;
   claims.push(claim);
@@ -422,9 +463,9 @@ export async function runMissionBatch(model=missionModel){
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
    const reconcileAcceptedDevelopment=claim.job.role==='development'&&claim.job.attempts<2;
    const unresolvedProvider=error instanceof MissionModelFailure&&error.partial.providerOutcomeUnresolved===true;
-   const retry=!directorRecoveryRelease(claim)&&!checkpointFailed&&!unresolvedProvider&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
+   const retry=claim.mission.id!=='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'&&!directorRecoveryRelease(claim)&&!checkpointFailed&&!unresolvedProvider&&(reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail))));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...((claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))?Object.fromEntries(['rejectedSpecification','specificationValidationFeedback','specificationCharacters'].filter(key=>claim.job.result?.[key]!==undefined).map(key=>[key,claim.job.result![key]])):{}),...(claim.job.role==='review'&&claim.job.result?.sourceChecks?{sourceChecks:claim.job.result.sourceChecks}:{}),...(error instanceof MissionModelFailure?error.partial:{}),...(checkpointFailed?{checkpointFailed:true,specificationCheckpointError:specificationCheckpointError??'Provider response archival failed before settlement'}:{}),detail,diagnostic},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));
- return{claimed:claims.length,outcomes};
+ return{claimed:claims.length,outcomes,...(releaseFence?{releaseFence}:{})};
 }

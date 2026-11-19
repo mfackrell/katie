@@ -1,8 +1,33 @@
 import test from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {fork, spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import pg from 'pg';
+
+// The new owner release binding must lock rows with PERFORM. A bare SELECT
+// inside PL/pgSQL fails at runtime ('query has no destination for result data').
+const bindingSql=readFileSync('supabase/migrations/20261118002000_original_retest_mission_release_claim.sql','utf8');
+assert.match(bindingSql,/perform 1 from agent_missions where id=p_mission and project_id=p_project for update;/);
+assert.match(bindingSql,/perform 1 from mission_assignments where id=p_assignment and mission_id=p_mission for update;/);
+assert.doesNotMatch(bindingSql,/^ select 1 from (agent_missions|mission_assignments) where .* for update;/m);
+assert.match(bindingSql,/project_org_retest_claim_release_authorized/,'The native fixture must exercise the new exact-release binding predicate');
+assert.match(bindingSql,/b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid/,'Original mission79 source must be pinned in SQL');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/MISSION79_NEW_OWNER_WINDOW_TWO_CONNECTION_RACE_PASS|raceNewOwnerRpc\('OWNER_WINDOW'/,'New owner window must prove a two-connection race');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/raceNewOwnerRpc\('RELEASE_BIND'/,'New release binding must prove a two-connection race');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/exactJob79='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'/,'Native test must bind the exact original assignment identity');
+assert.match(bindingSql,/85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid/,'Original assignment source must be pinned in SQL');
+assert.match(bindingSql,/not exists\(select 1 from project_retest_future_window_receipts q where q.project_id=b.project_id\)/,'No downstream assignment may claim with stale pre-renewal release');
+assert.match(bindingSql,/create table public.project_retest_future_window_receipts/,'A distinct immutable owner window must exist');
+assert.match(bindingSql,/create function public.project_org_authorize_retest_future_window/,'Only the owner-confirmed window writer may renew time');
+assert.match(bindingSql,/project_org_retest_renewed_assignment/,'Source-bound inherited mission79 membership must be checked');
+assert.match(bindingSql,/do \$renewed_exact_release_fence\$/,'Old provider release must be fenced for the owner-renewed assignment');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/oldContinuationClaim/,'Native proof must reject the actual prior continuation SHA');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/bound\|changed\|release\|window\|mission\|owner/,'Replay must remain fail-closed after the one-time binding receipt');
+
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/rollback to savepoint negative_release_claim/,'Negative claim probes must not consume fixture-wide worker capacity');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/mission_assignments set created_at='2000-01-01T00:00:00Z'/,'Native proof must prioritize only the disposable original mission79 assignment');
+assert.match(readFileSync('tests/helpers/assert-blocked-management-retest.mjs','utf8'),/approvedProjectRecord\?\.spec\?\.milestones/,'Offline management must use the actual approved milestone from the native fixture');
 
 const PROJECT='fe9d2658-41e3-44c1-ae8e-a0cba98371fe';
 const SCOPE='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
@@ -186,7 +211,7 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    assert.equal(initial.priorCutoff,'2026-11-16T18:00:00+00:00');
 
    const future=new Date(Date.now()+3600000).toISOString();
-   const winningWindow=randomUUID(),losingWindow=randomUUID();
+   const winningWindow='7d216bbe-596e-457e-b84d-e07ad1e80365',losingWindow=randomUUID();
    const authArgs=[fixture.owner,PROJECT,fixture.release,fixture.priorWindow,
     fixture.priorCutoff,future,winningWindow,initial.stateHash];
    const otherAuth=[...authArgs];otherAuth[6]=losingWindow;
@@ -296,6 +321,12 @@ test('new owner authorization and resume RPCs serialize across two committed-sch
    await (await import('./helpers/assert-blocked-management-retest.mjs')).assertBlockedManagementRetest(
     first,second,observer,{project:PROJECT,owner:fixture.owner,priorRelease:fixture.release,
      windowId:winningWindow,scopeHash:SCOPE});
+   const boundClaimRows=(await observer.query(
+    'select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',
+    [PROJECT])).rows[0].n;
+   assert.equal(boundClaimRows,1,'Exactly one bound-release receipt survives two competing owner RPCs in disposable PostgreSQL');
+   assert.equal((await observer.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[PROJECT])).rows[0].n,1,
+    'Exactly one durable owner-window receipt after two competing RPCs in disposable PostgreSQL');
    console.log('BLOCKED_OWNER_REAL_TWO_CONNECTION_RPCS_PASS: COMMITTED schema, two actual concurrent authorize RPCs, two actual concurrent resume RPCs, single receipts, replay and rollback, 76/96 missions, 600000 allowance, 13 contracts, history and QA protections; zero live dispatch/inference');
   }catch(error){
    console.error('COMMITTED_RACE_DIAGNOSTIC: '+String(error?.stack||error));

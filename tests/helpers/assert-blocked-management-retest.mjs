@@ -16,6 +16,92 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   "to_regprocedure('public.project_org_resume_blocked_management_once(uuid,uuid,text,uuid,uuid,timestamptz,text)') admit"
  )).rows[0];
  assert.ok(definitions.offer&&definitions.admit,'Both guarded definitions must exist in committed PostgreSQL');
+ // Install and qualify the new source-bound claim grant against the SAME
+ // committed native owner-authorization and genuine PostgreSQL scheduler.
+ const releaseMigration='supabase/migrations/20261118002000_original_retest_mission_release_claim.sql';
+ const releaseInstalled=(await observer.query(
+  "select to_regprocedure('public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)') sig"
+ )).rows[0].sig;
+ if(!releaseInstalled)await observer.query(readFileSync(releaseMigration,'utf8'));
+ const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
+ assert.ok(claimRelease,"Original worker claim's new exact-release predicate must be installed");
+
+
+ // Reconstruct the actual saved 13-node reporting topology, not the generic
+ // benchmark's loop/writer/coder organization. Only the DISPOSABLE database
+ // changes; original node identities and all 13 contract-change receipts
+ // remain linked to their fixture rows. The production SQL guard is unchanged.
+ await first.query('reset role');
+ const originalNodes=(await first.query(
+  'select id,area,kind,management_level from project_organization_nodes where project_id=$1 order by id',
+  [project])).rows;
+ assert.equal(originalNodes.length,13,'Native original-project fixture must contain exactly 13 nodes');
+ const findNode=(area,level)=>originalNodes.filter(n=>n.area===area&&(level===undefined||n.management_level===level));
+ const unique=(area,level)=>{const hits=findNode(area,level);assert.equal(hits.length,1,'Expected one fixture node '+area+'/'+level);return hits[0];};
+ const fixtureRoot=unique('general','project_director');
+ const fixtureGame=unique('game_delivery','functional_director');
+ const fixtureQa=unique('independent_qa','functional_director');
+ const delivery=unique('loop delivery manager');
+ const qaExecution=unique('game_delivery','worker');
+ const qaPlanning=unique('loop supervisor');
+ const deliveryPlanning=unique('loop coder');
+ const repositoryAssessment=unique('loop writer');
+ const qaCoordinator=unique('loop reviewer');
+ const genericWorkers=originalNodes.filter(n=>n.area==='general'&&n.kind==='worker');
+ assert.equal(genericWorkers.length,4,'Four generic benchmark workers expected before mapping original roles');
+ const qaTools=['manage','analysis','research','repository_review'];
+ const deliveryTools=['analysis','development','manage','repository_review'];
+ const planningTools=['manage','analysis','repository_review'];
+ const assessmentTools=['analysis','repository_review'];
+ const actualTopology=[
+  [delivery,'delivery_management','manager','manager',2,fixtureGame.id,deliveryTools],
+  [qaExecution,'independent_qa_execution','manager','manager',2,fixtureQa.id,qaTools],
+  [qaPlanning,'independent_qa_planning','manager','manager',2,fixtureQa.id,qaTools],
+  [deliveryPlanning,'delivery_planning','manager','supervisor',3,delivery.id,planningTools],
+  [repositoryAssessment,'delivery_repository_assessment','worker','worker',3,delivery.id,assessmentTools],
+  [qaCoordinator,'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id,qaTools],
+  [genericWorkers[0],'independent_qa_execution_coordination','manager','supervisor',3,qaExecution.id,qaTools],
+  ...genericWorkers.slice(1).map(n=>[n,'qa_planning','manager','supervisor',3,qaPlanning.id,qaTools]),
+ ];
+ await first.query('begin');
+ try{
+  await first.query("set local session_replication_role = 'replica'");
+  for(const [node,area,kind,level,depth,parent,tools] of actualTopology){
+   await first.query('update project_organization_nodes set area=$2,kind=$3,management_level=$4,depth=$5,parent_id=$6,tools=$7 where id=$1',
+    [node.id,area,kind,level,depth,parent,tools]);
+   await first.query('update project_organization_contract_changes set tools=$2,prior_tools=$2 where project_id=$3 and window_id=$4 and node_id=$1',
+    [node.id,tools,project,windowId]);
+  }
+  // Reconstruct the exact THREE saved original grants (root, Game Delivery,
+  // delivery manager), using the original ratified paths; unrelated synthetic
+  // benchmark grants are not evidence of the live original organization.
+  for(const [node,tools] of [
+   [fixtureRoot,['manage','analysis','research','development','repository_review']],
+   [fixtureGame,['analysis','development','manage','repository_review']],
+  ]){
+   await first.query('update project_organization_nodes set tools=$2 where id=$1',[node.id,tools]);
+   await first.query('update project_organization_contract_changes set tools=$2,prior_tools=$2 where node_id=$1 and project_id=$3 and window_id=$4',
+    [node.id,tools,project,windowId]);
+  }
+  const exactPaths=(await first.query("select array(select jsonb_array_elements_text(spec->'allowedPaths')) paths from work_projects where id=$1",[project])).rows[0].paths;
+  assert.deepEqual(exactPaths,['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/']);
+  await first.query('delete from project_organization_scope_grants where node_id in (select id from project_organization_nodes where project_id=$1) and node_id<>all(array[$2::uuid,$3::uuid,$4::uuid])',
+   [project,fixtureRoot.id,fixtureGame.id,delivery.id]);
+  for(const [node,parent] of [[fixtureRoot,null],[fixtureGame,fixtureRoot.id],[delivery,fixtureGame.id]]){
+   await first.query('insert into project_organization_scope_grants(node_id,scope_hash,paths,parent_id) values($1,$2,$3,$4) on conflict(node_id,scope_hash) do update set paths=excluded.paths,parent_id=excluded.parent_id',
+    [node.id,scopeHash,exactPaths,parent]);
+  }
+  await first.query('update project_organization_scope_grants g set parent_id=n.parent_id from project_organization_nodes n where g.node_id=n.id and n.project_id=$1',[project]);
+  await first.query("set local session_replication_role = 'origin'");
+  await first.query('commit');
+ }catch(error){await first.query('rollback');throw error;}
+ await first.query('set role service_role');
+ assert.equal((await first.query('select count(*)::int n from project_organization_contract_changes where project_id=$1 and window_id=$2',[project,windowId])).rows[0].n,13,
+  'All thirteen historical deadline contracts remain preserved');
+ assert.equal((await first.query('select project_org_retest_exact_scope_grants($1) valid',[project])).rows[0].valid,false,
+  'Original three-grant proof must fail until saved owner retest lineage exists');
+ console.log('MISSION79_AUTHENTIC_ORIGINAL_13_NODE_TOPOLOGY_FIXTURE_PASS');
+
  await first.query('begin');
  try{
   await first.query('reset role');
@@ -31,30 +117,35 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [project,root.id,rat.approved_at])).rows[0].n);
   assert.ok(priorRootFailed<=1,'Synthetic source requires fewer than two prior post-ratification root failures');
   const exemplar=(await first.query("select id from agent_missions where project_id=$1 order by created_at desc,id desc limit 1",[project])).rows[0].id;
+  const actualSavedDecision=(await first.query('select continuation_decision_id from project_provider_execution where project_id=$1',[project])).rows[0].continuation_decision_id;
+  assert.ok(actualSavedDecision,'Fixture must preserve its own authenticated owner continuation decision');
   const firstId=randomUUID();
   for(const [i,id,node] of [
    [0,firstId,priorRootFailed===0?root:game],
    [1,source,root]
   ]){
-   const detail=i===1?'Mission state operation failed: No delegation change requested':'Management session blocked';
+   const detail=i===1?'Mission state operation failed: {"code":"P0001","details":null,"hint":null,"message":"No delegation change requested"}':'Management session blocked';
    await first.query(`insert into agent_missions
     select (jsonb_populate_record(null::agent_missions,to_jsonb(m)||jsonb_build_object(
      'id',$2::uuid,'status','blocked','project_kind','management',
      'project_evidence',jsonb_build_object('organizationNodeId',$3::uuid,'previousMissionId',null,
-      'providerContinuationWindow',$4::uuid,'providerContinuationRelease',$5::text),
+      'providerContinuationWindow',$4::uuid,'providerContinuationRelease',$5::text,
+      'providerContinuationDecision',$7::text),
      'created_at',clock_timestamp(),'updated_at',clock_timestamp(),'calls',1,
      'detail',$6::text))).*
     from agent_missions m where m.id=$1`,
-    [exemplar,id,node.id,windowId,priorRelease,detail]);
+    [exemplar,id,node.id,windowId,priorRelease,detail,i===1?actualSavedDecision:null]);
    // Model the real scheduler's exact temporary active-mission binding so
    // the existing management execution trigger remains ENFORCED in this fixture.
    await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,id]);
    await first.query(`insert into mission_assignments
-    (id,mission_id,job_key,role,agent_id,instruction,payload,status,result)
-    values($1,$2,'plan','work',$3,'Make bounded management decisions',
+    (id,mission_id,job_key,role,agent_id,instruction,payload,status,result,attempts)
+    values($1,$2,'plan','work',$3,coalesce($8::text,$4::text),
       jsonb_build_object('organizationNodeId',$5::uuid),'failed',
-      jsonb_build_object('detail',$4::text))`,
-    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id]);
+      $7::jsonb,$6::integer)`,
+    [i===1?'cd81b57d-0812-485c-b8f6-d658aa80186f':randomUUID(),id,node.agent_id,detail,node.id,i===1?1:0,
+     JSON.stringify(i===1?{detail,diagnostic:{stage:'work',errorType:'Error',acceptedIssue:false}}:{detail}),
+     i===1?'Make bounded management decisions. Delegate all technical execution.':'Make bounded management decisions']);
   }
   await first.query("update project_organization_nodes set decision_needed=(id=$2) where project_id=$1",[project,root.id]);
   await first.query(`update work_projects set status='blocked',
@@ -92,6 +183,24 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal(offer.maxMissions,96);assert.equal(offer.tokenAllowance,600000);
   const call=[owner,project,repairedRelease,source,windowId,offer.cutoff,offer.stateHash];
   const commitOnce=()=>first.query('select project_org_resume_blocked_management_once($1,$2,$3,$4,$5,$6,$7) r',call);
+  const raceNewOwnerRpc=async(label,sql,args)=>{
+   const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const contender=second.query(sql,args).then(r=>({ok:true,result:r.rows[0].r}),error=>({ok:false,error}));
+   let waiting=false;
+   for(let i=0;i<30;i++){
+    const locks=await observer.query('select locktype,granted from pg_locks where pid=$1 and granted=false',[pid]);
+    if(locks.rows.some(l=>l.locktype==='advisory'&&!l.granted)){waiting=true;break;}
+    const done=await Promise.race([contender.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),50))]);
+    if(done)throw Error(label+' competing writer returned before first transaction committed');
+   }
+   assert.equal(waiting,true,label+' requires real two-client advisory-lock contention');
+   await first.query('commit');
+   const rival=await contender;
+   assert.equal(rival.ok,false,label+' competing RPC must reject a consumed receipt');
+   assert.match(rival.error.message,/window|owner|authorization|retest|state|already|recorded|bound|release|mission/i);
+   await first.query('begin');
+   console.log('MISSION79_NEW_'+label+'_TWO_CONNECTION_RACE_PASS: two real writer RPCs, one immutable receipt and rejected competing caller');
+  };
   const rejected=async(action,regex)=>{
    await first.query('savepoint negative');
    try{await assert.rejects(action(),regex);}
@@ -150,6 +259,36 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '5 minutes' where id=$1",[project,lease]);
   await first.query('set role service_role');
   const scheduled=(await first.query('select project_org_schedule($1,$2) r',[project,lease])).rows[0].r;
+  // Bind the disposable scheduler-generated payload to the *actual* immutable
+  // production Mission 79 and assignment IDs. No production writes or
+  // additional worker commissions: only these fixture row identifiers change.
+  const exactMission79='b7c2e557-83e1-41cb-b174-bdb0d77d12e5';
+  const exactJob79='85e229aa-e571-43ef-9d4a-5cb64f4efcd1';
+  const generatedMission=scheduled.missionId;
+  const generatedJob=(await first.query(
+   'select id from mission_assignments where mission_id=$1',[generatedMission]
+  )).rows[0]?.id;
+  assert.ok(generatedJob,'Native scheduler must create exactly the claimed work assignment');
+  await first.query('reset role');
+  const srcMission=(await first.query('select to_jsonb(m) row from agent_missions m where id=$1',[generatedMission])).rows[0].row;
+  const srcJob=(await first.query('select to_jsonb(j) row from mission_assignments j where id=$1',[generatedJob])).rows[0].row;
+  // The production saved mission79 has the same complete immutable source
+  // evidence as its original failed director mission. Reproduce that exact
+  // property when assigning fixed production identifiers in this fixture.
+  const immutableSource=(await first.query('select project_evidence from agent_missions where id=$1',[source])).rows[0].project_evidence;
+  const immutableJobPayload=(await first.query('select payload from mission_assignments where mission_id=$1',[source])).rows[0].payload;
+  await first.query(`insert into agent_missions select (jsonb_populate_record(null::agent_missions,$1::jsonb||jsonb_build_object('id',$2::uuid,'project_evidence',$3::jsonb))).*`,[JSON.stringify(srcMission),exactMission79,JSON.stringify(immutableSource)]);
+  await first.query('update work_projects set active_mission_id=$2 where id=$1',[project,exactMission79]);
+  await first.query(`insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb||jsonb_build_object('id',$2::uuid,'mission_id',$3::uuid,'payload',$4::jsonb))).*`,[JSON.stringify(srcJob),exactJob79,exactMission79,JSON.stringify(immutableJobPayload)]);
+  const oldBindings=(await first.query('select to_jsonb(b) row from project_organization_assignments b where b.assignment_id=$1',[generatedJob])).rows.map(x=>x.row);
+  for(const binding of oldBindings){
+   await first.query(`insert into project_organization_assignments select (jsonb_populate_record(null::project_organization_assignments,$1::jsonb||jsonb_build_object('assignment_id',$2::uuid))).*`,[JSON.stringify(binding),exactJob79]);
+  }
+  await first.query('delete from project_organization_assignments where assignment_id=$1',[generatedJob]);
+  await first.query('delete from mission_assignments where id=$1',[generatedJob]);
+  await first.query('delete from agent_missions where id=$1',[generatedMission]);
+  scheduled.missionId=exactMission79;
+  await first.query('set role service_role');
   assert.ok(scheduled?.missionId,'Normal scheduler must admit precisely one fresh management mission: '+JSON.stringify(scheduled));
   assert.equal(scheduled.nodeId,root.id);
   const newMission=(await first.query('select project_kind,project_evidence from agent_missions where id=$1',[scheduled.missionId])).rows[0];
@@ -161,12 +300,1306 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   const stillSource=(await first.query('select status,detail from agent_missions where id=$1',[source])).rows[0];
   assert.equal(stillSource.status,'blocked');assert.match(stillSource.detail,/No delegation change requested/);
   assert.equal((await first.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+  // Return the project scheduling lease through the NORMAL project lifecycle.
+  // The worker queue is not a Project Director management decision and does
+  // not automatically acquire new owner permissions.
+  const finished=(await first.query(
+   "select finish_work_project($1,$2,'wait',$3::jsonb) ok",
+   [project,lease,JSON.stringify({detail:'Awaiting the queued management assignment'})]
+  )).rows[0].ok;
+  assert.equal(finished,true,'Ordinary scheduler must relinquish project lease before worker claim');
+  const originalJob=(await first.query(
+   'select id,status,attempts,lease from mission_assignments where mission_id=$1',
+   [scheduled.missionId])).rows[0];
+  assert.equal(originalJob.status,'queued');assert.equal(originalJob.attempts,0);
+  // The shared native fixture has other legitimate runnable projects. This
+  // isolated test must inspect this one authorized mission's release fence,
+  // not whichever unrelated job globally queued first. Follow the existing
+  // continuation-qualification pattern: age ONLY the disposable assignment
+  // before its history baseline, then roll back the whole scheduler test.
+  await first.query('reset role');
+  await first.query("update mission_assignments set created_at='2000-01-01T00:00:00Z' where id=$1",
+   [originalJob.id]);
+  await first.query('set role service_role');
+  const executionRelease='d'.repeat(40),unboundRelease='e'.repeat(40);
+  // All release-gate transitions must present the caller-observed generation.
+  // The five-argument SQL guard independently rechecks it under the state lock.
+  const setGate=async(args,observedGeneration)=>{
+   const actual=(await first.query('select coalesce((select generation from project_retest_production_release_gate where project_id=$1),0)::bigint g',[args[0]])).rows[0].g;
+   const expected=observedGeneration??Number(actual);
+   return first.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5) g',[...args,expected]);
+  };
+  // Negative release probes must not leave unrelated fixture workers leased:
+  // doing so fills the unchanged three-worker global cap before mission 79.
+  const releaseEpoch=async release=>(await first.query(
+   'select project_org_retest_release_epoch($1,$2) e',[project,release])).rows[0].e;
+  const isolatedNegativeClaim=async(release,observedGeneration,deployment='dpl_NativeFixture79')=>{
+   await first.query('savepoint negative_release_claim');
+   try{
+    if(observedGeneration==='legacy')
+     return (await first.query('select claim_mission_work_release($1) r',[release])).rows[0].r;
+    const generation=observedGeneration??(await releaseEpoch(release)).generation;
+    return (await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+     [release,generation,deployment])).rows[0].r;
+   }
+   finally{
+    await first.query('rollback to savepoint negative_release_claim');
+    await first.query('release savepoint negative_release_claim');
+   }
+  };
+  const stale=await isolatedNegativeClaim(executionRelease);
+  assert.notEqual(stale?.job?.id,originalJob.id,'Without an exact owner-source binding, a later SHA cannot claim mission 79');
+
+  const offerArgs=[owner,project,executionRelease];
+  // The old binding MUST refuse: no renewed owner deadline exists yet.
+  await rejected(()=>first.query(
+   'select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs
+  ),/window|future|owner|release/i);
+
+  // Reproduce the actual production 45-minute no-progress watchdog and its
+  // expired management mission: neither status is changed in production.
+  await first.query('reset role');
+  await first.query(`update work_projects set status='blocked',
+    progress_since=clock_timestamp()-interval '46 minutes',
+    detail='No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.'
+    where id=$1`,[project]);
+  await first.query("update agent_missions set status='blocked',detail='Mission deadline reached; no work started' where id=$1",
+   [scheduled.missionId]);
+  await first.query('set role service_role');
+  assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
+  assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,'blocked');
+  // Fixture-only reconstruction of the original expired receipt/window;
+  // historical owner retest first needed a live synthetic window to execute.
+  // All triggers are restored BEFORE any future owner authorization is tested.
+  const expiredOriginalCutoff='2026-11-18T14:00:00Z';
+  await first.query('reset role');
+  await first.query("set local session_replication_role = 'replica'");
+  try{
+   await first.query('update project_blocked_management_retest_receipts set cutoff=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update project_blocked_owner_windows set cutoff=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update project_execution_windows set cutoff=$2 where id=$1',[windowId,expiredOriginalCutoff]);
+   await first.query('update project_provider_execution set deadline=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update work_projects set deadline=$2 where id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update project_organization_contract_changes set deadline=$2 where project_id=$1 and window_id=$3',[project,expiredOriginalCutoff,windowId]);
+   await first.query('update project_organization_nodes set deadline=$2 where project_id=$1',[project,expiredOriginalCutoff]);
+   await first.query('update agent_missions set deadline=$2 where id=$1',[scheduled.missionId,expiredOriginalCutoff]);
+  }finally{await first.query("set local session_replication_role = 'origin'");}
+  assert.equal((await first.query("show session_replication_role")).rows[0].session_replication_role,'origin');
+  await first.query('set role service_role');
+  const originalAuthority=(await first.query(
+   'select r.window_id,r.cutoff,project_provider_continued(p.id) continued from work_projects p join project_blocked_management_retest_receipts r on r.project_id=p.id where p.id=$1',
+   [project])).rows[0];
+  assert.equal(new Date(originalAuthority.cutoff).toISOString(),'2026-11-18T14:00:00.000Z');
+  assert.equal(originalAuthority.window_id,'7d216bbe-596e-457e-b84d-e07ad1e80365');
+  assert.equal(originalAuthority.continued,true);
+  // Only the disposable fixture commits the synthetic 79th management
+  // mission before concurrent owner writes; production is never touched.
+  await first.query('commit');
+  assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,79);
+  await first.query('begin');
+
+  // Compare all immutable records BEFORE owner renewal, again after renewal
+  // and after release binding. Exempt only mission79 deadline/status/update
+  // timestamps, never its source evidence, usage or token reservations.
+  const originalIntegrity=async()=>{
+   await first.query('reset role');
+   try{
+    const sources={
+     missions:"select md5(coalesce(jsonb_agg(case when m.id=$2::uuid then to_jsonb(m)-'deadline'-'status'-'updated_at' else to_jsonb(m) end order by m.id)::text,'[]')) h from agent_missions m where m.project_id=$1",
+     calls:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.id)::text,'[]')) h from mission_calls c join mission_assignments j on j.id=c.job_id join agent_missions m on m.id=j.mission_id where m.project_id=$1",
+     providerRequests:"select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.id)::text,'[]')) h from project_provider_requests r where r.project_id=$1",
+     providerDispatches:"select md5(coalesce(jsonb_agg(to_jsonb(d) order by d.task_id)::text,'[]')) h from project_provider_dispatches d join mission_assignments j on j.id=d.task_id join agent_missions m on m.id=j.mission_id where m.project_id=$1",
+     assignments:"select md5(coalesce(jsonb_agg(to_jsonb(j) order by j.id)::text,'[]')) h from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1",
+     originalRetestReceipt:"select md5(coalesce(jsonb_agg(to_jsonb(r) order by r.project_id)::text,'[]')) h from project_blocked_management_retest_receipts r where r.project_id=$1",
+     originalContracts:"select md5(coalesce(jsonb_agg(to_jsonb(c) order by c.node_id)::text,'[]')) h from project_organization_contract_changes c where c.project_id=$1 and c.window_id=$2::uuid",
+     grants:"select md5(coalesce(jsonb_agg(to_jsonb(g) order by g.node_id)::text,'[]')) h from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1",
+     decisions:"select md5(coalesce(jsonb_agg(to_jsonb(d) order by d.id)::text,'[]')) h from project_organization_decisions d where d.project_id=$1",
+     exceptions:"select md5(coalesce(jsonb_agg(to_jsonb(e) order by e.id)::text,'[]')) h from project_organization_exceptions e where e.project_id=$1",
+     packageCount:"select count(*)::text h from project_work_packages where project_id=$1",
+     exposure:"select coalesce(sum(greatest(coalesce(m.actual_tokens,0),coalesce(m.reserved_tokens,0))),0)::text h from agent_missions m where m.project_id=$1"
+    };
+    const hashes={};
+    for(const [name,query] of Object.entries(sources))
+     hashes[name]=(await first.query(query,
+      name==='missions'?[project,scheduled.missionId]:
+      name==='originalContracts'?[project,windowId]:[project])).rows[0].h;
+    return hashes;
+   }finally{await first.query('set role service_role');}
+  };
+  const sourceBeforeOwnerRenewal=await originalIntegrity();
+
+  // The release operator, not the owner UI or service-role runtime, must
+  // open the canonical production epoch only after verifying READY on alias.
+  // All gate transitions here are in disposable native PostgreSQL.
+  await first.query('set role service_role');
+  await rejected(()=>setGate(
+   [project,executionRelease,'dpl_NativeFixture79','active']),/permission denied/i);
+  await first.query('reset role');
+  const activeGate=(await setGate(
+   [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
+  assert.equal(activeGate.state,'active');
+  const activeEpoch=(await first.query('select project_org_retest_release_epoch($1,$2) e',
+   [project,executionRelease])).rows[0].e;
+  assert.equal(activeEpoch.active,true);assert.equal(activeEpoch.generation,activeGate.generation??1);
+  await first.query('set role service_role');
+  assert.equal((await first.query(
+   'select project_org_retest_active_release($1,$2) allowed',
+   [project,executionRelease])).rows[0].allowed,true);
+  assert.equal((await first.query(
+   'select project_org_retest_active_release($1,$2) allowed',
+   [project,unboundRelease])).rows[0].allowed,false);
+
+  // End-to-end: Chromium owner-selected cutoff -> real first-party route ->
+  // authenticated owner bearer -> real immutable PostgreSQL receipt. The
+  // browser integration rolls back a nested savepoint; no extra window survives.
+  const {assertMission79BrowserPostgres}=await import('./assert-mission79-browser-postgres.mjs');
+  await assertMission79BrowserPostgres(first,{
+   project,owner,release:executionRelease,missionId:scheduled.missionId,
+   assignmentId:originalJob.id,stage:'authorize'
+  });
+  // Real TWO-BACKEND lock wait across the five-minute owner authorization
+  // margin. This branch is disposable PostgreSQL only. The claimant passes
+  // the first validation, blocks on a genuine organization row, and must
+  // reject the now-expired selection before inserting its immutable receipt.
+  await first.query('commit'); // Release setup's advisory locks, keep disposable fixture.
+  await first.query('begin');
+  await first.query('reset role');
+  await first.query('select id from project_organization_nodes where id=$1 for update',[fixtureRoot.id]);
+  const cutoffContenderPid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+  await second.query('set role service_role');
+  const nearCutoff=new Date(Date.now()+5*60000+8000).toISOString();
+  const priorOffer=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(priorOffer.stage,'authorize');
+  const nearArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,randomUUID(),
+   nearCutoff,priorOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
+  const contender=second.query('select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',nearArgs)
+   .then(r=>({ok:true,r:r.rows[0].r}),error=>({ok:false,error}));
+  let sawRealLock=false;
+  for(let i=0;i<35;i++){
+   const locks=await observer.query('select locktype,granted from pg_locks where pid=$1 and granted=false',[cutoffContenderPid]);
+   if(locks.rows.some(l=>!l.granted)){sawRealLock=true;break;}
+   const finished=await Promise.race([contender.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),50))]);
+   if(finished)throw Error('Owner cutoff contender returned before waiting on the held original organization row');
+  }
+  assert.equal(sawRealLock,true,'Owner cutoff race must observe actual PostgreSQL lock contention');
+  await new Promise(resolve=>setTimeout(resolve,8500));
+  await first.query('commit');
+  const expiredContender=await contender;
+  assert.equal(expiredContender.ok,false,'Owner write must fail when margin expires under a real row lock');
+  assert.match(expiredContender.error.message,/future cutoff expired while acquiring organization locks/i);
+  await first.query('begin');
+  await first.query('set role service_role');
+  assert.equal((await first.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[project])).rows[0].n,0,
+   'A real post-lock owner cutoff failure cannot create any immutable owner receipt');
+  console.log('MISSION79_OWNER_CUTOFF_REAL_ROW_LOCK_CONTENTION_NEGATIVE_PASS');
+  const futureOffer=(await first.query(
+   'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(futureOffer.stage,'authorize');
+  assert.equal(futureOffer.missionId,scheduled.missionId);
+  assert.equal(futureOffer.assignmentId,originalJob.id);
+  assert.equal(futureOffer.historicalMissions,79);
+  assert.equal(futureOffer.releaseGeneration,activeEpoch.generation);
+  assert.equal(futureOffer.deploymentId,'dpl_NativeFixture79');
+  // Neither an altered source lineage nor a QA supervisor reporting into
+  // delivery may be silently re-baselined by the fresh owner window.
+  await first.query('savepoint original_lineage_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update agent_missions set project_evidence=jsonb_set(project_evidence,'{providerContinuationRelease}',to_jsonb($2::text)) where id=$1",
+    [source,'f'.repeat(40)]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
+    offerArgs),/Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_lineage_negative');
+   await first.query('release savepoint original_lineage_negative');
+  }
+  // Full original evidence, not substring or selected-key acceptance.
+  await first.query('savepoint original_full_evidence_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update agent_missions set project_evidence=project_evidence||'{\"unauthorizedHistoricalMarker\":true}'::jsonb where id=$1",[source]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',offerArgs),
+    /Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_full_evidence_negative');
+   await first.query('release savepoint original_full_evidence_negative');
+  }
+  await first.query('savepoint original_full_result_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update mission_assignments set result=result||'{\"unauthorizedHistoricalMarker\":true}'::jsonb where id=$1",['cd81b57d-0812-485c-b8f6-d658aa80186f']);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',offerArgs),
+    /Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_full_result_negative');
+   await first.query('release savepoint original_full_result_negative');
+  }
+  await first.query('savepoint original_qa_topology_negative');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update project_organization_nodes set parent_id=(select id from project_organization_nodes where project_id=$1 and area='delivery_management' limit 1) where id=(select id from project_organization_nodes where project_id=$1 and area='qa_planning' limit 1)",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
+    offerArgs),/Original owner retest and project identity not eligible/i);
+  }finally{
+   await first.query('rollback to savepoint original_qa_topology_negative');
+   await first.query('release savepoint original_qa_topology_negative');
+  }
+  assert.equal((await first.query('select project_org_retest_original_owner_lineage($1) verified',[project])).rows[0].verified,true,
+   'Untampered original source and QA hierarchy must remain valid');
+  console.log('MISSION79_HISTORICAL_SOURCE_AND_QA_TOPOLOGY_NEGATIVES_PASS');
+  // Preserve the authentic original scope across owner offer AND locked write.
+  // These corruptions exist only inside rolled-back disposable transactions;
+  // the ordinary owner state hash intentionally does not contain grant rows.
+  const scopeGrantNegative=async(label,sqlStatement,params,offerStatement,writer,pattern)=>{
+   await first.query('savepoint mission79_scope_grant_negative');
+   try{
+    await first.query('reset role');
+    await first.query("set local session_replication_role = 'replica'");
+    await first.query(sqlStatement,params);
+    await first.query("set local session_replication_role = 'origin'");
+    await first.query('set role service_role');
+    assert.equal((await first.query('select project_org_retest_exact_scope_grants($1) valid',[project])).rows[0].valid,false,
+     label+' must invalidate exact original scope-grant attestation');
+    await rejected(()=>first.query(offerStatement,offerArgs),pattern);
+    if(writer)await rejected(writer,/grant|owner|original|historical|scope|state|window|source/i);
+   }finally{
+    await first.query('rollback to savepoint mission79_scope_grant_negative');
+    await first.query('release savepoint mission79_scope_grant_negative');
+    await first.query('set role service_role');
+   }
+  };
+  const originalGrantOffer='select project_org_retest_future_window_offer($1,$2,$3)';
+  await scopeGrantNegative('deleted delivery grant',
+   'delete from project_organization_scope_grants where node_id=$1',[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('broadened grant paths',
+   "update project_organization_scope_grants set paths=array['app/unapproved/'] where node_id=$1",[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('changed development permission',
+   "update project_organization_nodes set tools=array_remove(tools,'development') where id=$1",[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('changed grant parent',
+   'update project_organization_scope_grants set parent_id=null where node_id=$1',[delivery.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  await scopeGrantNegative('extra QA grant',
+   'insert into project_organization_scope_grants(node_id,scope_hash,paths,parent_id) values($1,$2,$3,$4)',
+   [fixtureQa.id,scopeHash,['app/milestone-3-tic-tac-toe/'],fixtureRoot.id],
+   originalGrantOffer,null,/Original owner retest and project identity not eligible/i);
+  console.log('MISSION79_THREE_ORIGINAL_SCOPE_GRANTS_READ_ONLY_NEGATIVES_PASS');
+  const authorizationId=randomUUID();
+  const explicitFutureCutoff=new Date(Date.now()+4*3600000).toISOString();
+  assert.ok(Date.parse(explicitFutureCutoff)>Date.parse(futureOffer.priorCutoff));
+  const approveArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
+  const approve=()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',approveArgs);
+  // Owner offer predated a CLOSE -> OPEN transition of the SAME deployment.
+  // The old generation must not authorize even when SHA and state hash match.
+  await first.query('savepoint stale_owner_offer_generation');
+  try{
+   await first.query('reset role');
+   await setGate([project,executionRelease,'dpl_NativeFixture79','closed']);
+   await setGate([project,executionRelease,'dpl_NativeFixture79','active']);
+   await first.query('set role service_role');
+   await rejected(approve,/Observed canonical release epoch or deployment changed under owner write lock/i);
+   const reopenedOffer=(await first.query('select project_org_retest_future_window_offer($1,$2,$3) o',offerArgs)).rows[0].o;
+   assert.ok(reopenedOffer.releaseGeneration>futureOffer.releaseGeneration,
+    'A reopened release must have a new generation even when SHA and deployment are unchanged');
+  }finally{
+   await first.query('rollback to savepoint stale_owner_offer_generation');
+   await first.query('release savepoint stale_owner_offer_generation');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_STALE_OWNER_OFFER_EPOCH_REJECTED_PASS');
+  // The original preflight was valid; a grant-only change after it must still
+  // be rejected by the locked writer even with its unchanged offered hash.
+  await scopeGrantNegative('grant changed between offer and authorization',
+   "update project_organization_scope_grants set paths=array['app/changed-after-offer/'] where node_id=$1",
+   [delivery.id],originalGrantOffer,approve,/Original owner retest and project identity not eligible/i);
+  console.log('MISSION79_SCOPE_GRANT_OFFER_TO_OWNER_WRITE_DRIFT_REJECTED_PASS');
+  await rejected(()=>first.query('select project_org_retest_future_window_offer($1,$2,$3)',
+   [randomUUID(),project,executionRelease]),/owner|auth|original/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [...approveArgs.slice(0,7),'f'.repeat(64),...approveArgs.slice(8)]),/state|owner|fresh|authorization/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [owner,project,executionRelease,randomUUID(),originalJob.id,authorizationId,explicitFutureCutoff,futureOffer.stateHash,...approveArgs.slice(8)]),
+   /mission|state|owner|original|exact/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [...approveArgs.slice(0,8),activeEpoch.generation+1,'dpl_NativeFixture79']),
+   /Observed canonical release epoch or deployment changed/i);
+  await rejected(()=>first.query(
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+   [...approveArgs.slice(0,9),'dpl_WrongNativeFixture']),
+   /Observed canonical release epoch or deployment changed/i);
+  await first.query('set role anon');await rejected(approve,/permission denied/i);
+  await first.query('set role service_role');
+  const ownerWindow=(await approve()).rows[0].r;
+  assert.deepEqual(await originalIntegrity(),sourceBeforeOwnerRenewal,
+   'Owner-selected window preserves 79 historical missions, all charges, immutable retest receipt, original contracts and grants');
+  assert.equal(ownerWindow.stage,'authorized');assert.equal(ownerWindow.status,'blocked');
+  assert.equal(ownerWindow.missionStatus,'blocked');assert.equal(ownerWindow.authorizationId,authorizationId);
+  assert.equal(Date.parse(ownerWindow.cutoff),Date.parse(explicitFutureCutoff));
+  assert.equal(ownerWindow.historicalMissions,79);
+  await raceNewOwnerRpc('OWNER_WINDOW',
+   'select project_org_authorize_retest_future_window($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) r',approveArgs);
+  assert.equal((await observer.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',[project])).rows[0].n,1);
+  assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_future_window_owner_authorized'",[project])).rows[0].n,1);
+  assert.equal((await first.query('select deadline,max_missions,token_allowance from work_projects where id=$1',
+   [project])).rows[0].max_missions,96);
+  assert.equal((await first.query('select count(*)::int n from project_retest_future_window_receipts where project_id=$1',
+   [project])).rows[0].n,1);
+  assert.equal((await first.query(
+   'select organization_hash from project_retest_future_window_receipts where project_id=$1',[project]
+  )).rows[0].organization_hash,await (async()=>{
+    await first.query('reset role');
+    try{return (await first.query('select project_org_scope_ratification_state($1) h',[project])).rows[0].h;}
+    finally{await first.query('set role service_role');}
+   })(),
+   'New owner window must pin the immutable post-renewal organizational and QA contract');
+  assert.equal((await first.query('select project_provider_continued($1) a',[project])).rows[0].a,true);
+  assert.equal((await first.query('select project_provider_continued_assignment($1) a',[originalJob.id])).rows[0].a,true);
+  const recordedWindow=(await first.query(
+   'select project_org_retest_future_window_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(recordedWindow.stage,'authorized');
+  assert.equal(recordedWindow.authorizationId,authorizationId);
+  await rejected(approve,/state|window|owner|authorization/i);
+  await rejected(()=>first.query(
+   'select project_org_retest_future_window_offer($1,$2,$3)',
+   [owner,project,unboundRelease]),/SHA|release|window|production/i);
+  // The new mission79 payload must match the already immutable original
+  // source, including unknown/new evidence keys. Mutation is rolled back.
+  for(const [name,table,column,id] of [
+   ['mission evidence','agent_missions','project_evidence',scheduled.missionId],
+   ['assignment payload','mission_assignments','payload',originalJob.id],
+  ]){
+   await first.query('savepoint mission79_original_evidence_negative');
+   try{
+    await first.query('reset role');
+    await first.query("set local session_replication_role = 'replica'");
+    await first.query(`update ${table} set ${column}=${column}||'{"unauthorizedHistoricalMarker":true}'::jsonb where id=$1`,[id]);
+    await first.query("set local session_replication_role = 'origin'");
+    await first.query('set role service_role');
+    await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+     /Historical mission 79 or approved renewed source changed/i);
+   }finally{
+    await first.query('rollback to savepoint mission79_original_evidence_negative');
+    await first.query('release savepoint mission79_original_evidence_negative');
+   }
+  }
+  console.log('MISSION79_COMPLETE_SAVED_SOURCE_EVIDENCE_TAMPER_NEGATIVES_PASS');
+  const claimOffer=(await first.query(
+   'select project_org_retest_claim_release_offer($1,$2,$3) r',offerArgs)).rows[0].r;
+  assert.equal(claimOffer.stage,'bind');
+  assert.equal(claimOffer.missionId,scheduled.missionId);
+  assert.equal(claimOffer.assignmentId,originalJob.id);
+  assert.equal(claimOffer.historicalMissions,79);
+  assert.equal(claimOffer.maxMissions,96);
+  assert.equal(claimOffer.tokenAllowance,600000);
+  // A separate real browser interaction must bind the already persisted
+  // owner window; it must not double-write its immutable approval.
+  await assertMission79BrowserPostgres(first,{
+   project,owner,release:executionRelease,missionId:scheduled.missionId,
+   assignmentId:originalJob.id,stage:'authorized'
+  });
+  const immutableBeforeBinding=await unmodified();
+  const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
+  // All cases run on the disposable DB. A forged pending provider request or
+  // changed owner-approved objective after the real authorization MUST fail
+  // both read-only offer and locked binding without another immutable receipt.
+  const pendingRequestFixture=async()=>{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query(`insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash)
+     values($1,$2,$3,$4,$5,$6,'inference',$7)`,
+    [randomUUID(),project,scheduled.missionId,originalJob.id,
+     (await first.query('select agent_id from mission_assignments where id=$1',[originalJob.id])).rows[0].agent_id,
+     randomUUID(),'f'.repeat(64)]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   assert.equal((await first.query('select project_provider_request_pending($1) pending',[project])).rows[0].pending,true);
+  };
+  const verifyBindingUnchanged=async(label)=>{
+   assert.equal((await first.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,0,label+' cannot create release receipt');
+   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked',label+' cannot restart blocked project');
+   assert.equal((await first.query('select status,attempts,lease from mission_assignments where id=$1',[originalJob.id])).rows[0].attempts,0,label+' cannot consume worker capacity');
+  };
+  await first.query('savepoint before_binding_pending_provider');
+  try{
+   await pendingRequestFixture();
+   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
+    /Unresolved original project provider request blocks release binding/i);
+   await verifyBindingUnchanged('Pending provider request');
+  }finally{
+   await first.query('rollback to savepoint before_binding_pending_provider');
+   await first.query('release savepoint before_binding_pending_provider');
+   await first.query('set role service_role');
+  }
+  await first.query('savepoint before_binding_objective_tamper');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set objective=objective||' UNAPPROVED CHANGE' where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await verifyBindingUnchanged('Objective drift before binding');
+  }finally{
+   await first.query('rollback to savepoint before_binding_objective_tamper');
+   await first.query('release savepoint before_binding_objective_tamper');
+   await first.query('set role service_role');
+  }
+  await first.query('savepoint before_binding_specification_tamper');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set spec=jsonb_set(spec,'{milestones,0,instruction}',to_jsonb('Unapproved management milestone'::text)) where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
+    /Original three-grant authority changed under binding lock/i);
+   await verifyBindingUnchanged('Approved specification drift before binding');
+  }finally{
+   await first.query('rollback to savepoint before_binding_specification_tamper');
+   await first.query('release savepoint before_binding_specification_tamper');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_BIND_PENDING_PROVIDER_OBJECTIVE_AND_SPEC_DRIFT_NEGATIVES_PASS');
+  const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
+  await first.query('savepoint stale_owner_binding_generation');
+  try{
+   await first.query('reset role');
+   await setGate([project,executionRelease,'dpl_NativeFixture79','closed']);
+   await setGate([project,executionRelease,'dpl_NativeFixture79','active']);
+   await first.query('set role service_role');
+   await rejected(bind,/Observed canonical release epoch or deployment changed under binding lock/i);
+  }finally{
+   await first.query('rollback to savepoint stale_owner_binding_generation');
+   await first.query('release savepoint stale_owner_binding_generation');
+   await first.query('set role service_role');
+  }
+  // A delayed operator request from an earlier CLOSE/OPEN generation must
+  // not apply to the newer gate even for an identical SHA/deployment.
+  await first.query('savepoint stale_operator_generation_replay');
+  try{
+   await first.query('reset role');
+   const initial=(await first.query('select generation,state from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
+   const close=(await setGate([project,executionRelease,'dpl_NativeFixture79','closed'],Number(initial.generation))).rows[0].g;
+   assert.equal(close.state,'closed');
+   const reopened=(await setGate([project,executionRelease,'dpl_NativeFixture79','active'],Number(initial.generation)+1)).rows[0].g;
+   assert.equal(reopened.state,'active');
+   const beforeReplay=(await first.query('select generation,state,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
+   const eventCount=(await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_release_gate_transition'",[project])).rows[0].n;
+   await rejected(()=>setGate([project,executionRelease,'dpl_NativeFixture79','closed'],Number(initial.generation)),
+    /Observed release gate generation changed under operator lock/i);
+   await rejected(()=>setGate([project,executionRelease,'dpl_NativeFixture79','active'],Number(initial.generation)+1),
+    /Observed release gate generation changed under operator lock/i);
+   assert.deepEqual((await first.query('select generation,state,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0],beforeReplay);
+   assert.equal((await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_release_gate_transition'",[project])).rows[0].n,eventCount);
+  }finally{
+   await first.query('rollback to savepoint stale_operator_generation_replay');
+   await first.query('release savepoint stale_operator_generation_replay');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_STALE_OPERATOR_GENERATION_REPLAY_REJECTED_PASS');
+  console.log('MISSION79_STALE_OWNER_BINDING_EPOCH_REJECTED_PASS');
+  await scopeGrantNegative('grant changed between release offer and binding',
+   "update project_organization_scope_grants set paths=array['tests/changed-before-binding/'] where node_id=$1",
+   [delivery.id],'select project_org_retest_claim_release_offer($1,$2,$3)',bind,
+   /Historical mission 79 or approved renewed source changed|Fresh owner-selected future window|Original/i);
+  console.log('MISSION79_SCOPE_GRANT_RELEASE_BINDING_DRIFT_REJECTED_PASS');
+  await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',
+   [randomUUID(),project,executionRelease]),/authenticated|owner|window/);
+  await rejected(()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...bindArgs.slice(0,5),'f'.repeat(64),...bindArgs.slice(6)]),/exact|state|required|fresh|owner/);
+  await rejected(()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...bindArgs.slice(0,6),activeEpoch.generation+1,'dpl_NativeFixture79']),
+   /Observed canonical release epoch or deployment changed/i);
+  await rejected(()=>first.query(
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',
+   [...bindArgs.slice(0,7),'dpl_WrongNativeFixture']),
+   /Observed canonical release epoch or deployment changed/i);
+  await first.query('set role anon');await rejected(bind,/permission denied/i);
+  await first.query('set role service_role');
+  const receipt=(await bind()).rows[0].r;
+  assert.equal(receipt.stage,'bound');assert.equal(receipt.releaseSha,executionRelease);
+  const savedBinding=(await first.query('select bound_deployment_id,bound_release_generation from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0];
+  assert.equal(savedBinding.bound_deployment_id,'dpl_NativeFixture79');
+  assert.equal(Number(savedBinding.bound_release_generation),Number(activeEpoch.generation));
+  assert.deepEqual(await originalIntegrity(),sourceBeforeOwnerRenewal,
+   'Exact-release binding preserves all original mission and provider accounting data');
+  await raceNewOwnerRpc('RELEASE_BIND',
+   'select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
+  assert.equal((await observer.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,1);
+  assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_new_window_release_bound'",[project])).rows[0].n,1);
+  const resumed=(await first.query('select status,progress_since,detail from work_projects where id=$1',[project])).rows[0];
+  assert.equal(resumed.status,'running','One guarded bound-release action must re-admit only the exact watchdog state');
+  assert.match(resumed.detail,/mission79 admitted/);
+  assert.ok(new Date(resumed.progress_since).getTime()>Date.now()-60000,
+   'Watchdog interval may renew only on actual auditable release binding');
+  assert.equal(receipt.existing,false);assert.equal(receipt.historicalMissions,79);
+  const afterBinding=await unmodified();
+  for(const key of ['assignments','decisions','exceptions','grants','packages','nodes'])
+   assert.equal(afterBinding[key],immutableBeforeBinding[key],
+    'Release binding must not change historical '+key);
+  assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,
+   'running','Only the owner-approved original blocked management mission may resume');
+  await rejected(bind,/bound|changed|release|window|mission|owner/i);
+  assert.equal((await first.query(
+   'select project_org_retest_claim_release_authorized($1,$2) a',
+   [project,executionRelease])).rows[0].a,true);
+  assert.equal((await first.query(
+   'select project_org_retest_claim_release_authorized($1,$2) a',
+   [project,unboundRelease])).rows[0].a,false);
+  assert.equal((await first.query(
+   'select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',
+   [project])).rows[0].n,1);
+  assert.equal((await first.query(
+   'select continuation_release_sha from project_provider_execution where project_id=$1',
+   [project])).rows[0].continuation_release_sha,priorRelease,
+   'Original owner continuation SHA must remain immutable');
+  assert.equal((await first.query(
+   'select project_evidence from agent_missions where id=$1',
+   [scheduled.missionId])).rows[0].project_evidence.providerContinuationRelease,priorRelease,
+   'Mission 79 must retain its immutable original source release');
+
+  // Release is already bound, but an altered objective or unresolved
+  // project provider request must NEVER yield the original queued job.
+  // Preserve the bound receipt and the original unconsumed assignment.
+  const boundCount=(await first.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n;
+  const preservedJob=(await first.query('select status,attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
+  const beforeLeaseNegative=async(label,mutate)=>{
+   await first.query('savepoint after_binding_negative');
+   try{
+    await mutate();
+    assert.equal((await first.query('select project_org_retest_claim_release_authorized($1,$2) ok',[project,executionRelease])).rows[0].ok,false,label+' must invalidate release permission');
+    const denied=await isolatedNegativeClaim(executionRelease,activeEpoch.generation);
+    assert.notEqual(denied?.job?.id,originalJob.id,label+' must reject actual worker lease');
+    assert.deepEqual((await first.query('select status,attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0],preservedJob,label+' must preserve queued original assignment');
+    assert.equal((await first.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,boundCount,label+' must preserve immutable binding');
+   }finally{
+    await first.query('rollback to savepoint after_binding_negative');
+    await first.query('release savepoint after_binding_negative');
+    await first.query('set role service_role');
+   }
+  };
+  await beforeLeaseNegative('Pending provider before lease',pendingRequestFixture);
+  await beforeLeaseNegative('Objective drift before lease',async()=>{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set objective=objective||' UNAPPROVED CHANGE' where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+  });
+  await beforeLeaseNegative('Approved milestone drift before lease',async()=>{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set spec=jsonb_set(spec,'{milestones,0,instruction}',to_jsonb('Unapproved management milestone'::text)) where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+  });
+  await beforeLeaseNegative('Saved director agent drift before lease',async()=>{
+   // The original one-director mission may have no alternate team member.
+   // Select another existing organization agent as an unauthorized principal;
+   // changing only the disposable assignment must still fail the exact
+   // saved-director binding without manufacturing a new team member.
+   const other=(await first.query(
+    "select n.agent_id id from project_organization_nodes n where n.project_id=$1 and n.agent_id<>(select agent_id from mission_assignments where id=$2) order by n.id limit 1",
+    [project,originalJob.id])).rows[0]?.id;
+   assert.ok(other,'Fixture requires an existing distinct organization agent for the negative binding test');
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query('update mission_assignments set agent_id=$2 where id=$1',[originalJob.id,other]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+  });
+  console.log('MISSION79_LEASE_PENDING_PROVIDER_OBJECTIVE_SPEC_AND_AGENT_DRIFT_NEGATIVES_PASS');
+  const oldContinuationClaim=await isolatedNegativeClaim(priorRelease);
+  assert.notEqual(oldContinuationClaim?.job?.id,originalJob.id,
+   'Historical continuation release must never reclaim owner-renewed mission79');
+  const staleOther=await isolatedNegativeClaim(unboundRelease);
+  assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
+  // A promotion cannot invalidate the immutable bound generation while
+  // original mission79 is still queued and unleased. No release state,
+  // authorization receipt, mission, charges or worker attempt may change.
+  await first.query('savepoint unleased_binding_close_negative');
+  try{
+   const gateBefore=(await first.query('select state,generation,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
+   const receiptBefore=(await first.query('select bound_release_sha,bound_release_generation,bound_deployment_id from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0];
+   await first.query('reset role');
+   await rejected(()=>setGate(
+    [project,executionRelease,'dpl_NativeFixture79','closed']),
+    /Bound original mission79 is unleased/i);
+   assert.deepEqual((await first.query('select state,generation,release_sha,deployment_id from project_retest_production_release_gate where project_id=$1',[project])).rows[0],gateBefore);
+   assert.deepEqual((await first.query('select bound_release_sha,bound_release_generation,bound_deployment_id from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0],receiptBefore);
+   await first.query('set role service_role');
+   assert.equal((await first.query('select project_org_retest_claim_release_authorized($1,$2) ok',[project,executionRelease])).rows[0].ok,true);
+   assert.equal((await first.query('select status,attempts,lease from mission_assignments where id=$1',[originalJob.id])).rows[0].attempts,0);
+  }finally{
+   await first.query('rollback to savepoint unleased_binding_close_negative');
+   await first.query('release savepoint unleased_binding_close_negative');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_UNLEASED_BOUND_GENERATION_CANNOT_BE_SUPERSEDED_PASS');
+  const reopenedEpoch=await releaseEpoch(executionRelease);
+  assert.equal(reopenedEpoch.generation,activeEpoch.generation,'Original owner-bound generation restored');
+  const wrongDeployment=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation,'dpl_OtherDeployment');
+  assert.notEqual(wrongDeployment?.job?.id,originalJob.id);
+  const staleEpochClaim=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation+1);
+  assert.notEqual(staleEpochClaim?.job?.id,originalJob.id);
+  const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
+  assert.notEqual(legacyClaim?.job?.id,originalJob.id);
+  // An owner-approved window can expire before its FIRST worker lease.
+  // The exact bound runtime must settle that historical mission terminally,
+  // without manufacturing a retry, charging tokens, or changing receipts.
+  await first.query('savepoint never_claimed_owner_window_expiry');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   const expiredBoundCutoff=new Date(Date.now()-60000).toISOString();
+   await first.query("update project_provider_execution set deadline=$2 where project_id=$1",[project,expiredBoundCutoff]);
+   await first.query("update work_projects set deadline=$2 where id=$1",[project,expiredBoundCutoff]);
+   await first.query("update agent_missions set deadline=$2 where id=$1",[scheduled.missionId,expiredBoundCutoff]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   const before=(await first.query('select attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
+   assert.equal(before.attempts,0);assert.equal(before.lease,null);
+   // Reproduce actual cron ordering: project batch takes the shared state
+   // lock FIRST and blocks the expired project while mission79 remains queued.
+   await first.query('select claim_work_project()');
+   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
+   assert.equal((await first.query('select status,attempts from mission_assignments where id=$1',[originalJob.id])).rows[0].status,'queued');
+   await first.query('reset role');
+   await rejected(()=>setGate([project,executionRelease,'dpl_NativeFixture79','closed']),/Bound original mission79 is unleased/i);
+   await first.query('set role service_role');
+   const noLease=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
+   assert.notEqual(noLease?.job?.id,originalJob.id,'No original mission79 lease after owner cutoff');
+   const terminated=(await first.query('select status,attempts,lease from mission_assignments where id=$1',[originalJob.id])).rows[0];
+   assert.deepEqual(terminated,{status:'failed',attempts:0,lease:null});
+   assert.equal((await first.query('select status from agent_missions where id=$1',[scheduled.missionId])).rows[0].status,'blocked');
+   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked');
+   assert.equal((await first.query("select count(*)::int n from project_events where project_id=$1 and event='mission79_unleased_owner_window_expired'",[project])).rows[0].n,1);
+   assert.equal((await first.query('select count(*)::int n from mission_calls where job_id=$1',[originalJob.id])).rows[0].n,0);
+   // Terminally expired, zero-attempt mission now permits the trusted
+   // coordinator's exact CLOSE, without creating a replacement grant.
+   await first.query('reset role');
+   const afterExpiryClose=(await setGate(
+    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+   assert.equal(afterExpiryClose.state,'closed');
+   await first.query('set role service_role');
+  }finally{
+   await first.query('rollback to savepoint never_claimed_owner_window_expiry');
+   await first.query('release savepoint never_claimed_owner_window_expiry');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_PROJECT_FIRST_CUTOFF_ORDER_TERMINAL_SETTLEMENT_PASS');
+  console.log('MISSION79_UNLEASED_OWNER_CUTOFF_TERMINAL_SETTLEMENT_PASS');
+  const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+   [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
+  if(!claimed||claimed.mission?.id!==scheduled.missionId){
+   const predicateSql=[
+    "select j.id job_id,j.status job_status,j.attempts,j.lease,j.available_at,",
+    "m.id mission_id,m.status mission_status,p.status project_status,p.active_mission_id,p.deadline,",
+    "benchmark_effective_mission_deadline(m.id) mission_deadline,",
+    "project_provider_continued_assignment(j.id) source_ok,",
+    "project_org_retest_claim_release_authorized(p.id,$2) release_ok,",
+    "active_managed_work(j.agent_id,j.id) active_agent_work,",
+    "(select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(m.team) v where v->>'id'=j.agent_id::text) team_max,",
+    "(select (config->>'maxActiveTasks')::integer from managed_agents where id=j.agent_id) agent_max,",
+    "not exists(select 1 from unnest(j.dependencies) dep where not exists(select 1 from mission_assignments d where d.mission_id=j.mission_id and d.job_key=dep and d.status='completed')) deps_ready,",
+    "(select count(*) from mission_assignments aa join agent_missions bb on bb.id=aa.mission_id where aa.status='running' and aa.lease_until>now() and bb.status in ('running','awaiting_approval')) global_running",
+    "from mission_assignments j join agent_missions m on m.id=j.mission_id join work_projects p on p.id=m.project_id where j.id=$1"
+   ].join(' ');
+   const diagnostic=(await first.query(predicateSql,[originalJob.id,executionRelease])).rows;
+   const workerBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint,text)'::regprocedure) definition")).rows[0].definition;
+   console.log('MISSION79_CLAIM_REJECTION_DIAGNOSTIC '+JSON.stringify({
+    diagnostic,patchOccurrences:workerBody.split('project_org_retest_claim_release_authorized_epoch(b.project_id,p_release,p_epoch,p_deployment)').length-1,
+    staleClaim:stale,otherClaim:staleOther,claimed
+   }));
+  }
+  assert.equal(claimed?.mission?.id,scheduled.missionId,'Native release-bound worker must claim mission 79');
+  assert.equal(claimed?.job?.id,originalJob.id);
+  assert.equal(claimed?.job?.status,'running');
+  assert.equal(claimed?.job?.attempts,1);
+  assert.ok(claimed?.job?.lease,'Real six-minute worker lease required');
+  // The PostgreSQL transaction predates browser authorization, owner locks,
+  // and the original cutoff-race wait. A transaction-start lease would have
+  // lost that elapsed time; the one allowed attempt must get a fresh clock.
+  const remainingLeaseMs=new Date(claimed.job.lease_until).getTime()-Date.now();
+  assert.ok(remainingLeaseMs>355000&&remainingLeaseMs<=361000,
+   'Mission79 six-minute lease must be fresh after database lock waits: '+remainingLeaseMs+'ms');
+  console.log('MISSION79_POSTLOCK_WALL_CLOCK_LEASE_FRESHNESS_PASS: '+remainingLeaseMs+'ms');
+  assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
+  assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
+  // Same actual lease and exact request must be ADMITTED while original
+  // lineage is intact. A savepoint rolls back the provider audit record;
+  // model-list never invokes an external provider or charges inference.
+  const lineageProviderArgs=[originalJob.id,claimed.job.lease,randomUUID(),
+   'model-list','a'.repeat(64),null,null];
+  await first.query('savepoint mission79_intact_provider_lineage');
+  try{
+   const admitted=(await first.query(
+    'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    lineageProviderArgs)).rows[0].ok;
+   assert.equal(admitted,true,
+    'Actual live leased model-list request with authentic original lineage must be admitted');
+  }finally{
+   await first.query('rollback to savepoint mission79_intact_provider_lineage');
+   await first.query('release savepoint mission79_intact_provider_lineage');
+  }
+  console.log('MISSION79_PROVIDER_LINEAGE_REAL_LEASE_POSITIVE_PASS');
+
+  // A genuine inference admission must also succeed under the same source
+  // when live. Its provider-audit insert and model-call counter increment are
+  // rolled back: no HTTP request, model charge, or durable extra inference.
+  const lineageInferenceArgs=[originalJob.id,claimed.job.lease,randomUUID(),
+   'inference','b'.repeat(64),null,null];
+  await first.query('savepoint mission79_intact_inference_admission');
+  try{
+   const callsBefore=(await first.query('select calls from agent_missions where id=$1',
+    [scheduled.missionId])).rows[0].calls;
+   const admitted=(await first.query(
+    'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    lineageInferenceArgs)).rows[0].ok;
+   assert.equal(admitted,true,'Real inference request with the valid lease and original owner lineage is admissible before expiration');
+   assert.equal((await first.query('select calls from agent_missions where id=$1',
+    [scheduled.missionId])).rows[0].calls,callsBefore+1,
+    'Normal inference writer increments only the transactional call counter');
+  }finally{
+   await first.query('rollback to savepoint mission79_intact_inference_admission');
+   await first.query('release savepoint mission79_intact_inference_admission');
+  }
+  console.log('MISSION79_PROVIDER_INFERENCE_VALID_LEASE_ROLLBACK_ONLY_POSITIVE_PASS');
+
+  // Real lease already exists. Forge a new-window evidence reference without
+  // changing decision/release. The exact original lineage must still be
+  // required by BOTH model-provider admission and management decision writes.
+  await first.query('savepoint mission79_after_lease_source_drift');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query(
+    "update agent_missions set project_evidence=jsonb_set(project_evidence,'{providerContinuationWindow}',to_jsonb($2::text)) where id=$1",
+    [scheduled.missionId,authorizationId]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+    [scheduled.missionId,originalJob.id])).rows[0].ok,false);
+   assert.equal((await first.query('select project_provider_continued_assignment($1) ok',
+    [originalJob.id])).rows[0].ok,false,
+    'New-window evidence cannot bypass the original mission79 source contract');
+   // Protected provider audit rows are intentionally unreadable by
+   // service_role; inspect them only as the disposable PostgreSQL owner.
+   const countProviderRequests=async()=>{
+    await first.query('reset role');
+    try{return (await first.query('select count(*)::int n from project_provider_requests where assignment_id=$1',
+     [originalJob.id])).rows[0].n;}
+    finally{await first.query('set role service_role');}
+   };
+   const requestsBefore=await countProviderRequests();
+   const decisionsBefore=(await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',
+    [project])).rows[0].n;
+   const admitted=(await first.query(
+    'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    lineageProviderArgs)).rows[0].ok;
+   assert.equal(admitted,false,'Provider admission with drifted original source must fail');
+   await rejected(()=>first.query('select project_org_decide($1,$2,$3::jsonb)',
+    [originalJob.id,claimed.job.lease,JSON.stringify([{action:'ready'}])]),
+    /Current owner execution window required|source|window/i);
+   assert.equal(await countProviderRequests(),requestsBefore);
+   assert.equal((await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',
+    [project])).rows[0].n,decisionsBefore);
+   console.log('MISSION79_POSTLEASE_DRIFT_PROVIDER_AND_MANAGEMENT_NEGATIVES_PASS');
+  }finally{
+   await first.query('rollback to savepoint mission79_after_lease_source_drift');
+   await first.query('release savepoint mission79_after_lease_source_drift');
+   await first.query('set role service_role');
+  }
+  const duplicate=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
+   [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
+  assert.notEqual(duplicate?.job?.id,originalJob.id,'Lease must prevent duplicate worker claim');
+
+  // The one permitted original attempt MUST settle terminally if its
+  // worker crashes or a transient error tries to queue a second inference.
+  // Negative simulations are rollback-only and preserve historical charges.
+  for(const scenario of ['expired','queued']){
+   await first.query('savepoint terminal_settlement_fixture');
+   try{
+    await first.query('reset role');
+    if(scenario==='expired')
+     await first.query("update mission_assignments set status='running',attempts=1,lease_until=clock_timestamp()-interval '1 second' where id=$1",[originalJob.id]);
+    else
+     await first.query("update mission_assignments set status='queued',attempts=1,lease=null,lease_until=null where id=$1",[originalJob.id]);
+    await first.query('set role service_role');
+    const callsBefore=(await first.query('select calls,reserved_tokens,actual_tokens from agent_missions where id=$1',[scheduled.missionId])).rows[0];
+    await first.query('select claim_mission_work_release_epoch($1,$2,$3)',[executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79']);
+    const settled=(await first.query('select status,attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
+    assert.equal(settled.status,'failed',scenario+' must be terminal');
+    assert.equal(settled.attempts,1,'One charged attempt only; do not reset or retry');
+    assert.equal(settled.lease,null);
+    assert.equal(settled.lease_until,null);
+    assert.deepEqual((await first.query('select calls,reserved_tokens,actual_tokens from agent_missions where id=$1',[scheduled.missionId])).rows[0],callsBefore,
+     'Terminal settlement must not change paid-call evidence');
+    await first.query('reset role');
+    const closed=(await setGate(
+     [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+    assert.equal(closed.state,'closed','No stranded release gate after terminal settlement');
+    console.log('MISSION79_'+scenario.toUpperCase()+'_ORIGINAL_ATTEMPT_SETTLEMENT_PASS');
+   }finally{
+    await first.query('rollback to savepoint terminal_settlement_fixture');
+    await first.query('release savepoint terminal_settlement_fixture');
+    await first.query('set role service_role');
+   }
+  }
+  // Closing an active generation must fail if a paid worker already owns a
+  // lease. The SQL gate locks serialize with new claims, while this safety
+  // check also covers an expired worker whose lease has been requeued.
+  const gateStateBeforeAttempt=(await first.query(
+   'select state,generation from project_retest_production_release_gate where project_id=$1',
+   [project])).rows[0];
+  await first.query('reset role');
+  await rejected(()=>setGate(
+   [project,executionRelease,'dpl_NativeFixture79','closed']),
+   /Undrained owner-renewed worker attempt/i);
+  await first.query('savepoint expired_mission79_claim');
+  await first.query("update mission_assignments set status='queued',lease=null,lease_until=null where id=$1",
+   [originalJob.id]);
+  await rejected(()=>setGate(
+   [project,executionRelease,'dpl_NativeFixture79','closed']),
+   /Undrained owner-renewed worker attempt/i);
+  await first.query('rollback to savepoint expired_mission79_claim');
+  await first.query('release savepoint expired_mission79_claim');
+  // A genuinely settled failure is terminal, has no lease and no pending
+  // provider receipt; unlike an expired/requeued attempt it cannot restart
+  // inference. Permit the privileged coordinator to CLOSE and promote.
+  await first.query('savepoint settled_terminal_mission79_attempt');
+  await first.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[originalJob.id]);
+  // Both CLOSE and OPEN must reject a pending provider operation, even
+  // when the worker assignment is terminal failed with no lease.
+  await first.query('savepoint terminal_failed_pending_request');
+  try{
+   await pendingRequestFixture();
+   await first.query('reset role');
+   await rejected(()=>setGate(
+    [project,executionRelease,'dpl_NativeFixture79','closed']),
+    /Undrained owner-renewed worker attempt or unresolved provider request/i);
+   assert.equal((await first.query('select state from project_retest_production_release_gate where project_id=$1',[project])).rows[0].state,'active');
+  }finally{
+   await first.query('rollback to savepoint terminal_failed_pending_request');
+   await first.query('release savepoint terminal_failed_pending_request');
+  }
+  const settledGate=(await setGate(
+   [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+  await first.query('savepoint terminal_failed_pending_open');
+  try{
+   await pendingRequestFixture();
+   await first.query('reset role');
+   await rejected(()=>setGate(
+    [project,executionRelease,'dpl_NativeFixture79','active']),
+    /Undrained owner-renewed worker attempt or unresolved provider request/i);
+   assert.equal((await first.query('select state from project_retest_production_release_gate where project_id=$1',[project])).rows[0].state,'closed');
+  }finally{
+   await first.query('rollback to savepoint terminal_failed_pending_open');
+   await first.query('release savepoint terminal_failed_pending_open');
+  }
+  // The original provider may return after its authorized cutoff and lease
+  // expired. Exact previously admitted receipt can resolve without creating
+  // another request, a new lease or any paid inference; CLOSE then proceeds.
+  await first.query('savepoint late_provider_receipt_after_cutoff');
+  try{
+   await first.query('reset role');
+   // The preceding settled-attempt test left the gate CLOSED. Restore its
+   // active generation inside this rolled-back fixture before testing CLOSE.
+   const openedForLateReply=(await setGate(
+    [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g;
+   assert.equal(openedForLateReply.state,'active');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set deadline=clock_timestamp()-interval '2 minutes' where id=$1",[project]);
+   await first.query("update project_provider_execution set deadline=clock_timestamp()-interval '2 minutes' where project_id=$1",[project]);
+   await first.query("update agent_missions set deadline=clock_timestamp()-interval '2 minutes',status='blocked' where id=$1",[scheduled.missionId]);
+   await first.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[originalJob.id]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await pendingRequestFixture();
+   await first.query('reset role'); // Private receipt table: read only under disposable postgres.
+   const req=(await first.query('select id,execution_attempt,operation,request_hash,resolved_at from project_provider_requests where project_id=$1 and resolved_at is null',[project])).rows[0];
+   await first.query('set role service_role');
+   assert.ok(req&&req.resolved_at===null);
+   const settle=[originalJob.id,req.execution_attempt,req.id,req.operation,req.request_hash,null,'Native recorded inference reply'];
+   assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    [originalJob.id,req.execution_attempt,randomUUID(),req.operation,req.request_hash,null,'Wrong request identity'])).rows[0].ok,false);
+   assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',settle)).rows[0].ok,true,
+    'Exact already-admitted response must settle after cutoff and expired lease');
+   assert.equal((await first.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',settle)).rows[0].ok,false,
+    'Receipt settlement must be one-time');
+   assert.equal((await first.query('select project_provider_request_pending($1) pending',[project])).rows[0].pending,false);
+   await first.query('reset role');
+   const recorded=(await first.query('select resolved_at,provider_receipt from project_provider_requests where id=$1',[req.id])).rows[0];
+   await first.query('set role service_role');
+   assert.ok(recorded.resolved_at);assert.equal(recorded.provider_receipt,'Native recorded inference reply');
+   await first.query('reset role');
+   const closed=(await setGate(
+    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+   assert.equal(closed.state,'closed','Settled response permits release coordination');
+   console.log('MISSION79_LATE_PROVIDER_RECEIPT_EXACT_ONE_TIME_SETTLEMENT_PASS');
+  }finally{
+   await first.query('rollback to savepoint late_provider_receipt_after_cutoff');
+   await first.query('release savepoint late_provider_receipt_after_cutoff');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_PROVIDER_PENDING_SEALS_BOTH_GATE_TRANSITIONS_PASS');
+  assert.equal(settledGate.state,'closed',
+   'Completed terminal failed attempt without outstanding provider work must drain release gate');
+  await first.query('rollback to savepoint settled_terminal_mission79_attempt');
+  await first.query('release savepoint settled_terminal_mission79_attempt');
+  await first.query('set role service_role');
+  console.log('MISSION79_TERMINAL_FAILED_ATTEMPT_DRAINS_RELEASE_GATE_PASS');
+  assert.deepEqual((await first.query(
+   'select state,generation from project_retest_production_release_gate where project_id=$1',
+   [project])).rows[0],gateStateBeforeAttempt,
+   'Live/expired attempted worker must not change the sealed release-gate generation');
+  console.log('MISSION79_RELEASE_GATE_UNDRAINED_LEASE_NEGATIVES_PASS');
+
+  // Two real PostgreSQL sessions now exercise the inherited transaction-start
+  // deadline race against the *actual* mission79 decision RPC. The instance
+  // is an isolated native fixture, never the user's original project.
+  // Commit the valid claim here so the second backend can observe its lease;
+  // later offline inference still runs inside a separately rolled-back txn.
+  await first.query('commit');
+  const originalRaceIntegrity=await originalIntegrity();
+  const originalFutureReceipt=(await first.query(
+   'select cutoff,organization_hash,authorization_id from project_retest_future_window_receipts where project_id=$1',[project])).rows[0];
+  const originalLeaseUntil=(await first.query(
+   'select lease_until::text lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0].lease_until;
+  const receiptHash=async()=> (await first.query(
+   "select md5((select to_jsonb(q)::text from project_retest_future_window_receipts q where q.project_id=$1)||"+
+   "(select to_jsonb(b)::text from project_retest_claim_release_receipts b where b.project_id=$1)) h",
+   [project])).rows[0].h;
+  const originalReceiptHash=await receiptHash();
+  // These are deterministic no-network management commands, not inference.
+  // Use existing saved plan contents so a successful pre-expiry decision has
+  // a legitimate shape rather than relying on input validation failure.
+  const savedRacePlan=(await first.query(
+   'select purpose,direction,outcomes,milestones,organizations from project_organization_plans where node_id=$1',
+   [fixtureRoot.id])).rows[0];
+  assert.ok(savedRacePlan?.purpose);
+  const realRaceCommands=JSON.stringify([{action:'plan',...savedRacePlan}]);
+  const stateDuringRace=async()=>{
+   await observer.query('reset role');
+   const [d,a,r,p,c,e]=await Promise.all([
+    observer.query('select count(*)::int n from project_organization_decisions where project_id=$1',[project]),
+    observer.query('select status,attempts,lease,lease_until,result from mission_assignments where id=$1',[originalJob.id]),
+    observer.query('select count(*)::int n from project_provider_requests where project_id=$1',[project]),
+    observer.query('select count(*)::int n from project_work_packages where project_id=$1',[project]),
+    observer.query('select calls,routing_calls,status from agent_missions where id=$1',[scheduled.missionId]),
+    observer.query('select count(*)::int n from project_events where project_id=$1',[project])
+   ]);
+   return {decisions:d.rows[0].n,assignment:a.rows[0],requests:r.rows[0].n,
+    packages:p.rows[0].n,mission:c.rows[0],events:e.rows[0].n};
+  };
+  const raceWait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const blockedDecisionAcross=async(label,expiry)=>{
+   const before=await stateDuringRace();
+   let firstOpen=false,secondOpen=false;
+   try{
+    await first.query('begin');firstOpen=true;
+    await first.query("select pg_advisory_xact_lock(hashtextextended('katie.mission.state',0))");
+    await second.query('begin');secondOpen=true;
+    const started=(await second.query('select transaction_timestamp() started')).rows[0].started;
+    assert.ok(new Date(started).getTime()<new Date(expiry).getTime(),
+     label+': second transaction must start BEFORE expiry');
+    const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+    const contender=second.query('select project_org_decide($1,$2,$3::jsonb) accepted',
+     [originalJob.id,claimed.job.lease,realRaceCommands])
+     .then(r=>({ok:true,accepted:r.rows[0].accepted}),error=>({ok:false,error}));
+    let blocked=false;
+    for(let attempt=0;attempt<40;attempt++){
+     const locks=(await observer.query(
+      'select locktype,granted from pg_locks where pid=$1 and not granted',[pid])).rows;
+     if(locks.some(lock=>lock.locktype==='advisory')){blocked=true;break;}
+     const early=await Promise.race([contender.then(()=>true),raceWait(40).then(()=>false)]);
+     if(early)throw Error(label+': decision did not wait for mission-state advisory lock');
+    }
+    assert.equal(blocked,true,label+': separate PostgreSQL decision must block on real mission-state lock');
+    await raceWait(Math.max(0,new Date(expiry).getTime()-Date.now()+700));
+    await first.query('commit');firstOpen=false;
+    const result=await contender;
+    await second.query('rollback');secondOpen=false;
+    assert.equal(result.ok,false,label+': expired transaction-start authorization must not save decision');
+    assert.match(result.error.message,/mission79 (owner cutoff|worker lease) expired after mission-state lock/i,
+     label+': rejection must come from actual post-lock wall-clock validation');
+    assert.deepEqual(await stateDuringRace(),before,
+     label+': no decision, assignment, package, event, model call or provider request changed');
+    console.log('MISSION79_DECISION_'+label+'_TWO_CONNECTION_POSTLOCK_NEGATIVE_PASS');
+   }finally{
+    if(firstOpen)await first.query('rollback').catch(()=>{});
+    if(secondOpen)await second.query('rollback').catch(()=>{});
+   }
+  };
+  // The FK insert can pass a concurrent FOR NO KEY UPDATE lock on the
+  // mission, whereas the subsequent inference-call UPDATE cannot. Reproduce
+  // a genuinely blocked second PostgreSQL session across the lease deadline.
+  // The postwrite provider guard must roll back BOTH audit and counter writes.
+  const providerLockLease=new Date(Date.now()+5800).toISOString();
+  await first.query('reset role');
+  await first.query("set session_replication_role='replica'");
+  try{
+   await first.query('update mission_assignments set lease_until=$2 where id=$1',
+    [originalJob.id,providerLockLease]);
+  }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  const beforeProviderLockRace=await stateDuringRace();
+  let providerLockerOpen=false,providerContenderOpen=false;
+  try{
+   await first.query('begin');providerLockerOpen=true;
+   await first.query('reset role');
+   const lockedMission=await first.query(
+    'select id from agent_missions where id=$1 for no key update',[scheduled.missionId]);
+   assert.equal(lockedMission.rows.length,1,'Target mission row lock must be real');
+   await second.query('begin');providerContenderOpen=true;
+   const started=(await second.query('select transaction_timestamp() t')).rows[0].t;
+   assert.ok(new Date(started).getTime()<new Date(providerLockLease).getTime(),
+    'Inference starts before original live worker lease expires');
+   const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const contender=second.query('select project_provider_request($1,$2,$3,$4,$5,$6,$7) admitted',
+    lineageInferenceArgs).then(r=>({ok:true,admitted:r.rows[0].admitted}),
+     error=>({ok:false,error}));
+   let sawMissionRowWait=false;
+   for(let i=0;i<50;i++){
+    const locks=(await observer.query(
+     'select locktype from pg_locks where pid=$1 and not granted',[pid])).rows;
+    if(locks.some(l=>l.locktype==='transactionid'||l.locktype==='tuple')){
+     sawMissionRowWait=true;break;
+    }
+    const early=await Promise.race([contender.then(()=>true),raceWait(40).then(()=>false)]);
+    if(early)throw Error('Inference did not wait on held mission NO KEY UPDATE lock');
+   }
+   assert.equal(sawMissionRowWait,true,
+    'Real provider inference must wait on mission calls UPDATE after initial authorization checks');
+   await raceWait(Math.max(0,new Date(providerLockLease).getTime()-Date.now()+700));
+   await first.query('commit');providerLockerOpen=false;
+   const result=await contender;
+   await second.query('rollback');providerContenderOpen=false;
+   assert.equal(result.ok,false,'Expired inference cannot be authorized after mission row lock wait');
+   assert.match(result.error.message,/Mission79 provider request expired before dispatch/i);
+   assert.deepEqual(await stateDuringRace(),beforeProviderLockRace,
+    'Late inference must leave no provider request, model calls, decision, assignment or historical mutation');
+   console.log('MISSION79_PROVIDER_INFERENCE_ROW_LOCK_POSTWRITE_ROLLBACK_PASS');
+  }finally{
+   if(providerLockerOpen)await first.query('rollback').catch(()=>{});
+   if(providerContenderOpen)await second.query('rollback').catch(()=>{});
+   await first.query('set role service_role');
+  }
+
+  const shortLease=new Date(Date.now()+3500).toISOString();
+  await first.query('reset role');
+  await first.query("set session_replication_role='replica'");
+  try{
+   await first.query('update mission_assignments set lease_until=$2 where id=$1',[originalJob.id,shortLease]);
+  }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+   [scheduled.missionId,originalJob.id])).rows[0].ok,true);
+  await blockedDecisionAcross('LEASE_EXPIRY',shortLease);
+
+
+  // Independent second-lock race. The original principal has already passed
+  // the global advisory lock and its clock check before the decision blocks
+  // on the pre-existing plan's PostgreSQL ROW lock (not advisory). The final
+  // decision wrapper must roll back even already-inserted decision receipts.
+  const rowLease=new Date(Date.now()+5500).toISOString();
+  await first.query('reset role');
+  await first.query("set session_replication_role='replica'");
+  try{
+   await first.query('update mission_assignments set lease_until=$2 where id=$1',
+    [originalJob.id,rowLease]);
+  }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  const beforePlanLockRace=await stateDuringRace();
+  let planLockerOpen=false,planContenderOpen=false;
+  try{
+   await first.query('begin');planLockerOpen=true;
+   await first.query('reset role'); // Disposable fixture DB owner locks the existing plan.
+   const lockedPlan=await first.query(
+    'select node_id from project_organization_plans where node_id=$1 for update',[fixtureRoot.id]);
+   assert.equal(lockedPlan.rows.length,1,'Original saved plan row must exist to force an UPDATE row lock');
+   await second.query('begin');planContenderOpen=true;
+   const started=(await second.query('select transaction_timestamp() t')).rows[0].t;
+   assert.ok(new Date(started).getTime()<new Date(rowLease).getTime(),
+    'Plan-row contender starts before legitimate worker lease expiration');
+   const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const contender=second.query('select project_org_decide($1,$2,$3::jsonb) accepted',
+    [originalJob.id,claimed.job.lease,realRaceCommands])
+    .then(r=>({ok:true,accepted:r.rows[0].accepted}),error=>({ok:false,error}));
+   let sawRowWait=false;
+   for(let i=0;i<50;i++){
+    const locks=(await observer.query(
+     'select locktype from pg_locks where pid=$1 and not granted',[pid])).rows;
+    if(locks.some(l=>l.locktype==='transactionid'||l.locktype==='tuple')){
+     sawRowWait=true;break;
+    }
+    const early=await Promise.race([contender.then(()=>true),raceWait(40).then(()=>false)]);
+    if(early)throw Error('Mission79 decision returned before waiting on held plan row');
+   }
+   assert.equal(sawRowWait,true,
+    'Genuine PostgreSQL plan-row lock must block the decision after its first clock check');
+   await raceWait(Math.max(0,new Date(rowLease).getTime()-Date.now()+700));
+   await first.query('commit');planLockerOpen=false;
+   const result=await contender;
+   await second.query('rollback');planContenderOpen=false;
+   assert.equal(result.ok,false,
+    'Management decision may not commit after lease expiry during a SECOND row-lock wait');
+   assert.match(result.error.message,/Mission79 management result expired before commit/i);
+   assert.deepEqual(await stateDuringRace(),beforePlanLockRace,
+    'Postwrite expiry rollback must preserve all decisions, assignments, plan effects, receipts and provider activity');
+   console.log('MISSION79_DECISION_PLAN_ROW_LOCK_POSTWRITE_ROLLBACK_PASS');
+  }finally{
+   if(planLockerOpen)await first.query('rollback').catch(()=>{});
+   if(planContenderOpen)await second.query('rollback').catch(()=>{});
+   await first.query('set role service_role');
+  }
+
+  // The real owner API enforces a five-minute minimum on NEW approvals.
+  // Compress ONLY this disposable fixture's already-authorized cutoff for a
+  // fast decision-race test; then restore receipt bytes and source hashes.
+  // This cannot modify real owner receipts or weaken the production UI.
+  const setFixtureCutoff=async(cutoff,leaseUntil,restoreHash=false)=>{
+   await first.query('reset role');
+   await first.query("set session_replication_role='replica'");
+   try{
+    await first.query('update work_projects set deadline=$2 where id=$1',[project,cutoff]);
+    await first.query('update project_provider_execution set deadline=$2 where project_id=$1',[project,cutoff]);
+    await first.query('update agent_missions set deadline=$2 where id=$1',[scheduled.missionId,cutoff]);
+    await first.query('update mission_assignments set lease_until=$2 where id=$1',[originalJob.id,leaseUntil]);
+    await first.query('update project_execution_windows set cutoff=$2 where id=$1',
+     [originalFutureReceipt.authorization_id,cutoff]);
+    await first.query('update project_organization_nodes set deadline=$2 where project_id=$1',[project,cutoff]);
+    await first.query('update project_organization_contract_changes set deadline=$2 where project_id=$1 and window_id=$3',
+     [project,cutoff,originalFutureReceipt.authorization_id]);
+    await first.query('update project_retest_claim_release_receipts set cutoff=$2 where project_id=$1',[project,cutoff]);
+    await first.query('update project_retest_future_window_receipts set cutoff=$2,organization_hash=$3 where project_id=$1',
+     [project,cutoff,restoreHash?originalFutureReceipt.organization_hash:
+      (await first.query('select project_org_scope_ratification_state($1) h',[project])).rows[0].h]);
+   }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  };
+  const shortCutoff=new Date(Date.now()+3500).toISOString();
+  await setFixtureCutoff(shortCutoff,new Date(Date.now()+600000).toISOString());
+  assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+   [scheduled.missionId,originalJob.id])).rows[0].ok,true,
+   'Before owner cutoff, original release and hierarchy remain source-qualified');
+  await blockedDecisionAcross('OWNER_CUTOFF',shortCutoff);
+  await setFixtureCutoff(originalFutureReceipt.cutoff,originalLeaseUntil,true);
+  assert.equal(await receiptHash(),originalReceiptHash,
+   'Both immutable owner/release receipts are byte-identical after disposable time compression');
+  assert.deepEqual(await originalIntegrity(),originalRaceIntegrity,
+   'Original historical mission, grants, organization and receipts remain unchanged');
+  assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
+   [scheduled.missionId,originalJob.id])).rows[0].ok,true);
+  console.log('MISSION79_DECISION_POSTLOCK_RACE_RESTORE_SOURCE_INTEGRITY_PASS');
+  await first.query('begin');
+  await first.query('set role service_role');
+
+  // Continue the REAL database-claimed management identity into the normal
+  // executeClaim dispatcher with an injected deterministic no-network model.
+  // The isolated DB command adapter is mocked here: no paid provider, worker
+  // commissioning, or project decision is written during this assertion.
+  // Reuse the real owner-ratified development specification from the
+  // disposable original project. Do not fabricate a milestone in the model.
+  const approvedProjectRecord=(await first.query(
+   'select objective,team,phase,spec,approved_hash,deadline,milestone_index from work_projects where id=$1',
+   [project])).rows[0];
+  assert.ok(approvedProjectRecord?.spec?.milestones?.length>0,
+   'Offline management context must use the saved approved project milestone');
+  const {modules}=await import('./load-project-modules.mjs');
+  // Read the REAL approved organization, decisions, grants and milestones from
+  // the native PostgreSQL fixture. No fabricated management topology.
+  const adapter={from(table){
+   assert.match(table,/^[a-z_]+$/);let columns='*',where=[],values=[],orders=[],single=false,range;
+   const q={select(c){assert.match(c,/^[a-z_,*]+$/);columns=c;return q;},
+    eq(k,v){values.push(v);where.push(k+'=$'+values.length);return q;},
+    in(k,v){values.push(v);where.push(k+'=any($'+values.length+')');return q;},
+    order(k,o){orders.push(k+(o.ascending?' asc':' desc'));return q;},
+    range(a,b){range=[a,b];return q;},single(){single=true;return q;},
+    then(ok,bad){
+     const sql='select '+columns+' from '+table+
+      (where.length?' where '+where.join(' and '):'')+
+      (orders.length?' order by '+orders.join(','):'')+
+      (range?' limit '+(range[1]-range[0]+1)+' offset '+range[0]:'');
+     return first.query(sql,values).then(r=>({
+      data:JSON.parse(JSON.stringify(single?r.rows[0]:r.rows)),error:null
+     })).then(ok,bad);
+    }};return q;
+  }};
+  const originalPlan=(await first.query(
+   'select purpose,direction,outcomes,milestones,organizations from project_organization_plans where node_id=$1',
+   [root.id])).rows[0];
+  assert.ok(originalPlan?.purpose&&Array.isArray(originalPlan.organizations)&&originalPlan.organizations.length>0);
+  const commands=[{action:'plan',purpose:originalPlan.purpose,
+   direction:originalPlan.direction+' Continue the approved development and independent QA objectives under unchanged owner authority.',
+   outcomes:originalPlan.outcomes,milestones:originalPlan.milestones,
+   organizations:originalPlan.organizations},{action:'ready'}];
+  const decisionCountBefore=(await first.query(
+   'select count(*)::int n from project_organization_decisions where project_id=$1',[project])).rows[0].n;
+  const controlledCalls=[];
+  const loader=modules({
+   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>adapter},
+   '@/lib/missions/store':{rpc:async(name,args)=>{
+    controlledCalls.push({name,args});
+    if(name==='project_provider_mode')return true;
+    if(name==='project_org_decide'){
+     const result=await first.query('select project_org_decide($1,$2,$3::jsonb) accepted',
+      [args.p_job,args.p_lease,JSON.stringify(args.p_commands)]);
+     assert.equal(result.rows[0].accepted,true,'Saved original hierarchy must accept this offline model decision');
+     return true;
+    }
+    throw Error('Controlled management unexpectedly called '+name);
+   }},
+  });
+  let modelCalls=0;
+  await loader('@/lib/missions/worker').executeClaim(claimed,async(c,instruction,input,tools)=>{
+   modelCalls++;assert.equal(tools,'none');assert.equal(c.job.id,originalJob.id);
+   assert.match(instruction,/Never write code/);
+   assert.equal(JSON.parse(input).project.objective,approvedProjectRecord.objective);
+   assert.equal(JSON.parse(input).reporting.organizationNodeCount,13);
+   return {text:JSON.stringify(commands),model:'deterministic-offline-fixture'};
+  });
+  assert.equal(modelCalls,1);
+  assert.deepEqual(controlledCalls.map(c=>c.name),['project_provider_mode','project_org_decide']);
+  assert.equal(controlledCalls[1].args.p_lease,claimed.job.lease);
+  assert.equal((await first.query('select count(*)::int n from project_organization_decisions where project_id=$1',[project])).rows[0].n,
+   decisionCountBefore+1,'Actual PostgreSQL must record one management decision under the real lease');
+  assert.equal((await first.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0,
+   'No downstream coding package is commissioned by the offline qualification');
+  assert.equal((await first.query('select calls from agent_missions where id=$1',
+   [scheduled.missionId])).rows[0].calls,0,'Controlled test cannot produce a charged model call');
+  console.log('RETEST_MISSION79_RELEASE_CLAIM_PASS: exact bound SHA only, original 79/96 ledger, source evidence, normal worker lease, one offline LLM management route, no paid inference');
+
   console.log('BLOCKED_MANAGEMENT_ONCE_POSTGRES_PASS: original 78 failed missions preserved, owner-scoped one-shot receipt, stale/replay/ACL negatives, zero owner-created missions, then one real lease-bound root management mission 79/96; disposable rollback, no inference');
  }finally{
   await first.query('rollback');
  }
- assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,78,
-  'Committed synthetic failure must remain exactly 78 after scheduler rollback');
+ assert.equal((await observer.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,79,
+  'Exactly the saved 79th synthetic management mission survives; worker claim remains rolled back');
  assert.equal((await observer.query('select count(*)::int n from project_blocked_management_retest_receipts where project_id=$1',[project])).rows[0].n,1,
   'Exactly one durable recovery receipt after two actual competing owner RPCs');
  assert.equal((await observer.query("select count(*)::int n from project_events where project_id=$1 and event='blocked_management_retest_authorized'",[project])).rows[0].n,1,
