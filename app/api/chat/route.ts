@@ -475,7 +475,10 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   // Latest explicit subject/modality change outranks a former conversation goal.
   if (intent==="image-generation" ||
       /^(?:\s*)(?:new topic\s*:|change of subject\s*:|switching (?:topics|gears)\s*:)/i.test(message) ||
-      /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message)) return "";
+      /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message) ||
+      // Clear replacement tasks introduced after criticism override a prior objective.
+      // A negative verdict about the last answer does not authorize stale-task revival.
+      /(?:^|[.!?;]\s+)(?:now|instead)\s+(?:explain|define|summarize|calculate|translate|compare|outline|research|analy[sz]e|draft|write|describe|show|list|create|tell\s+me\s+about|give\s+me)\b/i.test(message)) return "";
   // "Stop rehashing..." can be a direct current-turn instruction even if A
   // correctly emits not_feedback rather than inventing provider attribution.
   // In that case use only the same scoped history, without naming a model.
@@ -526,6 +529,18 @@ function sourceBoundObjectiveContinuityGuidance(input: {
     "Obey the latest explicit user instructions first. Do not turn an open-ended conversation into obligatory fiction, resume unrelated work, or override safety and provider constraints.",
     "Do not claim the next selected responder authored the prior answer. Do not invent model-specific satisfaction or outcome evidence."
   ].join("\n");
+}
+
+/**
+ * C-owned post-selection provenance integrity gate. A's optional routing field
+ * must never silently erase or change the trusted record already used for quote
+ * and generation preflight. An absent field is compatible only with null preflight.
+ */
+function sameScopedPreflightFeedback(
+  preflight: CurrentTurnFeedbackProvenanceV1 | null,
+  routed: CurrentTurnFeedbackProvenanceV1 | null | undefined,
+): boolean {
+  return JSON.stringify(preflight ?? null) === JSON.stringify(routed ?? null);
 }
 
 function buildGenerationParams({
@@ -2136,11 +2151,10 @@ async function executeChat(request: NextRequest) {
 
       // Never let the post-selection routing provenance differ from the record
       // used to quote the generation payload. Fail before paid generation.
-      if (routingDecision.currentTurnFeedback && 
-          JSON.stringify(routingDecision.currentTurnFeedback)!==JSON.stringify(preflightTurnFeedback)) {
-        return await rejectTracked("Source-linked feedback changed between quoted preflight and routing selection.");
+      if (!sameScopedPreflightFeedback(preflightTurnFeedback,routingDecision.currentTurnFeedback)) {
+        return await rejectTracked("Source-linked feedback changed or was absent between quoted preflight and routing selection.");
       }
-      currentTurnFeedback=routingDecision.currentTurnFeedback ?? null;
+      currentTurnFeedback=preflightTurnFeedback;
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
       fallbackChain = routingDecision.fallbackChain;
