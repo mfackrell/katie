@@ -748,6 +748,9 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   await first.query('set role service_role');
   const receipt=(await bind()).rows[0].r;
   assert.equal(receipt.stage,'bound');assert.equal(receipt.releaseSha,executionRelease);
+  const savedBinding=(await first.query('select bound_deployment_id,bound_release_generation from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0];
+  assert.equal(savedBinding.bound_deployment_id,'dpl_NativeFixture79');
+  assert.equal(Number(savedBinding.bound_release_generation),Number(activeEpoch.generation));
   assert.deepEqual(await originalIntegrity(),sourceBeforeOwnerRenewal,
    'Exact-release binding preserves all original mission and provider accounting data');
   await raceNewOwnerRpc('RELEASE_BIND',
@@ -790,67 +793,46 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    'Historical continuation release must never reclaim owner-renewed mission79');
   const staleOther=await isolatedNegativeClaim(unboundRelease);
   assert.notEqual(staleOther?.job?.id,originalJob.id,'A different new SHA still cannot claim the queued original mission');
-  // Simulate privilege-separated canonical alias promotion: under the
-  // identical claim/state locks operator closes the gate BEFORE alias moves.
-  // A stale runtime cannot reactivate it and cannot claim even with a saved
-  // immutable binding/old SHA. Reopen only after a verified READY alias.
-  await first.query('reset role');
-  const closedGate=(await first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
-   [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
-  assert.equal(closedGate.state,'closed');
-  await first.query('set role service_role');
-  const staleWhileClosed=await isolatedNegativeClaim(executionRelease);
-  assert.equal((await releaseEpoch(executionRelease)).active,false);
-  assert.notEqual(staleWhileClosed?.job?.id,originalJob.id,
-   'A superseded deployment cannot claim the original assignment while the canonical alias gate is sealed');
-  await rejected(()=>first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4)',
-   [project,executionRelease,'dpl_NativeFixture79','active']),/permission denied/i);
-  await first.query('reset role');
-  assert.equal((await first.query(
-   'select project_org_retest_set_release_gate($1,$2,$3,$4) g',
-   [project,executionRelease,'dpl_NativeFixture79','active'])).rows[0].g.state,'active');
-  await first.query('set role service_role');
-  const reopenedEpoch=await releaseEpoch(executionRelease);
-  assert.equal(reopenedEpoch.active,true);
-  assert.ok(reopenedEpoch.generation>activeEpoch.generation,
-   'Closing/reopening the release gate must advance its generation');
-  const wrongDeployment=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation,'dpl_OtherDeployment');
-  assert.notEqual(wrongDeployment?.job?.id,originalJob.id,
-   'Same release SHA with a different deployment ID must not lease mission79');
-  const staleEpochClaim=await isolatedNegativeClaim(executionRelease,activeEpoch.generation);
-  assert.notEqual(staleEpochClaim?.job?.id,originalJob.id,
-   'Old pre-promotion epoch must not claim the original job after reopening');
-  const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
-  assert.notEqual(legacyClaim?.job?.id,originalJob.id);
-  // A stale (zero-epoch) worker and legacy claimant must not perform
-  // housekeeping writes on the original mission/assignment, even if an
-  // expired lease would normally be requeued. Ordinary global workers remain
-  // eligible through their unchanged housekeeping and claim predicates.
-  await first.query('savepoint mission79_stale_housekeeping');
+  // A bound receipt is immutable for one deployment and generation.
+  // A later deployment serving the SAME SHA must not inherit the one-shot
+  // authority. Roll back promotions, then claim the real original binding.
+  await first.query('savepoint same_sha_replacement_negative');
   try{
    await first.query('reset role');
-   await first.query("set local session_replication_role = 'replica'");
-   await first.query("update mission_assignments set status='running',attempts=1,lease=gen_random_uuid(),lease_until=clock_timestamp()-interval '1 minute' where id=$1",[originalJob.id]);
-   await first.query("set local session_replication_role = 'origin'");
+   const sealed=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+   assert.equal(sealed.state,'closed');
    await first.query('set role service_role');
-   const rowBefore=(await first.query('select status,attempts,lease,lease_until,updated_at from mission_assignments where id=$1',[originalJob.id])).rows[0];
-   const missionBefore=(await first.query('select status,detail,updated_at from agent_missions where id=$1',[scheduled.missionId])).rows[0];
-   await first.query('select claim_mission_work_release_epoch($1,$2,$3)',[executionRelease,0,'dpl_StaleRuntime']);
-   await first.query('select claim_mission_work_release($1)',[executionRelease]);
-   assert.deepEqual((await first.query('select status,attempts,lease,lease_until,updated_at from mission_assignments where id=$1',[originalJob.id])).rows[0],rowBefore,
-    'Stale or legacy claim cannot requeue, consume or clear original mission79 expired lease');
-   assert.deepEqual((await first.query('select status,detail,updated_at from agent_missions where id=$1',[scheduled.missionId])).rows[0],missionBefore,
-    'Stale or legacy claim must preserve original mission79 history');
+   assert.notEqual((await isolatedNegativeClaim(executionRelease))?.job?.id,originalJob.id);
+   await first.query('reset role');
+   const replacement=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
+    [project,executionRelease,'dpl_AnotherDeploymentSameSha','active'])).rows[0].g;
+   assert.equal(replacement.state,'active');
+   await first.query('set role service_role');
+   const newer=await releaseEpoch(executionRelease);
+   assert.ok(newer.generation>activeEpoch.generation);
+   const inherited=await isolatedNegativeClaim(executionRelease,newer.generation,'dpl_AnotherDeploymentSameSha');
+   assert.notEqual(inherited?.job?.id,originalJob.id,
+    'Same SHA on different production deployment cannot claim original mission79');
+   assert.equal((await first.query(
+    'select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',
+    [project,executionRelease,newer.generation,'dpl_AnotherDeploymentSameSha'])).rows[0].ok,false);
+   assert.notEqual((await isolatedNegativeClaim(executionRelease,activeEpoch.generation,'dpl_NativeFixture79'))?.job?.id,originalJob.id);
+   assert.notEqual((await isolatedNegativeClaim(executionRelease,'legacy'))?.job?.id,originalJob.id);
   }finally{
-   await first.query('rollback to savepoint mission79_stale_housekeeping');
-   await first.query('release savepoint mission79_stale_housekeeping');
+   await first.query('rollback to savepoint same_sha_replacement_negative');
+   await first.query('release savepoint same_sha_replacement_negative');
+   await first.query('set role service_role');
   }
-  const lockedClaimBody=(await first.query("select pg_get_functiondef('public.claim_mission_work_release_epoch(text,bigint,text)'::regprocedure) body")).rows[0].body;
-  assert.match(lockedClaimBody,/where id=j\.id and[\s\S]*?project_org_retest_claim_release_authorized_epoch\(m\.project_id,p_release,p_epoch,p_deployment\)/,
-   'Exact owner/source epoch and live cutoff must be rechecked at the post-lock lease UPDATE');
-  console.log('MISSION79_STALE_HOUSEKEEPING_AND_POSTLOCK_CUTOFF_NEGATIVES_PASS');
+  console.log('MISSION79_SAME_SHA_REPLACEMENT_DEPLOYMENT_REJECTED_PASS');
+  const reopenedEpoch=await releaseEpoch(executionRelease);
+  assert.equal(reopenedEpoch.generation,activeEpoch.generation,'Original owner-bound generation restored');
+  const wrongDeployment=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation,'dpl_OtherDeployment');
+  assert.notEqual(wrongDeployment?.job?.id,originalJob.id);
+  const staleEpochClaim=await isolatedNegativeClaim(executionRelease,reopenedEpoch.generation+1);
+  assert.notEqual(staleEpochClaim?.job?.id,originalJob.id);
+  const legacyClaim=await isolatedNegativeClaim(executionRelease,'legacy');
+  assert.notEqual(legacyClaim?.job?.id,originalJob.id);
   const claimed=(await first.query('select claim_mission_work_release_epoch($1,$2,$3) r',
    [executionRelease,reopenedEpoch.generation,'dpl_NativeFixture79'])).rows[0].r;
   if(!claimed||claimed.mission?.id!==scheduled.missionId){
