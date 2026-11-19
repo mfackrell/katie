@@ -74,6 +74,9 @@ function evaluate(expression:string,environment:Record<string,unknown>):any {
   // Local evaluation of frozen, production-repository AST. Not user-supplied code.
   return new Function(...Object.keys(environment),`${source}\nreturn captured;`)(...Object.values(environment));
 }
+const continuityNode=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='sourceBoundObjectiveContinuityGuidance','sourceBoundObjectiveContinuityGuidance');
+const sourceBoundObjectiveContinuityGuidance=evaluate(
+  continuityNode.getText(routeAst).replace('function sourceBoundObjectiveContinuityGuidance','function'),{});
 const build=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='buildGenerationParams','buildGenerationParams');
 const buildGenerationParams=evaluate(build.getText(routeAst).replace('function buildGenerationParams','function'),{
   workflowTimestamp:()=> '2026-11-18T23:00:00.000Z'
@@ -112,6 +115,7 @@ function prepared(f:Case, mode=f.mode??'best-answer', overrides:{
     saveProviderSystemAudit:async()=>{throw Error('No provider audit writes permitted in offline test');},
     routingMode:mode==='best-answer'?'best_answer':'best_value',
     currentTurnFeedback:overrides.currentTurnFeedback,
+    sourceBoundObjectiveContinuityGuidance,
   };
   const candidate=evaluate(routeExpression('prepareCandidateRequest'),environment);
   const generated=candidate('offline-fixture-model',context,{intent:'assistant-reflection'});
@@ -143,6 +147,25 @@ function assertObjectiveAndCorrection(generated:ReturnType<typeof prepared>,f:Ca
   assert.equal(generated.user,f.current.text,'Current user message remains authoritative');
 }
 
+/** A-producer contract fixture for exercising C's production consumer only.
+ * A's actual receipt/actor verification is independently tested in A #1122.
+ */
+function scopedPriorFeedback(f:Case,polarity:'positive'|'negative'|'ambiguous') {
+  const prior=[...f.history].reverse().find(turn=>turn.role==='assistant');
+  assert.ok(prior,'Fixture must contain a prior assistant');
+  return {
+    version:'current-turn-feedback-v1' as const,
+    source:{requestId:'current-request',userMessageId:f.current.id,
+      textExcerpt:f.current.text.slice(0,600),polarity,
+      dimension:'objective_fidelity' as const,correctionExcerpt:f.current.text.slice(0,600)},
+    target:{status:'attributed' as const,assistantMessageId:prior.id,
+      priorRequestId:prior.request_id??'fixture-prior-request',
+      provider:prior.provider??'openai',model:prior.model??'gpt-5.6-luna',
+      priorIntent:'social-emotional',basis:'settled_scoped_saved_reply' as const},
+    applicableToOngoingObjective:null,
+  };
+}
+
 test('C-00 fixture inventory is complete, unique and executable',()=>{
   assert.equal(packet.fixtures.length,14);
   assert.deepEqual([...cases.keys()].sort(),Array.from({length:14},(_,i)=>`C-${String(i+1).padStart(2,'0')}`));
@@ -150,19 +173,19 @@ test('C-00 fixture inventory is complete, unique and executable',()=>{
 });
 
 test('C-01 criticism retains prior user objective and current correction in real generation parameters',()=>{
-  const f=scenario('C-01'); const output=prepared(f);
+  const f=scenario('C-01'); const output=prepared(f,undefined,{currentTurnFeedback:scopedPriorFeedback(f,'negative')});
   assertObjectiveAndCorrection(output,f);
   assert.match(output.persona,/do not.*(?:menu|question)|take initiative|proactive/i);
 });
 
 test('C-02 positive correction retains the objective without negative-evidence invention',()=>{
-  const f=scenario('C-02');const output=prepared(f);
+  const f=scenario('C-02');const output=prepared(f,undefined,{currentTurnFeedback:scopedPriorFeedback(f,'positive')});
   assertObjectiveAndCorrection(output,f);
   assert.doesNotMatch(output.persona,/negative feedback from current user|current user disliked this answer/i);
 });
 
 test('C-03 correction explicitly rejects the stale performance-review premise',()=>{
-  const f=scenario('C-03');const output=prepared(f);
+  const f=scenario('C-03');const output=prepared(f,undefined,{currentTurnFeedback:scopedPriorFeedback(f,'negative')});
   assertObjectiveAndCorrection(output,f);
   assert.match(output.persona,/performance.review|scorecard|interview/i);
   assert.match(output.persona,/avoid|do not|instead|new/i);
@@ -250,6 +273,18 @@ test('C-08 v1 feedback provenance must reach generation as prior settled source,
     'Source-linked prior user objective must reach generation guidance');
   assert.match(guidance,/previous|prior|attribut|feedback|correct/i,
     'Generation must receive explicit correction context separate from generic conversation history');
+  // The same current correction may not promote another prior assistant
+  // or a forged source request into generation instructions.
+  const wrongTarget=prepared(f,'best-value',{currentTurnFeedback:{
+    ...sourceLinkedFeedback,target:{...sourceLinkedFeedback.target,assistantMessageId:'foreign-assistant'},
+  }});
+  assert.ok(!wrongTarget.persona.includes(f.history[0].text),
+    'Misattributed previous assistant must fail closed');
+  const wrongRequest=prepared(f,'best-value',{currentTurnFeedback:{
+    ...sourceLinkedFeedback,source:{...sourceLinkedFeedback.source,requestId:'foreign-request'},
+  }});
+  assert.ok(!wrongRequest.persona.includes(f.history[0].text),
+    'Foreign request provenance must fail closed');
   assert.ok(!guidance.includes(f.selected_next!.model),
     'Do not claim the newly selected responder authored the criticized answer');
 });
@@ -300,7 +335,7 @@ test('C-11 pending uncertain request resumes original workflow once with objecti
 });
 
 test('C-12 Best Answer and Best Value carry identical objective/correction source, not selection policy',()=>{
-  const f=scenario('C-12');const answer=prepared(f,'best-answer');const value=prepared(f,'best-value');
+  const f=scenario('C-12');const feedback=scopedPriorFeedback(f,'negative');const answer=prepared(f,'best-answer',{currentTurnFeedback:feedback});const value=prepared(f,'best-value',{currentTurnFeedback:feedback});
   assertObjectiveAndCorrection(answer,f);assertObjectiveAndCorrection(value,f);
   assert.equal(answer.persona,value.persona);
   assert.equal(answer.user,value.user);
