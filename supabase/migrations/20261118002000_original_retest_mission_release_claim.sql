@@ -1166,53 +1166,16 @@ $m79_finalize$);
  execute replace(legacy,proof,'false');
 end $epoch_claim_patch$;
 
--- Settle ONLY a previously recorded exact original mission79 request.
--- Arrival after lease/cutoff is not a fresh provider admission or inference.
--- The original provider RPC's deadline checks remain unchanged for ALL new
--- requests and every other project. Service role and the global state lock
--- remain mandatory; a duplicate or mismatched settlement returns false.
+-- Allow only settlement of an EXACT, existing original mission79 provider request
+-- after the original clock/lease expires. No new work, inference, receipt
+-- creation, or other-project relaxation. Existing service-role ACL is retained.
 do $mission79_late_provider_receipt$
 declare body text;anchor text:='perform pg_advisory_xact_lock(hashtextextended(''katie.mission.state'',0));';
  replacement text:=$early$perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  if p_receipt is not null and p_scope is null
   and p_job='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid then
   if p_request is null or p_attempt is null or p_operation not in ('model-list','inference')
-   or p_hash is null or p_hash !~ '^[0-9a-f]{64}
- public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
- public.claim_mission_work_release_epoch(text,bigint,text)
- from public,anon,authenticated,service_role;
-grant execute on function
- public.project_org_retest_release_epoch(uuid,text),
- public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
- public.claim_mission_work_release_epoch(text,bigint,text) to service_role;
-
-revoke all on function
- public.project_org_retest_exact_scope_grants(uuid),
- public.project_org_retest_original_owner_lineage(uuid),
- public.project_org_retest_future_window_offer(uuid,uuid,text),
- public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
- public.project_org_retest_renewed_assignment(uuid,uuid)
- from public,anon,authenticated,service_role;
-grant execute on function
- public.project_org_retest_exact_scope_grants(uuid),
- public.project_org_retest_original_owner_lineage(uuid),
- public.project_org_retest_future_window_offer(uuid,uuid,text),
- public.project_org_authorize_retest_future_window(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text),
- public.project_org_retest_renewed_assignment(uuid,uuid)
- to service_role;
-
-revoke all on function
- public.project_org_retest_claim_release_authorized(uuid,text),
- public.project_org_retest_claim_release_offer(uuid,uuid,text),
- public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)
- from public,anon,authenticated,service_role;
-grant execute on function
- public.project_org_retest_claim_release_authorized(uuid,text),
- public.project_org_retest_claim_release_offer(uuid,uuid,text),
- public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)
- to service_role;
-commit;
-
+   or p_hash is null or p_hash !~ '^[0-9a-f]{64}$'
    or length(p_receipt) not between 1 and 256 then return false;end if;
   update project_provider_requests request
    set provider_receipt=p_receipt,resolved_at=clock_timestamp()
