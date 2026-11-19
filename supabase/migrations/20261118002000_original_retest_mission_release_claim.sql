@@ -77,7 +77,8 @@ begin
     or (j.status='failed' and exists(
       select 1 from project_provider_requests request
       where request.assignment_id=j.id and request.resolved_at is null)))
- ) then raise exception 'Undrained owner-renewed worker attempt; release gate transition denied';end if;
+ ) or project_provider_request_pending(p_project)
+ then raise exception 'Undrained owner-renewed worker attempt or unresolved provider request; release gate transition denied';end if;
  stamp:=clock_timestamp();
  if g.project_id is null then
   if p_action<>'active' then raise exception 'Initial release requires verified READY alias';end if;

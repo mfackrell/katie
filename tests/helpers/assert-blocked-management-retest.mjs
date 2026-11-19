@@ -712,6 +712,57 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   });
   const immutableBeforeBinding=await unmodified();
   const bindArgs=[owner,project,executionRelease,scheduled.missionId,originalJob.id,claimOffer.stateHash,activeEpoch.generation,'dpl_NativeFixture79'];
+  // All cases run on the disposable DB. A forged pending provider request or
+  // changed owner-approved objective after the real authorization MUST fail
+  // both read-only offer and locked binding without another immutable receipt.
+  const pendingRequestFixture=async()=>{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query(`insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash)
+     values($1,$2,$3,$4,$5,$6,'inference',$7)`,
+    [randomUUID(),project,scheduled.missionId,originalJob.id,
+     (await first.query('select agent_id from mission_assignments where id=$1',[originalJob.id])).rows[0].agent_id,
+     randomUUID(),'f'.repeat(64)]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   assert.equal((await first.query('select project_provider_request_pending($1) pending',[project])).rows[0].pending,true);
+  };
+  const verifyBindingUnchanged=async(label)=>{
+   assert.equal((await first.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,0,label+' cannot create release receipt');
+   assert.equal((await first.query('select status from work_projects where id=$1',[project])).rows[0].status,'blocked',label+' cannot restart blocked project');
+   assert.equal((await first.query('select status,attempts,lease from mission_assignments where id=$1',[originalJob.id])).rows[0].attempts,0,label+' cannot consume worker capacity');
+  };
+  await first.query('savepoint before_binding_pending_provider');
+  try{
+   await pendingRequestFixture();
+   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
+    /Unresolved original project provider request blocks release binding/i);
+   await verifyBindingUnchanged('Pending provider request');
+  }finally{
+   await first.query('rollback to savepoint before_binding_pending_provider');
+   await first.query('release savepoint before_binding_pending_provider');
+   await first.query('set role service_role');
+  }
+  await first.query('savepoint before_binding_objective_tamper');
+  try{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set objective=objective||' UNAPPROVED CHANGE' where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+   await rejected(()=>first.query('select project_org_retest_claim_release_offer($1,$2,$3)',offerArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await rejected(()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8)',bindArgs),
+    /Historical mission 79 or approved renewed source changed/i);
+   await verifyBindingUnchanged('Objective drift before binding');
+  }finally{
+   await first.query('rollback to savepoint before_binding_objective_tamper');
+   await first.query('release savepoint before_binding_objective_tamper');
+   await first.query('set role service_role');
+  }
+  console.log('MISSION79_BIND_PENDING_PROVIDER_AND_OBJECTIVE_DRIFT_NEGATIVES_PASS');
   const bind=()=>first.query('select project_org_bind_retest_claim_release($1,$2,$3,$4,$5,$6,$7,$8) r',bindArgs);
   await first.query('savepoint stale_owner_binding_generation');
   try{
@@ -788,6 +839,35 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    [scheduled.missionId])).rows[0].project_evidence.providerContinuationRelease,priorRelease,
    'Mission 79 must retain its immutable original source release');
 
+  // Release is already bound, but an altered objective or unresolved
+  // project provider request must NEVER yield the original queued job.
+  // Preserve the bound receipt and the original unconsumed assignment.
+  const boundCount=(await first.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n;
+  const preservedJob=(await first.query('select status,attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
+  const beforeLeaseNegative=async(label,mutate)=>{
+   await first.query('savepoint after_binding_negative');
+   try{
+    await mutate();
+    assert.equal((await first.query('select project_org_retest_claim_release_authorized($1,$2) ok',[project,executionRelease])).rows[0].ok,false,label+' must invalidate release permission');
+    const denied=await isolatedNegativeClaim(executionRelease,activeEpoch.generation);
+    assert.notEqual(denied?.job?.id,originalJob.id,label+' must reject actual worker lease');
+    assert.deepEqual((await first.query('select status,attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0],preservedJob,label+' must preserve queued original assignment');
+    assert.equal((await first.query('select count(*)::int n from project_retest_claim_release_receipts where project_id=$1',[project])).rows[0].n,boundCount,label+' must preserve immutable binding');
+   }finally{
+    await first.query('rollback to savepoint after_binding_negative');
+    await first.query('release savepoint after_binding_negative');
+    await first.query('set role service_role');
+   }
+  };
+  await beforeLeaseNegative('Pending provider before lease',pendingRequestFixture);
+  await beforeLeaseNegative('Objective drift before lease',async()=>{
+   await first.query('reset role');
+   await first.query("set local session_replication_role = 'replica'");
+   await first.query("update work_projects set objective=objective||' UNAPPROVED CHANGE' where id=$1",[project]);
+   await first.query("set local session_replication_role = 'origin'");
+   await first.query('set role service_role');
+  });
+  console.log('MISSION79_LEASE_PENDING_PROVIDER_AND_OBJECTIVE_DRIFT_NEGATIVES_PASS');
   const oldContinuationClaim=await isolatedNegativeClaim(priorRelease);
   assert.notEqual(oldContinuationClaim?.job?.id,originalJob.id,
    'Historical continuation release must never reclaim owner-renewed mission79');
@@ -924,8 +1004,35 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   // inference. Permit the privileged coordinator to CLOSE and promote.
   await first.query('savepoint settled_terminal_mission79_attempt');
   await first.query("update mission_assignments set status='failed',lease=null,lease_until=null where id=$1",[originalJob.id]);
+  // Both CLOSE and OPEN must reject a pending provider operation, even
+  // when the worker assignment is terminal failed with no lease.
+  await first.query('savepoint terminal_failed_pending_request');
+  try{
+   await pendingRequestFixture();
+   await first.query('reset role');
+   await rejected(()=>first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',
+    [project,executionRelease,'dpl_NativeFixture79','closed']),
+    /Undrained owner-renewed worker attempt or unresolved provider request/i);
+   assert.equal((await first.query('select state from project_retest_production_release_gate where project_id=$1',[project])).rows[0].state,'active');
+  }finally{
+   await first.query('rollback to savepoint terminal_failed_pending_request');
+   await first.query('release savepoint terminal_failed_pending_request');
+  }
   const settledGate=(await first.query('select project_org_retest_set_release_gate($1,$2,$3,$4) g',
    [project,executionRelease,'dpl_NativeFixture79','closed'])).rows[0].g;
+  await first.query('savepoint terminal_failed_pending_open');
+  try{
+   await pendingRequestFixture();
+   await first.query('reset role');
+   await rejected(()=>first.query('select project_org_retest_set_release_gate($1,$2,$3,$4)',
+    [project,executionRelease,'dpl_NativeFixture79','active']),
+    /Undrained owner-renewed worker attempt or unresolved provider request/i);
+   assert.equal((await first.query('select state from project_retest_production_release_gate where project_id=$1',[project])).rows[0].state,'closed');
+  }finally{
+   await first.query('rollback to savepoint terminal_failed_pending_open');
+   await first.query('release savepoint terminal_failed_pending_open');
+  }
+  console.log('MISSION79_PROVIDER_PENDING_SEALS_BOTH_GATE_TRANSITIONS_PASS');
   assert.equal(settledGate.state,'closed',
    'Completed terminal failed attempt without outstanding provider work must drain release gate');
   await first.query('rollback to savepoint settled_terminal_mission79_attempt');

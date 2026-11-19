@@ -10,6 +10,7 @@ on:
       - 'components/mission79-future-window-control.tsx'
       - 'app/api/projects/organization/route.ts'
       - 'app/api/projects/route.ts'
+      - 'app/api/version/route.ts'
       - 'components/director-recovery-control.tsx'
       - 'tests/helpers/assert-blocked-management-retest.mjs'
       - 'tests/helpers/assert-mission79-browser-postgres.mjs'
