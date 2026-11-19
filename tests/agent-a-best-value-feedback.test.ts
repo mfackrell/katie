@@ -9,6 +9,7 @@ import {
   type CurrentTurnFeedbackProvenanceV1,
 } from '@/lib/router/current-turn-feedback';
 import {chooseProvider} from '@/lib/router/master-router';
+import {chooseRoutingWithLLM} from '@/lib/router/model-intent';
 import type {LlmProvider} from '@/lib/providers/types';
 import type {RegistryRoutingModel} from '@/lib/models/registry';
 
@@ -163,6 +164,7 @@ test('Best Value rejects other-model feedback and bounds repeated invalid select
       }])),
     }) as Awaited<ReturnType<typeof evidence.resolveRoutingEvidence>>);
   let reranks=0;
+  let returnedDecisionJson=0;
   const provider:LlmProvider={name:'openai',listModels:async()=>['gpt-5-mini','gpt-5.4'],
     generate:async p=>{
       if(p.user.includes('CURRENT_USER_MESSAGE:'))return {
@@ -173,8 +175,9 @@ test('Best Value rejects other-model feedback and bounds repeated invalid select
           context_influence:'Relevant prior context',selection_justification:'Quality objective recognized'}),
         provider:'openai',model:p.modelId!};
       reranks++;
-      const payload=JSON.parse(p.user.slice(p.user.lastIndexOf('\n\n')+2));
-      assert.equal(payload.routing_mode,'best_value');
+      assert.match(p.user,/"routing_mode":"best_value"/,'prompt contains the actual mode JSON');
+      assert.match(p.user,/"candidates":\[/,'prompt contains a real candidate list');
+      returnedDecisionJson++;
       return {text:JSON.stringify({
         selected:{provider:'openai',model:'gpt-5-mini'},
         selection_justification:'Claims another model\'s satisfaction as direct evidence',
@@ -192,6 +195,140 @@ test('Best Value rejects other-model feedback and bounds repeated invalid select
       'Continue conversation','Previous conversation was creative',[provider],
       {modelRegistrySnapshot:registeredModels(),routing_mode:'best_value'}));
     assert.equal(reranks,3,'one initial, one correction, and one alternate; no unlimited cycling');
+    assert.equal(returnedDecisionJson,3,'actual decision JSON must be returned; mock exceptions are not validation evidence');
     assert.equal(result.explainer?.selected_source,'deterministic-fallback');
   }finally{rank.mock.restore();quote.mock.restore();}
+});
+
+
+/**
+ * Independent-A-QA acceptance paths: exercise the actual decision JSON parser,
+ * not an exception thrown by a fake provider before a selection is returned.
+ * No network, paid inference, or production database access is performed.
+ */
+type FeedbackOutcome = 'positive' | 'negative' | 'ambiguous';
+function bestValueSourceEvidence(selectedOutcome: FeedbackOutcome | null = null,
+                                 otherOutcome: FeedbackOutcome | null = null) {
+  const feedback = (outcome: FeedbackOutcome, sourceId: string) => ({
+    positive: Number(outcome === 'positive'), negative: Number(outcome === 'negative'),
+    ambiguous: Number(outcome === 'ambiguous'), uncertainty:'One scoped, explicit user feedback event',
+    evidence:[{source:'message_reaction',source_id:sourceId,observed_at:'2026-11-18T22:00:00.000Z',
+      dimension:'user_satisfaction',outcome,confidence:'direct_response_reaction',
+      task_excerpt:'Creative conversational continuation'}]
+  });
+  return {overhead:{status:'unknown'},candidates:{
+    'openai:gpt-5-mini':{quality:{status:'unknown',observations:[],
+      ...(selectedOutcome?{feedback:feedback(selectedOutcome,'source-mini')}: {})},economics:{status:'unknown'}},
+    'openai:gpt-5.4':{quality:{status:'unknown',observations:[],
+      ...(otherOutcome?{feedback:feedback(otherOutcome,'source-other')}: {})},economics:{status:'unknown'}}
+  }};
+}
+function selectionJson(selectedModel: string, evidenceBasis: string,
+                       kind = 'attributed_feedback') {
+  const alternative = selectedModel === 'gpt-5-mini' ? 'gpt-5.4' : 'gpt-5-mini';
+  return JSON.stringify({
+    selected:{provider:'openai',model:selectedModel},
+    selection_justification:'Selected on task-specific quality with documented limitations.',
+    quality_qualification:{
+      required_quality:'Creative conversational continuity and initiative.',
+      selected_fit:'Can provide a direct, coherent response.',
+      evidence_basis_kind:kind,evidence_basis:evidenceBasis,
+      comparative_uncertainty:'Actual comparative quality remains uncertain.',
+      cost_after_qualification:'Lower quoted cost only after quality qualification.'
+    },
+    alternatives:[{provider:'openai',model:alternative,
+      why_not_selected:'Less certain task quality or higher expected price.'}]
+  });
+}
+async function executeSelectionCase(responses: string[], evidenceData = bestValueSourceEvidence()) {
+  const rank=mock.method(economics,'rankControlPlaneByActualCost',async(candidates:unknown[])=>candidates);
+  const returned:Array<{modelId:string;corrected:boolean;text:string}>=[];
+  let attempt=0;
+  const provider:LlmProvider={
+    name:'openai',listModels:async()=>['gpt-5-mini','gpt-5.4'],
+    generate:async params=>{
+      const text=responses[Math.min(attempt,responses.length-1)];
+      returned.push({modelId:params.modelId??'',corrected:params.user.includes('CORRECTION:'),
+        text});
+      attempt++;
+      return {text,provider:'openai',model:params.modelId!};
+    }
+  };
+  try{
+    const decisionProviders=[
+      {provider,modelId:'gpt-5-mini'},
+      {provider,modelId:'gpt-5.4'}
+    ];
+    const candidates=['gpt-5-mini','gpt-5.4'].map(modelId=>({
+      providerName:'openai',modelId,supports_text:true,
+      supports_vision:false,supports_video:false,supports_image_generation:false,
+      supports_web_search:false,reasoning_depth_tier:'high',speed_tier:'medium',
+      cost_tier:'medium',specialization_tags:[],prior_score:1,score_breakdown:{}
+    }));
+    const result=await runWithStandaloneAccounting(owner,()=>chooseRoutingWithLLM({
+      routing_mode:'best_value',prompt:'Continue our creative conversation with initiative.',
+      intent:'assistant-reflection',modalityFlags:{has_images:false,has_video_input:false},
+      hardRouteContext:{hard_rule_applied:false,rule:'none'},preferenceProfile:{},
+      candidates,decisionProviders,registryLookup:registeredModels(),
+      requestEvidence:evidenceData
+    } as unknown as Parameters<typeof chooseRoutingWithLLM>[0]));
+    assert.equal(returned.length,attempt,'each attempted model must return its mocked JSON');
+    assert.ok(returned.every(x=>typeof x.text==='string'),
+      'all test provider attempts must actually produce their promised payload');
+    return {result,returned};
+  }finally{rank.mock.restore();}
+}
+
+test('A-QA1 wrong-model praise is rejected, and a corrected documented selection is accepted',async()=>{
+  const wrong=selectionJson('gpt-5-mini','User praised source-other','attributed_feedback');
+  const corrected=selectionJson('gpt-5-mini','Documented text support; comparative outcomes unverified.',
+    'documented_capability');
+  const {result,returned}=await executeSelectionCase([wrong,corrected],
+    bestValueSourceEvidence(null,'positive'));
+  assert.equal(returned.length,2,'actual rejected JSON must trigger exactly one correction');
+  assert.equal(returned[0].text,wrong,'the original wrong-source selection reached the parser');
+  assert.equal(returned[1].corrected,true,'second request carried correction instructions');
+  assert.equal(result.accepted,true,'valid documented-capability correction must be accepted');
+  assert.equal(result.accepted ? result.selectedModel : null,'gpt-5-mini');
+});
+
+test('A-QA1 same-model negative and ambiguous evidence cannot be described as praise',async()=>{
+  for(const polarity of ['negative','ambiguous'] as const){
+    const falsePraise=selectionJson('gpt-5-mini','User praised model; source-mini');
+    const honest=selectionJson('gpt-5-mini',
+      polarity==='negative' ? 'User criticized model; source-mini' :
+        'Mixed response, ambiguous outcome; source-mini');
+    const {result,returned}=await executeSelectionCase([falsePraise,honest],
+      bestValueSourceEvidence(polarity));
+    assert.equal(returned.length,2,polarity+' false praise must be rejected');
+    assert.equal(returned[1].corrected,true);
+    assert.equal(result.accepted,true,polarity+' with honest attribution is valid');
+  }
+});
+
+test('A-QA1 true selected-model positive evidence can qualify a cited selection',async()=>{
+  const truePraise=selectionJson('gpt-5-mini','User praised model; source-mini');
+  const {result,returned}=await executeSelectionCase([truePraise],
+    bestValueSourceEvidence('positive'));
+  assert.equal(returned.length,1,'source-cited direct positive must pass first attempt');
+  assert.equal(result.accepted,true);
+});
+
+test('A-QA1 actual invalid JSON is bounded to 3 decisions with one correction',async()=>{
+  const {result,returned}=await executeSelectionCase(['{not-json']);
+  assert.equal(result.accepted,false);
+  assert.equal(result.reason,'all_decision_providers_failed');
+  assert.equal(returned.length,3,'initial, one retry, and one alternate only');
+  assert.deepEqual(returned.map(x=>x.modelId),['gpt-5-mini','gpt-5-mini','gpt-5.4']);
+  assert.deepEqual(returned.map(x=>x.corrected),[false,true,true]);
+});
+
+test('A-QA1 actual JSON with an ineligible provider:model pair is bounded to 3',async()=>{
+  const invalid=selectionJson('nonexistent-model','Documented support','documented_capability');
+  const {result,returned}=await executeSelectionCase([invalid]);
+  assert.equal(result.accepted,false);
+  assert.equal(result.reason,'all_decision_providers_failed');
+  assert.equal(returned.length,3);
+  assert.ok(returned.every(x=>x.text===invalid),'valid JSON with invalid model was returned');
+  assert.deepEqual(returned.map(x=>x.modelId),['gpt-5-mini','gpt-5-mini','gpt-5.4']);
 });
