@@ -40,7 +40,7 @@ test('durable pause and fresh resume replay immutable inputs and execution conte
   const value=await cachedWorkflowValue('initial-context',async()=>{loads++;return {history:['before paid work']};});assert.deepEqual(value,{history:['before paid work']});
   assert.equal(workflowTimestamp(),'2026-10-28T00:00:00Z');
   if(!firstId)firstId=workflowMessageId('user');else assert.equal(workflowMessageId('user'),firstId);
-  return new Response(executions===1?'{"type":"accounting_pause","code":"standalone_approval_required"}\n':'{"type":"content","text":"completed"}\n',{headers:{'content-type':'application/x-ndjson'}});
+  return new Response(executions===1?'{"type":"accounting_pause","code":"standalone_runpod_in_progress"}\n':'{"type":"content","text":"completed"}\n',{headers:{'content-type':'application/x-ndjson'}});
  };
  await (await executeStandaloneWorkflow(request(),payload,execute)).text();assert.equal(stored.status,'paused');assert.equal(executions,1);
  const resumed=await executeStandaloneWorkflow(request(true),{actorId,chatId,standaloneResume:true},execute);assert.match(await resumed.text(),/completed/);assert.equal(stored.status,'completed');assert.equal(loads,1);assert.equal(checkpoints,1);
@@ -52,7 +52,7 @@ test('cached token count absence is durable across approved workflow resume',asy
    run++;
    const unsupported=await cachedWorkflowValue('context-count:chat:0:saved-request-hash',async()=>{countCalls++;return null;});
    assert.equal(unsupported,null);
-   return new Response(run===1?'{"type":"accounting_pause","code":"standalone_approval_required"}\n':'{"type":"content","text":"confirmed"}\n',
+   return new Response(run===1?'{"type":"accounting_pause","code":"standalone_runpod_in_progress"}\n':'{"type":"content","text":"confirmed"}\n',
      {headers:{'content-type':'application/x-ndjson'}});
  };
  await (await executeStandaloneWorkflow(request(),payload,execute)).text();
@@ -77,13 +77,13 @@ test('changed original body is rejected and never becomes resumed spending autho
 test('a hidden pending attempt remains visible even when its optional caller returned success',async()=>{
  pending=true;
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"content","text":"answer already saved"}\n',{headers:{'content-type':'application/x-ndjson'}}));
- assert.match(await response.text(),/standalone_pending_attempt/);assert.equal(stored.status,'paused');
+ assert.match(await response.text(),/technical recovery/);assert.equal(stored.status,'paused');
 });
 
 test('a transient HTTP failure cannot strand already reserved supporting work',async()=>{
  pending=true;
  const response=await executeStandaloneWorkflow(request(),payload,async()=>Response.json({error:'Transient preparation unavailable'},{status:503}));
- assert.equal(response.status,402);assert.equal(stored.status,'paused');assert.equal((await response.json()).code,'standalone_pending_attempt');
+ assert.equal(response.status,402);assert.equal(stored.status,'paused');assert.equal((await response.json()).stage,'recovery');
 });
 test('a generic preparation exception surfaces the database durable pause instead of terminal failure',async()=>{
  pending=true;
@@ -117,7 +117,7 @@ test('routing timeout pauses the durable workflow and clears only its processing
 test('SDK-wrapped accounting denial preserves its pause across execution boundaries',async()=>{
  const denial=Object.assign(Error('Connection error'),{cause:Object.assign(Error('Approval required'),{code:'standalone_approval_required'})});
  await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw denial}),error=>error===denial.cause);
- assert.equal(stored.status,'paused');
+ assert.equal(stored.status,'failed','deprecated financial approval must not become durable work authorization');
 });
 
 test('stream execution failure is never persisted as successful completion',async()=>{
