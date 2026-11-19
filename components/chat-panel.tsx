@@ -431,6 +431,69 @@ async function isSavedChatRequestComplete(
   }
 }
 
+/**
+ * A definitively failed chat + workflow is terminal too. Clear the stale
+ * browser lock only after verifying the exact request/chat identities.
+ * Never treat a running, paused, missing or uncertain workflow as failed.
+ */
+async function isSavedChatRequestTerminalFailure(
+  chatId: string,
+  requestId: string,
+  bearer?: string | null,
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `/api/chat/status?requestId=${encodeURIComponent(requestId)}&chatId=${encodeURIComponent(chatId)}`,
+      { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
+    );
+    if (!response.ok) return false;
+    const payload = await response.json() as {
+      requestId?: string; chatId?: string; status?: string; workflowStatus?: string | null;
+    };
+    return payload.requestId === requestId &&
+      payload.chatId === chatId &&
+      payload.status === "failed" &&
+      payload.workflowStatus === "failed";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A failed chat request can retain a paused original helper receipt. That
+ * original must remain recoverable, but must not hold the composer hostage
+ * when the owner explicitly sends a DIFFERENT message. A new request ID and
+ * new content are required; never auto-replay the paused original.
+ */
+async function isDistinctNewMessageAfterPausedRoutingFailure(
+  chatId: string,
+  requestId: string,
+  oldContent: string,
+  newContent: string,
+  bearer?: string | null,
+): Promise<boolean> {
+  if (!newContent.trim() || newContent.trim() === oldContent.trim()) return false;
+  try {
+    const response = await fetch(
+      `/api/chat/status?requestId=${encodeURIComponent(requestId)}&chatId=${encodeURIComponent(chatId)}`,
+      { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
+    );
+    if (!response.ok) return false;
+    const payload = await response.json() as {
+      requestId?: string; chatId?: string; status?: string; workflowStatus?: string | null;
+      routingRecoveryReady?: boolean; error?: string | null; assistantMessageId?: string | null;
+    };
+    return payload.requestId === requestId && payload.chatId === chatId &&
+      payload.status === "failed" && payload.workflowStatus === "paused" &&
+      payload.routingRecoveryReady === false &&
+      !payload.assistantMessageId &&
+      typeof payload.error === "string" &&
+      payload.error.includes("saved request paused after a provider timeout");
+  } catch {
+    return false;
+  }
+}
+
 function waitForRecoveryPoll(ms = MOBILE_RECOVERY_POLL_INTERVAL_MS): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1845,10 +1908,20 @@ export function ChatPanel({
       const bearer = await ownerSessionBearer().catch(() => null);
       const finished = Boolean(previousPending.requestId) &&
         await isSavedChatRequestComplete(chatId, previousPending.requestId!, bearer);
-      if (!finished || readPendingChatRequest(chatId)?.requestId !== previousPending.requestId) {
+      const terminalFailure = !finished && Boolean(previousPending.requestId) &&
+        await isSavedChatRequestTerminalFailure(chatId, previousPending.requestId!, bearer);
+      const distinctNewMessage = !finished && !terminalFailure && Boolean(previousPending.requestId) &&
+        await isDistinctNewMessageAfterPausedRoutingFailure(
+          chatId, previousPending.requestId!, previousPending.content,
+          composerValueRef.current, bearer,
+        );
+      if ((!finished && !terminalFailure && !distinctNewMessage) ||
+          readPendingChatRequest(chatId)?.requestId !== previousPending.requestId) {
         setStatusMessage("The previous request is not yet verified complete. Katie will keep checking its original status; no duplicate request was sent.");
         return;
       }
+      // Definitively failed requests are finished. The user's next explicit
+      // Send is a new request, never an automatic retry of the old one.
       clearPendingChatRequest(chatId);
     }
     const latestComposerText = composerValueRef.current.trim();
