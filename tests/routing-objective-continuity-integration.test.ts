@@ -1,0 +1,266 @@
+/**
+ * Agent C (Issue #1120) — offline objective-continuity integration regressions.
+ *
+ * These tests use production exported helpers and AST-extracted production
+ * chat-route request builders. The latter is the same seam used by
+ * tests/routing-generation-preparation.test.ts. No provider, database, or
+ * remote service is invoked.
+ *
+ * RED tests are intentional before objective-continuity/Agent A integration:
+ * source-linked corrective context does not yet reach the final model persona.
+ * A green test from merely replaying the fixture's expected fields is forbidden.
+ * Lexical checks are necessary but never independently establish creative quality.
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
+import {isCreativeNarrativeTurn,shouldApplyCreativeNarrativeContinuity} from '../lib/chat/creative-continuity';
+import {decideResponsePolicy} from '../lib/chat/response-policy';
+import {recoverLateRoutingResponse} from '../lib/chat/late-routing-recovery';
+
+interface Turn {
+  id: string;
+  role: 'user'|'assistant';
+  text: string;
+  actor_id?: string;
+  chat_id?: string;
+  model?: string;
+  provider?: string;
+  request_id?: string;
+  status?: string;
+}
+interface Case {
+  id: string;
+  title: string;
+  category: string;
+  history: Turn[];
+  current: {id:string;text:string;actor_id?:string;chat_id?:string};
+  expect: Record<string,unknown>;
+  mode?: 'best-value'|'best-answer';
+  modes?: Array<'best-value'|'best-answer'>;
+  selected_next?: {provider:string;model:string};
+  provider_state?: Record<string,unknown>;
+}
+const fixturePath='tests/fixtures/routing-objective-continuity-cases.json';
+const packet=JSON.parse(readFileSync(fixturePath,'utf8')) as {fixtures:Case[]};
+const cases=new Map(packet.fixtures.map(f=>[f.id,f]));
+const scenario=(id:string):Case=>{
+  const result=cases.get(id);
+  assert.ok(result,`Missing scenario ${id}`);
+  return result;
+};
+const routeText=readFileSync('app/api/chat/route.ts','utf8');
+const routeAst=ts.createSourceFile('route.ts',routeText,ts.ScriptTarget.Latest,true);
+function uniqueNode(predicate:(node:ts.Node)=>boolean,description:string):ts.Node {
+  const found:ts.Node[]=[];
+  function visit(node:ts.Node):void {
+    if(predicate(node)) found.push(node);
+    ts.forEachChild(node,visit);
+  }
+  visit(routeAst);
+  assert.equal(found.length,1,`Expected exactly one production ${description}`);
+  return found[0];
+}
+function routeExpression(variable:string):string {
+  const node=uniqueNode(n=>ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name)&&n.name.text===variable,variable) as ts.VariableDeclaration;
+  assert.ok(node.initializer,`${variable} must have an initializer`);
+  return node.initializer.getText(routeAst);
+}
+function evaluate(expression:string,environment:Record<string,unknown>):any {
+  const source=ts.transpileModule(`const captured=${expression};`,{
+    compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}
+  }).outputText;
+  // Local evaluation of frozen, production-repository AST. Not user-supplied code.
+  return new Function(...Object.keys(environment),`${source}\nreturn captured;`)(...Object.values(environment));
+}
+const build=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='buildGenerationParams','buildGenerationParams');
+const buildGenerationParams=evaluate(build.getText(routeAst).replace('function buildGenerationParams','function'),{
+  workflowTimestamp:()=> '2026-11-18T23:00:00.000Z'
+});
+
+/** Execute actual prepareCandidateRequest from the production chat route. */
+function prepared(f:Case, mode=f.mode??'best-answer', overrides:{responsePurpose?:'conversation'|'deliverable'}={}) {
+  const history=f.history.map(turn=>({
+    id:turn.id,role:turn.role,content:turn.text,
+    ...(turn.model?{model:turn.model}:{}),
+    ...(turn.provider?{provider:turn.provider}:{}),
+    ...(turn.request_id?{request_id:turn.request_id}:{}),
+    ...(turn.actor_id?{actor_id:turn.actor_id}:{}),
+    ...(turn.chat_id?{chat_id:turn.chat_id}:{}),
+  }));
+  const context={
+    creativeTextNarrativeRequest:false,
+    responsePolicy:decideResponsePolicy({message:f.current.text,intent:'assistant-reflection',
+      responsePurpose:overrides.responsePurpose??'conversation'}),
+    taskProgressContext:'',resumptionContext:'',visualContinuity:null,
+  };
+  const environment:Record<string,unknown>={
+    cacheablePersona:'Katie actor voice',conversationCacheKey:()=> 'offline-cache',
+    actorId:f.current.actor_id??'actor-fixture',chatId:f.current.chat_id??'chat-fixture',
+    requestId:'current-request',name:'Katie',personaForGeneration:'Katie actor voice',
+    storedWebsite:{fresh:false,context:'',previousWebsiteEvidence:undefined},
+    documentProduction:null,DOCUMENT_DRAFT_GUIDANCE:'Document drafting',DOCUMENT_REVIEW_GUIDANCE:'Document review',
+    CREATIVE_CONTINUITY_INSTRUCTIONS:'Narrative continuity only',summary:'',
+    historyForProvider:history.map(({role,content})=>({role,content})),
+    message:f.current.text,messageForGeneration:f.current.text,images:[],attachments:[],
+    resolvedRequestIntent:'assistant-reflection',buildGenerationParams,
+    saveProviderSystemAudit:async()=>{throw Error('No provider audit writes permitted in offline test');},
+    routingMode:mode==='best-answer'?'best_answer':'best_value',
+  };
+  const candidate=evaluate(routeExpression('prepareCandidateRequest'),environment);
+  const generated=candidate('offline-fixture-model',context,{intent:'assistant-reflection'});
+  return generated as {persona:string;user:string;history:Array<{role:string;content:string}>;routingMode?:string};
+}
+
+/** Inspect production context supplied to the routing classifier; do not synthesize model evidence. */
+function routingContext(f:Case):string {
+  const history=f.history.map(turn=>({
+    id:turn.id,role:turn.role,content:turn.text,
+    model:turn.model,createdAt:undefined,attachments:undefined,
+  }));
+  return evaluate(routeExpression('controlPlaneConversationContext'),{
+    getAccountingScope:()=>undefined,persona:'Actor persona',summary:'',history,
+    explicitSavedProjectReference:false,
+    priorTaskProgress:{projectContext:null,objective:null,pending:[]},
+    images:[],attachments:[],selectionContext:()=>'',sessionContext:{activeRepo:null},
+  });
+}
+
+function assertObjectiveAndCorrection(generated:ReturnType<typeof prepared>,f:Case):void {
+  const original=f.history.find(t=>t.role==='user');
+  assert.ok(original,'Objective must originate from a prior user turn');
+  assert.match(generated.persona,/objective|continuity|ongoing/i,'Active conversational objective must be explicitly identified in final-generation guidance');
+  assert.ok(generated.persona.includes(original.text),
+    `Final-generation guidance must carry the user's actual original objective, not only model history (${original.id})`);
+  assert.ok(generated.persona.includes(f.current.text),
+    `Final-generation guidance must carry the latest corrective user instruction (${f.current.id})`);
+  assert.equal(generated.user,f.current.text,'Current user message remains authoritative');
+}
+
+test('C-00 fixture inventory is complete, unique and executable',()=>{
+  assert.equal(packet.fixtures.length,14);
+  assert.deepEqual([...cases.keys()].sort(),Array.from({length:14},(_,i)=>`C-${String(i+1).padStart(2,'0')}`));
+  assert.ok(packet.fixtures.every(f=>f.history.length && f.current.id && f.current.text && f.expect));
+});
+
+test('C-01 criticism retains prior user objective and current correction in real generation parameters',()=>{
+  const f=scenario('C-01'); const output=prepared(f);
+  assertObjectiveAndCorrection(output,f);
+  assert.match(output.persona,/do not.*(?:menu|question)|take initiative|proactive/i);
+});
+
+test('C-02 positive correction retains the objective without negative-evidence invention',()=>{
+  const f=scenario('C-02');const output=prepared(f);
+  assertObjectiveAndCorrection(output,f);
+  assert.doesNotMatch(output.persona,/negative feedback from current user|current user disliked this answer/i);
+});
+
+test('C-03 correction explicitly rejects the stale performance-review premise',()=>{
+  const f=scenario('C-03');const output=prepared(f);
+  assertObjectiveAndCorrection(output,f);
+  assert.match(output.persona,/performance.review|scorecard|interview/i);
+  assert.match(output.persona,/avoid|do not|instead|new/i);
+  // Independent human QA must additionally judge whether the generated *answer*
+  // actually advances something new; lexical no-repeat checks alone cannot.
+});
+
+test('C-04 explicit new topic does not acquire creative continuation instructions',()=>{
+  const f=scenario('C-04');const output=prepared(f);
+  assert.match(output.user,/accrual/);
+  assert.doesNotMatch(output.persona,/Katie, take the lead|Be witty, creative, playful/i);
+  assert.equal(isCreativeNarrativeTurn(f.current.text,f.history.map(x=>({role:x.role,content:x.text}))),false);
+});
+
+test('C-05 the latest explicit request to ask questions supersedes old no-questions preference',()=>{
+  const f=scenario('C-05');const output=prepared(f);
+  assert.match(output.user,/ask me three questions/i);
+  assert.doesNotMatch(output.persona,/No menus or unnecessary questions/);
+  assert.ok(output.history.some(turn=>turn.content.includes('No menus')),
+    'History remains visible but is not promoted to a newer imperative');
+});
+
+test('C-06 terminology clarification pauses an active professional deliverable',()=>{
+  const f=scenario('C-06');const policy=decideResponsePolicy({
+    message:f.current.text,hasPendingDeliverable:true,
+    intent:'general-text',responsePurpose:'deliverable'
+  });
+  assert.equal(policy.purpose,'conversation');
+  assert.equal(policy.requiresSubstantiveProcessing,false);
+  assert.match(policy.generationInstruction??'',/Keep the active substantive task pending/);
+});
+
+test('C-07 open-ended creative personal chat does not force a fictional-scene route',()=>{
+  const f=scenario('C-07');
+  assert.equal(isCreativeNarrativeTurn(f.current.text,f.history.map(x=>({role:x.role,content:x.text}))),false);
+  const policy=decideResponsePolicy({message:f.current.text,intent:'assistant-reflection',responsePurpose:'conversation'});
+  assert.equal(policy.purpose,'conversation');
+  assert.equal(policy.generationInstruction,null);
+});
+
+test('C-08 current feedback binds to the preceding settled assistant, never the new selected model',()=>{
+  const f=scenario('C-08');const ctx=routingContext(f);
+  const prior=f.history.find(x=>x.role==='assistant')!;
+  assert.match(ctx,/gpt-5\.6-luna/);
+  assert.ok(ctx.includes(prior.id),'Routing context must carry prior assistant message ID for attribution');
+  assert.ok(ctx.includes(prior.request_id!),'Routing context must carry prior settled request ID');
+  assert.ok(ctx.includes(prior.provider!),'Routing context must carry the previous provider');
+  assert.ok(!ctx.includes(f.selected_next!.model),'The next model must not become the feedback target');
+  assert.match(f.current.text,/failed to take initiative/);
+});
+
+test('C-09 feedback without a completed prior assistant has no invented attribution',()=>{
+  const f=scenario('C-09');const ctx=routingContext(f);
+  assert.doesNotMatch(ctx,/feedback_target|attributed_model|gpt-5\.6-luna/i);
+  assert.ok(!f.history.some(x=>x.role==='assistant'));
+});
+
+test('C-10 unrelated actors and chats cannot enter actual scoped context assembly',()=>{
+  const f=scenario('C-10');
+  assert.ok(f.history.every(x=>x.actor_id!==f.current.actor_id&&x.chat_id!==f.current.chat_id));
+  // The database/context-loader boundary must be scoped before preparation.
+  assert.match(routeText,/assembleContext\(actorId, chatId\)/);
+  // Do not inject the unrelated history: it was never an admitted actor/chat source.
+  const scoped={...f,history:f.history.filter(x=>x.actor_id===f.current.actor_id&&x.chat_id===f.current.chat_id)};
+  assert.doesNotMatch(routingContext(scoped),/Be witty, creative, playful|journal, an interview/);
+});
+
+test('C-11 paused uncertain request resumes original request once without new dispatch',async()=>{
+  const f=scenario('C-11');assert.equal(f.provider_state?.status,'uncertain');
+  let checks=0,resumptions=0,paidCalls=0;
+  const savedObjective=f.history.find(x=>x.role==='user')!.text;
+  const savedCorrection=f.current.text;
+  const recovered=await recoverLateRoutingResponse({
+    readStatus:async()=>{checks++;return {status:'processing',workflowStatus:'paused',routingRecoveryReady:true};},
+    resumeOriginal:async()=>{resumptions++;return Response.json({objective:savedObjective,correction:savedCorrection});},
+    wait:async()=>{throw Error('No wait needed');},cancelled:()=>false,maxChecks:3,
+  });
+  const body=await recovered!.json() as {objective:string;correction:string};
+  assert.equal(body.objective,savedObjective);assert.equal(body.correction,savedCorrection);
+  assert.equal(checks,1);assert.equal(resumptions,1);assert.equal(paidCalls,0);
+});
+
+test('C-12 Best Answer and Best Value carry identical objective/correction source, not selection policy',()=>{
+  const f=scenario('C-12');const answer=prepared(f,'best-answer');const value=prepared(f,'best-value');
+  assertObjectiveAndCorrection(answer,f);assertObjectiveAndCorrection(value,f);
+  assert.equal(answer.persona,value.persona);
+  assert.equal(answer.user,value.user);
+  assert.equal(answer.routingMode,'best_answer');assert.equal(value.routingMode,'best_value');
+});
+
+test('C-13 explicit image-generation intent suppresses narrative continuation',()=>{
+  const f=scenario('C-13');const history=f.history.map(x=>({role:x.role,content:x.text}));
+  assert.equal(shouldApplyCreativeNarrativeContinuity(isCreativeNarrativeTurn(f.current.text,history),'image-generation'),false);
+  assert.match(f.current.text,/Generate a picture/);
+});
+
+test('C-14 saved completed request does not auto-resume or create a second publication',async()=>{
+  const f=scenario('C-14');assert.equal(f.provider_state?.existing_final_message_saved,true);
+  let resumptions=0,reads=0;
+  const result=await recoverLateRoutingResponse({
+    readStatus:async()=>{reads++;return {status:'completed',workflowStatus:'completed',routingRecoveryReady:false};},
+    resumeOriginal:async()=>{resumptions++;throw Error('Must not send new request after saved completion');},
+    wait:async()=>{throw Error('Completed request must not be polled repeatedly');},cancelled:()=>false,maxChecks:3,
+  });
+  assert.equal(result,null);assert.equal(reads,1);assert.equal(resumptions,0);
+});
