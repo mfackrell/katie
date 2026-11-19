@@ -114,6 +114,15 @@ export function traceAttemptIdentity(fields: {
   if (fields.endpoint) state.meta.endpoint = fields.endpoint;
 }
 
+/** Preserve the request trace when abort originates in an independent async context. */
+export function bindProviderTraceRecorder(): (phase: ProviderTracePhase, details?: TraceDetails) => void {
+  const state = traceStorage.getStore();
+  return (phase, details = {}) => {
+    if (!state) return;
+    traceStorage.run(state, () => recordProviderTrace(phase, details));
+  };
+}
+
 function safeValue(value: unknown, max = 100): string | null {
   if (typeof value !== "string" || !value || value.length > max || !/^[a-zA-Z0-9_./:-]+$/.test(value)) return null;
   return value;
@@ -131,6 +140,7 @@ export function recordProviderTrace(phase: ProviderTracePhase, details: TraceDet
   try {
     const now = process.hrtime.bigint();
     const seen = state.seen;
+    if (phase === "cancellation_requested" && seen.has(phase)) return;
     const event: ProviderTraceEvent = {
       event: "katie_provider_attempt_timing", version: 1, traceId: state.traceId,
       taskName: safeValue(state.meta.taskName) ?? "unknown",
