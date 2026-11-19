@@ -168,12 +168,7 @@ test('UI retains pending receipt after stream interruption, controls duplicate s
  assert.match(tail,/The polling window is not a terminal server outcome/);
  assert.match(tail,/setStatusMessage\(savedAnswerPreviewed[\s\S]*?return;/);
  assert.match(tail,/if \(!terminalFailure\) \{[\s\S]*?status remains unverified[\s\S]*?return;/);
- // Accept either the strict pending guard or the newer verified-completion guard.
- // Neither path may transmit a second request while the original remains unresolved.
- const strictPendingGuard=/if \(readPendingChatRequest\(chatId\)\) \{[\s\S]*?do not resend/.test(source);
- const verifiedPendingGuard=/const previousPending = readPendingChatRequest\(chatId\);[\s\S]*?if \(previousPending\) \{[\s\S]*?isSavedChatRequestComplete\(chatId, previousPending\.requestId!, bearer\)/.test(source) &&
-  /if \(!finished \|\| readPendingChatRequest\(chatId\)\?\.requestId !== previousPending\.requestId\) \{[\s\S]*?no duplicate request was sent[\s\S]*?return;/.test(source);
- assert.ok(strictPendingGuard || verifiedPendingGuard,'Unresolved pending work must not permit a duplicate send');
+ assert.match(source,/const previousPending = readPendingChatRequest\(chatId\);/);
  assert.match(source,/Age alone cannot prove a saved request failed/);
  assert.doesNotMatch(source,/pendingAgeMs >/);
  assert.match(source,/savedStatus\.status === "completed" && savedStatus\.workflowStatus === "completed"/);
@@ -184,4 +179,103 @@ test('ambiguous 408/5xx and missing stream body are treated as recoverable deliv
  const stageIndex=source.lastIndexOf('requestStage = "reading response stream"',bodyIndex);
  assert.ok(stageIndex > 0 && stageIndex < bodyIndex);
  assert.match(source,/if \(effectiveResponse\.status === 408 \|\| effectiveResponse\.status >= 500\) \{\s*requestStage = "reading response stream";\s*throw new Error\(httpCause\)/);
+});
+
+// Execute the actual submit-lock code and status-verification helpers from
+// chat-panel.tsx, rather than asserting the obsolete conditional's spelling.
+// Never authorize a fresh request on a missing, conflicting, or live receipt.
+const lockHelperStart = source.indexOf('async function isSavedChatRequestComplete(');
+const lockHelperEnd = source.indexOf('function waitForRecoveryPoll(', lockHelperStart);
+const lockSubmitStart = source.indexOf('  async function onSubmit(');
+const lockGateStart = source.indexOf('    const previousPending = readPendingChatRequest(chatId);', lockSubmitStart);
+const lockGateEnd = source.indexOf('    const latestComposerText = composerValueRef.current.trim();', lockGateStart);
+assert.ok(lockHelperStart >= 0 && lockHelperEnd > lockHelperStart, 'status verification helpers must exist');
+assert.ok(lockSubmitStart >= 0 && lockGateStart > lockSubmitStart && lockGateEnd > lockGateStart,
+  'submit must check the pending request before composing a new one');
+const executableLockGate = ts.transpileModule(
+  source.slice(lockHelperStart, lockHelperEnd) +
+  '\nasync function checkSendLock() {\n' +
+  source.slice(lockGateStart, lockGateEnd) +
+  '\nreturn true;\n}\nglobalThis.checkSendLock = checkSendLock;',
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText;
+
+async function checkSendLock(payload, { ok = true, networkError = false, swapped = false, pendingId = 'req' } = {}) {
+  let pending = { requestId: pendingId, chatId: 'chat' };
+  let reads = 0;
+  let clears = 0;
+  const statusRequests = [];
+  const messages = [];
+  const sandbox = vm.createContext({
+    chatId: 'chat',
+    encodeURIComponent,
+    ownerSessionBearer: async () => 'owner-token',
+    readPendingChatRequest: (id) => {
+      assert.equal(id, 'chat');
+      reads++;
+      if (swapped && reads === 2) pending = { requestId: 'another-request', chatId: 'chat' };
+      return pending;
+    },
+    clearPendingChatRequest: (id) => {
+      assert.equal(id, 'chat');
+      clears++;
+      pending = null;
+    },
+    setStatusMessage: message => messages.push(message),
+    fetch: async (url, options) => {
+      statusRequests.push({ url, options });
+      if (networkError) throw Error('status temporarily unavailable');
+      return { ok, json: async () => payload };
+    },
+  });
+  vm.runInContext(executableLockGate, sandbox);
+  const allowed = (await sandbox.checkSendLock()) === true;
+  assert.equal(clears, allowed ? 1 : 0, 'unverified requests must retain their pending receipt');
+  for (const { url, options } of statusRequests) {
+    assert.equal(url, '/api/chat/status?requestId=req&chatId=chat');
+    assert.equal(options.cache, 'no-store');
+    assert.equal(options.headers.Authorization, 'Bearer owner-token');
+    assert.ok(!options.method || options.method === 'GET', 'verification must not replay a POST');
+  }
+  if (!allowed) assert.match(messages.at(-1) ?? '', /no duplicate request was sent/);
+  return { allowed, clears, statusReads: statusRequests.length };
+}
+
+test('Send unlocks after exact completed-and-saved or definitively failed chat plus workflow', async () => {
+  const exact = { requestId: 'req', chatId: 'chat' };
+  const completed = await checkSendLock({
+    ...exact, status: 'completed', workflowStatus: 'completed', assistantMessageId: 'saved-answer',
+  });
+  assert.equal(completed.allowed, true);
+  assert.equal(completed.statusReads, 1);
+  const failed = await checkSendLock({ ...exact, status: 'failed', workflowStatus: 'failed' });
+  assert.equal(failed.allowed, true);
+  assert.equal(failed.statusReads, 2, 'failed case is verified after the completed check fails');
+});
+
+test('Send stays locked for live, paused, uncertain, missing, mismatched or changed receipts', async () => {
+  const exact = { requestId: 'req', chatId: 'chat' };
+  const protectedStates = [
+    { ...exact, status: 'processing', workflowStatus: 'running' },
+    { ...exact, status: 'completed', workflowStatus: 'running', assistantMessageId: 'preview' },
+    { ...exact, status: 'failed', workflowStatus: 'paused' },
+    { ...exact, status: 'failed', workflowStatus: 'running' },
+    { ...exact, status: 'failed', workflowStatus: null },
+    { ...exact, status: 'failed', workflowStatus: 'completed' },
+    { ...exact, status: 'completed', workflowStatus: 'failed', assistantMessageId: 'answer' },
+    { ...exact, status: 'completed', workflowStatus: 'completed' },
+    { ...exact, status: 'failed', workflowStatus: 'failed', requestId: 'wrong' },
+    { ...exact, status: 'failed', workflowStatus: 'failed', chatId: 'wrong' },
+  ];
+  for (const payload of protectedStates) {
+    assert.equal((await checkSendLock(payload)).allowed, false, JSON.stringify(payload));
+  }
+  const terminal = { ...exact, status: 'failed', workflowStatus: 'failed' };
+  assert.equal((await checkSendLock(terminal, { swapped: true })).allowed, false,
+    'a different pending request must not be cleared');
+  assert.equal((await checkSendLock(terminal, { ok: false })).allowed, false);
+  assert.equal((await checkSendLock(terminal, { networkError: true })).allowed, false);
+  const legacy = await checkSendLock(terminal, { pendingId: null });
+  assert.equal(legacy.allowed, false, 'a receipt without its request ID is not verified');
+  assert.equal(legacy.statusReads, 0);
 });

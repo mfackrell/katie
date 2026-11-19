@@ -431,6 +431,34 @@ async function isSavedChatRequestComplete(
   }
 }
 
+/**
+ * A definitively failed chat + workflow is terminal too. Clear the stale
+ * browser lock only after verifying the exact request/chat identities.
+ * Never treat a running, paused, missing or uncertain workflow as failed.
+ */
+async function isSavedChatRequestTerminalFailure(
+  chatId: string,
+  requestId: string,
+  bearer?: string | null,
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `/api/chat/status?requestId=${encodeURIComponent(requestId)}&chatId=${encodeURIComponent(chatId)}`,
+      { cache: "no-store", ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) },
+    );
+    if (!response.ok) return false;
+    const payload = await response.json() as {
+      requestId?: string; chatId?: string; status?: string; workflowStatus?: string | null;
+    };
+    return payload.requestId === requestId &&
+      payload.chatId === chatId &&
+      payload.status === "failed" &&
+      payload.workflowStatus === "failed";
+  } catch {
+    return false;
+  }
+}
+
 function waitForRecoveryPoll(ms = MOBILE_RECOVERY_POLL_INTERVAL_MS): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1845,10 +1873,15 @@ export function ChatPanel({
       const bearer = await ownerSessionBearer().catch(() => null);
       const finished = Boolean(previousPending.requestId) &&
         await isSavedChatRequestComplete(chatId, previousPending.requestId!, bearer);
-      if (!finished || readPendingChatRequest(chatId)?.requestId !== previousPending.requestId) {
+      const terminalFailure = !finished && Boolean(previousPending.requestId) &&
+        await isSavedChatRequestTerminalFailure(chatId, previousPending.requestId!, bearer);
+      if ((!finished && !terminalFailure) ||
+          readPendingChatRequest(chatId)?.requestId !== previousPending.requestId) {
         setStatusMessage("The previous request is not yet verified complete. Katie will keep checking its original status; no duplicate request was sent.");
         return;
       }
+      // Definitively failed requests are finished. The user's next explicit
+      // Send is a new request, never an automatic retry of the old one.
       clearPendingChatRequest(chatId);
     }
     const latestComposerText = composerValueRef.current.trim();
