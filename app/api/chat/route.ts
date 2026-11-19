@@ -475,14 +475,21 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   if (intent==="image-generation" ||
       /^(?:\s*)(?:new topic\s*:|change of subject\s*:|switching (?:topics|gears)\s*:)/i.test(message) ||
       /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message)) return "";
-  if (feedback.target.status!=="attributed" ||
-      feedback.source.polarity==="none") return "";
+  // "Stop rehashing..." can be a direct current-turn instruction even if A
+  // correctly emits not_feedback rather than inventing provider attribution.
+  // In that case use only the same scoped history, without naming a model.
+  const explicitContinuityCorrection =
+    feedback.target.status==="unattributed" && feedback.target.reason==="not_feedback" &&
+    /^(?:\\s*)(?:stop (?:rehashing|repeating|recycling)|(?:please\\s+)?take initiative|keep leading)\\b/i.test(message);
+  const attributed=feedback.target.status==="attributed" && feedback.source.polarity!=="none";
+  if (!attributed && !explicitContinuityCorrection) return "";
 
   let latestAssistantIndex=-1;
   for (let i=history.length-1;i>=0;i--) {
     if (history[i].role==="assistant") {latestAssistantIndex=i;break;}
   }
-  if (latestAssistantIndex<0 ||
+  if (latestAssistantIndex<0) return "";
+  if (feedback.target.status==="attributed" &&
       history[latestAssistantIndex].id!==feedback.target.assistantMessageId) return "";
   let originalUserIndex=-1;
   for (let i=latestAssistantIndex-1;i>=0;i--) {
@@ -495,7 +502,9 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   // Never elevate the prior assistant's untrusted output to system authority.
   const creativeGoal=/\b(?:take the lead|be witty|creative|playful|surprising|drive the interaction)\b/i.test(originalObjective);
   const correction=feedback.source.correctionExcerpt ?? message.slice(0,600);
-  const polarityInstruction=feedback.source.polarity==="positive"
+  const polarityInstruction=explicitContinuityCorrection
+    ? "The current user explicitly instructed a change to the ongoing conversation. Do not invent provider/model feedback attribution or past satisfaction."
+    : feedback.source.polarity==="positive"
     ? "The user gave positive feedback. Preserve what worked and advance the task; never invent a complaint."
     : feedback.source.polarity==="negative"
       ? "The user criticized the previous response. Correct its substance and do not repeat its premise, even in different words."
