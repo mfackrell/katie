@@ -175,6 +175,22 @@ test('C-04 explicit new topic does not acquire creative continuation instruction
   assert.match(output.user,/accrual/);
   assert.doesNotMatch(output.persona,/Katie, take the lead|Be witty, creative, playful/i);
   assert.equal(isCreativeNarrativeTurn(f.current.text,f.history.map(x=>({role:x.role,content:x.text}))),false);
+  // Exercise the actual production generation builder with the versioned A-owned
+  // route-result contract, not merely an absent continuity flag. A genuine
+  // explicit topic switch must win even when older creative turns exist.
+  const switchedFeedback={
+    version:'current-turn-feedback-v1' as const,
+    source:{requestId:'current-request',userMessageId:f.current.id,
+      textExcerpt:f.current.text,polarity:'none' as const,
+      dimension:'unspecified' as const,correctionExcerpt:null},
+    target:{status:'unattributed' as const,reason:'not_feedback' as const},
+    applicableToOngoingObjective:false,
+  };
+  const switched=prepared(f,'best-answer',{currentTurnFeedback:switchedFeedback});
+  assert.equal(switched.user,f.current.text,'The explicit latest topic is authoritative');
+  assert.ok(!switched.persona.includes(f.history[0].text),
+    'A topic-switch provenance signal must not promote the stale creative objective');
+  assert.doesNotMatch(switched.persona,/Katie, take the lead|Be witty, creative, playful/i);
 });
 
 test('C-05 the latest explicit request to ask questions supersedes old no-questions preference',()=>{
