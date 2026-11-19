@@ -350,9 +350,9 @@ test('C-QA7 standalone latest-topic requests do not revive old objectives in eit
       });
       assert.equal(generated.user,latest);
       assert.ok(!generated.persona.includes(original),
-        \`Independent latest task must not acquire stale creative objective (\${mode}): \${latest}\`);
+        `Independent latest task must not acquire stale creative objective (${mode}): ${latest}`);
       assert.doesNotMatch(generated.persona,/SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY/,
-        \`Fresh topical request must not be recast as old-task feedback: \${latest}\`);
+        `Fresh topical request must not be recast as old-task feedback: ${latest}`);
     }
   }
   // The distinct task must not be inferred merely from question punctuation
@@ -369,7 +369,7 @@ test('C-QA7 standalone latest-topic requests do not revive old objectives in eit
         currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
       });
       assert.ok(generated.persona.includes(original),
-        \`Same-objective correction must keep trusted continuity (\${mode}): \${latest}\`);
+        `Same-objective correction must keep trusted continuity (${mode}): ${latest}`);
       assert.ok(generated.persona.includes(latest),
         'Current correction must remain verbatim in generation guidance');
     }
