@@ -347,3 +347,50 @@ test("D4: stale documentation-verified stored row fails closed on routing read w
   assert.equal("source_metadata" in grouped.get("openai")![0], false, "no metadata leaking to routing snapshot");
   assert.equal("capability_verified_at" in grouped.get("openai")![0], false);
 });
+
+test("D5: persisted documentation economic provenance is revalidated on every routing read without refresh", () => {
+  const now = "2026-11-19T05:30:00.000Z";
+  const establishedAt = "2026-11-19T01:00:00.000Z";
+  const published = parseOfficialModelEvidence(officialModelSpec("openai", "gpt-6.2-astra")!, openaiDoc)!;
+  const approved = retainOfficialModelEvidence(syntheticRecord(establishedAt), undefined, published, establishedAt);
+  type Persisted = Parameters<typeof buildRoutingRegistrySnapshot>[1][number];
+  const persisted = (changes: Record<string, unknown> = {}): Persisted =>
+    ({ ...approved, ...changes }) as unknown as Persisted;
+  // Call the actual production admission builder, directly, not a hand-copied predicate.
+  // The database reader uses it even after discovery/doc refresh fails.
+  const noRefresh = (record: Persisted) =>
+    buildRoutingRegistrySnapshot([{name:"openai"}], [record], now).get("openai")![0];
+
+  const valid = noRefresh(persisted({pricing_input_per_1m:"8.00", pricing_output_per_1m:"40.0"}));
+  assert.equal(valid.routing_eligibility, "verified", "intact model-specific approved base schedule remains verified");
+  assert.equal("source_metadata" in valid, false, "do not leak economic provenance");
+  assert.equal("pricing_verified_at" in valid, false, "do not leak verification metadata");
+
+  const corrupt = [
+    {pricing_input_per_1m:"0.10", pricing_output_per_1m:"40"},
+    {pricing_input_per_1m:"8", pricing_output_per_1m:"41"},
+    {pricing_input_per_1m:"0.10", source_metadata:{
+      ...approved.source_metadata, published_base_input_per_1m:0.10
+    }},
+    {source_metadata:{...approved.source_metadata, published_base_output_per_1m:41}},
+    {source_metadata:{...approved.source_metadata, provider_documented_model_id:"gpt-6-sol"}},
+    {source_metadata:{...approved.source_metadata, pricing_verification_source:"https://example.com/fake"}},
+    {source_metadata:{...approved.source_metadata, capability_verification_source:"https://example.com/fake"}},
+    {source_metadata:{...approved.source_metadata, pricing_tier:"uncertified"}},
+    {source_metadata:{...approved.source_metadata, price_verified_scope:"other_tier"}},
+    {source_metadata:{...approved.source_metadata, published_base_input_per_1m:undefined}},
+    {source_metadata:{}},
+    {source_metadata:null}
+  ];
+  for (const [i, mutation] of corrupt.entries()) {
+    assert.equal(noRefresh(persisted(mutation)).routing_eligibility, "restricted",
+      "failed/no-refresh contradictory or lost documentation proof must fail closed (case " + i + ")");
+  }
+  for (const locked of ["restricted", "manual_override_only", "disabled"] as const) {
+    assert.equal(noRefresh(persisted({routing_eligibility:locked, pricing_input_per_1m:"0.10"})).routing_eligibility,
+      locked, "preserve explicit routing policy state");
+  }
+  assert.equal(noRefresh(persisted({source_metadata:{
+    capability_source:"provider", pricing_source:"provider"
+  }})).routing_eligibility, "verified", "preserve independently established non-documentation provider evidence");
+});
