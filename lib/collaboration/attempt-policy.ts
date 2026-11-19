@@ -1,5 +1,6 @@
 import { isTerminalProviderError, ProviderResponseError } from "@/lib/providers/response-errors";
 import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { recordProviderTrace } from "@/lib/diagnostics/provider-attempt-timing";
 /** A local timeout cannot establish that the remote provider stopped billing. */
 export async function withProviderAttemptTimeout<T>(
   work: (signal: AbortSignal) => Promise<T>,
@@ -30,6 +31,9 @@ export async function withProviderAttemptTimeout<T>(
             false,
             "standalone_outcome_unknown",
           );
+          recordProviderTrace("cancellation_requested", {
+            failureCategory: "local_timeout", timeoutSource: "control_plane", cancellationReason: "decision_deadline",
+          });
           controller.abort(error);
           reject(error);
         }, Math.max(0, timeoutMs));

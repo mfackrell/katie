@@ -11,6 +11,7 @@ import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/reg
 import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
 import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
+import { recordProviderTrace, runProviderAttemptTrace } from "@/lib/diagnostics/provider-attempt-timing";
 import { getAccountingScope, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import { rankControlPlaneByActualCost } from "@/lib/router/control-plane-economics";
 
@@ -898,16 +899,27 @@ async function executeControlPlaneJsonTask<T>(args: {
     remaining.splice(remaining.indexOf(candidate), 1);
     const sourceLabel = `${candidate.provider.name}:${candidate.modelId}`;
     try {
-      const response = await withProviderAttemptTimeout(
-        signal => runWithStandaloneActivity(`control_plane_${args.taskName}`, () => candidate.provider.generate({
-          ...params,
-          user: params.user + correction,
-          modelId: candidate.modelId,
-          signal,
-        })),
+      const scope = getAccountingScope();
+      const response = await runProviderAttemptTrace({
+        taskName: args.taskName,
+        requestId: scope?.kind === "standalone" ? scope.context.requestId : null,
+        provider: candidate.provider.name,
+        modelId: candidate.modelId,
+      }, () => withProviderAttemptTimeout(
+        signal => runWithStandaloneActivity(`control_plane_${args.taskName}`, async () => {
+          recordProviderTrace("request_preparation_started");
+          const answer = await candidate.provider.generate({
+            ...params,
+            user: params.user + correction,
+            modelId: candidate.modelId,
+            signal,
+          });
+          recordProviderTrace("response_parsing_completed");
+          return answer;
+        }),
         controlPlaneAttemptTimeoutMs(args.timeoutMs, getAccountingScope()?.kind === "standalone"),
         `${args.taskName}:${sourceLabel}`
-      );
+      ));
       let parsed: T | null = null;
       try { parsed = args.parse(response.text ?? "", sourceLabel); } catch { /* Invalid JSON is repairable. */ }
       if (parsed !== null) {
