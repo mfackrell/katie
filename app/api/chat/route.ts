@@ -462,11 +462,12 @@ function buildRepoAuditContextBlock(params: {
 function sourceBoundObjectiveContinuityGuidance(input: {
   feedback: CurrentTurnFeedbackProvenanceV1 | null | undefined;
   requestId: string;
+  chatId: string;
   message: string;
-  history: ReadonlyArray<{id?: string; role: string; content: string}>;
+  history: ReadonlyArray<{id?: string; chatId?: string; role: string; content: string}>;
   intent?: RequestIntent;
 }): string {
-  const {feedback,requestId,message,history,intent}=input;
+  const {feedback,requestId,chatId,message,history,intent}=input;
   if (!feedback || feedback.version!=="current-turn-feedback-v1" ||
       feedback.source.requestId!==requestId ||
       feedback.source.textExcerpt!==message.slice(0,600) ||
@@ -489,6 +490,10 @@ function sourceBoundObjectiveContinuityGuidance(input: {
     if (history[i].role==="assistant") {latestAssistantIndex=i;break;}
   }
   if (latestAssistantIndex<0) return "";
+  // Current request feedback must refer to the immediate same-chat predecessor.
+  // A restored cross-chat project source is not conversational continuity.
+  if (latestAssistantIndex!==history.length-1 ||
+      history[latestAssistantIndex].chatId!==chatId) return "";
   if (feedback.target.status==="attributed" &&
       history[latestAssistantIndex].id!==feedback.target.assistantMessageId) return "";
   let originalUserIndex=-1;
@@ -497,6 +502,7 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   }
   if (originalUserIndex<0) return "";
   const originalUser=history[originalUserIndex];
+  if (originalUser.chatId!==chatId) return "";
   const originalObjective=originalUser.content.trim().slice(0,1800);
   if (!originalObjective) return "";
   // Never elevate the prior assistant's untrusted output to system authority.
@@ -1949,7 +1955,7 @@ async function executeChat(request: NextRequest) {
     const prepareCandidateRequest = (selectedModelId: string, context: Awaited<ReturnType<typeof prepareGenerationContext>>, classification: ResolvedRoutingIntent | undefined, forReview = false) => {
       const { creativeTextNarrativeRequest, responsePolicy, taskProgressContext, resumptionContext, visualContinuity } = context;
       const objectiveContinuityGuidance = forReview || typeof sourceBoundObjectiveContinuityGuidance !== "function" ? "" : sourceBoundObjectiveContinuityGuidance({
-        feedback:currentTurnFeedback,requestId,message,history,
+        feedback:currentTurnFeedback,requestId,chatId,message,history,
         intent:classification?.intent ?? resolvedRequestIntent,
       });
       return ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
