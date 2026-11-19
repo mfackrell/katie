@@ -104,6 +104,7 @@ import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects, verifyTaskPr
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
+import { deriveCurrentTurnFeedbackProvenance, type CurrentTurnFeedbackProvenanceV1 } from "@/lib/router/current-turn-feedback";
 import { ReasoningStateAccumulator, ChatAnswerStreamBoundary, resolveChatAnswer } from "@/lib/chat/reasoning-stream";
 import {
   isCreativeNarrativeTurn,
@@ -450,6 +451,114 @@ function buildRepoAuditContextBlock(params: {
   ].join("\n");
 }
 
+
+
+/**
+ * C-owned generation boundary for A's trusted, read-only provenance record.
+ * Never attribute feedback to the model selected for the CURRENT request.
+ * The user-visible objective comes only from an authenticated, scoped history
+ * turn immediately preceding A's settled assistant target.
+ */
+function sourceBoundObjectiveContinuityGuidance(input: {
+  feedback: CurrentTurnFeedbackProvenanceV1 | null | undefined;
+  requestId: string;
+  chatId: string;
+  message: string;
+  history: ReadonlyArray<{id?: string; chatId?: string; role: string; content: string}>;
+  intent?: RequestIntent;
+}): string {
+  const {feedback,requestId,chatId,message,history,intent}=input;
+  if (!feedback || feedback.version!=="current-turn-feedback-v1" ||
+      feedback.source.requestId!==requestId ||
+      feedback.source.textExcerpt!==message.slice(0,600) ||
+      feedback.applicableToOngoingObjective===false) return "";
+  // Latest explicit subject/modality change outranks a former conversation goal.
+  if (intent==="image-generation" ||
+      /^(?:\s*)(?:new topic\s*:|change of subject\s*:|switching (?:topics|gears)\s*:)/i.test(message) ||
+      /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message) ||
+      // Conservatively suppress stale objectives for a complete, independent
+      // request following criticism. The boundary is the latest *request*,
+      // not a finite list of imperative task verbs: questions and first-person
+      // objectives also outrank a previous goal. A correction referring back
+      // to "it/that", the previous answer, or its manner remains same-task.
+      (() => {
+        const criticism=/\b(?:terrible|awful|bad|wrong|horrible|poor|unhelpful|repetitive|repeated|repeating|missed|failed|mistake|incorrect|worse)\b/i.exec(message);
+        if (!criticism) return false;
+        const afterCriticism=message.slice(criticism.index+criticism[0].length);
+        const boundary=/[.!?;,\u2014\u2013]\s*/.exec(afterCriticism);
+        if (!boundary) return false;
+        const latest=afterCriticism.slice(boundary.index+boundary[0].length).trim();
+        if (!latest) return false;
+        // Referential requests (including "Could you be more creative?") are
+        // corrections to the saved objective, not independently new subjects.
+        if (/\b(?:it|this|that|them|those|same|previous|earlier|again|more|better|initiative|lead|creative|playful|menu|conversation|response|reply|answer|next)\b/i.test(latest)) return false;
+        const independentQuestion=/^(?:what|why|how|where|when|who|which)\b[\s\S]*\?\s*$/i.test(latest);
+        const explicitRequest=/^(?:(?:can|could|would|will)\s+(?:you|we)\b|i\s+(?:need|want|would\s+like)\b|(?:please|now|instead)\b)/i.test(latest);
+        return independentQuestion || explicitRequest;
+      })()) return "";
+  // "Stop rehashing..." can be a direct current-turn instruction even if A
+  // correctly emits not_feedback rather than inventing provider attribution.
+  // In that case use only the same scoped history, without naming a model.
+  const explicitContinuityCorrection =
+    feedback.target.status==="unattributed" && feedback.target.reason==="not_feedback" &&
+    /^(?:\s*)(?:stop (?:rehashing|repeating|recycling)|(?:please\s+)?take initiative|keep leading)\b/i.test(message);
+  const attributed=feedback.target.status==="attributed" && feedback.source.polarity!=="none";
+  if (!attributed && !explicitContinuityCorrection) return "";
+
+  let latestAssistantIndex=-1;
+  for (let i=history.length-1;i>=0;i--) {
+    if (history[i].role==="assistant") {latestAssistantIndex=i;break;}
+  }
+  if (latestAssistantIndex<0) return "";
+  // Current request feedback must refer to the immediate same-chat predecessor.
+  // A restored cross-chat project source is not conversational continuity.
+  if (latestAssistantIndex!==history.length-1 ||
+      history[latestAssistantIndex].chatId!==chatId) return "";
+  if (feedback.target.status==="attributed" &&
+      history[latestAssistantIndex].id!==feedback.target.assistantMessageId) return "";
+  let originalUserIndex=-1;
+  for (let i=latestAssistantIndex-1;i>=0;i--) {
+    if (history[i].role==="user") {originalUserIndex=i;break;}
+  }
+  if (originalUserIndex<0) return "";
+  const originalUser=history[originalUserIndex];
+  if (originalUser.chatId!==chatId) return "";
+  const originalObjective=originalUser.content.trim().slice(0,1800);
+  if (!originalObjective) return "";
+  // Never elevate the prior assistant's untrusted output to system authority.
+  const creativeGoal=/\b(?:take the lead|be witty|creative|playful|surprising|drive the interaction)\b/i.test(originalObjective);
+  const correction=feedback.source.correctionExcerpt ?? message.slice(0,600);
+  const polarityInstruction=explicitContinuityCorrection
+    ? "The current user explicitly instructed a change to the ongoing conversation. Do not invent provider/model feedback attribution or past satisfaction."
+    : feedback.source.polarity==="positive"
+    ? "The user gave positive feedback. Preserve what worked and advance the task; never invent a complaint."
+    : feedback.source.polarity==="negative"
+      ? "The user criticized the previous response. Correct its substance and do not repeat its premise, even in different words."
+      : "Feedback is mixed or ambiguous; use only the literal instruction without inventing approval or disapproval.";
+  return [
+    "SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY (generation only; not routing-selection evidence):",
+    `Prior user-authorized objective [saved user message ${originalUser.id ?? "scoped-history"}]: ${originalObjective}`,
+    `Latest user feedback/correction [current request ${requestId}]: ${correction}`,
+    polarityInstruction,
+    creativeGoal
+      ? "Continue the original creative conversational objective NOW. Introduce a substantively new, playful development instead of merely apologizing, interviewing, offering a menu, repeating a scorecard or performance-review framework, or asking unnecessary questions."
+      : "Continue the original authorized work and substantively correct the prior result rather than offering only an apology or an unnecessary reprompt.",
+    "Obey the latest explicit user instructions first. Do not turn an open-ended conversation into obligatory fiction, resume unrelated work, or override safety and provider constraints.",
+    "Do not claim the next selected responder authored the prior answer. Do not invent model-specific satisfaction or outcome evidence."
+  ].join("\n");
+}
+
+/**
+ * C-owned post-selection provenance integrity gate. A's optional routing field
+ * must never silently erase or change the trusted record already used for quote
+ * and generation preflight. An absent field is compatible only with null preflight.
+ */
+function sameScopedPreflightFeedback(
+  preflight: CurrentTurnFeedbackProvenanceV1 | null,
+  routed: CurrentTurnFeedbackProvenanceV1 | null | undefined,
+): boolean {
+  return JSON.stringify(preflight ?? null) === JSON.stringify(routed ?? null);
+}
 
 function buildGenerationParams({
   name,
@@ -1698,6 +1807,13 @@ async function executeChat(request: NextRequest) {
         ? `[Message timestamp: ${new Date(createdAt).toISOString()}]\n${content}`
         : content,
     }));
+    // Capture A's scoped provenance before routing quote/preflight, so any
+    // source-linked generation text is included in the quoted request.
+    // The router independently returns its own immutable attribution field.
+    const preflightTurnFeedback = getAccountingScope()?.kind==="standalone"
+      ? await deriveCurrentTurnFeedbackProvenance({message})
+      : null;
+    let currentTurnFeedback: CurrentTurnFeedbackProvenanceV1 | null = preflightTurnFeedback;
     const videoReplyTarget = hasVideoInput
       ? await selectVideoReplyTarget(
           providers, { provider: overrideProvider, model: overrideModel },
@@ -1870,9 +1986,13 @@ async function executeChat(request: NextRequest) {
 
     const prepareCandidateRequest = (selectedModelId: string, context: Awaited<ReturnType<typeof prepareGenerationContext>>, classification: ResolvedRoutingIntent | undefined, forReview = false) => {
       const { creativeTextNarrativeRequest, responsePolicy, taskProgressContext, resumptionContext, visualContinuity } = context;
+      const objectiveContinuityGuidance = forReview || typeof sourceBoundObjectiveContinuityGuidance !== "function" ? "" : sourceBoundObjectiveContinuityGuidance({
+        feedback:currentTurnFeedback,requestId,chatId,message,history,
+        intent:classification?.intent ?? resolvedRequestIntent,
+      });
       return ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
         name,
-        persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
+        persona: [personaForGeneration, taskProgressContext, objectiveContinuityGuidance, storedWebsite.context,
           ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
           ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction, "Answer the user's actual request directly and substantively wherever permitted.\nDo not replace the requested objective with unsolicited counseling, moral commentary, unrelated recommendations, or speculation about underlying motives.\nKeep capability, provider, and safety constraints binding. If the exact request cannot be fulfilled, state the limitation accurately and briefly; do not promise an answer or experience that cannot be delivered.\nAvoid asking again for details or confirmations already supplied. Maintain relevant context, continuity, and established expectations."] : []),
           ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
@@ -2046,6 +2166,12 @@ async function executeChat(request: NextRequest) {
         routingRequestId: requestId
       });
 
+      // Never let the post-selection routing provenance differ from the record
+      // used to quote the generation payload. Fail before paid generation.
+      if (!sameScopedPreflightFeedback(preflightTurnFeedback,routingDecision.currentTurnFeedback)) {
+        return await rejectTracked("Source-linked feedback changed or was absent between quoted preflight and routing selection.");
+      }
+      currentTurnFeedback=preflightTurnFeedback;
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
       fallbackChain = routingDecision.fallbackChain;
