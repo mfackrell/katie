@@ -127,9 +127,23 @@ function safeValue(value: unknown, max = 100): string | null {
   if (typeof value !== "string" || !value || value.length > max || !/^[a-zA-Z0-9_./:-]+$/.test(value)) return null;
   return value;
 }
+const SAFE_CODES = new Set([
+  "INVALID_ARGUMENT", "RESOURCE_EXHAUSTED", "PERMISSION_DENIED", "UNAVAILABLE", "INTERNAL",
+  "DEADLINE_EXCEEDED", "NOT_FOUND", "FAILED_PRECONDITION", "UNAUTHENTICATED", "CANCELLED",
+  "ABORTED", "OUT_OF_RANGE", "DATA_LOSS", "UNKNOWN", "ALREADY_EXISTS",
+  "rate_limit_exceeded", "insufficient_quota", "invalid_request_error", "server_error",
+  "model_not_found", "context_length_exceeded", "invalid_api_key", "unsupported_parameter",
+  "rate_limit_error", "api_error", "authentication_error", "permission_error",
+  "overloaded_error", "invalid_request", "not_found_error", "billing_hard_limit_reached",
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT",
+  "UND_ERR_SOCKET", "ABORT_ERR", "uncertain_exposure_retained",
+  "standalone_outcome_unknown", "standalone_cancelled", "standalone_receipt_conflict",
+  "standalone_usage_unpriced", "standalone_time_budget_exhausted",
+  "standalone_approval_required", "standalone_context_missing",
+]);
 function safeCode(value: unknown): string | undefined {
   const result = safeValue(value, 64);
-  return result ?? undefined;
+  return result && SAFE_CODES.has(result) ? result : undefined;
 }
 function ms(delta: bigint): number { return Math.round(Number(delta) / 100_000) / 10; }
 
