@@ -530,10 +530,15 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     const timeoutSignal = AbortSignal.timeout(transmissionTimeoutMs);
     const transmissionSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), timeoutSignal]);
     const traceAbort = bindProviderTraceRecorder();
-    const onTransmissionAbort = () => traceAbort('cancellation_requested', {
-      cancellationReason: timeoutSignal.aborted ? 'transport_deadline' : controller.signal.aborted ? 'owner' : 'parent_signal',
-      timeoutSource: timeoutSignal.aborted ? 'transmission' : 'upstream',
-    });
+    const onTransmissionAbort = () => {
+      const controlPlaneDeadline = signal?.aborted &&
+        (signal.reason as { code?: unknown } | null)?.code === 'standalone_outcome_unknown';
+      traceAbort('cancellation_requested', {
+        cancellationReason: timeoutSignal.aborted ? 'transport_deadline' :
+          controlPlaneDeadline ? 'decision_deadline' : controller.signal.aborted ? 'unknown' : 'parent_signal',
+        timeoutSource: timeoutSignal.aborted ? 'transmission' : controlPlaneDeadline ? 'control_plane' : 'none',
+      });
+    };
     transmissionSignal.addEventListener('abort', onTransmissionAbort, {once: true});
     const activeKey = `${context.userId}:${attempt.id}`;
     activeTransmissions.set(activeKey, controller);
@@ -546,6 +551,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       }).catch(() => controller.abort()).finally(() => { pollingCancellation = false; });
     }, 2_000);
     cancellationPoll.unref();
+    let transportOrBodyPending = true;
     try {
       // Serialize only the frozen, authorized value. Callbacks cannot mutate it.
       recordProviderTrace('dispatch_initiated');
@@ -553,6 +559,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       recordProviderTrace('response_headers_received', {httpStatus: response.status});
       await ledger.recordProviderIdentifiers(context.userId, attempt.id, response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? response.headers.get('x-goog-request-id'), null);
       const body = await readProviderResponseText(response);
+      transportOrBodyPending = false;
       if (!response.ok) recordProviderTrace('provider_http_rejection', {
         httpStatus: response.status,
         errorCode: safeHttpErrorCode(body),
@@ -566,7 +573,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if(reconciled?.state==='uncertain'&&!safeUncertainCheckpoint(checkpoint,provider,prepared.endpoint))return unavailableUncertainResponse();
       return restore(checkpoint);
     } catch (error) {
-      if (transmissionSignal.aborted && (error === transmissionSignal.reason ||
+      if (transportOrBodyPending && transmissionSignal.aborted && (error === transmissionSignal.reason ||
           error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) {
         // Transport promise observed abort; this does NOT prove remote cancellation.
         recordProviderTrace('cancellation_acknowledged');
