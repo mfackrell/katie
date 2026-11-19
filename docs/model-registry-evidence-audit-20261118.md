@@ -118,6 +118,12 @@ server's parser has successfully processed each live HTTP response:
 | `claude-opus-5-5`, `claude-sonnet-5-5` | Accessible | Exact IDs and Anthropic Messages identifiers, 1M context, 128K max output, base prices and thinking capabilities found |
 | `claude-fable-5-2` | **Not accessible to this read-only retrieval** | Comparison references in other model pages are **not sufficient** to qualify its own page. Keep unverified; do not fabricate a price check |
 
+### Fable HTML-only evidence and data-retention boundary — 2026-11-19
+
+Read-only public retrieval now confirms Anthropic's [official Claude Fable 5.2 HTML overview](https://platform.claude.com/docs/en/models/fable-5-2/overview) identifies `claude-fable-5-2`, Standard base $8 input / $40 output per MTok, 1M context and 128K maximum output. The same first-party page explicitly states that Fable 5.2 **requires 30-day data retention** and is unavailable under zero data retention without express Anthropic authorization. This is a material model-specific privacy/usage constraint requiring separate owner/security consideration if Fable is later proposed for sensitive actor or mission traffic.
+
+**Qualification remains unchanged:** public HTML is not the exact `.md` endpoint currently fetched by `fetchOfficialModelEvidence`; that endpoint could not be fetched and parsed by this read-only check. This observation does **not** establish a passing live parser, configured-account access, consent to 30-day retention, or permission for paid inference. Keep Fable fail-closed until its exact parser/source and applicable retention/owner constraints are independently qualified. No policy or production behavior is modified by this note.
+
 The directly inspected URL set is the eight OpenAI/Anthropic first-party pages linked
 in the evidence-backed model table above, with `.md` appended. Pages may change
 independently of this audit; any subsequent scheduled verification must validate
