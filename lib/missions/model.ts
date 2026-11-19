@@ -18,6 +18,21 @@ import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,mi
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
+// This is a local pre-send refusal, never evidence of a provider response.
+// Only the immutable original assignment gets the additional owner-window fence.
+class MissionBeforeProviderDispatchExpired extends Error {
+ constructor(){super('Mission execution time window exhausted before dispatch; saved work remains intact');this.name='MissionBeforeProviderDispatchExpired';}
+}
+function originalMission79DispatchRemainingMs(claim:Claim,executionDeadline:number,now=Date.now()){
+ if(claim.mission.project_id!=='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'
+   ||claim.mission.id!=='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'
+   ||claim.job.id!=='85e229aa-e571-43ef-9d4a-5cb64f4efcd1')return Infinity;
+ const leaseUntil=Date.parse(claim.job.lease_until??'');
+ const ownerCutoff=Date.parse(claim.mission.deadline??'');
+ if(!Number.isFinite(leaseUntil)||!Number.isFinite(ownerCutoff)||!Number.isFinite(executionDeadline))return -Infinity;
+ // Leave time for the provider handoff, never start it at or past a boundary.
+ return Math.min(executionDeadline,leaseUntil,ownerCutoff)-now-5000;
+}
 export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[];composerNotes?:string;requestedExecutionEffort?:string;specificationNormalization?:{candidateHash:string;expandedHash:string;operation:string;independentReviewRequired:boolean};revisionPatch?:{baseHash:string;resultHash:string;edits:Array<{before:string;after:string}>}};
 type FullBinding={trial_id:string;account_id:string;benchmark_contract_hash:string;baseline_sha:string;model:string};
 async function fullProjectBinding(claim:Claim):Promise<FullBinding|null>{
@@ -46,7 +61,7 @@ export function isCreditExhaustion(error:unknown):boolean{
 // an unchanged, draft-blind review-contract response may be reused; the worker
 // still validates its source provenance, and independently reviews the candidate.
 async function trialProviderRequest<T>(
- claim:Claim,operation:'model-list'|'inference',requestHash:string,send:()=>Promise<T>,confirmedReceipt:(result:T)=>string|null,
+ claim:Claim,operation:'model-list'|'inference',requestHash:string,send:()=>Promise<T>,confirmedReceipt:(result:T)=>string|null,executionDeadline:number,
 ):Promise<T>{
  const boundary={p_job:claim.job.id,p_lease:claim.job.lease};
  const request={p_job:claim.job.id,p_attempt:claim.job.lease,p_request:randomUUID(),p_operation:operation,p_hash:requestHash};
@@ -56,6 +71,10 @@ async function trialProviderRequest<T>(
   throw new MissionModelFailure('Trial provider admission could not be confirmed',{providerOutcomeUnresolved:true});
  }
  try{
+  // Admission is not dispatch authorization after an arbitrary SQL/network delay.
+  // An admitted but unsent original request retains its durable request fence;
+  // the existing auditable mission stop prevents a duplicate paid inference.
+  if(originalMission79DispatchRemainingMs(claim,executionDeadline)<1000)throw new MissionBeforeProviderDispatchExpired();
   const result=await send();
   const receipt=confirmedReceipt(result);
   if(!receipt)throw Error('Trial provider refused execution or returned an uncertain response');
@@ -86,14 +105,15 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   if(claim.mission.project_kind==='management'&&tools!=='none')throw Error('Management tools must remain disabled');
   if(!await rpc<boolean>('project_provider_mission_live',boundary))throw Error('Trial assignment authority is unavailable');
   if(savedReview)return savedReview;
+  const executionDeadline=missionExecutionDeadline(claim);
   const provider=getAvailableProviders().find(candidate=>candidate.name==='openai');
   if(!provider)throw Error('Trial OpenAI connection unavailable');
   const models=await trialProviderRequest(claim,'model-list',createHash('sha256').update('openai:GET:/v1/models').digest('hex'),
-   ()=>provider.listModels(),result=>Array.isArray(result)&&result.every(id=>typeof id==='string')?'model-catalog':null);
+   ()=>provider.listModels(),result=>Array.isArray(result)&&result.every(id=>typeof id==='string')?'model-catalog':null,executionDeadline);
   const modelId=['gpt-5.4','gpt-5.2','gpt-5'].find(id=>models.includes(id)&&boundedModelSupported(provider.name,id));
   if(!modelId)throw Error('No supported reasoning model is available through the trial connection');
   const choice={provider,modelId,reasoning:'Provider-account trial with a single bounded connection'};
-  const result=await executeMissionModel(claim,instruction,input,tools,choice,missionExecutionDeadline(claim),undefined,false,reviewFormat,false,false,false,true);
+  const result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,undefined,false,reviewFormat,false,false,false,true);
   const complete={...result,provider:provider.name,routingReason:choice.reasoning,attemptedModels:[provider.name+':'+modelId]};
   if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))
    throw Error('Worker no longer authorized to persist review checkpoint');
@@ -253,12 +273,21 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const started=Date.now();
   try{
    if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
-   const send=()=>client.responses.create(request,{timeout:inferenceTimeout});
+   const send=()=>{
+    // Admission/token counting may have taken the entire remaining window.
+    // Recompute immediately before inference, not before asynchronous RPCs.
+    const now=Date.now();
+    const timeout=Math.min(inferenceTimeout,missionAttemptTimeout(executionDeadline,outputTokens,now),
+     tools==='calculate'?calculationDeadline-now-5000:Infinity,
+     originalMission79DispatchRemainingMs(claim,executionDeadline,now));
+    if(timeout<1000)throw new MissionBeforeProviderDispatchExpired();
+    return client.responses.create(request,{timeout});
+   };
    const response=providerControlled?await trialProviderRequest(claim,'inference',createHash('sha256').update(JSON.stringify(request)).digest('hex'),send,result=>{
     const refused=(result.output??[]).some(item=>item&&typeof item==='object'&&'content' in item&&Array.isArray(item.content)&&item.content.some(block=>block?.type==='refusal'));
     const definitive=result.status==='completed'||result.status==='incomplete'&&result.incomplete_details?.reason==='max_output_tokens';
     return definitive&&!refused&&!result.error&&typeof result.id==='string'&&result.id.length>0?result.id:null;
-   }):await send();
+   },executionDeadline):await send();
    if(providerControlled)console.info('[Trial model usage]',{jobId:claim.job.id,model:selectedModel,requestId:response.id,usage:response.usage});
    if((fullBenchmark||fenced)&&(response as {service_tier?:string}).service_tier!=='default')throw Error('Full provider service tier uncertain; reservation retained');
    let draftCheckpointFailed=false;
@@ -310,8 +339,8 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    }
    return{text,sources,calculations,model:selectedModel};
   }catch(error){
-   if(fullBenchmark)await fullBenchmarkAccounting(claim,ordinary).finish(callId,rejectedBeforeInference(error)?0:null).catch(()=>{});
-   else if(!providerControlled)await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
+   if(fullBenchmark)await fullBenchmarkAccounting(claim,ordinary).finish(callId,error instanceof MissionBeforeProviderDispatchExpired||rejectedBeforeInference(error)?0:null).catch(()=>{});
+   else if(!providerControlled)await rpc('finish_mission_call',{p_call:callId,p_tokens:error instanceof MissionBeforeProviderDispatchExpired||rejectedBeforeInference(error)?0:null}).catch(()=>{});
    console.warn('[Missions] Provider attempt ended',{jobId:claim.job.id,callId,provider:choice.provider.name,model:selectedModel,durationMs:Date.now()-started,reservedTokens:reserve,countMethod:counted?'provider':'conservative-bytes',error:error instanceof Error?error.message.slice(0,350):'Unknown provider failure'});
    throw error;
   }
