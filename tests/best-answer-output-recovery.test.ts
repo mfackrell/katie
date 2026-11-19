@@ -4,7 +4,6 @@ import { planBestAnswerOutputTokens } from "../lib/providers/output-planning";
 import { summarizeProviderOutcome } from "../lib/providers/response-diagnostics";
 import { assertProviderOutput, ProviderResponseError } from "../lib/providers/response-errors";
 import { runWithRefusalFallback } from "../lib/router/refusal-detection";
-import { bestAnswerClaimSupported } from "../lib/router/best-answer-evidence";
 import { estimatePreparedRequest, prepareStandaloneRequest } from "../lib/standalone-accounting/estimate";
 import type { ChatGenerateParams, ProviderResponse } from "../lib/providers/types";
 
@@ -128,17 +127,4 @@ test("other providers and HTTP rejection remain separately classified", () => {
   assert.equal(summarizeProviderOutcome(JSON.stringify({error:{code:"context_length_exceeded"}}),
     "openai","/v1/responses",false,400).normalizedFailureReason,"CONTEXT_CAPACITY_EXHAUSTED");
   assert.equal(summarizeProviderOutcome("","openai","/v1/responses",false,504).normalizedFailureReason,"TIMEOUT");
-});
-
-test("Best Answer rejects fabricated prior task-quality evidence; delivery alone proves nothing", () => {
-  const claim="Chosen for proven high analytical precision in earlier interactions.";
-  const priorDelivery={quality:{feedback:{evidence:[]}}};
-  assert.equal(bestAnswerClaimSupported(claim,[],priorDelivery),false);
-  assert.equal(bestAnswerClaimSupported("Comparable answer quality is unknown.",[],priorDelivery),true);
-  assert.equal(bestAnswerClaimSupported("No evidence of proven prior analytical quality exists.",[],priorDelivery),true);
-  const falseAlternative=[{whyNotSelected:"The winner has an established track record from a prior completed message."}];
-  assert.equal(bestAnswerClaimSupported("Reasoned selection only",falseAlternative),false);
-  const feedback={quality:{feedback:{evidence:[{outcome:"positive",source:"internal_review",
-    task_excerpt:"Earlier comprehensive executive qualification review",dimension:"task_quality"}]}}};
-  assert.equal(bestAnswerClaimSupported(claim,[],feedback),true);
 });

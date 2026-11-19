@@ -1192,18 +1192,6 @@ export async function chooseProvider(
       };
     });
     if (!neutral) llmCandidatesUsed = shortlistDecisionCandidates(llmCandidatesUsed, options?.decisionCandidatesPerProvider);
-    if (neutral && options?.routing_mode === "best_answer") {
-      // Best Answer must not infer paid-generation eligibility from discovery
-      // labels alone. Preserve Best Value's existing candidate population.
-      const priced = llmCandidatesUsed.filter(candidate =>
-        Boolean(getModelPrice(candidate.providerName, candidate.modelId)));
-      console.info("[Best Answer Eligibility]", {
-        requestId: traceRequestId, discoveredCandidates: llmCandidatesUsed.length,
-        reviewedPriceCandidates: priced.length,
-        excludedUnpriced: llmCandidatesUsed.length - priced.length,
-      });
-      llmCandidatesUsed = priced;
-    }
     console.info(`[LLM Router Preferences] ${JSON.stringify({ requestId: traceRequestId, intent, preferenceProfile })}`);
     console.info(
       `[LLM Router Candidates] ${JSON.stringify({ requestId: traceRequestId, count: llmCandidatesUsed.length, candidates: llmCandidatesUsed })}`

@@ -1,6 +1,5 @@
 import { type RoutingEvidence } from "@/lib/router/observed-evidence";
 import { getModelPrice } from "@/lib/standalone-accounting/pricing";
-import { bestAnswerClaimSupported } from "@/lib/router/best-answer-evidence";
 import type { ProjectTransition } from "@/lib/chat/task-progress";
 import { isNonConversationalModel } from "@/lib/models/non-conversational";
 import {
@@ -2374,16 +2373,10 @@ For Best Value selections with multiple eligible candidates, REQUIRED additional
 Do not cite direct feedback or verified outcomes unless actually present in the supplied candidate evidence. Where evidence is only inferred, state that comparative outcome quality is unknown. Do not substitute cost for an adequate-quality finding.
 ` : "";
 
-  const bestAnswerIntegrityContract = neutral && args.routing_mode === "best_answer" ? `
-BEST ANSWER ONLY — EVIDENCE AND COMPLETION RELIABILITY:
-A previous response that merely requested source material is NOT a completed analysis or evidence of answer quality. A successful delivery, previous selection, or model family reputation alone does not establish demonstrated performance. If no positively attributed, comparable task feedback exists, explicitly state that comparative quality is unknown. Never claim a proven or established track record on such evidence.
-Evaluate whether the reviewed output capacity and current request's likely visible report plus reasoning can plausibly complete; do not equate a model's maximum supported output with the actual requested allowance. Prefer candidates with reviewed model-specific pricing and capacity evidence; unpriced model names are not validated entitlement or capability.
-` : "";
-
   const result = await executeControlPlaneJsonTask({
     taskName: "routing-rerank",
     decisionProviders: eligibleDecisionProviders,
-    userPrompt: `${systemPrompt}${bestValueQualityContract}${bestAnswerIntegrityContract}\n\n${JSON.stringify({
+    userPrompt: `${systemPrompt}${bestValueQualityContract}\n\n${JSON.stringify({
       prompt: args.prompt,
       intent: args.intent,
       secondary_intents: args.secondaryIntents ?? [],
@@ -2454,10 +2447,6 @@ Evaluate whether the reviewed output capacity and current request's likely visib
       // A successful LLM-primary comparison must contrast the winner with at least
       // one actual eligible alternative whenever a choice exists.
       if (neutral && args.candidates.length > 1 && selectionComparisons.length === 0) return null;
-      if (neutral && args.routing_mode === "best_answer" && !bestAnswerClaimSupported(
-        selectionJustification, selectionComparisons,
-        args.requestEvidence?.candidates[`${selectedProvider}:${selectedModel}`]
-      )) return null;
       return { selectedProvider, selectedModel, selectionJustification, selectionComparisons };
     },
     timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
