@@ -12,7 +12,7 @@ import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
 import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
 import { recordProviderTrace, runProviderAttemptTrace } from "@/lib/diagnostics/provider-attempt-timing";
-import { getAccountingScope, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, isStandaloneAccountingError, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import { rankControlPlaneByActualCost } from "@/lib/router/control-plane-economics";
 
 export type RoutingMode = "best_answer" | "best_value";
@@ -2588,9 +2588,11 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
   ));
   // A cancelled/unauthorized owner request is terminal for the whole
   // operation, even if another judge happened to produce an answer.
+  // A single judge's model refusal is not an owner authorization failure.
   const fatal = judgeResults.find(result =>
     result.status === "rejected" &&
-    isTerminalAttemptError(result.reason) &&
+    (isStandaloneAccountingError(result.reason) ||
+      (result.reason instanceof Error && result.reason.name === "AbortError")) &&
     !(result.reason instanceof Error && "code" in result.reason &&
       result.reason.code === "standalone_outcome_unknown"));
   if (fatal?.status === "rejected") throw fatal.reason;
