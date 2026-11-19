@@ -245,6 +245,47 @@ test('C-QA3 feedback-plus-topic replacement suppresses stale objective in produc
     'Correction plus a replacement task is a topic switch, not a creative-continuation request');
 });
 
+test('C-QA5 feedback plus polite or reordered replacement requests must honor the latest task',()=>{
+  const f=scenario('C-01');
+  const original=f.history.find(t=>t.role==='user')!.text;
+  // A's authenticated prior negative feedback can remain valid even when
+  // the latest turn explicitly asks for a different substantive objective.
+  // These are the exact production source-builder cases the non-author found.
+  for (const latest of [
+    'That response was terrible. Can you explain accrual accounting instead?',
+    'That response was terrible. Please explain accrual accounting instead.',
+    'That response was terrible. Instead, explain accrual accounting.',
+    'That response was terrible. Could you summarize the balance sheet instead?',
+    'That response was terrible. Now explain accrual accounting instead.',
+  ]) {
+    const changed:Case={...f,current:{...f.current,text:latest}};
+    const generated=prepared(changed,'best-value',{
+      currentTurnFeedback:scopedPriorFeedback(changed,'negative'),
+    });
+    assert.equal(generated.user,latest,'The current user request must remain exact');
+    assert.ok(!generated.persona.includes(original),
+      `Explicit latest request must not promote unrelated creative instructions: ${latest}`);
+    assert.doesNotMatch(generated.persona,/SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY/,
+      `A fresh task is not an instruction to resume the earlier creative goal: ${latest}`);
+  }
+  // Regression protection: a real same-task correction is not automatically
+  // discarded merely because it contains a feedback phrase or "instead".
+  for (const latest of [
+    'Katie, that is terrible. You repeated yourself and failed to take initiative.',
+    'That response was terrible. Please take initiative instead.',
+    'That response was terrible. Instead of another menu, keep leading our creative conversation.',
+  ]) {
+    const continuing:Case={...f,current:{...f.current,text:latest}};
+    const generated=prepared(continuing,'best-value',{
+      currentTurnFeedback:scopedPriorFeedback(continuing,'negative'),
+    });
+    assert.ok(generated.persona.includes(original),
+      `Genuine same-task correction must preserve scoped objective: ${latest}`);
+    assert.ok(generated.persona.includes(latest),
+      'Generation must carry the latest corrective instruction verbatim');
+  }
+});
+
 test('C-QA4 actual post-routing gate fails closed when optional feedback vanishes',()=>{
   const node=uniqueNode(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='sameScopedPreflightFeedback',
     'sameScopedPreflightFeedback') as ts.FunctionDeclaration;
