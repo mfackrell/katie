@@ -79,32 +79,36 @@ export async function deriveCurrentTurnFeedbackProvenance(input: {
 
   try {
     const db=getSupabaseAdminClient();
-    const {data:current,error:currentError}=await db.from("standalone_workflows")
+    const {data:currentRow,error:currentError}=await db.from("standalone_workflows")
       .select("created_at").eq("owner_id",userId).eq("actor_id",actorId)
       .eq("chat_id",chatId).eq("request_id",requestId).maybeSingle();
+    const current=currentRow as {created_at?:string} | null;
     if (currentError || !current?.created_at)
       return unattributed(source,"missing_receipt",applicableToOngoingObjective);
 
     // Do not skip an intervening user or an incomplete/error assistant message:
     // the critic's target must be the immediate saved predecessor.
-    const {data:previous,error:previousError}=await db.from("messages")
+    const {data:previousRows,error:previousError}=await db.from("messages")
       .select("id,role").eq("actor_id",actorId).eq("chat_id",chatId)
       .lt("created_at",current.created_at).order("created_at",{ascending:false}).limit(1);
     if (previousError) return unattributed(source,"missing_receipt",applicableToOngoingObjective);
+    const previous=previousRows as Array<{id:string;role:string}> | null;
     const last=previous?.[0];
     if (!last || last.role !== "assistant")
       return unattributed(source,"no_prior_completed_reply",applicableToOngoingObjective);
 
-    const {data:priorRequest,error:requestError}=await db.from("chat_requests")
+    const {data:priorRequestRow,error:requestError}=await db.from("chat_requests")
       .select("request_id,assistant_message_id").eq("actor_id",actorId).eq("chat_id",chatId)
       .eq("assistant_message_id",last.id).eq("status","completed").maybeSingle();
+    const priorRequest=priorRequestRow as {request_id?:string;assistant_message_id?:string} | null;
     if (requestError || !priorRequest?.request_id || priorRequest.request_id === requestId)
       return unattributed(source,"missing_receipt",applicableToOngoingObjective);
 
-    const {data:priorWorkflow,error:workflowError}=await db.from("standalone_workflows")
+    const {data:priorWorkflowRow,error:workflowError}=await db.from("standalone_workflows")
       .select("status,checkpoints").eq("owner_id",userId).eq("actor_id",actorId)
       .eq("chat_id",chatId).eq("request_id",priorRequest.request_id)
       .eq("status","completed").maybeSingle();
+    const priorWorkflow=priorWorkflowRow as {checkpoints?:Record<string,unknown>|null;status?:string} | null;
     if (workflowError || !priorWorkflow)
       return unattributed(source,"scope_mismatch",applicableToOngoingObjective);
     const checkpoints=priorWorkflow.checkpoints as Record<string,unknown> | null;
