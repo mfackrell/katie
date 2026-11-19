@@ -255,10 +255,20 @@ test("first-party model parser contracts cover all accessible documented model c
   }
   const sonnet = officialModelSpec("anthropic", "claude-sonnet-5-5")!;
   const sonnetDoc = anthropicDoc.replaceAll("claude-opus-5-5", "claude-sonnet-5-5")
-    .replace("$4 / MTok", "$2 / MTok").replace("$20 / MTok", "$10 / MTok")
+    // These rates occur in both the overview and the pricing table; update both.
+    .replaceAll("$4 / MTok", "$2 / MTok").replaceAll("$20 / MTok", "$10 / MTok")
     .replace("Adaptive (always on)", "Adaptive");
   const result = parseOfficialModelEvidence(sonnet, sonnetDoc);
-  assert.ok(result);
-  assert.equal(result.pricingMatchesApprovedSchedule, true);
+  assert.ok(result, "claude-sonnet-5-5 parser failed");
+  assert.equal(result.documentedModelId, sonnet.modelId);
+  assert.equal(result.inputPer1m, 2, "claude-sonnet-5-5 parsed input rate");
+  assert.equal(result.outputPer1m, 10, "claude-sonnet-5-5 parsed output rate");
+  assert.equal(result.pricingMatchesApprovedSchedule, true, "claude-sonnet-5-5 official schedule");
   assert.deepEqual(result.supportedEndpoints, ["messages"]);
+  const changedPrice = parseOfficialModelEvidence(
+    sonnet, sonnetDoc.replace("| Output | $10 / MTok |", "| Output | $11 / MTok |")
+  );
+  assert.ok(changedPrice);
+  assert.equal(changedPrice.outputPer1m, 11);
+  assert.equal(changedPrice.pricingMatchesApprovedSchedule, false, "changed Sonnet price must fail closed");
 });
