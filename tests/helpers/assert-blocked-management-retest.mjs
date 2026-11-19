@@ -921,10 +921,14 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
    await first.query('set role service_role');
   });
   await beforeLeaseNegative('Saved director agent drift before lease',async()=>{
+   // The original one-director mission may have no alternate team member.
+   // Select another existing organization agent as an unauthorized principal;
+   // changing only the disposable assignment must still fail the exact
+   // saved-director binding without manufacturing a new team member.
    const other=(await first.query(
-    "select (x->>'id')::uuid id from agent_missions m cross join lateral jsonb_array_elements(m.team) x where m.id=$1 and (x->>'id')::uuid<>(select agent_id from mission_assignments where id=$2) limit 1",
-    [scheduled.missionId,originalJob.id])).rows[0]?.id;
-   assert.ok(other,'Fixture must have an alternative eligible mission-team member to test the agent-binding attack');
+    "select n.agent_id id from project_organization_nodes n where n.project_id=$1 and n.agent_id<>(select agent_id from mission_assignments where id=$2) order by n.id limit 1",
+    [project,originalJob.id])).rows[0]?.id;
+   assert.ok(other,'Fixture requires an existing distinct organization agent for the negative binding test');
    await first.query('reset role');
    await first.query("set local session_replication_role = 'replica'");
    await first.query('update mission_assignments set agent_id=$2 where id=$1',[originalJob.id,other]);
