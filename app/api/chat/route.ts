@@ -476,11 +476,26 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   if (intent==="image-generation" ||
       /^(?:\s*)(?:new topic\s*:|change of subject\s*:|switching (?:topics|gears)\s*:)/i.test(message) ||
       /^(?:\s*)(?:generate|draw|create|edit)\s+(?:an?\s+)?(?:image|picture|photo|video)\b/i.test(message) ||
-      // A later self-contained request (including polite or reordered forms)
-      // outranks the previous objective, even if this turn also criticizes the
-      // settled prior answer. "Please take initiative instead" is still a
-      // same-objective correction and must not trigger this task guard.
-      /(?:^|[.!?;,\u2014\u2013]\s*)(?:(?:now|instead|please)\s*,?\s*|(?:can|could|would|will)\s+you\s+(?:please\s+)?)*(?:explain|define|summarize|calculate|translate|compare|outline|research|analy[sz]e|draft|write|describe|show|list|create|tell\s+me\s+about|give\s+me|help\s+me\s+(?:understand|learn\s+about))\b/i.test(message)) return "";
+      // Conservatively suppress stale objectives for a complete, independent
+      // request following criticism. The boundary is the latest *request*,
+      // not a finite list of imperative task verbs: questions and first-person
+      // objectives also outrank a previous goal. A correction referring back
+      // to "it/that", the previous answer, or its manner remains same-task.
+      (() => {
+        const criticism=/\b(?:terrible|awful|bad|wrong|horrible|poor|unhelpful|repetitive|repeated|repeating|missed|failed|mistake|incorrect|worse)\b/i.exec(message);
+        if (!criticism) return false;
+        const afterCriticism=message.slice(criticism.index+criticism[0].length);
+        const boundary=/[.!?;,\u2014\u2013]\s*/.exec(afterCriticism);
+        if (!boundary) return false;
+        const latest=afterCriticism.slice(boundary.index+boundary[0].length).trim();
+        if (!latest) return false;
+        // Referential requests (including "Could you be more creative?") are
+        // corrections to the saved objective, not independently new subjects.
+        if (/\b(?:it|this|that|them|those|same|previous|earlier|again|more|better|initiative|lead|creative|playful|menu|conversation|response|reply|answer|next)\b/i.test(latest)) return false;
+        const independentQuestion=/^(?:what|why|how|where|when|who|which)\b[\s\S]*\?\s*$/i.test(latest);
+        const explicitRequest=/^(?:(?:can|could|would|will)\s+(?:you|we)\b|i\s+(?:need|want|would\s+like)\b|(?:please|now|instead)\b)/i.test(latest);
+        return independentQuestion || explicitRequest;
+      })()) return "";
   // "Stop rehashing..." can be a direct current-turn instruction even if A
   // correctly emits not_feedback rather than inventing provider attribution.
   // In that case use only the same scoped history, without naming a model.
