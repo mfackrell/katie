@@ -1,4 +1,5 @@
 import { getAccountingScope } from '@/lib/standalone-accounting/context';
+import type { CurrentTurnFeedbackProvenanceV1 } from '@/lib/router/current-turn-feedback';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { getModelPrice, priceTokenUsage } from '@/lib/standalone-accounting/pricing';
 import { quoteSerializedRoutingRequest } from './control-plane-economics';
@@ -61,7 +62,7 @@ export function modelAttributedFeedback(
   // nearby conversational labels only when the original task excerpt exists;
   // the selector still must establish actual objective-level comparability.
   // Never admit coding/financial evidence merely because the model is identical.
-  const conversational = new Set(['general-text','social-emotional','safety-sensitive-vision']);
+  const conversational = new Set(['general-text','social-emotional','safety-sensitive-vision','assistant-reflection']);
   const isRelated = (row: ObservedModelFeedback) => row.intent === intent ||
     (bestValueComparable && conversational.has(intent) && conversational.has(row.intent) &&
       Boolean(row.task_excerpt?.trim()));
@@ -141,7 +142,8 @@ export function expectedCost(provider: LlmProvider['name'], model: string,
 
 export async function resolveRoutingEvidence(candidates: CandidateMetadata[], providers: LlmProvider[],
   params: Omit<ChatGenerateParams, 'modelId'> | undefined, intent: string,
-  bestValueQuality = false): Promise<RoutingEvidence> {
+  bestValueQuality = false,
+  currentTurnFeedback?: CurrentTurnFeedbackProvenanceV1 | null): Promise<RoutingEvidence> {
   const scope = getAccountingScope();
   const result: RoutingEvidence = {overhead: {status: 'unknown'}, candidates: {}};
   if (scope?.kind !== 'standalone') return result;
@@ -169,6 +171,23 @@ export async function resolveRoutingEvidence(candidates: CandidateMetadata[], pr
         feedbackRows=[...keyed.values()];
       }
     } catch { /* Unavailable quality feedback must not break routing. */ }
+  }
+  // The present correction may arrive before saveMessage. Admit it only when
+  // the trusted scoped provenance links it to a prior completed assistant.
+  // Never infer praise from silence or attach criticism to the NEXT model.
+  if (bestValueQuality && currentTurnFeedback?.target.status === 'attributed' &&
+      currentTurnFeedback.source.polarity !== 'none' &&
+      currentTurnFeedback.source.requestId === scope.context.requestId) {
+    const {source,target}=currentTurnFeedback;
+    feedbackRows=[...feedbackRows,{
+      request_id:target.priorRequestId, observed_at:new Date().toISOString(),
+      provider:target.provider, model:target.model, intent:target.priorIntent ?? intent,
+      source:'adjacent_user_feedback',
+      dimension:source.dimension, outcome:source.polarity,
+      confidence:'direct_current_turn_scoped_settled_reply',
+      source_id:source.userMessageId ?? `current-request:${source.requestId}`,
+      task_excerpt:source.textExcerpt,
+    }];
   }
   result.overhead = {source: 'standalone_provider_attempts settled receipts for current scoped request',
     observed_micro_usd: overhead, remaining_overhead: 'unknown; stage two and later helpers have not completed'};
