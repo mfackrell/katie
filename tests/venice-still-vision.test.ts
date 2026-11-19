@@ -69,10 +69,10 @@ function fixture(){
     get sends(){return sends;},get discovery(){return discovery;},get uncertain(){return uncertain;},
     get dispatches(){return dispatches;},get attempt(){return attempt;}};
 }
-test('free catalog validation checks verified private vision capability and published price before paid traffic',async()=>{
+test('catalog enforces private vision capability without financial approvals',async()=>{
   const f=fixture();f.modelSpec={privacy:'anonymized'};
   await assert.rejects(f.run(),VeniceUnavailable);assert.equal(f.sends,0);assert.equal(f.dispatches,0);
-  await assert.rejects(verifyVeniceVisionCatalog(key,async()=>Response.json(catalog({pricing:{input:{usd:5},output:{usd:9}}}))),VeniceUnavailable);
+  await assert.doesNotReject(verifyVeniceVisionCatalog(key,async()=>Response.json(catalog({pricing:{input:{usd:5},output:{usd:9}}}))));
   assert.equal(f.sends,0);
 });
 test('one accounted Venice POST replays immutable successful description with zero additional charges',async()=>{
@@ -93,7 +93,7 @@ test('definitive insufficient-credit 402 completes once and is replayed without 
 test('lost provider result remains uncertain and cannot create a duplicate inference',async()=>{
   const f=fixture();f.mode='lost';
   await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
-  await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
+  assert.equal(await f.run(),null,'uncertain job does not retransmit');
   assert.equal(f.sends,1);assert.equal(f.uncertain,1);
 });
 test('acknowledged lost Venice exposure never retransmits and allows separately accounted continuation',async()=>{

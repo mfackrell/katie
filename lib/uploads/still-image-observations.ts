@@ -5,12 +5,10 @@ import { createHash } from 'node:crypto';
 import type { FileReference, LlmProvider } from '@/lib/providers/types';
 import type { ConversationAttachment } from '@/lib/chat/attachment-continuity';
 import { buildKatieVisualEpisode } from '@/lib/chat/visual-memory';
-import { QWEN_STILL_POLICY } from '@/lib/standalone-accounting/runpod-policy';
 import { describeImageWithRunpodQwen } from '@/lib/chat/runpod-still-vision';
 import { describeImageWithVenice, VeniceUnavailable } from '@/lib/chat/venice-still-vision';
-import { StandaloneAccountingError, createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
-import { getAccountingScope, isStandaloneAccountingError, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
-import { loadStandalonePricing } from '@/lib/standalone-accounting/pricing-intake';
+import { StandaloneAccountingError } from '@/lib/standalone-accounting/ledger';
+import { isStandaloneAccountingError, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
 import { getAvailableProviders } from '@/lib/providers';
 import { rankControlPlaneByActualCost } from '@/lib/router/control-plane-economics';
 import { isExplicitVisionPolicyRefusal, isGenericVisionRefusal } from '@/lib/chat/vision-refusal-fallback';
@@ -435,33 +433,24 @@ export function reusableImageObservation(reference:FileReference,saved:Conversat
 /** One escalation across the bounded image set, after Qwen, using only actual
  * adapter payloads with reviewed image billing. No unpriceable Grok loop. */
 export async function escalateStillImageEvidence(images:string[],question:string):Promise<{text:string;model:string}> {
-  const ledger=createStandaloneLedger();
-  const scope=getAccountingScope();
-  if(scope?.kind==='standalone'){
-    // Admission fence at the paid escalation boundary, including workflow replay.
-    // A caught observation failure is never authorization to spend past Qwen.
-    const uncertain=await ledger.requestUncertainties(scope.context.userId,scope.context.requestId);
-    for(const attempt of uncertain){
-      if(attempt.request_id===scope.context.requestId && attempt.provider==='runpod' && attempt.model===QWEN_STILL_POLICY.model &&
-          attempt.state==='uncertain' && !await ledger.uncertainExposureAccepted(scope.context.userId,attempt.id))
-        throw Object.assign(new StandaloneAccountingError('outcome_unknown','Qwen submission exposure is unresolved. Accept its exposure before continuing remaining image work.'),{attemptId:attempt.id});
-    }
-  }
-  const pricing=await loadStandalonePricing(ledger);
+  // Unknown cost or a previously uncertain Qwen result is reporting evidence,
+  // never an authorization boundary for a distinct model/provider.
   const providers=getAvailableProviders();
   const candidates:Array<{provider:LlmProvider;modelId:string}>=[];
   for(const provider of providers){
-    let listed:Set<string>;
-    try{listed=new Set(await provider.listModels());}catch{continue;}
-    for(const price of pricing.models)if(price.provider===provider.name&&price.vision&&listed.has(price.model)){
-      const capability=buildCandidateMetadata(provider.name,price.model,'multimodal-reasoning');
-      if(capability.supports_vision&&!capability.supports_image_generation&&(!requiresAdditionalImageDetail(question)||capability.reasoning_depth_tier==='high'))candidates.push({provider,modelId:price.model});
+    let models:string[];
+    try{models=await provider.listModels();}catch{continue;}
+    for(const model of models){
+      const capability=buildCandidateMetadata(provider.name,model,'multimodal-reasoning');
+      if(capability.supports_vision&&!capability.supports_image_generation&&
+          (!requiresAdditionalImageDetail(question)||capability.reasoning_depth_tier==='high'))
+        candidates.push({provider,modelId:model});
     }
   }
   const params={name:'Katie image observation',persona:'Inspect source images factually. Return only grounded observations and explicit coverage limitations.',summary:'',history:[],images,user:BASE_QUESTION+'\nCURRENT VISUAL QUESTION: '+question};
   const ranked=await rankControlPlaneByActualCost(candidates,params,undefined,'attachment-observation-escalation');
   const selected=ranked[0];
-  if(!selected)throw new StandaloneAccountingError('no_priceable_vision','No configured vision model can price the required image inspection. The saved evidence is insufficient for this question.');
+  if(!selected)throw new StandaloneAccountingError('no_priceable_vision','No technically compatible, configured vision model is available. The saved evidence is insufficient for this question.');
   try{
     const result=await runWithStandaloneActivity('attachment-observation-escalation',()=>selected.provider.generate({...params,modelId:selected.modelId}));
     if(!result.text?.trim()||isExplicitVisionPolicyRefusal(result.text))throw new Error('The selected image inspection did not return usable evidence.');

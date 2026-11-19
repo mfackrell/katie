@@ -36,12 +36,12 @@ test('routine helper compares qualified serialized requests before choosing expe
   } finally {globalThis.fetch=originalFetch;}
 });
 
-test('unknown prices never win over a validated qualified helper', async () => {
+test('unpriced qualified models remain as fallbacks after priced candidates', async () => {
   const provider = new OpenAiProvider('test-not-a-real-key');
   await runWithStandaloneAccounting(owner,async () => {
     const candidates = [{provider,modelId:'gpt-5.6-sol'},{provider,modelId:'gpt-5-mini'}];
     const ranked=await rankControlPlaneByActualCost(candidates,params,{...pricing,models:pricing.models.slice(1)});
-    assert.deepEqual(ranked.map(c=>c.modelId),['gpt-5-mini']);
+    assert.deepEqual(ranked.map(c=>c.modelId),['gpt-5-mini','gpt-5.6-sol']);
   });
 });
 
@@ -148,7 +148,7 @@ test('resume past an unavailable, settled zero-cost provider rejection preserves
   }
 });
 
-test('missing saved provider fails closed for completed output, pending, uncertain, and unverified rejection', async () => {
+test('missing saved provider fails closed for completed output, pending, active dispatch and unverified rejection', async () => {
   const originalFetch=globalThis.fetch;
   const originalUrl=process.env.NEXT_PUBLIC_SUPABASE_URL, originalKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
   process.env.NEXT_PUBLIC_SUPABASE_URL='https://accounting.test';process.env.SUPABASE_SERVICE_ROLE_KEY='test-only-key';
@@ -175,7 +175,6 @@ test('missing saved provider fails closed for completed output, pending, uncerta
     {...verified,state:'reserved'},
     {...verified,state:'paused'},
     {...verified,state:'dispatched'},
-    {...verified,state:'uncertain'},
     {...verified,state:'settled',usage:{nonbillableRejected:false}},
     {...verified,state:'settled',actual_microusd:'1'},
     {...verified,state:'settled',evidence:{kind:'provider_receipt'}},
@@ -192,6 +191,40 @@ test('missing saved provider fails closed for completed output, pending, uncerta
     }
     assert.equal(transmissions,0,'no replacement dispatch or pricing probe was allowed');
   } finally {
+    globalThis.fetch=originalFetch;
+    if(originalUrl===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=originalUrl;
+    if(originalKey===undefined)delete process.env.SUPABASE_SERVICE_ROLE_KEY;else process.env.SUPABASE_SERVICE_ROLE_KEY=originalKey;
+  }
+});
+
+test('a missing model with an uncertain outcome advances to a distinct eligible fallback ordinal',async()=>{
+  const originalFetch=globalThis.fetch;
+  const originalUrl=process.env.NEXT_PUBLIC_SUPABASE_URL,originalKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL='https://accounting.test';process.env.SUPABASE_SERVICE_ROLE_KEY='fixture-only';
+  const visited:string[]=[];
+  const saved={provider:'anthropic',model:'claude-haiku-5-5',state:'uncertain',
+    actual_microusd:null,response_checkpoint:null};
+  globalThis.fetch=async(input,init)=>{
+    const url=String(input),body=JSON.parse(String(init?.body));
+    if(url.endsWith('/standalone_lookup_attempt')) {
+      visited.push(body.p_key);
+      return Response.json(body.p_key.endsWith(':0')?saved:null);
+    }
+    if(url.endsWith('/standalone_load_pricing'))return Response.json({snapshot:pricing,retrievedAt:new Date().toISOString()});
+    throw Error('No paid provider or unrecognized ledger operation is allowed');
+  };
+  const provider:LlmProvider={name:'openai',async listModels(){return['gpt-5-mini'];},async generate(p){
+    captureControlPlanePreparation(prepareStandaloneRequest('openai',p.modelId!,
+      '/v1/chat/completions',{model:p.modelId!,messages:[{role:'user',content:p.user}],max_completion_tokens:1024}));
+    throw Error('No paid transmission permitted in candidate preparation');
+  }};
+  try{
+    const candidates=await runWithStandaloneAccounting({...owner,requestId:'safe-uncertain-alternative',resumed:true},
+      ()=>rankControlPlaneByActualCost([{provider,modelId:'gpt-5-mini'}],params,undefined,'control_plane_intent-classification'));
+    assert.deepEqual(candidates.map(c=>c.modelId),['gpt-5-mini']);
+    assert.deepEqual(visited,['control_plane_intent-classification:0','control_plane_intent-classification:1'],
+      'old uncertain attempt stays immutable; only the next ordinal is a fallback');
+  }finally{
     globalThis.fetch=originalFetch;
     if(originalUrl===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=originalUrl;
     if(originalKey===undefined)delete process.env.SUPABASE_SERVICE_ROLE_KEY;else process.env.SUPABASE_SERVICE_ROLE_KEY=originalKey;

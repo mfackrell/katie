@@ -24,8 +24,8 @@ type VeniceCompletion={
   choices?:Array<{finish_reason?:unknown;message?:{content?:unknown}}>;
   usage?:{prompt_tokens?:unknown;completion_tokens?:unknown};
 };
-/** Only the pinned model, vision capability and <= reviewed pricing qualify.
- * The catalog is free; a missing/unverifiable price never authorizes inference.
+/** Verify the pinned model's actual vision capability and privacy.
+ * Price remains an after-the-fact reporting attribute, never an authorization.
  * No image or user message is sent during discovery.
  */
 export async function verifyVeniceVisionCatalog(key:string,transport:typeof fetch=fetch):Promise<void>{
@@ -43,12 +43,8 @@ export async function verifyVeniceVisionCatalog(key:string,transport:typeof fetc
   const selected=models.find((item:unknown)=>item&&typeof item==='object'&&(item as {id?:unknown}).id===policy.model) as
     {model_spec?:{capabilities?:{supportsVision?:unknown};pricing?:{input?:{usd?:unknown};output?:{usd?:unknown}};privacy?:unknown;offline?:unknown}}|undefined;
   const spec=selected?.model_spec;
-  const input=spec?.pricing?.input?.usd,output=spec?.pricing?.output?.usd;
-  if(!spec||spec.capabilities?.supportsVision!==true||spec.offline===true||
-    spec.privacy!=='private'||typeof input!=='number'||typeof output!=='number'||
-    !Number.isFinite(input)||!Number.isFinite(output)||input<0||output<0||
-    input>policy.inputUsdPerMillion||output>policy.outputUsdPerMillion)
-    throw new VeniceUnavailable('The reviewed Venice vision model or its price is unavailable; no paid request was sent.');
+  if(!spec||spec.capabilities?.supportsVision!==true||spec.offline===true||spec.privacy!=='private')
+    throw new VeniceUnavailable('The required private Venice vision model is unavailable; no inference was sent.');
 }
 function decoded(checkpoint:ResponseCheckpoint):VeniceStillObservation|null {
   if(checkpoint.status!==200)return null;
@@ -105,16 +101,12 @@ export async function describeImageWithVenice(image:string,question:string,deps:
       deps.onStatus?.('Using saved Dolphin Venice observation');
       return decoded(attempt.response_checkpoint);
     }
-    if(attempt.state==='uncertain'&&await ledger.uncertainExposureAccepted(context.userId,attempt.id)){
-      // Authorized continuation consumes no additional Venice inference.
-      // The original reservation stays held and existing premium escalation
-      // may proceed independently under the same original request budget.
-      return null;
+    if(attempt.state==='uncertain'){
+      // Prior operation is never retransmitted; safe independent fallback may proceed.
+      return attempt.response_checkpoint ? decoded(attempt.response_checkpoint) : null;
     }
-    if(attempt.state==='uncertain'||attempt.state==='dispatched'||attempt.state==='settled')
-      throw Object.assign(new StandaloneAccountingError('outcome_unknown','The prior Venice request outcome is unresolved; no duplicate image analysis was submitted.'),{attemptId:attempt.id});
-    if(attempt.state==='paused')
-      throw Object.assign(new StandaloneAccountingError('approval_required','Venice image analysis requires existing owner spending approval.'),{attemptId:attempt.id});
+    if(attempt.state==='dispatched'||attempt.state==='settled')
+      return attempt.response_checkpoint ? decoded(attempt.response_checkpoint) : null;
   }
   // Only first dispatch performs model/price discovery. Do not change a saved
   // prepared request or submit twice when the external result is uncertain.
@@ -135,12 +127,10 @@ export async function describeImageWithVenice(image:string,question:string,deps:
       preflightEstimate:estimate,estimatorVersion:policy.version,
       reason:'One priced, bounded Dolphin Venice image-analysis fallback'});
   }
-  if(attempt.state==='paused')
-    throw Object.assign(new StandaloneAccountingError('approval_required','Venice fallback is paused for owner spending approval.'),{attemptId:attempt.id});
-  if(attempt.state!=='reserved')
+  if(attempt.state!=='reserved'&&attempt.state!=='paused')
     throw Object.assign(new StandaloneAccountingError('outcome_unknown','Venice dispatch is not in an authorized state.'),{attemptId:attempt.id});
   const claimed=await ledger.claimDispatch(context.userId,attempt.id);
-  if(!claimed)throw Object.assign(new StandaloneAccountingError('approval_required','Venice spending admission was blocked; no inference was sent.'),{attemptId:attempt.id});
+  if(!claimed)throw Object.assign(new StandaloneAccountingError('dispatch_conflict','Venice one-shot dispatch claim was unavailable; no duplicate inference was sent.'),{attemptId:attempt.id});
   deps.onStatus?.('Analyzing image with Dolphin Venice…');
   try{
     if(context.signal?.aborted)throw Error('Cancelled after claim');

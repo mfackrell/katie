@@ -127,6 +127,7 @@ export async function loadStandalonePricing(ledger:ReturnType<typeof createStand
   try{return await loadPricing(ledger,version);}
   catch(error){
     if(error&&typeof error==='object'&&'code' in error&&String(error.code).startsWith('standalone_'))throw error;
-    throw Object.assign(new Error('Validated pricing is unavailable; paid dispatch is blocked.',{cause:error}),{code:'standalone_pricing_unavailable',terminal:true});
+    console.warn('[Accounting reporting] Live pricing unavailable; using reviewed static snapshot',{reason:error instanceof Error?error.name:'unknown'});
+    return PRICING_SNAPSHOT;
   }
 }

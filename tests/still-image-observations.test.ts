@@ -152,22 +152,24 @@ test('owner can request additional ordinary inspection of an aspect absent from 
  assert.equal(reinspections,1);assert.equal(result.get(ref.fileId)!.observedSummary,'The shoes are blue.');
 });
 
-test('paid escalation admission fence checks durable Qwen uncertainty before pricing, ranking or dispatch',async t=>{
- const {escalateStillImageEvidence}=await import('../lib/uploads/still-image-observations');
- const {runWithStandaloneAccounting}=await import('../lib/standalone-accounting/context');
- const previous=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;t.after(()=>{globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=previous;});
- const calls:string[]=[];let accepted=false;
- globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={async rpc(name:string){calls.push(name);
-   if(name==='standalone_request_uncertainties')return{data:[{id:'qwen',request_id:'incident',provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',state:'uncertain'}],error:null};
-   if(name==='standalone_uncertain_exposure_accepted')return{data:accepted,error:null};
-   if(name==='standalone_load_pricing'&&accepted)throw Error('Authorized next safe checkpoint reached');
-   assert.fail('No pricing, provider selection or paid dispatch before owner authorization: '+name);
- }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
- await assert.rejects(runWithStandaloneAccounting({userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),{code:'standalone_outcome_unknown'});
- assert.deepEqual(calls,['standalone_request_uncertainties','standalone_uncertain_exposure_accepted']);
- accepted=true;
- await assert.rejects(runWithStandaloneAccounting({userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),error=>error instanceof Error && error.cause instanceof Error && /Authorized next safe checkpoint reached/.test(error.cause.message));
- assert.equal(calls.at(-1),'standalone_load_pricing');
+test('an uncertain Qwen charge never imposes financial approval on safe independent image escalation',async t=>{
+  const {escalateStillImageEvidence}=await import('../lib/uploads/still-image-observations');
+  const {runWithStandaloneAccounting}=await import('../lib/standalone-accounting/context');
+  const original=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+  t.after(()=>{globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=original;});
+  const calls:string[]=[];
+  globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={async rpc(name:string){
+    calls.push(name);
+    if(name==='standalone_lookup_attempt')return {data:null,error:null};
+    assert.fail('Escalation must not ask accounting for an exposure approval, budget, or price: '+name);
+  }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+  const providersModule=await import('../lib/providers');
+  t.mock.method(providersModule,'getAvailableProviders',()=>[]);
+  await assert.rejects(runWithStandaloneAccounting(
+    {userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},
+    ()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),error=>
+      error instanceof Error&&/technically compatible/.test(error.message));
+  assert.equal(calls.length,0,'previous uncertain charge does not query or block financial approval');
 });
 
 

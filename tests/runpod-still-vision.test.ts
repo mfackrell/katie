@@ -93,7 +93,14 @@ test('bounded polling expiry can resume original job without another POST',async
   const f=fixture();f.queue=true;await assert.rejects(f.run(),{code:'standalone_runpod_in_progress'});assert.equal(f.sends,1);assert.ok(f.polls<40);
   f.queue=false;await f.run();assert.equal(f.sends,1);assert.equal(f.row?.state,'estimated');
 });
-test('threshold pause sends no RunPod traffic',async()=>{const f=fixture();f.pause=true;await assert.rejects(f.run(),{code:'standalone_approval_required'});assert.equal(f.sends,0);assert.equal(f.polls,0);});
+test('a legacy paused attempt cannot bypass dispatch and resumes after financial release',async()=>{
+ const f=fixture();f.pause=true;
+ await assert.rejects(f.run(),{code:'standalone_dispatch_conflict'});
+ assert.equal(f.sends,0);assert.equal(f.polls,0);
+ f.state='reserved';f.pause=false;
+ const result=await f.run();
+ assert.match(result.text,/brown dog/);assert.equal(f.sends,1);
+});
 test('revoked scope prevents both submission and saved-result access',async()=>{const f=fixture();await f.run();f.allowed=false;await assert.rejects(f.run(),{code:'standalone_scope_denied'});assert.equal(f.sends,1);});
 test('returned job mismatch is terminal and never results in a replacement submission',async()=>{const f=fixture();f.mismatch=true;await assert.rejects(f.run(),{code:'standalone_runpod_job_mismatch'});await assert.rejects(f.run(),{code:'standalone_runpod_job_mismatch'});assert.equal(f.sends,1);});
 test('RunPod refuses invalid pixels before ledger or paid traffic',async()=>{let calls=0;await assert.rejects(describeImageWithRunpodQwen('data:text/plain;base64,SGk=','describe',{fetchFn:async()=>{calls++;throw Error('Unexpected');}}),/requires one bounded/);assert.equal(calls,0);});
@@ -118,12 +125,12 @@ test('definitive submission rejection retains estimated exposure and is replayed
 test('lost submission acceptance without a job identity remains uncertain and never submits again',async()=>{
  const f=fixture();f.lostAcceptance=true;await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
  assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.provider_request_id,null);
- await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});assert.equal(f.sends,1);assert.equal(f.row?.reserved_microusd,'20000');
+ await assert.rejects(f.run(),/Original Qwen submission outcome unknown/);assert.equal(f.sends,1);assert.equal(f.row?.reserved_microusd,'20000');
 });
 
-test('explicit owner acceptance of lost Qwen exposure permits independent fallback without inventing output or another Qwen POST',async()=>{
+test('lost Qwen exposure remains unconfirmed while other providers can continue',async()=>{
  const f=fixture();f.lostAcceptance=true;await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
- f.exposureAccepted=true;await assert.rejects(f.run(),error=>error instanceof Error&&!('terminal' in error)&&/separate image escalation/.test(error.message));
+ await assert.rejects(f.run(),/different authorized provider can continue/);
  assert.equal(f.sends,1);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.actual_microusd,null);
 });
 
@@ -135,14 +142,14 @@ test('accepted uncertain saved Qwen output replays without clearing uncertainty 
  assert.equal(f.calls.filter(c=>c.name==='standalone_complete_qwen_estimate').length,completions);
 });
 
-test('genuine attached image stops before every paid escalation until owner accepts; resumes without retransmitting Qwen',async()=>{
+test('genuine image can use distinct independent fallback without accounting acceptance',async()=>{
  const f=fixture();f.lostAcceptance=true;let premium=0;
  const reference={fileId:'image',fileName:'current.jpg',mimeType:'image/jpeg',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
  const run=()=>observeStandaloneStillImages([reference],{qwen:()=>f.run(),escalate:async()=>{premium++;return{text:'Visible grounded evidence',model:'premium'};}});
  await assert.rejects(run(),{code:'standalone_outcome_unknown'});
  assert.equal(premium,0);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.provider_request_id,null);
- await assert.rejects(run(),{code:'standalone_outcome_unknown'});assert.equal(premium,0);assert.equal(f.sends,1);
- f.exposureAccepted=true;await run();assert.equal(premium,1);assert.equal(f.sends,1);assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.state,'uncertain');
+ await run();assert.equal(premium,1);assert.equal(f.sends,1);
+ await run();assert.equal(premium,2);assert.equal(f.sends,1);assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.state,'uncertain');
 });
 
 test('incident 14774c56: failed image then plain text never reuses hidden JPEG or invokes vision',async()=>{
@@ -157,8 +164,9 @@ test('incident 14774c56: failed image then plain text never reuses hidden JPEG o
  assert.deepEqual(composer.references,[]);assert.equal(qwen,0);assert.equal(premium,0);assert.equal(f.sends,1);
 });
 
-test('Qwen uncertainty auto-authorized by durable owner policy escalates without a prompt or duplicate submission',async()=>{
- const f=fixture();f.lostAcceptance=true;f.exposureAccepted=true;let escalations=0;
+test('Qwen uncertain costs do not block independent visual inspection',async()=>{
+ const f=fixture();f.lostAcceptance=true;let escalations=0;
+ await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
  const ref={fileId:'genuine',fileName:'current.jpg',mimeType:'image/jpeg',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
  for(let i=0;i<2;i++)await observeStandaloneStillImages([ref],{qwen:()=>f.run(),escalate:async()=>{escalations++;return{text:'Safe independent observation',model:'premium'};}});
  assert.equal(f.sends,1);assert.equal(escalations,2);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');
