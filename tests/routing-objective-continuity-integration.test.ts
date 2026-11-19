@@ -18,6 +18,8 @@ import ts from 'typescript';
 import {isCreativeNarrativeTurn,shouldApplyCreativeNarrativeContinuity} from '../lib/chat/creative-continuity';
 import {decideResponsePolicy} from '../lib/chat/response-policy';
 import {recoverLateRoutingResponse} from '../lib/chat/late-routing-recovery';
+import {runWithStandaloneAccounting, runWithStandaloneActivity, nextStandaloneAttempt} from '../lib/standalone-accounting/context';
+import {claimChatRequest} from '../lib/chat/request-idempotency';
 
 interface Turn {
   id: string;
@@ -343,6 +345,23 @@ test('C-11 pending uncertain request resumes original workflow once with objecti
   const body=await recovered!.json() as {objective:string;correction:string};
   assert.equal(body.objective,savedObjective);assert.equal(body.correction,savedCorrection);
   assert.equal(checks,1);assert.equal(resumptions,1);
+  // Exercise the real account-scoped deterministic ordinal allocator, not
+  // an unused provider-call mock counter. The original request's activity
+  // key must not change after a safe resumed invocation.
+  const scoped={userId:'c-test-owner',actorId:'c-test-actor',chatId:'c-test-chat',
+    requestId:'c-test-durable-request'};
+  const allocate=(resumed=false)=>runWithStandaloneAccounting({...scoped,resumed},()=>
+    runWithStandaloneActivity('control_plane_routing-rerank',()=>nextStandaloneAttempt()!));
+  const first=allocate(),recoveredAttempt=allocate(true);
+  assert.equal(first.attemptKey,'control_plane_routing-rerank:0');
+  assert.equal(recoveredAttempt.attemptKey,first.attemptKey);
+  assert.deepEqual(recoveredAttempt.context.requestId,first.context.requestId);
+  assert.deepEqual(recoveredAttempt.context.actorId,first.context.actorId);
+  const other=runWithStandaloneAccounting({...scoped,actorId:'foreign-actor'},()=>
+    runWithStandaloneActivity('control_plane_routing-rerank',()=>nextStandaloneAttempt()!));
+  assert.equal(other.context.actorId,'foreign-actor');
+  assert.notEqual(other.context.actorId,first.context.actorId,
+    'Attempt IDs are always interpreted inside original authenticated actor scope');
   // This is the browser resume seam; B-owned provider receipt/charge tests must
   // independently establish that resuming does not retransmit an uncertain call.
 });
@@ -370,6 +389,58 @@ test('C-14 saved completed request never triggers browser auto-resume',async()=>
     wait:async()=>{throw Error('Completed request must not be polled repeatedly');},cancelled:()=>false,maxChecks:3,
   });
   assert.equal(result,null);assert.equal(reads,1);assert.equal(resumptions,0);
+  // Execute the PRODUCTION request-claim decision using a sealed, in-memory
+  // PostgREST substitute: saved completed requests cannot be re-claimed or
+  // assigned to a foreign actor/chat. No transport/provider/production DB.
+  const globals=globalThis as unknown as {__KATIE_SUPABASE_ADMIN_CLIENT__?:unknown};
+  const previousClient=globals.__KATIE_SUPABASE_ADMIN_CLIENT__;
+  const saved={
+    request_id:'c14-original-request',actor_id:'actor-c14',chat_id:'chat-c14',
+    request_fingerprint:'immutable-hash-c14',status:'completed',
+    assistant_message_id:'saved-answer-c14',assistant_model:'gpt-5.6-luna',
+    assistant_content:'Saved, complete response',assistant_assets:[],
+    error_message:null,created_at:'2026-11-18T00:00:00Z',
+    updated_at:'2026-11-18T00:00:03Z',completed_at:'2026-11-18T00:00:03Z',
+  };
+  let insertAttempts=0,readsFromSaved=0,unexpectedMutations=0;
+  globals.__KATIE_SUPABASE_ADMIN_CLIENT__={
+    from(table:string) {
+      assert.equal(table,'chat_requests');
+      return {
+        insert(_payload:unknown) {
+          insertAttempts++;
+          return {then:(resolve:(value:unknown)=>unknown)=>
+            Promise.resolve({data:null,error:{message:'unique violation'}}).then(resolve)};
+        },
+        select(_columns:string) {
+          return {eq(field:string,value:string) {
+            assert.equal(field,'request_id');assert.equal(value,saved.request_id);
+            return {maybeSingle:async()=>{readsFromSaved++;return {data:saved,error:null};}};
+          }};
+        },
+        update(_payload:unknown){unexpectedMutations++;throw Error('Replay must not mutate completed request');},
+      };
+    },
+  };
+  try {
+    const original={
+      requestId:saved.request_id,actorId:saved.actor_id,chatId:saved.chat_id,
+      requestFingerprint:saved.request_fingerprint,
+    };
+    const same=await claimChatRequest(original);
+    assert.equal(same.mode,'existing');
+    assert.equal(same.mode==='existing'&&same.record.assistantMessageId,saved.assistant_message_id);
+    assert.equal(same.mode==='existing'&&same.record.assistantContent,saved.assistant_content);
+    const foreign=await claimChatRequest({...original,actorId:'foreign-actor'});
+    assert.equal(foreign.mode,'conflict');
+    const altered=await claimChatRequest({...original,requestFingerprint:'different-input'});
+    assert.equal(altered.mode,'conflict');
+    assert.equal(insertAttempts,3);
+    assert.equal(readsFromSaved,3);
+    assert.equal(unexpectedMutations,0);
+  } finally {
+    globals.__KATIE_SUPABASE_ADMIN_CLIENT__=previousClient;
+  }
   // No provider dispatch/cost accounting is exercised by this browser-only seam;
   // retain B's independent durable receipt and replay acceptance as a separate gate.
 });
