@@ -13,7 +13,7 @@ test("every regular routing selection launches three independent judges concurre
  assert.match(section,/parse: parseRoutingJudgeResponse/);
  assert.match(section,/if \(judges\.length === 3\) break/);
  assert.doesNotMatch(section,/Promise\.race\(/);
- assert.match(section,/isTerminalAttemptError\(result\.reason\)/);
+ assert.match(section,/isStandaloneAccountingError\(result\.reason\)/);
 });
 
 test("per-judge helper allows one provider attempt and no automatic retransmission", () => {
