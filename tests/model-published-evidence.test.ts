@@ -223,3 +223,44 @@ test("verified numeric rates reject invalid PostgREST values and accept canonica
     assert.equal(row.pricing_verified_at, null, String(input));
   }
 });
+
+test("first-party model parser contracts cover all accessible documented model cohorts", () => {
+  const openaiCases = [
+    { id: "gpt-6.2-astra", input: 8, output: 40, chat: true },
+    { id: "gpt-6-astra", input: 10, output: 50, chat: true },
+    { id: "gpt-6.2-sol", input: 2, output: 10, chat: true },
+    { id: "gpt-6-sol", input: 2, output: 10, chat: true },
+    { id: "gpt-5.5-pro", input: 30, output: 180, chat: false, snapshot: "gpt-5.5-pro-2026-04-23" },
+    { id: "gpt-5.4-pro", input: 30, output: 180, chat: false, snapshot: "gpt-5.4-pro-2026-03-05" }
+  ];
+  for (const model of openaiCases) {
+    const spec = officialModelSpec("openai", model.id)!;
+    let fixture = openaiDoc.replaceAll("gpt-6.2-astra", model.id)
+      .replace("| Input | $8 |", "| Input | $" + model.input + " |")
+      .replace("| Output | $40 |", "| Output | $" + model.output + " |");
+    if (!model.chat) fixture = fixture.replace(
+      "| Chat Completions | " + "`v1/chat/completions`" + " | Supported |",
+      "| Chat Completions | " + "`v1/chat/completions`" + " | Not supported |"
+    );
+    if ("snapshot" in model && model.snapshot) {
+      fixture += "\n## Snapshots\n- " + "`" + model.snapshot + "`";
+    }
+    const published = parseOfficialModelEvidence(spec, fixture);
+    assert.ok(published, model.id);
+    assert.equal(published.pricingMatchesApprovedSchedule, true, model.id);
+    assert.deepEqual(published.supportedEndpoints,
+      model.chat ? ["responses", "chat_completions"] : ["responses"], model.id);
+    if ("snapshot" in model && model.snapshot) {
+      assert.ok(parseOfficialModelEvidence(spec, fixture, model.snapshot), model.snapshot);
+      assert.equal(parseOfficialModelEvidence(spec, fixture, model.snapshot + "-invented"), null);
+    }
+  }
+  const sonnet = officialModelSpec("anthropic", "claude-sonnet-5-5")!;
+  const sonnetDoc = anthropicDoc.replaceAll("claude-opus-5-5", "claude-sonnet-5-5")
+    .replace("$4 / MTok", "$2 / MTok").replace("$20 / MTok", "$10 / MTok")
+    .replace("Adaptive (always on)", "Adaptive");
+  const result = parseOfficialModelEvidence(sonnet, sonnetDoc);
+  assert.ok(result);
+  assert.equal(result.pricingMatchesApprovedSchedule, true);
+  assert.deepEqual(result.supportedEndpoints, ["messages"]);
+});
