@@ -944,8 +944,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   try{
    await first.query('reset role');
    await first.query("set local session_replication_role = 'replica'");
-   await first.query("update work_projects set deadline=clock_timestamp()-interval '1 minute' where id=$1",[project]);
-   await first.query("update agent_missions set deadline=clock_timestamp()-interval '1 minute' where id=$1",[scheduled.missionId]);
+   const expiredBoundCutoff=new Date(Date.now()-60000).toISOString();
+   await first.query("update project_provider_execution set deadline=$2 where project_id=$1",[project,expiredBoundCutoff]);
+   await first.query("update work_projects set deadline=$2 where id=$1",[project,expiredBoundCutoff]);
+   await first.query("update agent_missions set deadline=$2 where id=$1",[scheduled.missionId,expiredBoundCutoff]);
    await first.query("set local session_replication_role = 'origin'");
    await first.query('set role service_role');
    const before=(await first.query('select attempts,lease,lease_until from mission_assignments where id=$1',[originalJob.id])).rows[0];
