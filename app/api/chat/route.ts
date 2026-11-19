@@ -493,7 +493,7 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   const originalObjective=originalUser.content.trim().slice(0,1800);
   if (!originalObjective) return "";
   // Never elevate the prior assistant's untrusted output to system authority.
-  const creativeGoal=/\\b(?:take the lead|be witty|creative|playful|surprising|drive the interaction)\\b/i.test(originalObjective);
+  const creativeGoal=/\b(?:take the lead|be witty|creative|playful|surprising|drive the interaction)\b/i.test(originalObjective);
   const correction=feedback.source.correctionExcerpt ?? message.slice(0,600);
   const polarityInstruction=feedback.source.polarity==="positive"
     ? "The user gave positive feedback. Preserve what worked and advance the task; never invent a complaint."
