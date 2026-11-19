@@ -247,8 +247,20 @@ test('C-09 feedback without a completed prior assistant has no invented attribut
 test('C-10 unrelated actors and chats cannot enter actual scoped context assembly',()=>{
   const f=scenario('C-10');
   assert.ok(f.history.every(x=>x.actor_id!==f.current.actor_id&&x.chat_id!==f.current.chat_id));
-  // The database/context-loader boundary must be scoped before preparation.
-  assert.match(routeText,/assembleContext\(actorId, chatId\)/);
+  // Verify the executable production AST, not a regex that a dead comment
+  // could satisfy: scoped loader arguments must originate from the authenticated
+  // request variables and be passed to the context-cache callback.
+  const scopedLoad=uniqueNode(n=>ts.isCallExpression(n) && ts.isIdentifier(n.expression) &&
+    n.expression.text==='assembleContext','scoped assembleContext call') as ts.CallExpression;
+  assert.deepEqual(scopedLoad.arguments.map(arg=>arg.getText(routeAst)),['actorId','chatId']);
+  const loaderCallback=scopedLoad.parent;
+  assert.ok(ts.isArrowFunction(loaderCallback) && loaderCallback.body===scopedLoad,
+    'Scoped context loader must execute as the cached workflow callback');
+  const cachedLoad=loaderCallback.parent;
+  assert.ok(ts.isCallExpression(cachedLoad) && ts.isIdentifier(cachedLoad.expression) &&
+    cachedLoad.expression.text==='cachedWorkflowValue',
+    'Scoped loader must use the existing durable assembled-context cache');
+  assert.equal(cachedLoad.arguments[0].getText(routeAst),'\"assembled-context\"');
   // Do not inject the unrelated history: it was never an admitted actor/chat source.
   const scoped={...f,history:f.history.filter(x=>x.actor_id===f.current.actor_id&&x.chat_id===f.current.chat_id)};
   assert.doesNotMatch(routingContext(scoped),/Be witty, creative, playful|journal, an interview/);
