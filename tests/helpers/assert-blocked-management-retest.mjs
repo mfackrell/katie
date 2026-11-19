@@ -1054,6 +1054,24 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   console.log('MISSION79_POSTLOCK_WALL_CLOCK_LEASE_FRESHNESS_PASS: '+remainingLeaseMs+'ms');
   assert.equal(claimed?.mission?.calls,0,'Claim must not reserve or pay for provider inference');
   assert.equal(claimed?.mission?.project_evidence?.providerContinuationRelease,priorRelease);
+  // Same actual lease and exact request must be ADMITTED while original
+  // lineage is intact. A savepoint rolls back the provider audit record;
+  // model-list never invokes an external provider or charges inference.
+  const lineageProviderArgs=[originalJob.id,claimed.job.lease,randomUUID(),
+   'model-list','a'.repeat(64),null,null];
+  await first.query('savepoint mission79_intact_provider_lineage');
+  try{
+   const admitted=(await first.query(
+    'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
+    lineageProviderArgs)).rows[0].ok;
+   assert.equal(admitted,true,
+    'Actual live leased model-list request with authentic original lineage must be admitted');
+  }finally{
+   await first.query('rollback to savepoint mission79_intact_provider_lineage');
+   await first.query('release savepoint mission79_intact_provider_lineage');
+  }
+  console.log('MISSION79_PROVIDER_LINEAGE_REAL_LEASE_POSITIVE_PASS');
+
   // Real lease already exists. Forge a new-window evidence reference without
   // changing decision/release. The exact original lineage must still be
   // required by BOTH model-provider admission and management decision writes.
@@ -1084,7 +1102,7 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
     [project])).rows[0].n;
    const admitted=(await first.query(
     'select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok',
-    [originalJob.id,'model-list',randomUUID(),'model-list','a'.repeat(64),null,null])).rows[0].ok;
+    lineageProviderArgs)).rows[0].ok;
    assert.equal(admitted,false,'Provider admission with drifted original source must fail');
    await rejected(()=>first.query('select project_org_decide($1,$2,$3::jsonb)',
     [originalJob.id,claimed.job.lease,JSON.stringify([{action:'ready'}])]),
@@ -1328,6 +1346,62 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   assert.equal((await first.query('select project_org_retest_renewed_assignment($1,$2) ok',
    [scheduled.missionId,originalJob.id])).rows[0].ok,true);
   await blockedDecisionAcross('LEASE_EXPIRY',shortLease);
+
+
+  // Independent second-lock race. The original principal has already passed
+  // the global advisory lock and its clock check before the decision blocks
+  // on the pre-existing plan's PostgreSQL ROW lock (not advisory). The final
+  // decision wrapper must roll back even already-inserted decision receipts.
+  const rowLease=new Date(Date.now()+5500).toISOString();
+  await first.query('reset role');
+  await first.query("set session_replication_role='replica'");
+  try{
+   await first.query('update mission_assignments set lease_until=$2 where id=$1',
+    [originalJob.id,rowLease]);
+  }finally{await first.query("set session_replication_role='origin'");await first.query('set role service_role');}
+  const beforePlanLockRace=await stateDuringRace();
+  let planLockerOpen=false,planContenderOpen=false;
+  try{
+   await first.query('begin');planLockerOpen=true;
+   await first.query('reset role'); // Disposable fixture DB owner locks the existing plan.
+   const lockedPlan=await first.query(
+    'select node_id from project_organization_plans where node_id=$1 for update',[fixtureRoot.id]);
+   assert.equal(lockedPlan.rows.length,1,'Original saved plan row must exist to force an UPDATE row lock');
+   await second.query('begin');planContenderOpen=true;
+   const started=(await second.query('select transaction_timestamp() t')).rows[0].t;
+   assert.ok(new Date(started).getTime()<new Date(rowLease).getTime(),
+    'Plan-row contender starts before legitimate worker lease expiration');
+   const pid=(await second.query('select pg_backend_pid() pid')).rows[0].pid;
+   const contender=second.query('select project_org_decide($1,$2,$3::jsonb) accepted',
+    [originalJob.id,claimed.job.lease,realRaceCommands])
+    .then(r=>({ok:true,accepted:r.rows[0].accepted}),error=>({ok:false,error}));
+   let sawRowWait=false;
+   for(let i=0;i<50;i++){
+    const locks=(await observer.query(
+     'select locktype from pg_locks where pid=$1 and not granted',[pid])).rows;
+    if(locks.some(l=>l.locktype==='transactionid'||l.locktype==='tuple')){
+     sawRowWait=true;break;
+    }
+    const early=await Promise.race([contender.then(()=>true),raceWait(40).then(()=>false)]);
+    if(early)throw Error('Mission79 decision returned before waiting on held plan row');
+   }
+   assert.equal(sawRowWait,true,
+    'Genuine PostgreSQL plan-row lock must block the decision after its first clock check');
+   await raceWait(Math.max(0,new Date(rowLease).getTime()-Date.now()+700));
+   await first.query('commit');planLockerOpen=false;
+   const result=await contender;
+   await second.query('rollback');planContenderOpen=false;
+   assert.equal(result.ok,false,
+    'Management decision may not commit after lease expiry during a SECOND row-lock wait');
+   assert.match(result.error.message,/Mission79 management result expired before commit/i);
+   assert.deepEqual(await stateDuringRace(),beforePlanLockRace,
+    'Postwrite expiry rollback must preserve all decisions, assignments, plan effects, receipts and provider activity');
+   console.log('MISSION79_DECISION_PLAN_ROW_LOCK_POSTWRITE_ROLLBACK_PASS');
+  }finally{
+   if(planLockerOpen)await first.query('rollback').catch(()=>{});
+   if(planContenderOpen)await second.query('rollback').catch(()=>{});
+   await first.query('set role service_role');
+  }
 
   // The real owner API enforces a five-minute minimum on NEW approvals.
   // Compress ONLY this disposable fixture's already-authorized cutoff for a

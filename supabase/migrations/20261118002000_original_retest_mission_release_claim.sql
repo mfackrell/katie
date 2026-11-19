@@ -1340,6 +1340,61 @@ begin
  execute replace(body,anchor,replacement);
 end $mission79_postlock_decision_clock$;
 
+
+-- The early mission-state lock fence is necessary but not sufficient:
+-- a management decision may then wait on a plan/node/assignment row lock
+-- while writing. Final validation runs AFTER every inherited decision write,
+-- before this RPC returns, and a raised exception atomically rolls back ALL
+-- of its SQL effects (including earlier plan upserts and decision receipts).
+-- This exact mission79 fence changes no ordinary project management path.
+do $mission79_postwrite_decision_clock$
+declare
+ body text;
+ old_declaration text:='declare n project_organization_nodes;';
+ new_declaration text:=$postvars$declare n project_organization_nodes;
+ mission79_final_limit timestamptz;
+ mission79_result boolean;$postvars$;
+ old_principal text:='n:=project_org_principal(p_job,p_lease);';
+ new_principal text:=$postprincipal$n:=project_org_principal(p_job,p_lease);
+ if p_job='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid then
+  -- Capture the real original lease and immutable owner cutoff BEFORE the
+  -- inherited decision clears the worker lease on successful completion.
+  select least(j.lease_until,q.cutoff,p.deadline,m.deadline,n.deadline)
+   into mission79_final_limit
+   from mission_assignments j
+   join agent_missions m on m.id=j.mission_id
+   join work_projects p on p.id=m.project_id
+   join project_retest_future_window_receipts q on q.project_id=p.id
+   where j.id=p_job and j.lease=p_lease and p_lease is not null
+    and m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    and p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    and q.mission_id=m.id and q.assignment_id=j.id
+    and p.active_mission_id=m.id and p.status='running'
+    and m.status='running' and j.status='running'
+    and j.lease_until is not null and q.cutoff is not null
+    and p.deadline is not null and m.deadline is not null
+    and n.deadline is not null;
+  if mission79_final_limit is null or mission79_final_limit<=clock_timestamp()
+  then raise exception 'Mission79 management authority expired at decision start';end if;
+ end if;$postprincipal$;
+ old_return text:='return project_org_decide_before_exception_recovery(p_job,p_lease,p_commands);';
+ new_return text:=$postreturn$mission79_result:=project_org_decide_before_exception_recovery(p_job,p_lease,p_commands);
+ -- All preceding SQL mutations are in the SAME PostgreSQL transaction.
+ -- Any intervening row-lock wait beyond deadline fails and rolls them back.
+ if p_job='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+  and (mission79_final_limit is null or mission79_final_limit<=clock_timestamp())
+ then raise exception 'Mission79 management result expired before commit';end if;
+ return mission79_result;$postreturn$;
+begin
+ body:=pg_get_functiondef('public.project_org_decide(uuid,uuid,jsonb)'::regprocedure);
+ if (length(body)-length(replace(body,old_declaration,'')))/length(old_declaration)<>1
+  or (length(body)-length(replace(body,old_principal,'')))/length(old_principal)<>1
+  or (length(body)-length(replace(body,old_return,'')))/length(old_return)<>1
+ then raise exception 'Inherited management decision wrapper changed; postwrite wall-clock fence not installed';end if;
+ execute replace(replace(replace(body,old_declaration,new_declaration),
+   old_principal,new_principal),old_return,new_return);
+end $mission79_postwrite_decision_clock$;
+
 revoke all on function
  public.project_org_retest_release_epoch(uuid,text),
  public.project_org_retest_claim_release_authorized_epoch(uuid,text,bigint,text),
