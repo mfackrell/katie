@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 const source=fs.readFileSync("components/chat-panel.tsx","utf8");
 test("reply action is offered for assistant and user messages",()=>{
- assert.match(source,/messages\.map\(\(message\) =>/);
+ assert.match(source,/messages\.slice\(-visibleHistoryCount\)\.map\(\(message\) =>/);
  assert.match(source,/Reply to \$\{message\.role\} message/);
  assert.match(source,/setReplyTo\(\{id:message\.id,role:message\.role,content:message\.content\}\)/);
 });

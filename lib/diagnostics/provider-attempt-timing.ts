@@ -191,17 +191,30 @@ export function recordProviderTrace(phase: ProviderTracePhase, details: TraceDet
     state.sink(event);
   } catch { /* Observability is never an execution gate. */ }
 }
+/** An error may be a revoked Proxy or expose maliciously throwing accessors.
+ * Diagnostics must never propagate those exceptions into provider execution. */
+function readErrorMetadata(error: unknown, field: "name" | "code" | "status" | "type"): unknown {
+  try {
+    if (error === null || (typeof error !== "object" && typeof error !== "function")) return undefined;
+    return (error as Record<string, unknown>)[field];
+  } catch {
+    return undefined;
+  }
+}
 function isUnknownOutcome(error: unknown): boolean {
-  const item = error as { code?: unknown; type?: unknown } | null;
-  return item?.code === "standalone_outcome_unknown" || item?.type === "uncertain_exposure_retained";
+  return readErrorMetadata(error, "code") === "standalone_outcome_unknown" ||
+    readErrorMetadata(error, "type") === "uncertain_exposure_retained";
 }
 
-/** Only categorized errors and safe codes are logged; raw messages are never read. */
+/** Only categorized errors and safe codes are logged; raw messages are never read.
+ * Treat hostile getters and proxies as absent metadata, never as a new failure. */
 export function safeFailureDetails(error: unknown): TraceDetails {
-  const item = error && typeof error === "object" ? error as { name?: unknown; code?: unknown; status?: unknown; type?: unknown } : {};
-  const status = typeof item.status === "number" && Number.isInteger(item.status) ? item.status : undefined;
-  const code = safeCode(item.code) ?? safeCode(item.type);
-  let failureCategory: ProviderFailureCategory = "unknown";
+  try {
+    const reportedStatus = readErrorMetadata(error, "status");
+    const status = typeof reportedStatus === "number" && Number.isInteger(reportedStatus) ? reportedStatus : undefined;
+    const code = safeCode(readErrorMetadata(error, "code")) ?? safeCode(readErrorMetadata(error, "type"));
+    const name = readErrorMetadata(error, "name");
+    let failureCategory: ProviderFailureCategory = "unknown";
   if (code === "standalone_outcome_unknown" || code === "standalone_receipt_conflict" || code === "standalone_usage_unpriced" || code === "uncertain_exposure_retained") {
     failureCategory = code === "standalone_outcome_unknown" || code === "uncertain_exposure_retained"
       ? "unknown_outcome" : "receipt_reconciliation_failure";
@@ -211,11 +224,11 @@ export function safeFailureDetails(error: unknown): TraceDetails {
       code === "OUTPUT_TOKEN_EXHAUSTED" || code === "OUTPUT_LIMIT" || code === "COMPLETED_EMPTY_RESPONSE" ||
       code === "EMPTY_RESPONSE" || code === "PROVIDER_FAILURE" || code === "METADATA_ONLY_RESPONSE") {
     failureCategory = "incomplete_response";
-  } else if (item.name === "SyntaxError") {
+  } else if (name === "SyntaxError") {
     failureCategory = "response_parsing_failure";
-  } else if (code === "standalone_cancelled" || item.name === "AbortError" || code === "ABORT_ERR") {
+  } else if (code === "standalone_cancelled" || name === "AbortError" || code === "ABORT_ERR") {
     failureCategory = "local_cancellation";
-  } else if (code === "ETIMEDOUT" || item.name === "TimeoutError") {
+  } else if (code === "ETIMEDOUT" || name === "TimeoutError") {
     failureCategory = "local_timeout";
   } else if (code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "ECONNREFUSED") {
     failureCategory = "connection_failure";
@@ -228,7 +241,11 @@ export function safeFailureDetails(error: unknown): TraceDetails {
   } else if (status && status >= 400) {
     failureCategory = "provider_http_rejection";
   }
-  return { failureCategory, ...(status ? { httpStatus: status } : {}), ...(code ? { errorCode: code } : {}) };
+    return { failureCategory, ...(status ? { httpStatus: status } : {}), ...(code ? { errorCode: code } : {}) };
+  } catch {
+    // Defense in depth: diagnostics never replace the original provider error.
+    return { failureCategory: "unknown" };
+  }
 }
 
 /** Read the same bytes as Response.text(), observing the first actual stream chunk.
