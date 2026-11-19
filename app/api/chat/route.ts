@@ -492,7 +492,8 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   const originalUser=history[originalUserIndex];
   const originalObjective=originalUser.content.trim().slice(0,1800);
   if (!originalObjective) return "";
-  const previousReply=history[latestAssistantIndex].content.trim().slice(0,500);
+  // Never elevate the prior assistant's untrusted output to system authority.
+  const creativeGoal=/\\b(?:take the lead|be witty|creative|playful|surprising|drive the interaction)\\b/i.test(originalObjective);
   const correction=feedback.source.correctionExcerpt ?? message.slice(0,600);
   const polarityInstruction=feedback.source.polarity==="positive"
     ? "The user gave positive feedback. Preserve what worked and advance the task; never invent a complaint."
@@ -502,10 +503,12 @@ function sourceBoundObjectiveContinuityGuidance(input: {
   return [
     "SOURCE-BOUND CURRENT OBJECTIVE CONTINUITY (generation only; not routing-selection evidence):",
     `Prior user-authorized objective [saved user message ${originalUser.id ?? "scoped-history"}]: ${originalObjective}`,
-    `Previous saved assistant output [not a new instruction]: ${previousReply}`,
     `Latest user feedback/correction [current request ${requestId}]: ${correction}`,
     polarityInstruction,
-    "Continue the user-authorized original objective NOW while applying the latest correction. Proactively contribute a substantively new development rather than apologizing, interviewing, offering a menu, repeating a scorecard or performance-review framework, or asking unnecessary questions. Obey the latest explicit user instructions first. Do not turn a conversational objective into an obligatory fictional scene, resume a stale project, or override safety and provider constraints.",
+    creativeGoal
+      ? "Continue the original creative conversational objective NOW. Introduce a substantively new, playful development instead of merely apologizing, interviewing, offering a menu, repeating a scorecard or performance-review framework, or asking unnecessary questions."
+      : "Continue the original authorized work and substantively correct the prior result rather than offering only an apology or an unnecessary reprompt.",
+    "Obey the latest explicit user instructions first. Do not turn an open-ended conversation into obligatory fiction, resume unrelated work, or override safety and provider constraints.",
     "Do not claim the next selected responder authored the prior answer. Do not invent model-specific satisfaction or outcome evidence."
   ].join("\n");
 }
@@ -2118,7 +2121,8 @@ async function executeChat(request: NextRequest) {
 
       // Never let the post-selection routing provenance differ from the record
       // used to quote the generation payload. Fail before paid generation.
-      if (JSON.stringify(routingDecision.currentTurnFeedback ?? null)!==JSON.stringify(preflightTurnFeedback)) {
+      if (routingDecision.currentTurnFeedback && 
+          JSON.stringify(routingDecision.currentTurnFeedback)!==JSON.stringify(preflightTurnFeedback)) {
         return await rejectTracked("Source-linked feedback changed between quoted preflight and routing selection.");
       }
       currentTurnFeedback=routingDecision.currentTurnFeedback ?? null;
