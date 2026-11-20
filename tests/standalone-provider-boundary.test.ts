@@ -144,7 +144,10 @@ test('paid transport requires trusted scope, while unpriced usage is reported as
   assert.equal(response.status, 200);
   assert.equal(sends, 1, 'unknown accounting price alone must not veto authorized inference');
   assert.equal(fake.attempts[0].state, 'uncertain', 'unpriced actual charge remains recorded as unknown');
-  assert.equal(fake.attempts[0].preflight_estimate.pricingUnknown, true);
+  assert.equal(fake.attempts[0].preflight_estimate.reservationMicrousd, '0',
+    'zero is only an accounting marker when model pricing is missing');
+  assert.equal(fake.attempts[0].preflight_estimate.estimatedCostMicrousd, null,
+    'never manufacture a price for unpriced generation');
 });
 
 test('each transmission reserves then atomically claims its exact capped frozen payload and reconciles receipt', async () => {
