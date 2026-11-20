@@ -22,6 +22,36 @@ test('acceptance executes actual browser interaction and fails a wrong rendered 
     assert.match(checks[1].detail, /expected value/);
   } finally { await new Promise(done => server.close(done)); }
 });
+test('a visible button is not clicked before its delayed client-side event handler loads', { timeout: 45000 }, async () => {
+  const server = createServer((req, res) => {
+    if (req.url === '/hydrate.js') {
+      // Emulate a split client bundle that mounts the click handler only after
+      // DOMContentLoaded. A premature click appears successful but changes nothing.
+      setTimeout(() => {
+        res.setHeader('Content-Type', 'application/javascript');
+        res.end("document.querySelector('#change').addEventListener('click', () => { document.querySelector('#state').textContent='Changed state'; });");
+      }, 350);
+      return;
+    }
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<!doctype html><p id="state">Initial state</p><button id="change">Change state</button><script async src="/hydrate.js"></script>');
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  try {
+    const contract = { path: '/', scenarios: [{ name: 'Wait for delayed handler', steps: [
+      { action: 'expectText', selector: '#state', value: 'Initial state' },
+      { action: 'click', selector: '#change' },
+      { action: 'expectText', selector: '#state', value: 'Changed state' },
+    ] }] };
+    const checks = await runScenarios(contract, origin, { timeout: 20000 });
+    assert.deepEqual(checks.map(check => check.passed), [true], JSON.stringify(checks));
+    assert.equal(checks[0].detail, '2 rendered application assertion(s) passed');
+  } finally {
+    await new Promise(done => server.close(done));
+  }
+});
+
 test('browser blocks external subresources and cross-origin redirects', { timeout: 30000 }, async () => {
   let escaped = 0;
   const external = createServer((_req, res) => { escaped++; res.end('external'); });

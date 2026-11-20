@@ -169,7 +169,8 @@ test('an uncertain Qwen charge never imposes financial approval on safe independ
     {userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},
     ()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),error=>
       error instanceof Error&&/technically compatible/.test(error.message));
-  assert.equal(calls.length,0,'previous uncertain charge does not query or block financial approval');
+  assert.deepEqual(calls,[],
+    'zero eligible vision models must stop before pricing, lookup, approval, or any accounting RPC');
 });
 
 
