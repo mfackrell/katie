@@ -85,6 +85,12 @@ export async function GET(request:NextRequest){
  try{
   try{return NextResponse.json({mission79FutureWindow:await mission79FutureWindowOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{
+   const epoch=await rpc<{active:boolean;generation:number}>('project_org_retest_release_epoch',{
+    p_project:ORIGINAL_TTT_PROJECT,p_release:process.env.VERCEL_GIT_COMMIT_SHA
+   });
+   if(epoch&&Number.isSafeInteger(epoch.generation)&&epoch.generation>0&&epoch.active===false)
+    return NextResponse.json({error:'Original mission 79 is locked until the production release and audited security gate match.',
+     code:'mission79_release_mismatch'},{status:409,headers:{'Cache-Control':'no-store'}});
   try{return NextResponse.json({managementRetest:await blockedManagementRetestOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{
    try{return NextResponse.json({managementActivation:await managementActivationOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
@@ -104,6 +110,12 @@ export async function POST(request:NextRequest){
  if('trialAction' in p&&p.trialAction==='authorize_mission79_future_window'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'Exact READY production release is required'},{status:409});
+  const releaseEpoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
+   p_project:p.projectId,p_release:p.releaseSha
+  });
+  if(!releaseEpoch?.active)
+   return NextResponse.json({error:'Current production deployment does not match the original mission79 release gate.',
+    code:'mission79_release_mismatch'},{status:409});
   const offer=await mission79FutureWindowOffer(p.projectId);
   const next=Date.parse(p.cutoff);
   if(offer.stage!=='authorize'||offer.stateHash!==p.stateHash
