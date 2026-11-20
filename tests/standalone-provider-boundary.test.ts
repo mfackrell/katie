@@ -132,13 +132,19 @@ function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT)
   return { service, attempts, events, identifiers, uncertaintyReasons, factory: () => service };
 }
 
-test('paid transport fails closed without trusted context and unsupported pricing never sends', async () => {
+
+test('paid transport requires trusted scope, while unpriced usage is reported as unknown without a spending veto', async () => {
   let sends = 0;
   const fake = fakeLedger();
   const send = createAccountingFetch('openai', async () => { sends++; return receipt(); }, fake.factory);
   await assert.rejects(send('https://api.openai.com/v1/chat/completions', request), isStandaloneAccountingError);
-  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', { ...request, body: JSON.stringify({ model: 'unknown-unpriced', messages: [] }) })), isStandaloneAccountingError);
-  assert.equal(sends, 0);
+  assert.equal(sends, 0, 'untrusted transport cannot send');
+  const response = await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions',
+    { ...request, body: JSON.stringify({ model: 'unknown-unpriced', messages: [] }) }));
+  assert.equal(response.status, 200);
+  assert.equal(sends, 1, 'unknown accounting price alone must not veto authorized inference');
+  assert.equal(fake.attempts[0].state, 'uncertain', 'unpriced actual charge remains recorded as unknown');
+  assert.equal(fake.attempts[0].preflight_estimate.pricingUnknown, true);
 });
 
 test('each transmission reserves then atomically claims its exact capped frozen payload and reconciles receipt', async () => {
@@ -265,11 +271,15 @@ test('standalone child cannot opt out by entering an orchestrator scope', async 
   assert.equal(sends, 0);
 });
 
+
 test('OpenAI SDK cannot hide retries after an ambiguous network failure', async () => {
   const fake = fakeLedger(); let sends = 0;
-  const client = new OpenAI({ apiKey: 'offline-test', maxRetries: 0, fetch: createAccountingFetch('openai', async () => { sends++; throw new Error('socket closed after send'); }, fake.factory) });
-  await assert.rejects(runWithStandaloneAccounting(context, () => client.chat.completions.create({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] })), isStandaloneAccountingError);
-  assert.equal(sends, 1);
+  const client = new OpenAI({ apiKey: 'offline-test', maxRetries: 0,
+    fetch: createAccountingFetch('openai', async () => { sends++; throw new Error('socket closed after send'); }, fake.factory) });
+  await assert.rejects(runWithStandaloneAccounting(context, () =>
+    client.chat.completions.create({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] })),
+    error => error instanceof Error && /prior provider outcome is unavailable/.test(error.message));
+  assert.equal(sends, 1, 'the uncertain paid operation must never be retransmitted by the SDK');
   assert.equal(fake.attempts[0].state, 'uncertain');
 });
 
@@ -553,6 +563,7 @@ test('saved selector dispatches frozen Google REST bytes without accounting appr
   assert.equal(f.sent.length, 1, 'settled selector replays without another transmission');
 });
 
+
 test('Google SDK content unions group strings/parts and preserve explicit turns and system instructions', async t => {
   const f = googleFixture(t);
   const turns = [{ role: 'user', parts: [{ text: 'hello' }] }, { role: 'model', parts: [{ functionCall: { name: 'lookup', args: {} } }] },
@@ -566,18 +577,19 @@ test('Google SDK content unions group strings/parts and preserve explicit turns 
   ];
   for (const [contents, expected] of cases) {
     const before = JSON.stringify(contents);
-    await assert.rejects(runWithStandaloneAccounting({ ...context, requestId: 'shape-' + f.attempts.length }, () => googleGenerateContent('offline-fixture', {
-      model: 'gemini-2.5-flash', contents,
-      config: { systemInstruction: ['system', { text: 'rules' }], maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } }
-    })), isStandaloneAccountingError);
+    const result = await runWithStandaloneAccounting({ ...context, requestId: 'shape-' + f.sent.length },
+      () => googleGenerateContent('offline-fixture', {
+        model: 'gemini-2.5-flash', contents,
+        config: { systemInstruction: ['system', { text: 'rules' }], maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } }
+      }));
+    assert.ok(result, 'valid adapter output is returned without a financial approval veto');
     const body = f.attempts.at(-1)!.prepared_payload.payload as Record<string, unknown>;
     assert.deepEqual(body.contents, expected);
     assert.deepEqual(body.systemInstruction, { role: 'user', parts: [{ text: 'system' }, { text: 'rules' }] });
     assert.equal(JSON.stringify(contents), before);
-    // Each independent workflow starts its activity counter at zero.
-    f.attempts.length = 0;
+    f.attempts.length = 0; // new distinct workflow resets the fake ledger's ordinal
   }
-  assert.equal(f.sent.length, 0);
+  assert.equal(f.sent.length, cases.length, 'one transmission per genuinely distinct request');
 });
 
 test('invalid mixed/empty/unscoped function Google inputs fail before estimation or admission', async t => {
@@ -700,27 +712,33 @@ test('OpenAI Connection error preserves the exact pre-transmission replay mismat
 });
 
 
-test('accepted uncertain exposure replays complete saved output without settlement or retransmission', async () => {
- const f=fakeLedger();let sends=0;const accepted=new Set<string>();
- f.service.uncertainExposureAccepted=async(_owner,id)=>accepted.has(id);
- const send=createAccountingFetch('openai',async()=>{sends++;return Response.json({id:'unconfirmed-'+sends,choices:[{finish_reason:'stop',message:{content:'real saved output'}}]});},f.factory);
- await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request)),{code:'standalone_outcome_unknown'});
- const uncertain=f.attempts[0];const retained=JSON.stringify(uncertain);
- await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request)),{code:'standalone_outcome_unknown'});
- accepted.add(uncertain.id);
- for(let restart=0;restart<2;restart++){
-   const response=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request));
-   assert.match(await response.text(),/real saved output/);
- }
- assert.equal(sends,1);assert.equal(JSON.stringify(uncertain),retained,'state, identity, evidence and full reservation remain untouched');
- assert.equal(f.events.filter(event=>event==='settle').length,0);
- // The remaining logical call is a distinct ordinal and still enters admission.
- await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},async()=>{
-   await send('https://api.openai.com/v1/chat/completions',request);
-   await send('https://api.openai.com/v1/chat/completions',request);
- }),{code:'standalone_outcome_unknown'});
- assert.equal(sends,2);assert.equal(f.attempts.length,2);assert.equal(f.attempts[1].state,'uncertain');
- assert.equal(await f.service.uncertainExposureAccepted(context.userId,f.attempts[1].id),false,'a second uncertain attempt needs a new decision');
+
+test('uncertain usage replays complete saved output without settlement, approval, or retransmission', async () => {
+  const f = fakeLedger(); let sends = 0;
+  const send = createAccountingFetch('openai', async () => {
+    sends++;
+    return Response.json({ id: 'unconfirmed-' + sends, choices: [{ finish_reason: 'stop', message: { content: 'real saved output' } }] });
+  }, f.factory);
+  const first = await runWithStandaloneAccounting(context,
+    () => send('https://api.openai.com/v1/chat/completions', request));
+  assert.match(await first.text(), /real saved output/);
+  const uncertain = f.attempts[0]; const retained = JSON.stringify(uncertain);
+  for (let restart = 0; restart < 2; restart++) {
+    const response = await runWithStandaloneAccounting({ ...context, resumed: true },
+      () => send('https://api.openai.com/v1/chat/completions', request));
+    assert.match(await response.text(), /real saved output/);
+  }
+  assert.equal(sends, 1, 'saved complete output is returned without replaying paid inference');
+  assert.equal(JSON.stringify(uncertain), retained, 'original uncertain usage and attempt identity stay intact');
+  assert.equal(f.events.filter(event => event === 'settle').length, 0, 'missing receipt is not fabricated');
+  const second = await runWithStandaloneAccounting({ ...context, resumed: true }, async () => {
+    await send('https://api.openai.com/v1/chat/completions', request); // saved original
+    return send('https://api.openai.com/v1/chat/completions', request); // new distinct ordinal
+  });
+  assert.match(await second.text(), /real saved output/);
+  assert.equal(sends, 2);
+  assert.equal(f.attempts.length, 2);
+  assert.equal(f.attempts[1].state, 'uncertain');
 });
 
 test('accepting exposure never fabricates a missing or incomplete provider result',async()=>{
@@ -755,24 +773,29 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
 });
 
 
-test('legacy explicit Google observation replays accepted block without observing twice',async t=>{
- const f=fakeLedger();let sends=0;const oldKey=process.env.GOOGLE_API_KEY;process.env.GOOGLE_API_KEY='offline-fixture';
- t.after(()=>{if(oldKey===undefined)delete process.env.GOOGLE_API_KEY;else process.env.GOOGLE_API_KEY=oldKey;});
- t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async(url)=>{
-  if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});
-  sends++;return Response.json({responseId:'saved-blocked-observation',modelVersion:'gemini-2.5-flash',promptFeedback:{blockReason:'OTHER'},usageMetadata:{promptTokenCount:10}});
- },f.factory));
- const image={fileId:'file',fileName:'photo.png',mimeType:'image/png',preview:'Stored photo metadata',imageDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII='};
- await assert.rejects(runWithStandaloneAccounting(context,()=>describeAttachmentEvidence(image,{standaloneImages:false})),{code:'standalone_outcome_unknown'});
- const held=f.attempts[0];const preserved=JSON.stringify(held);
- f.service.uncertainExposureAccepted=async()=>true;
- let remaining=false;
- const result=await runWithStandaloneAccounting({...context,resumed:true},async()=>{
-  const summary=await describeAttachmentEvidence(image,{standaloneImages:false});remaining=true;return summary;
- });
- assert.equal(result.summaryModel,'source-excerpt');assert.equal(result.summaryCoverage,'metadata');assert.equal(remaining,true);
- assert.equal(sends,1);assert.equal(JSON.stringify(held),preserved,'blocked response stays uncertain with identical exposure and evidence');
- assert.equal(f.events.filter(event=>event==='settle').length,0);
+
+test('legacy explicit Google observation replays blocked response without observing twice', async t => {
+  const f = fakeLedger(); let sends = 0; const oldKey = process.env.GOOGLE_API_KEY; process.env.GOOGLE_API_KEY = 'offline-fixture';
+  t.after(() => { if (oldKey === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = oldKey; });
+  t.mock.method(accountingDispatch, 'createAccountingFetch', (provider: Parameters<typeof createAccountingFetch>[0]) =>
+    actualAccountingFetch(provider, async url => {
+      if (String(url).endsWith(':countTokens')) return Response.json({ totalTokens: 100 });
+      sends++; return Response.json({ responseId: 'saved-blocked-observation', modelVersion: 'gemini-2.5-flash',
+        promptFeedback: { blockReason: 'OTHER' }, usageMetadata: { promptTokenCount: 10 } });
+    }, f.factory));
+  const image = { fileId: 'file', fileName: 'photo.png', mimeType: 'image/png', preview: 'Stored photo metadata',
+    imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=' };
+  const first = await runWithStandaloneAccounting(context, () => describeAttachmentEvidence(image, { standaloneImages: false }));
+  const held = f.attempts[0]; const preserved = JSON.stringify(held);
+  const replay = await runWithStandaloneAccounting({ ...context, resumed: true },
+    () => describeAttachmentEvidence(image, { standaloneImages: false }));
+  for (const result of [first, replay]) {
+    assert.equal(result.summaryModel, 'source-excerpt');
+    assert.equal(result.summaryCoverage, 'metadata');
+  }
+  assert.equal(sends, 1, 'blocked receipt must not trigger repeated inference');
+  assert.equal(JSON.stringify(held), preserved, 'usage and evidence remain uncertain, not fabricated');
+  assert.equal(f.events.filter(event => event === 'settle').length, 0);
 });
 
 test('auto-authorized incomplete usage replays genuine Gemini selector output without approval or retransmission',async()=>{
