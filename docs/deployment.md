@@ -57,6 +57,7 @@ For this repository's production path, `.github/workflows/migrate.yml` is the de
 This repository uses **GitHub Actions as the single production deployment authority**.
 
 Enforcement rules:
-- Direct Git-based production auto-deploys are disabled in Vercel via `vercel.json` (`git.deploymentEnabled.main: false`).
-- The only allowed production deploy trigger is `.github/workflows/migrate.yml` after the `migrate` job succeeds.
-- Any future deploy mechanism must preserve the migration-before-deploy gate; do not add parallel production deploy triggers that bypass this workflow.
+- Direct Git-based production auto-deploys are disabled through `vercel.json` (`git.deploymentEnabled.main: false`); unrelated feature-branch Preview deployments continue.
+- `.github/workflows/migrate.yml` **only runs production database migrations**; it does not deploy or promote application code. Its earlier description as an enforced deployment trigger was inaccurate.
+- The coordinated privileged Vercel release operator owns production deployments and must use the original Developer Orchestrator's guarded `CLOSE → PROMOTE → VERIFY → OPEN` protocol when its security gate is active. Deployment builds must use an exact reviewed Git SHA and must not bypass required migrations or owner authority.
+- Automatic assignment of `katie-mu.vercel.app` after an unrelated Git merge must never be relied on. The Vercel `autoAssignCustomDomains=false` setting alone did not prevent this on November 20, 2026.
