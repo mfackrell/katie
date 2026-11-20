@@ -175,7 +175,8 @@ test("Nov 20 Lindsey incident accepts source-honest reasoned inference, not unsu
 
 test("Best Value judge contract explicitly separates inferred continuity from verified user feedback", () => {
   assert.match(source, /EVIDENCE CLASSIFICATION \(choose the basis kind from actual trusted provenance/);
-  assert.match(source, /For a message like "lindsey and i told each other EVERYTHING"/);
+  assert.match(source, /A personal disclosure such as "we told each other everything"/);
+  assert.doesNotMatch(source, /lindsey/i, "private incident name must not enter generic judge instructions");
   assert.match(source, /Without the selected model's cited feedback event, select reasoned_inference/);
   assert.match(source, /reasoned_inference: Use when comparing plausible conversational continuity/);
 });
