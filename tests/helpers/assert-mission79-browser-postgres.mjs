@@ -19,6 +19,7 @@ export async function assertMission79BrowserPostgres(first,{
   VERCEL_ENV:process.env.VERCEL_ENV,
   VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,
   VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
+  CRON_SECRET:process.env.CRON_SECRET,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -232,6 +233,7 @@ export async function assertMission79BrowserPostgres(first,{
   Object.assign(process.env,{
    VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:release,
    VERCEL_DEPLOYMENT_ID:'dpl_NativeFixture79',
+   CRON_SECRET:'fixture-cron-secret-for-authority-79',
    KATIE_OWNER_AUTH_USER_ID:owner,
    NEXT_PUBLIC_SUPABASE_URL:baseUrl,
    NEXT_PUBLIC_SUPABASE_ANON_KEY:'native-owner-qa-key',

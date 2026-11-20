@@ -105,10 +105,10 @@ test('owner POST refuses absent or mismatched Vercel deployment ID and stale gen
 });
 
 test('protected canonical version verification uses only authenticated owner cookie or existing server-side automation credential',async t=>{
- const keys=['VERCEL_ENV','VERCEL_GIT_COMMIT_SHA','VERCEL_DEPLOYMENT_ID','VERCEL_AUTOMATION_BYPASS_SECRET'];
+ const keys=['VERCEL_ENV','VERCEL_GIT_COMMIT_SHA','VERCEL_DEPLOYMENT_ID','VERCEL_AUTOMATION_BYPASS_SECRET','CRON_SECRET'];
  const old=Object.fromEntries(keys.map(k=>[k,process.env[k]]));
  Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,
-  VERCEL_DEPLOYMENT_ID:deploymentId});
+  VERCEL_DEPLOYMENT_ID:deploymentId,CRON_SECRET:'fixture-cron-secret-for-authority-79'});
  delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
  t.after(()=>{for(const k of keys){
   if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];

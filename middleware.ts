@@ -14,6 +14,17 @@ export async function middleware(request:NextRequest){
   const path=request.nextUrl.pathname;
   if(path==='/api/session'||path.startsWith('/api/internal/')||
     path.startsWith('/api/health/'))return NextResponse.next();
+  // Canonical mission79 alias proof is a *read-only* server-to-server GET.
+  // The normal Supabase session gate remains mandatory for all other calls,
+  // including owner authorization. Never grant access on a query alone.
+  const cronSecret=process.env.CRON_SECRET;
+  if(path==='/api/version'&&request.method==='GET'&&
+    process.env.VERCEL_ENV==='production'&&
+    typeof cronSecret==='string'&&cronSecret.length>=16&&
+    /^[a-f0-9]{40}$/.test(process.env.VERCEL_GIT_COMMIT_SHA??'')&&
+    request.nextUrl.searchParams.get('mission79_verify')===process.env.VERCEL_GIT_COMMIT_SHA&&
+    request.headers.get('authorization')==='Bearer '+cronSecret)
+    return NextResponse.next();
   const url=process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if(!url||!key)return NextResponse.json({error:'Session verification unavailable.'},{status:503,headers:noStore});
