@@ -85,18 +85,6 @@ export async function GET(request:NextRequest){
  try{
   try{return NextResponse.json({mission79FutureWindow:await mission79FutureWindowOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{
-   try{
-    const epoch=await rpc<{active:boolean;generation:number}>('project_org_retest_release_epoch',{
-     p_project:ORIGINAL_TTT_PROJECT,p_release:process.env.VERCEL_GIT_COMMIT_SHA
-    });
-    if(epoch&&Number.isSafeInteger(epoch.generation)&&epoch.generation>0&&epoch.active===false)
-     return NextResponse.json({error:'Original mission 79 is locked until the production release and audited security gate match.',
-      code:'mission79_release_mismatch'},{status:409,headers:{'Cache-Control':'no-store'}});
-   }catch{
-    // Older projects and isolated legacy recovery fixtures may not expose this
-    // newer epoch function. Preserve their existing recovery handling; the
-    // mission79 owner POST still requires an active epoch before any write.
-   }
   try{return NextResponse.json({managementRetest:await blockedManagementRetestOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{
    try{return NextResponse.json({managementActivation:await managementActivationOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
