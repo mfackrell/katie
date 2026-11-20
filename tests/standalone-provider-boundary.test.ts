@@ -132,22 +132,19 @@ function fakeLedger(paused = false, pricing: PricingSnapshot = PRICING_SNAPSHOT)
   return { service, attempts, events, identifiers, uncertaintyReasons, factory: () => service };
 }
 
-
-test('paid transport requires trusted scope, while unpriced usage is reported as unknown without a spending veto', async () => {
+test('paid transport rejects missing identity while unknown model price remains reporting-only', async () => {
   let sends = 0;
   const fake = fakeLedger();
   const send = createAccountingFetch('openai', async () => { sends++; return receipt(); }, fake.factory);
   await assert.rejects(send('https://api.openai.com/v1/chat/completions', request), isStandaloneAccountingError);
-  assert.equal(sends, 0, 'untrusted transport cannot send');
-  const response = await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions',
-    { ...request, body: JSON.stringify({ model: 'unknown-unpriced', messages: [] }) }));
-  assert.equal(response.status, 200);
-  assert.equal(sends, 1, 'unknown accounting price alone must not veto authorized inference');
-  assert.equal(fake.attempts[0].state, 'uncertain', 'unpriced actual charge remains recorded as unknown');
-  assert.equal(fake.attempts[0].preflight_estimate.reservationMicrousd, '0',
-    'zero is only an accounting marker when model pricing is missing');
-  assert.equal(fake.attempts[0].preflight_estimate.estimatedCostMicrousd, null,
-    'never manufacture a price for unpriced generation');
+  assert.equal(sends,0,'missing authenticated context never reaches provider');
+  const response=await runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', { ...request, body: JSON.stringify({ model: 'unknown-unpriced', messages: [] }) }));
+  assert.equal(response.status,200,'unknown price alone must not become an execution gate');
+  assert.equal(sends,1);
+  assert.equal(fake.attempts.length,1);
+  assert.equal(fake.attempts[0].model,'unknown-unpriced');
+  assert.equal(fake.attempts[0].preflight_estimate.pricingUnknown,true,'actual cost stays explicitly unknown');
+  assert.equal(fake.attempts[0].state,'uncertain','no fabricated cost receipt for unpriced model');
 });
 
 test('each transmission reserves then atomically claims its exact capped frozen payload and reconciles receipt', async () => {
@@ -274,15 +271,13 @@ test('standalone child cannot opt out by entering an orchestrator scope', async 
   assert.equal(sends, 0);
 });
 
-
 test('OpenAI SDK cannot hide retries after an ambiguous network failure', async () => {
   const fake = fakeLedger(); let sends = 0;
-  const client = new OpenAI({ apiKey: 'offline-test', maxRetries: 0,
-    fetch: createAccountingFetch('openai', async () => { sends++; throw new Error('socket closed after send'); }, fake.factory) });
-  await assert.rejects(runWithStandaloneAccounting(context, () =>
-    client.chat.completions.create({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] })),
-    error => error instanceof Error && /prior provider outcome is unavailable/.test(error.message));
-  assert.equal(sends, 1, 'the uncertain paid operation must never be retransmitted by the SDK');
+  const client = new OpenAI({ apiKey: 'offline-test', maxRetries: 2, fetch: createAccountingFetch('openai', async () => { sends++; throw new Error('socket closed after send'); }, fake.factory) });
+  const invoke=()=>runWithStandaloneAccounting(context, () => client.chat.completions.create({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] }));
+  await assert.rejects(invoke(), error => error instanceof Error && /400/.test(error.message));
+  await assert.rejects(invoke(), error => error instanceof Error && /400/.test(error.message));
+  assert.equal(sends, 1,'synthetic nonretryable response prevents SDK and workflow retransmission');
   assert.equal(fake.attempts[0].state, 'uncertain');
 });
 
@@ -566,7 +561,6 @@ test('saved selector dispatches frozen Google REST bytes without accounting appr
   assert.equal(f.sent.length, 1, 'settled selector replays without another transmission');
 });
 
-
 test('Google SDK content unions group strings/parts and preserve explicit turns and system instructions', async t => {
   const f = googleFixture(t);
   const turns = [{ role: 'user', parts: [{ text: 'hello' }] }, { role: 'model', parts: [{ functionCall: { name: 'lookup', args: {} } }] },
@@ -580,19 +574,18 @@ test('Google SDK content unions group strings/parts and preserve explicit turns 
   ];
   for (const [contents, expected] of cases) {
     const before = JSON.stringify(contents);
-    const result = await runWithStandaloneAccounting({ ...context, requestId: 'shape-' + f.sent.length },
-      () => googleGenerateContent('offline-fixture', {
-        model: 'gemini-2.5-flash', contents,
-        config: { systemInstruction: ['system', { text: 'rules' }], maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } }
-      }));
-    assert.ok(result, 'valid adapter output is returned without a financial approval veto');
+    await runWithStandaloneAccounting({ ...context, requestId: 'shape-' + f.attempts.length }, () => googleGenerateContent('offline-fixture', {
+      model: 'gemini-2.5-flash', contents,
+      config: { systemInstruction: ['system', { text: 'rules' }], maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } }
+    }));
     const body = f.attempts.at(-1)!.prepared_payload.payload as Record<string, unknown>;
     assert.deepEqual(body.contents, expected);
     assert.deepEqual(body.systemInstruction, { role: 'user', parts: [{ text: 'system' }, { text: 'rules' }] });
     assert.equal(JSON.stringify(contents), before);
-    f.attempts.length = 0; // new distinct workflow resets the fake ledger's ordinal
+    // Each independent workflow starts its activity counter at zero.
+    f.attempts.length = 0;
   }
-  assert.equal(f.sent.length, cases.length, 'one transmission per genuinely distinct request');
+  assert.equal(f.sent.length, cases.length,'each valid content shape sends one immutable provider request');
 });
 
 test('invalid mixed/empty/unscoped function Google inputs fail before estimation or admission', async t => {
@@ -715,33 +708,33 @@ test('OpenAI Connection error preserves the exact pre-transmission replay mismat
 });
 
 
-
-test('uncertain usage replays complete saved output without settlement, approval, or retransmission', async () => {
-  const f = fakeLedger(); let sends = 0;
-  const send = createAccountingFetch('openai', async () => {
-    sends++;
-    return Response.json({ id: 'unconfirmed-' + sends, choices: [{ finish_reason: 'stop', message: { content: 'real saved output' } }] });
-  }, f.factory);
-  const first = await runWithStandaloneAccounting(context,
-    () => send('https://api.openai.com/v1/chat/completions', request));
-  assert.match(await first.text(), /real saved output/);
-  const uncertain = f.attempts[0]; const retained = JSON.stringify(uncertain);
-  for (let restart = 0; restart < 2; restart++) {
-    const response = await runWithStandaloneAccounting({ ...context, resumed: true },
-      () => send('https://api.openai.com/v1/chat/completions', request));
-    assert.match(await response.text(), /real saved output/);
-  }
-  assert.equal(sends, 1, 'saved complete output is returned without replaying paid inference');
-  assert.equal(JSON.stringify(uncertain), retained, 'original uncertain usage and attempt identity stay intact');
-  assert.equal(f.events.filter(event => event === 'settle').length, 0, 'missing receipt is not fabricated');
-  const second = await runWithStandaloneAccounting({ ...context, resumed: true }, async () => {
-    await send('https://api.openai.com/v1/chat/completions', request); // saved original
-    return send('https://api.openai.com/v1/chat/completions', request); // new distinct ordinal
-  });
-  assert.match(await second.text(), /real saved output/);
-  assert.equal(sends, 2);
-  assert.equal(f.attempts.length, 2);
-  assert.equal(f.attempts[1].state, 'uncertain');
+test('uncertain cost never resends a completed saved output and distinct ordinals remain separate', async () => {
+ const f=fakeLedger();let sends=0;const accepted=new Set<string>();
+ f.service.uncertainExposureAccepted=async(_owner,id)=>accepted.has(id);
+ const send=createAccountingFetch('openai',async()=>{sends++;return Response.json({id:'unconfirmed-'+sends,choices:[{finish_reason:'stop',message:{content:'real saved output'}}]});},f.factory);
+ const first=await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request));
+ assert.equal(first.status,200,'complete original provider output remains available despite unknown actual charge');
+ const uncertain=f.attempts[0];const retained=JSON.stringify(uncertain);
+ const resumedBeforeApproval=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request));
+ assert.match(await resumedBeforeApproval.text(),/real saved output/);
+ assert.equal(sends,1,'resume must never retransmit a completed response');
+ accepted.add(uncertain.id);
+ for(let restart=0;restart<2;restart++){
+   const response=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request));
+   assert.match(await response.text(),/real saved output/);
+ }
+ assert.equal(sends,1);assert.equal(JSON.stringify(uncertain),retained,'state, identity, evidence and full reservation remain untouched');
+ assert.equal(f.events.filter(event=>event==='settle').length,0);
+ // The remaining logical call is a distinct ordinal and still enters admission.
+ await runWithStandaloneAccounting({...context,resumed:true},async()=>{
+   const prior=await send('https://api.openai.com/v1/chat/completions',request);
+   const independent=await send('https://api.openai.com/v1/chat/completions',request);
+   assert.equal(prior.status,200);assert.equal(independent.status,200);
+ });
+ assert.equal(sends,2,'a new ordinal is a different authorized operation, not a replay of the prior one');
+ assert.deepEqual(f.attempts.map(item=>item.attempt_key),['standalone:0','standalone:1']);
+ assert.equal(f.attempts.length,2);assert.equal(f.attempts[1].state,'uncertain');
+ assert.equal(await f.service.uncertainExposureAccepted(context.userId,f.attempts[1].id),false,'a second uncertain attempt needs a new decision');
 });
 
 test('accepting exposure never fabricates a missing or incomplete provider result',async()=>{
@@ -776,29 +769,25 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
 });
 
 
-
-test('legacy explicit Google observation replays blocked response without observing twice', async t => {
-  const f = fakeLedger(); let sends = 0; const oldKey = process.env.GOOGLE_API_KEY; process.env.GOOGLE_API_KEY = 'offline-fixture';
-  t.after(() => { if (oldKey === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = oldKey; });
-  t.mock.method(accountingDispatch, 'createAccountingFetch', (provider: Parameters<typeof createAccountingFetch>[0]) =>
-    actualAccountingFetch(provider, async url => {
-      if (String(url).endsWith(':countTokens')) return Response.json({ totalTokens: 100 });
-      sends++; return Response.json({ responseId: 'saved-blocked-observation', modelVersion: 'gemini-2.5-flash',
-        promptFeedback: { blockReason: 'OTHER' }, usageMetadata: { promptTokenCount: 10 } });
-    }, f.factory));
-  const image = { fileId: 'file', fileName: 'photo.png', mimeType: 'image/png', preview: 'Stored photo metadata',
-    imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=' };
-  const first = await runWithStandaloneAccounting(context, () => describeAttachmentEvidence(image, { standaloneImages: false }));
-  const held = f.attempts[0]; const preserved = JSON.stringify(held);
-  const replay = await runWithStandaloneAccounting({ ...context, resumed: true },
-    () => describeAttachmentEvidence(image, { standaloneImages: false }));
-  for (const result of [first, replay]) {
-    assert.equal(result.summaryModel, 'source-excerpt');
-    assert.equal(result.summaryCoverage, 'metadata');
-  }
-  assert.equal(sends, 1, 'blocked receipt must not trigger repeated inference');
-  assert.equal(JSON.stringify(held), preserved, 'usage and evidence remain uncertain, not fabricated');
-  assert.equal(f.events.filter(event => event === 'settle').length, 0);
+test('legacy explicit Google observation replays accepted block without observing twice',async t=>{
+ const f=fakeLedger();let sends=0;const oldKey=process.env.GOOGLE_API_KEY;process.env.GOOGLE_API_KEY='offline-fixture';
+ t.after(()=>{if(oldKey===undefined)delete process.env.GOOGLE_API_KEY;else process.env.GOOGLE_API_KEY=oldKey;});
+ t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async(url)=>{
+  if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:100});
+  sends++;return Response.json({responseId:'saved-blocked-observation',modelVersion:'gemini-2.5-flash',promptFeedback:{blockReason:'OTHER'},usageMetadata:{promptTokenCount:10}});
+ },f.factory));
+ const image={fileId:'file',fileName:'photo.png',mimeType:'image/png',preview:'Stored photo metadata',imageDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII='};
+ const original=await runWithStandaloneAccounting(context,()=>describeAttachmentEvidence(image,{standaloneImages:false}));
+ assert.equal(original.summaryCoverage,'metadata','provider-blocked output must not become visual evidence');
+ const held=f.attempts[0];const preserved=JSON.stringify(held);
+ f.service.uncertainExposureAccepted=async()=>true;
+ let remaining=false;
+ const result=await runWithStandaloneAccounting({...context,resumed:true},async()=>{
+  const summary=await describeAttachmentEvidence(image,{standaloneImages:false});remaining=true;return summary;
+ });
+ assert.equal(result.summaryModel,'source-excerpt');assert.equal(result.summaryCoverage,'metadata');assert.equal(remaining,true);
+ assert.equal(sends,1);assert.equal(JSON.stringify(held),preserved,'blocked response stays uncertain with identical exposure and evidence');
+ assert.equal(f.events.filter(event=>event==='settle').length,0);
 });
 
 test('auto-authorized incomplete usage replays genuine Gemini selector output without approval or retransmission',async()=>{
@@ -817,45 +806,38 @@ test('auto-authorized lost transmission returns a non-retryable local failure an
  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts.length,1);
 });
 
-
-test('large Claude input uses native count and replays exact settled generation without another quote', async () => {
-  const fake = fakeLedger();
-  const system = 'Long standing executive context. '.repeat(11000);
-  const body = JSON.stringify({ model: 'claude-sonnet-4-5', system, max_tokens: 16384,
-    messages: [{ role: 'user', content: 'hi katie' }] });
-  const original = { method: 'POST', headers: { 'x-api-key': 'fixture-key', 'anthropic-version': '2023-06-01' }, body };
-  let counts = 0, paid = 0;
-  const send = createAccountingFetch('anthropic', async (input, init) => {
-    if (String(input).endsWith('/count_tokens')) {
+test('large Claude input uses provider count for saved exact replay without a second quote', async () => {
+  const fake=fakeLedger();
+  const system='Long standing executive context. '.repeat(11000);
+  const body=JSON.stringify({model:'claude-sonnet-4-5',system,max_tokens:16384,messages:[{role:'user',content:'hi katie'}]});
+  const original={method:'POST',headers:{'x-api-key':'fixture-key','anthropic-version':'2023-06-01'},body};
+  let counts=0,paid=0;
+  const send=createAccountingFetch('anthropic',async(input,init)=>{
+    if(String(input).endsWith('/count_tokens')){
       counts++;
-      const counted = JSON.parse(String(init?.body));
-      assert.equal(counted.system, system);
-      assert.equal(counted.max_tokens, undefined);
-      assert.equal(counted.model, 'claude-sonnet-4-5');
-      return Response.json({ input_tokens: 90000 });
+      const counted=JSON.parse(String(init?.body));
+      assert.equal(counted.system,system);
+      assert.equal(counted.max_tokens,undefined);
+      assert.equal(counted.model,'claude-sonnet-4-5');
+      return Response.json({input_tokens:90000});
     }
     paid++;
-    assert.deepEqual(JSON.parse(String(init?.body)), JSON.parse(String(fake.attempts[0].prepared_payload.serializedBody)),
-      'paid request must match the frozen native-counted payload');
-    return Response.json({ id: 'approved-claude-receipt', model: 'claude-sonnet-4-5',
-      content: [{ type: 'text', text: 'Saved answer' }], stop_reason: 'end_turn',
-      usage: { input_tokens: 90000, output_tokens: 64, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
-  }, fake.factory);
-  const first = await runWithStandaloneAccounting(context,
-    () => send('https://api.anthropic.com/v1/messages', original));
-  assert.equal((await first.json()).content[0].text, 'Saved answer');
-  const attempt = fake.attempts[0];
-  assert.equal(attempt.preflight_estimate.inputTokens, 90000);
-  assert.equal(attempt.preflight_estimate.outputAllowance, 16384);
-  assert.equal(attempt.preflight_estimate.inputCountSource, 'provider');
-  assert.equal(attempt.reserved_microusd, '515760', 'full quoted usage is retained for reporting');
-  assert.equal(attempt.state, 'settled');
-  assert.equal(counts, 1); assert.equal(paid, 1);
-  const resumed = await runWithStandaloneAccounting({ ...context, resumed: true },
-    () => send('https://api.anthropic.com/v1/messages', original));
-  assert.equal((await resumed.json()).content[0].text, 'Saved answer');
-  assert.equal(counts, 1, 'native count is not repeated');
-  assert.equal(paid, 1, 'saved receipt prevents duplicate inference');
+    assert.deepEqual(JSON.parse(String(init?.body)),JSON.parse(String(fake.attempts[0].prepared_payload.serializedBody)));
+    return Response.json({id:'approved-claude-receipt',model:'claude-sonnet-4-5',content:[{type:'text',text:'Saved answer'}],stop_reason:'end_turn',usage:{input_tokens:90000,output_tokens:64,cache_read_input_tokens:0,cache_creation_input_tokens:0}});
+  },fake.factory);
+  const response=await runWithStandaloneAccounting(context,()=>send('https://api.anthropic.com/v1/messages',original));
+  assert.equal((await response.json()).content[0].text,'Saved answer');
+  assert.equal(counts,1);assert.equal(paid,1,'native count precedes exactly one generation');
+  const attempt=fake.attempts[0];
+  assert.equal(attempt.preflight_estimate.inputTokens,90000);
+  assert.equal(attempt.preflight_estimate.outputAllowance,16384);
+  assert.equal(attempt.preflight_estimate.inputCountSource,'provider');
+  assert.equal(attempt.reserved_microusd,'515760','native input count and full output allowance determine approval amount');
+  assert.equal(attempt.state,'settled');
+  const replay=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.anthropic.com/v1/messages',original));
+  assert.equal((await replay.json()).content[0].text,'Saved answer');
+  assert.equal(counts,1,'saved approved count is not recounted or silently repriced');
+  assert.equal(paid,1);assert.equal(attempt.state,'settled');
 });
 
 test('unverified oversized context has no approvable ledger attempt or paid dispatch',async()=>{
@@ -903,47 +885,48 @@ function november2MiniFixture() {
   }};
 }
 
-
-test('Nov 2 mini inflated heuristic obtains native count and preserves exact uncached replay without approval veto', async () => {
-  const fixture = november2MiniFixture();
-  const f = fakeLedger(false, fixture.pricing);
-  let native = 0, paid = 0;
-  const send = createAccountingFetch('openai', async (url, init) => {
-    if (String(url) === 'https://api.openai.com/v1/responses/input_tokens') {
+test('Nov 2 mini inflated heuristic obtains native count and preserves exact uncached replay',async()=>{
+  const fixture=november2MiniFixture();
+  const f=fakeLedger(false,fixture.pricing);
+  let native=0,paid=0;
+  const send=createAccountingFetch('openai',async(url,init)=>{
+    if(String(url)==='https://api.openai.com/v1/responses/input_tokens'){
       native++;
-      const counted = JSON.parse(String(init?.body));
-      assert.deepEqual(counted, { model: fixture.model, input: fixture.body.input },
-        'native count must receive complete original ordered model input');
-      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer fake-no-network');
-      assert.equal('max_output_tokens' in counted, false);
-      return Response.json({ object: 'response.input_tokens', input_tokens: 69133 });
+      const counted=JSON.parse(String(init?.body));
+      assert.deepEqual(counted,{model:fixture.model,input:fixture.body.input},
+        'native count must receive complete ordered model input, not the heuristic estimate');
+      assert.equal(new Headers(init?.headers).get('authorization'),'Bearer fake-no-network');
+      assert.equal('max_output_tokens' in counted,false,'output allowance is not input-token evidence');
+      return Response.json({object:'response.input_tokens',input_tokens:69133});
     }
     paid++;
-    const saved = f.attempts[0].prepared_payload;
-    assert.equal(String(init?.body), saved.serializedBody, 'only frozen request can be sent');
-    assert.deepEqual(JSON.parse(String(init?.body)).input, fixture.body.input, 'preserve entire input');
-    assert.equal(JSON.parse(String(init?.body)).prompt_cache_key, undefined, 'optional unsupported cache hint is removed');
-    return Response.json({ id: 'mock-mini-receipt', model: fixture.model, status: 'completed',
-      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Mocked completion', annotations: [] }] }],
-      usage: { input_tokens: 69133, output_tokens: 128, input_tokens_details: { cached_tokens: 0 } } });
-  }, f.factory);
-  const first = await runWithStandaloneAccounting(context,
-    () => send('https://api.openai.com/v1/responses', fixture.original));
-  assert.equal((await first.json()).output[0].content[0].text, 'Mocked completion');
-  assert.equal(native, 1); assert.equal(paid, 1); assert.equal(f.attempts.length, 1);
-  const attempt = f.attempts[0];
-  assert.equal(attempt.preflight_estimate.inputTokens, 69133);
-  assert.equal(attempt.preflight_estimate.outputAllowance, 4096);
-  assert.equal(attempt.preflight_estimate.inputCountSource, 'provider');
-  assert.notEqual(attempt.prepared_hash, fixture.initial.hash, 'unsupported cache metadata changes the frozen body hash');
-  assert.deepEqual(JSON.parse(String(attempt.prepared_payload.serializedBody)).input, fixture.body.input);
-  assert.equal(attempt.state, 'settled');
-  const replay = await runWithStandaloneAccounting({ ...context, resumed: true },
-    () => send('https://api.openai.com/v1/responses', fixture.original));
-  assert.equal((await replay.json()).output[0].content[0].text, 'Mocked completion');
-  assert.equal(native, 1, 'replay preserves counted evidence');
-  assert.equal(paid, 1, 'replay does not retransmit');
-  assert.equal(f.attempts.length, 1); assert.equal(attempt.usage?.inputTokens, 69133);
+    const saved=f.attempts[0].prepared_payload;
+    assert.equal(String(init?.body),saved.serializedBody,'provider must receive only the frozen approved body');
+    assert.deepEqual(JSON.parse(String(init?.body)).input,fixture.body.input,'no missing, repeated or reordered history');
+    assert.equal(JSON.parse(String(init?.body)).prompt_cache_key,undefined,'only unreviewed optional hint is dropped');
+    return Response.json({id:'mock-mini-receipt',model:fixture.model,status:'completed',output:[
+      {type:'message',role:'assistant',content:[{type:'output_text',text:'Mocked completion',annotations:[]}]}
+    ],usage:{input_tokens:69133,output_tokens:128,input_tokens_details:{cached_tokens:0}}});
+  },f.factory);
+  const first=await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',fixture.original));
+  assert.equal((await first.json()).output[0].content[0].text,'Mocked completion');
+  assert.equal(native,1);assert.equal(paid,1,'native counting is free; a distinct generation is recorded once');
+  assert.equal(f.attempts.length,1);
+  const attempt=f.attempts[0];
+  assert.equal(attempt.preflight_estimate.inputTokens,69133);
+  assert.equal(attempt.preflight_estimate.outputAllowance,4096);
+  assert.equal(attempt.preflight_estimate.inputCountSource,'provider');
+  assert.equal(attempt.preflight_estimate.ownerApprovalRequired,undefined,'reporting-only accounting cannot require owner payment approval');
+  assert.equal(attempt.estimator_version,'standalone-provider-count-v1','provider input count remains immutable evidence on replay');
+  assert.notEqual(attempt.prepared_hash,fixture.initial.hash,'uncached proposal has a new frozen hash');
+  assert.deepEqual(JSON.parse(String(attempt.prepared_payload.serializedBody)).input,fixture.body.input);
+  assert.equal(attempt.state,'settled');
+  const result=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/responses',fixture.original));
+  assert.equal((await result.json()).output[0].content[0].text,'Mocked completion');
+  assert.equal(native,1,'resume must preserve exact provider-native count evidence');
+  assert.equal(paid,1,'one and only one authorized generation');
+  assert.equal(f.attempts.length,1);assert.equal(attempt.state,'settled');
+  assert.equal(attempt.usage?.inputTokens,69133);
 });
 
 test('Nov 2 mini without an optional cache hint may use native-counted context without escalation',async()=>{
@@ -1119,56 +1102,52 @@ test('Grok malformed reasoning or conflicting totals fail closed without false s
 });
 
 
-
-test('GPT-5.5 unsupported cache hints retain exact same-model uncached dispatch and replay', async () => {
-  const model = 'gpt-5.5', key = 'katie:v1:fixture-chat';
-  const hints = openAiCacheSettings(model, key, 'responses');
-  assert.deepEqual(hints, { prompt_cache_key: key, prompt_cache_retention: '24h' });
-  const priced = PRICING_SNAPSHOT.models.find(row => row.provider === 'openai' && row.model === 'gpt-5.5-pro')!;
-  const pricing: PricingSnapshot = { ...PRICING_SNAPSHOT, version: 'fixture-gpt55',
-    models: [...PRICING_SNAPSHOT.models, { ...priced, model, supportsStreaming: true }] };
-  const body = { model, input: [{ role: 'user', content: 'Preserve the complete original input.' }],
-    max_output_tokens: 256, ...hints };
-  const original = prepareStandaloneRequest('openai', model, '/v1/responses', body);
-  assert.deepEqual(estimatePreparedRequest(original, pricing).issues, [
-    'No reviewed no-fee cache metadata policy for this exact model',
-    'Unsupported OpenAI prompt_cache_retention for this exact model',
-  ]);
-  const f = fakeLedger(false, pricing); let counts = 0, paid = 0;
-  const send = createAccountingFetch('openai', async (url, init) => {
-    if (String(url).endsWith('/input_tokens')) {
-      counts++;
-      assert.deepEqual(JSON.parse(String(init?.body)), { model, input: body.input });
-      return Response.json({ input_tokens: 42 });
-    }
-    paid++;
-    const transmitted = JSON.parse(String(init?.body));
-    assert.equal(transmitted.model, model);
-    assert.deepEqual(transmitted.input, body.input);
-    assert.equal(transmitted.max_output_tokens, 256);
-    assert.equal(transmitted.prompt_cache_key, undefined);
-    assert.equal(transmitted.prompt_cache_retention, undefined);
-    return Response.json({ id: 'mock-gpt55', model, status: 'completed', output: [],
-      usage: { input_tokens: 42, output_tokens: 7, input_tokens_details: { cached_tokens: 0 } } });
-  }, f.factory);
-  const input = { method: 'POST', body: JSON.stringify(body) };
-  const run = (resumed = false) => runWithStandaloneAccounting({ ...context, requestId: 'gpt55-cache-mismatch', resumed },
-    () => send('https://api.openai.com/v1/responses', input));
-  const first = await run();
-  assert.equal((await first.json()).status, 'completed');
-  assert.equal(paid, 1); assert.equal(f.attempts.length, 1);
-  const quote = f.attempts[0];
-  assert.equal(quote.state, 'settled');
-  assert.equal(quote.model, model);
-  assert.notEqual(quote.prepared_hash, original.hash);
-  assert.deepEqual(JSON.parse(String(quote.prepared_payload.serializedBody)).input, body.input);
-  const observedNativeCounts = counts;
-  const resumed = await run(true);
-  assert.equal((await resumed.json()).status, 'completed');
-  assert.equal(paid, 1, 'no duplicate transmission');
-  assert.equal(counts, observedNativeCounts, 'no repeated native count');
-  assert.equal(f.attempts.length, 1); assert.equal(quote.state, 'settled');
+test('GPT-5.5 with both unreviewed cache errors dispatches exact same-model uncached payload',async()=>{
+ const model='gpt-5.5',key='katie:v1:fixture-chat';
+ const hints=openAiCacheSettings(model,key,'responses');
+ assert.deepEqual(hints,{prompt_cache_key:key,prompt_cache_retention:'24h'});
+ const priced=PRICING_SNAPSHOT.models.find(row=>row.provider==='openai'&&row.model==='gpt-5.5-pro')!;
+ const pricing:PricingSnapshot={...PRICING_SNAPSHOT,version:'fixture-gpt55',
+  models:[...PRICING_SNAPSHOT.models,{...priced,model,supportsStreaming:true}]};
+ const body={model,input:[{role:'user',content:'Preserve the complete original input.'}],max_output_tokens:256,...hints};
+ const original=prepareStandaloneRequest('openai',model,'/v1/responses',body);
+ assert.deepEqual(estimatePreparedRequest(original,pricing).issues,[
+  'No reviewed no-fee cache metadata policy for this exact model',
+  'Unsupported OpenAI prompt_cache_retention for this exact model',
+ ]);
+ const f=fakeLedger(false,pricing);let counts=0,paid=0;
+ const send=createAccountingFetch('openai',async(url,init)=>{
+  if(String(url).endsWith('/input_tokens')){
+   counts++;assert.deepEqual(JSON.parse(String(init?.body)),{model,input:body.input});
+   return Response.json({input_tokens:42});
+  }
+  paid++;const transmitted=JSON.parse(String(init?.body));
+  assert.equal(transmitted.model,model);
+  assert.deepEqual(transmitted.input,body.input);
+  assert.equal(transmitted.max_output_tokens,256);
+  assert.equal(transmitted.prompt_cache_key,undefined);
+  assert.equal(transmitted.prompt_cache_retention,undefined);
+  return Response.json({id:'mock-gpt55',model,status:'completed',output:[],
+   usage:{input_tokens:42,output_tokens:7,input_tokens_details:{cached_tokens:0}}});
+ },f.factory);
+ const input={method:'POST',body:JSON.stringify(body)};
+ const run=(resumed=false)=>runWithStandaloneAccounting({...context,requestId:'gpt55-cache-mismatch',resumed},
+  ()=>send('https://api.openai.com/v1/responses',input));
+ const first=await run();assert.equal(first.status,200);
+ assert.equal(counts,1);assert.equal(paid,1);assert.equal(f.attempts.length,1);
+ const quote=f.attempts[0];
+ assert.equal(quote.state,'settled');
+ assert.equal(quote.model,model);
+ assert.equal(quote.preflight_estimate.ownerApprovalRequired,undefined,'unreviewed cache hints are stripped without a financial veto');
+ assert.equal(quote.preflight_estimate.inputCountSource,'provider');
+ assert.notEqual(quote.prepared_hash,original.hash);
+ assert.deepEqual(JSON.parse(String(quote.prepared_payload.serializedBody)).input,body.input);
+ const replay=await run(true);assert.equal(replay.status,200);
+ assert.equal(paid,1);assert.equal(counts,1,'resume must reuse exact count');
+ assert.equal(f.attempts.length,1);
+ assert.equal(quote.state,'settled');
 });
+
 
 test('Gemini PROHIBITED_CONTENT with provider-proven zero output settles input rather than accumulating uncertain exposure',async()=>{
  const f=fakeLedger();let counted=0,paid=0;
@@ -1382,10 +1361,10 @@ test('diagnostics distinguish actual provider HTTP rate limiting from missing re
     sends++;
     return new Response(JSON.stringify({error:{type:'rate_limit_exceeded',message:'private response body'}}),{status:429});
   },fake.factory);
-  const httpError=await runWithStandaloneAccounting({...context,requestId:'trace-rate-limited'},()=>runProviderAttemptTrace({
+  const rateLimited=await runWithStandaloneAccounting({...context,requestId:'trace-rate-limited'},()=>runProviderAttemptTrace({
     taskName:'routing-rerank',requestId:'trace-rate-limited',provider:'openai',modelId:'gpt-4o',
   },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event)));
-  assert.equal(httpError.status,429,'real provider rate limit is returned verbatim, never synthesized');
+  assert.equal(rateLimited.status,429,'real provider rejection is delivered unchanged to the caller');
   assert.equal(sends,1);
   assert.equal(fake.attempts[0].state,'uncertain');
   assert.equal(events.find(e=>e.phase==='response_headers_received')?.httpStatus,429);
@@ -1400,10 +1379,10 @@ test('diagnostics distinguish actual provider HTTP rate limiting from missing re
 test('diagnostics mark complete HTTP body and missing provider receipt separately',async()=>{
   const fake=fakeLedger();const events:ProviderTraceEvent[]=[];
   const send=createAccountingFetch('openai',async()=>new Response('{"choices":[]}',{status:200}),fake.factory);
-  const completed=await runWithStandaloneAccounting({...context,requestId:'trace-missing-receipt'},()=>runProviderAttemptTrace({
+  const withoutReceipt=await runWithStandaloneAccounting({...context,requestId:'trace-missing-receipt'},()=>runProviderAttemptTrace({
     taskName:'routing-rerank',requestId:'trace-missing-receipt',provider:'openai',modelId:'gpt-4o',
   },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event)));
-  assert.equal(completed.status,200,'a complete HTTP body is still returned even when usage reporting is incomplete');
+  assert.equal(withoutReceipt.status,200,'unsettled usage must remain reporting-only, not erase received body');
   assert.equal(events.find(e=>e.phase==='response_headers_received')?.httpStatus,200);
   assert.equal(events.at(-1)?.observed?.completeBody,true);
   assert.equal(events.at(-1)?.observed?.receipt,false);

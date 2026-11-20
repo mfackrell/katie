@@ -433,9 +433,10 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   assert.equal(await (await call('control_plane_routing-rerank',rerankBody,true)).text(),rerankSaved.response_checkpoint.body);
   assert.equal(wire.length,2,'saved exact responses replay with zero extra paid attempts');
   const changedRerank={...rerankBody,messages:[{role:'user',content:'select candidate from changed registry metadata'}]};
-  assert.equal(await (await call('control_plane_routing-rerank',changedRerank,true)).text(),rerankSaved.response_checkpoint.body,
-    'resume uses frozen original provider request, never mutable replacement routing metadata');
-  assert.equal(wire.length,2,'changed caller metadata cannot cause a second paid dispatch');
+  const changedMetadataReplay=await call('control_plane_routing-rerank',changedRerank,true);
+  assert.equal(await changedMetadataReplay.text(),rerankSaved.response_checkpoint.body,
+    'resumed workflow uses its immutable original paid attempt, never a changed routing payload');
+  assert.equal(wire.length,2,'changed routing metadata must not cause another provider transmission');
   const finalRerank=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
   assert.equal(finalRerank.id,rerankSaved.id);assert.equal(finalRerank.prepared_hash,rerankSaved.prepared_hash);
   assert.equal(finalRerank.state,'settled');

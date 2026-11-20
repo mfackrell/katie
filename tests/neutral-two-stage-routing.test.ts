@@ -41,21 +41,16 @@ const fixtures: Array<{message:string; intent:RequestIntent; complexity:'low'|'h
 for (const mode of ['best_value','best_answer'] as const) {
   for (const fixture of fixtures) test(`${mode}: LLM has both authorities: ${fixture.message}`, async () => {
     const rank = mock.method(economics,'rankControlPlaneByActualCost', async (candidates: unknown[]) => candidates);
-    const calls:string[]=[];
-    let actualClassifierProvider: string | null = null;
+    const calls:string[]=[]; let classifierProvider:string|null=null;
     const providers = Object.entries(models).map(([name, ids]) => ({name, listModels:async()=>[...ids], generate:async(params) => {
       calls.push(params.user);
-      if (params.user.includes('CURRENT_USER_MESSAGE:')) {
-        actualClassifierProvider = name;
-        return {text:JSON.stringify(understanding(fixture.message, fixture.intent, fixture.complexity)),provider:name,model:params.modelId!};
-      }
+      if (params.user.includes('CURRENT_USER_MESSAGE:')) {classifierProvider ??= name; return {text:JSON.stringify(understanding(fixture.message, fixture.intent, fixture.complexity)),provider:name,model:params.modelId!};}
       const payload=JSON.parse(params.user.slice(params.user.lastIndexOf('\n\n')+2));
       assert.equal(payload.routing_mode, mode);
       assert.equal(params.user.includes('BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:'),mode==='best_value');
       assert.equal(payload.understanding.intent, fixture.intent);
       assert.equal(payload.understanding.complexity, fixture.complexity);
-      assert.equal(payload.understanding.decisionEvidence.classification_provider, actualClassifierProvider,
-        'every independent judge must receive the actual Stage 1 classification provenance, not its own provider name');
+      assert.equal(payload.understanding.decisionEvidence.classification_provider, classifierProvider, "all judges must see the original classifier source, not their own provider");
       assert.equal(payload.candidates.length,6,'per-provider shortlist must not hide models');
       assert.deepEqual(new Set(payload.candidates.map((c:{provider:string})=>c.provider)),new Set(Object.keys(models)));
       assert.doesNotMatch(JSON.stringify(payload),/prior_score|score_breakdown|providerBoosts|specialization_tags|preference_profile/);
@@ -67,7 +62,7 @@ for (const mode of ['best_value','best_answer'] as const) {
       const result=await runWithStandaloneAccounting(owner,()=>chooseProvider(fixture.message,fixture.context??'',providers,{
         modelRegistrySnapshot:registry(), routing_mode:mode, actorRoutingProfile:actor, decisionCandidatesPerProvider:1,
       }));
-      assert.equal(calls.length,4,'one understanding call plus three independent selection judges');
+      assert.equal(calls.length,4,'one source-linked understanding and three independent one-shot judges');
       assert.equal(result.resolvedIntent.intent,fixture.intent);
       assert.equal(result.authority,'llm');
       assert.equal(result.provider.name,'grok','policy must not replace the LLM winner');
@@ -285,6 +280,6 @@ test('user objective, constraints and model-specific outcome evidence reach the 
       assert.equal(result.modelId,'grok-4.3');
       assert.equal(result.resolvedIntent.decisionEvidence?.primary_objective,original);
     }
-    assert.equal(selections,6,'three independently evidenced judge selections per route across two routing modes');
+    assert.equal(selections,6,'three independent selection judgments per route, without replaying a judge');
   }finally{rank.mock.restore();evidence.mock.restore();}
 });

@@ -254,6 +254,7 @@ function supportsWebSearch(providerName: ProviderName, modelId: string, registry
 
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
 const CONTROL_PLANE_DECISION_TIMEOUT_MS = 12_000;
+const ROUTING_RERANK_TIMEOUT_MS = 15_000; // +5s in-flight standalone grace = 20s total
 
 const intentDescriptions: Record<RequestIntent, string> = {
   text: "General text processing, base type.",
@@ -2660,7 +2661,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       decisionProviders: eligibleDecisionProviders,
       userPrompt: judgeBrief,
       parse: parseRoutingJudgeResponse,
-      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+      timeoutMs: args.timeoutMs ?? ROUTING_RERANK_TIMEOUT_MS,
       bestValueSelection: neutral && (args.routing_mode ?? "best_value") === "best_value",
     });
     if (!legacy) return { accepted: false, reason: "all_decision_providers_failed" };
@@ -2685,7 +2686,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       userPrompt: judgeBrief,
       activityOverride: `routing-rerank_judge_${lane}`,
       singleAttempt: true,
-      timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS,
+      timeoutMs: args.timeoutMs ?? ROUTING_RERANK_TIMEOUT_MS,
       parse: parseRoutingJudgeResponse,
     })
   ));

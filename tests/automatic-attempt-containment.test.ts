@@ -40,24 +40,25 @@ test("control-plane approval failure propagates without fallback", async () => {
   assert.equal(calls, 1);
 });
 
-test("control-plane timeout cancels each attempt and permits only a distinct eligible helper", async t => {
+test("control-plane timeout aborts each distinct helper exactly once and then falls back safely", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const calledModels: string[] = [];
+  const models: string[] = [];
   const signals: AbortSignal[] = [];
   const provider: LlmProvider = { name: "openai", listModels: async () => [], generate: async params => {
-    calledModels.push(params.modelId!);
+    models.push(params.modelId!);
     signals.push(params.signal!);
     queueMicrotask(() => t.mock.timers.tick(25));
     return new Promise<never>(() => {});
   } };
-  const result = await inferRequestClassification("review this patch", { hasImages: false }, {
+  // PR #1131 explicitly permits a DIFFERENT decision model after an uncertain
+  // helper timeout, but never replaying the same uncertain paid attempt.
+  const intent = await inferRequestClassification("review this patch", { hasImages: false }, {
     timeoutMs: 25,
     decisionProviders: [{ provider, modelId: "gpt-5.6-sol" }, { provider, modelId: "gpt-5.5" }],
   });
-  assert.ok(result, "unavailable helpers must resolve through existing safe classification fallback");
-  assert.deepEqual(calledModels, ["gpt-5.6-sol", "gpt-5.5"],
-    "a timed-out transmission is never replayed; only a different helper may be tried");
-  assert.ok(signals.every(signal => signal.aborted), "both timed-out paid attempts are cancelled locally");
+  assert.deepEqual(models, ["gpt-5.6-sol", "gpt-5.5"]);
+  assert.ok(signals.every(signal => signal.aborted), "both incomplete transmissions were cancelled locally");
+  assert.equal(typeof intent.intent, "string", "when all distinct helpers fail, safe heuristic classification remains available");
 });
 
 test("timeout requests cancellation and remains terminal if the provider ignores abort", async t => {
