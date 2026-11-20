@@ -115,3 +115,67 @@ test("required qualification appears in PRIMARY prompt schema and parser agrees"
   assert.match(source, /singleAttempt: true/);
   assert.match(source, /Promise\.allSettled\(judges\.map\(/);
 });
+
+const lindseyCandidates = [
+  { providerName: "openai", modelId: "gpt-5.3-codex" },
+  { providerName: "anthropic", modelId: "claude-sonnet-4-6" },
+  { providerName: "google", modelId: "gemini-2.5-flash" },
+];
+const lindseyRecommendation = {
+  selected: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  selection_justification: "The user is describing a deeply personal relationship. Claude Sonnet 4.6 plausibly supports contextual and emotionally nuanced conversation, while actual comparative outcomes are unverified.",
+  alternatives: [
+    { provider: "openai", model: "gpt-5.3-codex", why_not_selected: "Coding specialization provides no direct evidence of better emotionally nuanced dialogue." },
+    { provider: "google", model: "gemini-2.5-flash", why_not_selected: "Less verified task-specific continuity; comparative quality is unknown." },
+  ],
+  quality_qualification: {
+    required_quality: "Preserve intimate relationship context and respond with emotionally nuanced continuity.",
+    selected_fit: "Claude Sonnet 4.6 has plausible general conversational capability for this personal continuation.",
+    evidence_basis_kind: "reasoned_inference",
+    evidence_basis: "No verifiable selected-model feedback event or measured outcome was supplied; the comparison is reasoned from the conversational requirements.",
+    comparative_uncertainty: "Matched responses and actual comparative user satisfaction are unknown.",
+    cost_after_qualification: "Costs are compared only after evaluating conversational fit and the material quality threshold.",
+  },
+};
+
+test("Nov 20 Lindsey incident accepts source-honest reasoned inference, not unsupported feedback", () => {
+  const accepted = parse(lindseyRecommendation, { candidates: lindseyCandidates });
+  assert.equal(accepted?.selectedProvider, "anthropic");
+  assert.equal(accepted?.selectedModel, "claude-sonnet-4-6");
+  assert.equal(accepted?.selectionComparisons.length, 2);
+  const unsupportedFeedback = {
+    ...lindseyRecommendation,
+    quality_qualification: {
+      ...lindseyRecommendation.quality_qualification,
+      evidence_basis_kind: "attributed_feedback",
+      evidence_basis: "Prior successful conversations proved the user approved Claude Sonnet 4.6.",
+    },
+  };
+  assert.equal(parse(unsupportedFeedback, { candidates: lindseyCandidates }), null,
+    "unsupported prior conversational success has no attributable selected-model source ID");
+  assert.equal(parse({
+    ...unsupportedFeedback,
+    quality_qualification: { ...unsupportedFeedback.quality_qualification,
+      evidence_basis: "The user liked Claude Sonnet 4.6 in invented source_id=feedback-that-does-not-exist." },
+  }, { candidates: lindseyCandidates }), null, "fabricated feedback source IDs do not qualify");
+  assert.equal(parse({
+    ...lindseyRecommendation,
+    quality_qualification: { ...lindseyRecommendation.quality_qualification,
+      evidence_basis_kind: "verified_outcome", evidence_basis: "Unverified conversation continuation was a measured success." },
+  }, { candidates: lindseyCandidates }), null, "unsupported outcome cannot qualify");
+  assert.equal(parse({
+    ...lindseyRecommendation,
+    selected: { provider: "anthropic", model: "imaginary-sonnet" },
+  }, { candidates: lindseyCandidates }), null, "ineligible models remain prohibited");
+  assert.equal(parse({
+    ...lindseyRecommendation,
+    selection_justification: "The user praised this model for the previous response.",
+  }, { candidates: lindseyCandidates }), null, "unsourced praise cannot be laundered as reasoned inference");
+});
+
+test("Best Value judge contract explicitly separates inferred continuity from verified user feedback", () => {
+  assert.match(source, /EVIDENCE CLASSIFICATION \(choose the basis kind from actual trusted provenance/);
+  assert.match(source, /For a message like "lindsey and i told each other EVERYTHING"/);
+  assert.match(source, /Without the selected model's cited feedback event, select reasoned_inference/);
+  assert.match(source, /reasoned_inference: Use when comparing plausible conversational continuity/);
+});
