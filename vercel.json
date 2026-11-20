@@ -52,7 +52,8 @@
       "fix/management-loop-1048": false,
       "fix/paused-expired-window-renewal-1050": false,
       "fix/generated-image-perception-20261116": false,
-      "fix/generated-image-recall-20261116": false
+      "fix/generated-image-recall-20261116": false,
+      "main": false
     }
   }
 }
