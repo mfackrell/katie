@@ -99,3 +99,97 @@ test("all incomplete/failed judgments retain existing safe fallback result", asy
   assert.deepEqual(calls, { openai: 1, anthropic: 1, google: 1 },
     "a rejected structured response must not cause any automatic replay");
 });
+
+/** Four independently qualified judges; the provider names cast votes but never
+ * receive extra weight. No SDK/API transmission is made by these fixtures. */
+async function fourJudgeBallot(grokTimesOut: boolean, priorForA: number, priorForB: number) {
+  const calls: Record<string, number> = {};
+  const prompts = new Map<string,string>();
+  const seen: string[] = [];
+  let resolveAll!: () => void;
+  const allStarted = new Promise<void>(resolve => {resolveAll = resolve;});
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => {release = resolve;});
+  const modelA={provider:"openai" as const,model:"gpt-5.5-pro"};
+  const modelB={provider:"google" as const,model:"gemini-2.5-flash"};
+  const ballot=(winner:typeof modelA | typeof modelB)=>JSON.stringify({
+    selected:winner,
+    selection_justification:"A candidate meets the mocked task requirements; actual comparative outcomes remain unknown.",
+    alternatives:[{...(winner.model===modelA.model?modelB:modelA),
+      why_not_selected:"Existing model evidence and prior score decide this fixture without giving judge providers preference."}],
+    quality_qualification:qualification,
+  });
+  const decisions=[
+    {name:"openai" as const,model:"gpt-4.1-mini",choice:modelA},
+    {name:"anthropic" as const,model:"claude-haiku-5-5",choice:modelA},
+    {name:"google" as const,model:"gemini-2.5-flash",choice:modelB},
+    {name:"grok" as const,model:"grok-4.3",choice:modelB},
+  ];
+  const providers = decisions.map(judge=>({
+    provider: {
+      name:judge.name,
+      listModels:async()=>[judge.model],
+      generate:async (params:import("@/lib/providers/types").ChatGenerateParams)=>{
+        calls[judge.name]=(calls[judge.name]??0)+1;
+        seen.push(judge.name);
+        prompts.set(judge.name,params.user);
+        assert.equal(params.modelId,judge.model);
+        if(seen.length===4) resolveAll();
+        await barrier;
+        if(judge.name==="grok"&&grokTimesOut)
+          throw Object.assign(new Error("Simulated unknown helper timeout; never retry"),{code:"standalone_outcome_unknown"});
+        return {text:ballot(judge.choice),provider:judge.name,model:judge.model};
+      },
+    } as LlmProvider,
+    modelId:judge.model,
+  }));
+  const ranked = mock.method(economics,"rankControlPlaneByActualCost",
+    async(list:unknown[])=>list);
+  try{
+    const running=runWithStandaloneAccounting(owner,()=>chooseRoutingWithLLM({
+      routing_mode:"best_value",prompt:"Select a compatible model for a grounded text response",
+      intent:"general-text",complexity:"low",
+      modalityFlags:{has_images:false,has_video_input:false},
+      hardRouteContext:{hard_rule_applied:false,rule:"none"},
+      preferenceProfile:buildRoutingPreferenceProfile(),
+      candidates:[
+        {...buildCandidateMetadata(modelA.provider,modelA.model,"general-text"),prior_score:priorForA},
+        {...buildCandidateMetadata(modelB.provider,modelB.model,"general-text"),prior_score:priorForB},
+      ],
+      decisionProviders:providers,
+    }));
+    // The four provider calls must all start before any one of them finishes.
+    await Promise.race([allStarted,new Promise<never>((_,reject)=>
+      setTimeout(()=>reject(new Error("Four judges did not launch in parallel")),5000))]);
+    release();
+    const result=await running;
+    return {result,calls,prompts,seen};
+  }finally{release();ranked.mock.restore();}
+}
+
+test("four-judge Grok vote: simultaneous identical payloads, valid JSON and an evidence-ranked 2–2 tie",async()=>{
+  const {result,calls,prompts,seen}=await fourJudgeBallot(false,0,8);
+  assert.equal(result.accepted,true);
+  if(!result.accepted) assert.fail("Valid Grok 4.3 and other judgments must be accepted");
+  assert.equal(result.selected.modelId,"gemini-2.5-flash",
+    "A 2–2 split is resolved by existing candidate evidence/ranking, not the judge provider");
+  assert.deepEqual(seen.sort(),["anthropic","google","grok","openai"]);
+  assert.equal(new Set(prompts.values()).size,1,"identical instructions, candidate inventory and quality evidence");
+  assert.deepEqual(calls,{openai:1,anthropic:1,google:1,grok:1},
+    "each judge receives precisely one independent attempt");
+  const reversed=await fourJudgeBallot(false,8,0);
+  assert.equal(reversed.result.accepted,true);
+  if(!reversed.result.accepted) assert.fail("A qualifying tied judgment must be accepted");
+  assert.equal(reversed.result.selected.modelId,"gpt-5.5-pro",
+    "changing evidence/ranking changes the tie winner without weighting Grok or another judge");
+});
+
+test("one failed Grok judge does not block three independent valid votes or replay inference",async()=>{
+  const {result,calls,prompts}=await fourJudgeBallot(true,0,8);
+  assert.equal(result.accepted,true);
+  if(!result.accepted) assert.fail("Three valid judges must survive an unavailable Grok");
+  assert.equal(result.selected.modelId,"gpt-5.5-pro","existing 2–1 majority wins without Grok");
+  assert.equal(new Set(prompts.values()).size,1);
+  assert.deepEqual(calls,{openai:1,anthropic:1,google:1,grok:1},
+    "a failed judge never triggers a duplicate paid call");
+});

@@ -842,8 +842,8 @@ const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
     "gemini-3.1-pro-latest",
     "gemini-3-pro"
   ],
-  // Grok remains available for generation, but is excluded from strict JSON control-plane work after repeated timeout behavior.
-  grok: []
+  // Grok 4.3 supports the same strict selection-JSON contract as the other judges.
+  grok: ["grok-4.3"]
 };
 
 function isControlPlaneJsonInstructionCompatible(providerName: ProviderName, modelId: string): boolean {
@@ -2464,7 +2464,7 @@ For Best Value selections with multiple eligible candidates, ALL SIX quality_qua
 Do not cite direct feedback or verified outcomes unless actually present in the SELECTED provider:model candidate evidence. If evidence_basis_kind is attributed_feedback, cite the exact source_id and faithfully state whether its outcome was positive, negative or ambiguous; mere continued conversation and lack of complaint are not positive outcomes. Verified outcome citations must reference selected-model observations, never another candidate. Where evidence is only inferred, state that comparative outcome quality is unknown. Do not substitute cost for an adequate-quality finding.
 ` : "";
 
-  // Select three different judge models, preferring independent providers.
+  // Select four different judge models, preferring independent providers.
   // This is a fan-out for EVERY model-selection task, not a serial fallback.
   const judgeModelPreference: Record<ProviderName, string[]> = {
     // Models that can follow the strict judge JSON contract. These are judge
@@ -2472,7 +2472,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     openai: ["gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.5", "gpt-5-mini"],
     anthropic: ["claude-haiku-5-5", "claude-sonnet-5", "claude-opus-5"],
     google: ["gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"],
-    grok: [],
+    grok: ["grok-4.3"],
   };
   const judgePool = [...eligibleDecisionProviders].sort((a, b) => {
     const rank = (candidate: DecisionProviderCandidate) => {
@@ -2486,7 +2486,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
   const seenJudgeModels = new Set<string>();
   const seenJudgeProviders = new Set<ProviderName>();
   for (const candidate of judgePool) {
-    if (judges.length === 3) break;
+    if (judges.length === 4) break;
     const key = `${candidate.provider.name}:${candidate.modelId}`;
     if (seenJudgeProviders.has(candidate.provider.name) || seenJudgeModels.has(key)) continue;
     judges.push(candidate);
@@ -2494,7 +2494,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     seenJudgeProviders.add(candidate.provider.name);
   }
   for (const candidate of judgePool) {
-    if (judges.length === 3) break;
+    if (judges.length === 4) break;
     const key = `${candidate.provider.name}:${candidate.modelId}`;
     if (seenJudgeModels.has(key)) continue;
     judges.push(candidate);
@@ -2652,7 +2652,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`])) : candidateList
   })}`;
 
-  // The three-judge fan-out is for normal standalone Katie conversations.
+  // The four-judge fan-out is for normal standalone Katie conversations.
   // Preserve the existing one-at-a-time decision contract for orchestrated
   // software-building tasks and when fewer than three eligible judges exist.
   if (!neutral || judges.length < 3) {

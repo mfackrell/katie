@@ -5,13 +5,14 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const src = fs.readFileSync("lib/router/model-intent.ts", "utf8");
-test("every regular routing selection launches three independent judges concurrently", () => {
+test("every regular routing selection launches four independent judges concurrently", () => {
  const section=src.slice(src.indexOf("export async function chooseRoutingWithLLM("),src.indexOf("/** Reviewed prices",src.indexOf("export async function chooseRoutingWithLLM(")));
  assert.match(section,/Promise\.allSettled\(judges\.map\(/);
  assert.match(section,/activityOverride: `routing-rerank_judge_\$\{lane\}`/);
  assert.match(section,/singleAttempt: true/);
  assert.match(section,/parse: parseRoutingJudgeResponse/);
- assert.match(section,/if \(judges\.length === 3\) break/);
+ assert.match(section,/if \(judges\.length === 4\) break/);
+ assert.match(section,/grok: \["grok-4.3"\]/);
  assert.doesNotMatch(section,/Promise\.race\(/);
  assert.match(section,/isStandaloneAccountingError\(result\.reason\)/);
 });
@@ -37,7 +38,7 @@ test("selection aggregation uses trusted feedback before votes and never fabrica
   "async function select(validJudgments,args) {\n"+section+"\nreturn result;\n}\nglobalThis.select=select;",
   {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}
  ).outputText;
- const ctx=vm.createContext({Map,Math,Date,judgeStartMs:Date.now(),judges:[{}, {}, {}],console:{info:()=>{}}});
+ const ctx=vm.createContext({Map,Math,Date,judgeStartMs:Date.now(),judges:[{}, {}, {}, {}],console:{info:()=>{}}});
  vm.runInContext(executable,ctx);
  const ballot=(lane,provider,model)=>({lane,provider:"anthropic",modelId:"judge-"+lane,result:{
   selectedProvider:provider,selectedModel:model,selectionJustification:"qualified",selectionComparisons:[]}});

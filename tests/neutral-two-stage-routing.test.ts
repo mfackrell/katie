@@ -42,9 +42,11 @@ for (const mode of ['best_value','best_answer'] as const) {
   for (const fixture of fixtures) test(`${mode}: LLM has both authorities: ${fixture.message}`, async () => {
     const rank = mock.method(economics,'rankControlPlaneByActualCost', async (candidates: unknown[]) => candidates);
     const calls:string[]=[]; let classifierProvider:string|null=null;
+    const judgeInputs=new Map<string,string>();
     const providers = Object.entries(models).map(([name, ids]) => ({name, listModels:async()=>[...ids], generate:async(params) => {
       calls.push(params.user);
       if (params.user.includes('CURRENT_USER_MESSAGE:')) {classifierProvider ??= name; return {text:JSON.stringify(understanding(fixture.message, fixture.intent, fixture.complexity)),provider:name,model:params.modelId!};}
+      judgeInputs.set(name,params.user);
       const payload=JSON.parse(params.user.slice(params.user.lastIndexOf('\n\n')+2));
       assert.equal(payload.routing_mode, mode);
       assert.equal(params.user.includes('BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:'),mode==='best_value');
@@ -62,7 +64,10 @@ for (const mode of ['best_value','best_answer'] as const) {
       const result=await runWithStandaloneAccounting(owner,()=>chooseProvider(fixture.message,fixture.context??'',providers,{
         modelRegistrySnapshot:registry(), routing_mode:mode, actorRoutingProfile:actor, decisionCandidatesPerProvider:1,
       }));
-      assert.equal(calls.length,4,'one source-linked understanding and three independent one-shot judges');
+      assert.equal(calls.length,5,'one source-linked understanding and four independent one-shot judges');
+      assert.notEqual(classifierProvider,'grok','the fourth judge must not change stage-one classifier selection');
+      assert.deepEqual([...judgeInputs.keys()].sort(),['anthropic','google','grok','openai']);
+      assert.equal(new Set(judgeInputs.values()).size,1,'every judge receives exactly the same complete decision payload');
       assert.equal(result.resolvedIntent.intent,fixture.intent);
       assert.equal(result.authority,'llm');
       assert.equal(result.provider.name,'grok','policy must not replace the LLM winner');
@@ -280,6 +285,6 @@ test('user objective, constraints and model-specific outcome evidence reach the 
       assert.equal(result.modelId,'grok-4.3');
       assert.equal(result.resolvedIntent.decisionEvidence?.primary_objective,original);
     }
-    assert.equal(selections,6,'three independent selection judgments per route, without replaying a judge');
+    assert.equal(selections,8,'four independent selection judgments per route, without replaying a judge');
   }finally{rank.mock.restore();evidence.mock.restore();}
 });
