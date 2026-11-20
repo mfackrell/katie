@@ -8,6 +8,7 @@ import {blockedManagementRetestOffer,BLOCKED_RETEST_SOURCE,BLOCKED_RETEST_WINDOW
 import {getMessages} from '@/lib/data/persistence-store';
 import {mission79FutureWindowOffer,MISSION79_ID,MISSION79_ASSIGNMENT} from '@/lib/projects/mission79-future-window';
 import {verifyMission79ActiveProductionSha} from '@/lib/projects/mission79-active-release';
+import {mission79ReleaseIdentityFailure,mission79ReleaseIdentityMessage} from '@/lib/projects/mission79-release-identity';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -121,11 +122,12 @@ export async function POST(request:NextRequest){
   const identity=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
    p_project:p.projectId,p_release:p.releaseSha
   });
-  if(!identity?.active||!Number.isSafeInteger(identity.generation)||identity.generation<=0
-   ||!identity.deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(identity.deploymentId)
-   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID
-   ||identity.generation!==p.releaseGeneration||identity.deploymentId!==p.deploymentId)
-   return NextResponse.json({error:'Deployment identity or release epoch no longer matches the canonical owner window'},{status:409});
+  const releaseFailure=mission79ReleaseIdentityFailure(identity,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(releaseFailure)return NextResponse.json({
+   error:mission79ReleaseIdentityMessage(releaseFailure),code:releaseFailure
+  },{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact authorization release'},{status:409});
   return NextResponse.json(await rpc('project_org_authorize_retest_future_window',{
@@ -156,11 +158,12 @@ export async function POST(request:NextRequest){
   const identity=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{
    p_project:p.projectId,p_release:p.releaseSha
   });
-  if(!identity?.active||!Number.isSafeInteger(identity.generation)||identity.generation<=0
-   ||!identity.deploymentId||!/^dpl_[A-Za-z0-9]+$/.test(identity.deploymentId)
-   ||identity.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID
-   ||identity.generation!==p.releaseGeneration||identity.deploymentId!==p.deploymentId)
-   return NextResponse.json({error:'Deployment identity or release epoch changed before owner binding'},{status:409});
+  const bindingReleaseFailure=mission79ReleaseIdentityFailure(identity,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(bindingReleaseFailure)return NextResponse.json({
+   error:mission79ReleaseIdentityMessage(bindingReleaseFailure),code:bindingReleaseFailure
+  },{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact binding release'},{status:409});
   return NextResponse.json(await rpc('project_org_bind_retest_claim_release',{
