@@ -59,7 +59,19 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
             const renewal=await mission79FutureWindowOffer(p.id);
             return {projectId:p.id,releaseSha:releaseSha!,cutoff:renewal.cutoff??renewal.priorCutoff,
                 priorCutoff:renewal.priorCutoff,receipt:null,mission79FutureWindow:renewal};
-        }catch{ /* No suitable saved source for an explicitly renewed mission79 window. */ }
+        }catch{
+            // Never replace a valid original mission79 recovery with a legacy
+            // approval control just because Vercel moved the canonical alias.
+            // This read-only check cannot change release authority or spend.
+            try{
+                const epoch=await projectRpc<{active:boolean;generation:number;deploymentId:string|null}>(
+                    'project_org_retest_release_epoch',{p_project:p.id,p_release:releaseSha});
+                if(epoch&&Number.isSafeInteger(epoch.generation)&&epoch.generation>0&&epoch.active===false)
+                    return {projectId:p.id,releaseSha:releaseSha!,cutoff:p.deadline,priorCutoff:p.deadline,
+                        receipt:null,managementActivationError:
+                        'Original mission 79 is locked: the current production deployment does not match its recorded security release. A release operator must verify and restore the exact release gate before you can approve a new window. No owner approval was recorded.'};
+            }catch{ /* Retain the existing legacy recovery fallback if epoch lookup is unavailable. */ }
+        }
         try{
             const retest=await blockedManagementRetestOffer(p.id);
             return {projectId:p.id,releaseSha:releaseSha!,cutoff:retest.cutoff,priorCutoff:retest.cutoff,
