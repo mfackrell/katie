@@ -62,7 +62,7 @@ for (const mode of ['best_value','best_answer'] as const) {
       const result=await runWithStandaloneAccounting(owner,()=>chooseProvider(fixture.message,fixture.context??'',providers,{
         modelRegistrySnapshot:registry(), routing_mode:mode, actorRoutingProfile:actor, decisionCandidatesPerProvider:1,
       }));
-      assert.equal(calls.length,2,'separate understanding and selection calls');
+      assert.equal(calls.length,4,'one understanding call plus three independent selection judges');
       assert.equal(result.resolvedIntent.intent,fixture.intent);
       assert.equal(result.authority,'llm');
       assert.equal(result.provider.name,'grok','policy must not replace the LLM winner');
@@ -280,6 +280,6 @@ test('user objective, constraints and model-specific outcome evidence reach the 
       assert.equal(result.modelId,'grok-4.3');
       assert.equal(result.resolvedIntent.decisionEvidence?.primary_objective,original);
     }
-    assert.equal(selections,2,'one evidence-informed selection per route; no extra decision stage');
+    assert.equal(selections,6,'three independently evidenced judge selections per route across two routing modes');
   }finally{rank.mock.restore();evidence.mock.restore();}
 });
