@@ -1379,9 +1379,10 @@ test('diagnostics distinguish actual provider HTTP rate limiting from missing re
     sends++;
     return new Response(JSON.stringify({error:{type:'rate_limit_exceeded',message:'private response body'}}),{status:429});
   },fake.factory);
-  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'trace-rate-limited'},()=>runProviderAttemptTrace({
+  const httpError=await runWithStandaloneAccounting({...context,requestId:'trace-rate-limited'},()=>runProviderAttemptTrace({
     taskName:'routing-rerank',requestId:'trace-rate-limited',provider:'openai',modelId:'gpt-4o',
-  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event))),isStandaloneAccountingError);
+  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event)));
+  assert.equal(httpError.status,429,'real provider rate limit is returned verbatim, never synthesized');
   assert.equal(sends,1);
   assert.equal(fake.attempts[0].state,'uncertain');
   assert.equal(events.find(e=>e.phase==='response_headers_received')?.httpStatus,429);
@@ -1396,9 +1397,10 @@ test('diagnostics distinguish actual provider HTTP rate limiting from missing re
 test('diagnostics mark complete HTTP body and missing provider receipt separately',async()=>{
   const fake=fakeLedger();const events:ProviderTraceEvent[]=[];
   const send=createAccountingFetch('openai',async()=>new Response('{"choices":[]}',{status:200}),fake.factory);
-  await assert.rejects(runWithStandaloneAccounting({...context,requestId:'trace-missing-receipt'},()=>runProviderAttemptTrace({
+  const completed=await runWithStandaloneAccounting({...context,requestId:'trace-missing-receipt'},()=>runProviderAttemptTrace({
     taskName:'routing-rerank',requestId:'trace-missing-receipt',provider:'openai',modelId:'gpt-4o',
-  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event))),isStandaloneAccountingError);
+  },()=>send('https://api.openai.com/v1/chat/completions',request),event=>events.push(event)));
+  assert.equal(completed.status,200,'a complete HTTP body is still returned even when usage reporting is incomplete');
   assert.equal(events.find(e=>e.phase==='response_headers_received')?.httpStatus,200);
   assert.equal(events.at(-1)?.observed?.completeBody,true);
   assert.equal(events.at(-1)?.observed?.receipt,false);
