@@ -1,0 +1,37 @@
+name: Mission79 canonical machine authorization
+on:
+  pull_request:
+    paths:
+      - 'middleware.ts'
+      - 'lib/projects/mission79-active-release.ts'
+      - 'app/api/version/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'tests/mission79-canonical-machine-auth.test.mjs'
+      - 'tests/mission79-runtime-identity-guard.test.mjs'
+      - 'tests/mission79-future-window-runtime.test.mjs'
+      - 'tests/helpers/assert-mission79-browser-postgres.mjs'
+      - '.github/workflows/mission79-canonical-verification.yml'
+permissions:
+  contents: read
+jobs:
+  protected-canonical:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Exact middleware/route machine authentication and owner negative cases
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+        run: |
+          node --test tests/mission79-canonical-machine-auth.test.mjs \
+            tests/mission79-runtime-identity-guard.test.mjs \
+            tests/mission79-future-window-runtime.test.mjs
