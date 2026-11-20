@@ -38,7 +38,12 @@ export function Mission79FutureWindowControl({
     }),
    });
    const result=await response.json();
-   if(!response.ok)throw Error(typeof result.error==="string"?result.error:"Owner window authorization was rejected.");
+   if(!response.ok){
+    // Read-only refresh after a stale release/epoch. Never retry owner consent
+    // automatically or generate a second immutable authorization ID.
+    if(response.status===409)onRefresh();
+    throw Error(typeof result.error==="string"?result.error:"Owner window authorization was rejected.");
+   }
    if(result.projectId!==initial.projectId||result.stage!=="authorized"
     ||result.authorizationId!==authorizationId||result.releaseSha!==initial.releaseSha
     ||result.sourceMissionId!==initial.sourceMissionId
@@ -70,7 +75,10 @@ export function Mission79FutureWindowControl({
      assignmentId:initial.assignmentId,stateHash:initial.stateHash})
    });
    const result=await response.json();
-   if(!response.ok)throw Error(result.error??'Exact released mission cannot be rebound');
+   if(!response.ok){
+    if(response.status===409)onRefresh();
+    throw Error(result.error??'Exact released mission cannot be rebound');
+   }
    if(result.stage!=='bound'||result.projectId!==initial.projectId
     ||result.missionId!==initial.missionId||result.assignmentId!==initial.assignmentId
     ||result.releaseSha!==initial.releaseSha||result.scopeHash!==initial.scopeHash
