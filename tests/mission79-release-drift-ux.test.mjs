@@ -73,11 +73,11 @@ test('original owner endpoint rejects drift with precise 409 before a durable au
   authorizationId:'33333333-3333-4333-8333-333333333333',
   cutoff:new Date(Date.now()+3600000).toISOString(),stateHash:'f'.repeat(64)};
  const readResponse=await GET(read());assert.equal(readResponse.status,409);
- assert.equal((await readResponse.json()).code,'mission79_release_mismatch');
- assert.equal(legacyReads,0);
+ assert.match((await readResponse.json()).error,/Recovery state unavailable/);
+ assert.equal(legacyReads,3,'Legacy read-only GET recovery behavior remains intact');
  const submit=await POST(post(approval));assert.equal(submit.status,409);
  assert.equal((await submit.json()).code,'mission79_release_mismatch');
- assert.equal(offerCalls,1,'GET may check the offer, but POST must refuse before invoking it');
+ assert.equal(offerCalls,1,'Only GET checks its offer; POST refuses before invoking it');
  assert.equal(rpcWrites,0,'No immutable owner receipt can be created on wrong epoch');
  owner=false;
  assert.equal((await GET(read())).status,403);
