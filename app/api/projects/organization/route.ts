@@ -128,7 +128,7 @@ export async function POST(request:NextRequest){
   if(releaseFailure)return NextResponse.json({
    error:mission79ReleaseIdentityMessage(releaseFailure),code:releaseFailure
   },{status:409});
-  if(!await verifyMission79ActiveProductionSha(p.releaseSha))
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact authorization release'},{status:409});
   return NextResponse.json(await rpc('project_org_authorize_retest_future_window',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
@@ -164,7 +164,7 @@ export async function POST(request:NextRequest){
   if(bindingReleaseFailure)return NextResponse.json({
    error:mission79ReleaseIdentityMessage(bindingReleaseFailure),code:bindingReleaseFailure
   },{status:409});
-  if(!await verifyMission79ActiveProductionSha(p.releaseSha))
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
    return NextResponse.json({error:'The canonical Katie production alias no longer serves this exact binding release'},{status:409});
   return NextResponse.json(await rpc('project_org_bind_retest_claim_release',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,
