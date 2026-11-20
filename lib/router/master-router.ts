@@ -780,6 +780,15 @@ export async function chooseProvider(
   }));
 
   const controlPlaneDecisionProviders = selectControlPlaneDecisionModels(modelEntries, registryLookup, traceRequestId);
+  // Grok 4.3 joins only the final model-selection judges. The stage-one
+  // classifier and other control-plane workflows retain their existing pool.
+  const grokJudgeEntry = modelEntries.find(({provider, models}) =>
+    provider.name === "grok" && models.includes("grok-4.3") &&
+    !isBlockedRoutingModel("grok", "grok-4.3") &&
+    buildCandidateMetadata("grok", "grok-4.3", "general-text", {registryLookup}).supports_text);
+  const routingJudgeDecisionProviders = grokJudgeEntry
+    ? [...controlPlaneDecisionProviders, {provider: grokJudgeEntry.provider, modelId: "grok-4.3"}]
+    : controlPlaneDecisionProviders;
   console.info(
     `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"} context_length=${context.length}`
   );
@@ -1260,7 +1269,7 @@ export async function chooseProvider(
       },
       preferenceProfile,
       candidates: llmCandidatesUsed,
-      decisionProviders: controlPlaneDecisionProviders,
+      decisionProviders: routingJudgeDecisionProviders,
       timeoutMs: options?.decisionTimeoutMs,
       registryLookup
     });
