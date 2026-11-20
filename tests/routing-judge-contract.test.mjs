@@ -74,6 +74,8 @@ test("noncritical missing alternatives normalize only for a trusted single-candi
   assert.ok(single, "no alternative exists in the trusted single-candidate inventory");
   assert.equal(single.selectionComparisons.length, 0);
   assert.equal(parse(lone), null, "cannot manufacture alternatives when multiple candidates exist");
+  assert.equal(parse({ ...lone, alternatives: null }, { candidates: [candidates[0]] }), null,
+    "null is not an absent field and is not normalized");
   assert.equal(parse({ ...selection, quality_qualification: qualification, alternatives: "missing" }), null,
     "malformed alternative arrays cannot pass the multi-candidate contract");
 });
