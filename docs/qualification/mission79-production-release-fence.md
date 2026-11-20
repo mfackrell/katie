@@ -14,6 +14,32 @@ On 2026-11-18, the linked Vercel project's **auto-assign custom production domai
 
 This setting prevents **automatic custom-production-domain assignment**, but cannot by itself block a privileged administrator from manually promoting a different deployment. A production retest is permitted only while the release operator actively controls that remaining privilege.
 
+## November 20, 2026: observed Git-production alias drift and durable correction
+
+The `autoAssignCustomDomains=false` Vercel project toggle **did not**
+protect `katie-mu.vercel.app` after manual production promotion.
+Vercel's audit records for unrelated routing PR #1140 show a Git-triggered
+production deployment `dpl_BchPa7SkoBtNH6VdhsUPBHeoedSg` and subsequent
+`aliases-assigned` events for the same deployment, without a corresponding
+`manual-deployment-promotion-created` event. The existing gate stayed OPEN
+for `dpl_Hkcz6Jn8GSmzwY2Qwfrnr8MdupuR`, generation 5. This is **not**
+an owner or browser authorization failure.
+
+The primary release fence is now `vercel.json`:
+`git.deploymentEnabled.main=false`. This prevents Git-integrated automatic
+production deployment on every unrelated `main` merge, while ordinary
+feature-branch Preview deployments remain enabled by Vercel's default.
+The previous branch-specific exclusions and all cron schedules remain.
+
+A future release operator must create a reviewed, exact-SHA production
+deployment through the privileged Vercel release API, only while the SQL
+release gate is CLOSED; then PROMOTE, independently VERIFY the canonical alias,
+and OPEN the exact deployment SHA/ID under the expected generation. GitHub
+`migrate.yml` only runs migrations; its success does not promote a release.
+No automatic GitHub workflow may perform an unreviewed alias assignment.
+A privileged operator can still manually promote; that privilege requires
+the same coordination and cannot be fenced by repository configuration alone.
+
 ## Mandatory operator serialization
 
 1. Confirm separately executed independent security QA **PASS** and full CI **PASS**, both against the final exact PR SHA/tree. Do not merge on a partial or failed gate.
