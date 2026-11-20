@@ -40,22 +40,24 @@ test("control-plane approval failure propagates without fallback", async () => {
   assert.equal(calls, 1);
 });
 
-test("control-plane timeout cancels its attempt without invoking the next decision model", async t => {
+test("control-plane timeout cancels each attempt and permits only a distinct eligible helper", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  let calls = 0;
-  let signal: AbortSignal | undefined;
+  const calledModels: string[] = [];
+  const signals: AbortSignal[] = [];
   const provider: LlmProvider = { name: "openai", listModels: async () => [], generate: async params => {
-    calls++;
-    signal = params.signal;
+    calledModels.push(params.modelId!);
+    signals.push(params.signal!);
     queueMicrotask(() => t.mock.timers.tick(25));
     return new Promise<never>(() => {});
   } };
-  await assert.rejects(inferRequestClassification("review this patch", { hasImages: false }, {
+  const result = await inferRequestClassification("review this patch", { hasImages: false }, {
     timeoutMs: 25,
     decisionProviders: [{ provider, modelId: "gpt-5.6-sol" }, { provider, modelId: "gpt-5.5" }],
-  }), /billing outcome is unknown/);
-  assert.equal(calls, 1);
-  assert.equal(signal?.aborted, true);
+  });
+  assert.ok(result, "unavailable helpers must resolve through existing safe classification fallback");
+  assert.deepEqual(calledModels, ["gpt-5.6-sol", "gpt-5.5"],
+    "a timed-out transmission is never replayed; only a different helper may be tried");
+  assert.ok(signals.every(signal => signal.aborted), "both timed-out paid attempts are cancelled locally");
 });
 
 test("timeout requests cancellation and remains terminal if the provider ignores abort", async t => {
