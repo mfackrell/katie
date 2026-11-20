@@ -103,3 +103,45 @@ test('owner POST refuses absent or mismatched Vercel deployment ID and stale gen
  result=await POST(request());assert.equal(result.status,409);
  assert.equal(writes,1,'No second receipt or duplicate execution window');
 });
+
+test('protected canonical version verification uses only authenticated owner cookie or existing server-side automation credential',async t=>{
+ const keys=['VERCEL_ENV','VERCEL_GIT_COMMIT_SHA','VERCEL_DEPLOYMENT_ID','VERCEL_AUTOMATION_BYPASS_SECRET'];
+ const old=Object.fromEntries(keys.map(k=>[k,process.env[k]]));
+ Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,
+  VERCEL_DEPLOYMENT_ID:deploymentId});
+ delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+ t.after(()=>{for(const k of keys){
+  if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];
+ }});
+ const {verifyMission79ActiveProductionSha}=modules()('@/lib/projects/mission79-active-release');
+ let calls=0, seen=null, version=sha, id=deploymentId;
+ const securedFetch=async(url,options)=>{
+  calls++;seen=options.headers;
+  assert.equal(new URL(url).origin,'https://katie-mu.vercel.app');
+  assert.equal(new URL(url).pathname,'/api/version');
+  assert.equal(options.redirect,'error');
+  const credential=seen.Cookie==='__vercel_jwt=synthetic-owner-cookie'
+   ||seen['x-vercel-protection-bypass']==='synthetic-server-only-bypass';
+  return new Response(JSON.stringify({version,deploymentId:id}),
+   {status:credential?200:401,headers:{'Content-Type':'application/json'}});
+ };
+ assert.equal(await verifyMission79ActiveProductionSha(sha,securedFetch),false);
+ assert.equal(calls,1,'No unauthenticated server-to-server read passes SSO protection');
+ assert.equal(await verifyMission79ActiveProductionSha(sha,securedFetch,
+  '__vercel_jwt=synthetic-owner-cookie'),true);
+ assert.equal(seen.Cookie,'__vercel_jwt=synthetic-owner-cookie');
+ assert.equal(seen['x-vercel-protection-bypass'],undefined);
+ process.env.VERCEL_AUTOMATION_BYPASS_SECRET='synthetic-server-only-bypass';
+ assert.equal(await verifyMission79ActiveProductionSha(sha,securedFetch),true,
+  'Legitimate Vercel automation credential allows unattended worker verification');
+ assert.equal(seen['x-vercel-protection-bypass'],'synthetic-server-only-bypass');
+ assert.equal(seen.Cookie,undefined,'Never forward an owner cookie when the server credential is available');
+ id='dpl_SupersededDeployment';
+ assert.equal(await verifyMission79ActiveProductionSha(sha,securedFetch),false,
+  'Even authenticated protected version response must match the exact deployment');
+ delete process.env.VERCEL_DEPLOYMENT_ID;
+ const previousCalls=calls;
+ assert.equal(await verifyMission79ActiveProductionSha(sha,securedFetch),false,
+  'No credential or public response can replace missing trusted Vercel runtime identity');
+ assert.equal(calls,previousCalls,'Missing runtime ID fails closed before protected fetch');
+});
