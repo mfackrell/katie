@@ -66,6 +66,9 @@ export async function rankControlPlaneByActualCost(
       runWithStandaloneActivity(activity, () => nextStandaloneAttempt());
     }
   }
+  // No candidate can be dispatched. Keep the saved-attempt replay check above,
+  // but do not query accounting prices for an empty technical candidate pool.
+  if (candidates.length === 0) return [];
   const pricing = snapshot ?? await loadStandalonePricing(createStandaloneLedger());
   const priced: Array<{candidate: Candidate; cost: bigint; index: number}> = [];
   const unpriced: Candidate[] = [];
