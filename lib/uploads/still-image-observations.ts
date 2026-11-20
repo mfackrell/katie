@@ -447,6 +447,9 @@ export async function escalateStillImageEvidence(images:string[],question:string
         candidates.push({provider,modelId:model});
     }
   }
+  // An empty capability shortlist cannot authorize a provider. Do not query
+  // pricing or historical exposure simply to discover that there is no work.
+  if(candidates.length===0)throw new StandaloneAccountingError('no_priceable_vision','No technically compatible, configured vision model is available. The saved evidence is insufficient for this question.');
   const params={name:'Katie image observation',persona:'Inspect source images factually. Return only grounded observations and explicit coverage limitations.',summary:'',history:[],images,user:BASE_QUESTION+'\nCURRENT VISUAL QUESTION: '+question};
   const ranked=await rankControlPlaneByActualCost(candidates,params,undefined,'attachment-observation-escalation');
   const selected=ranked[0];
