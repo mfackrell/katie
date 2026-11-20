@@ -181,9 +181,9 @@ test('exact production release binding is a separate owner action after recorded
 });
 
 test('canonical alias verification rejects superseded deployment, redirect and spoofed version',async t=>{
- const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID};
+ const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,CRON_SECRET:process.env.CRON_SECRET};
  process.env.VERCEL_ENV='production';process.env.VERCEL_GIT_COMMIT_SHA=releaseSha;
- process.env.VERCEL_DEPLOYMENT_ID=deploymentId;
+ process.env.VERCEL_DEPLOYMENT_ID=deploymentId;process.env.CRON_SECRET='fixture-cron-secret-for-authority-79';
  t.after(()=>{for(const [k,v] of Object.entries(env)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
  const {verifyMission79ActiveProductionSha}=modules()('@/lib/projects/mission79-active-release');
  let checked=0;
@@ -210,11 +210,11 @@ test('real first-party owner auth and independently resolved production alias ga
  const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY};
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,CRON_SECRET:process.env.CRON_SECRET};
  const oldFetch=globalThis.fetch,oldNow=Date.now;
  Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId,
   KATIE_OWNER_AUTH_USER_ID:ownerId,NEXT_PUBLIC_SUPABASE_URL:'https://auth.example.test',
-  NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon'});
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon',CRON_SECRET:'fixture-cron-secret-for-authority-79'});
  Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
  t.after(()=>{globalThis.fetch=oldFetch;Date.now=oldNow;for(const [k,v] of Object.entries(env)){
   if(v===undefined)delete process.env[k];else process.env[k]=v;
@@ -267,11 +267,11 @@ test('real bearer and canonical alias jointly gate mission79 release binding',as
  const env={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID,
   KATIE_OWNER_AUTH_USER_ID:process.env.KATIE_OWNER_AUTH_USER_ID,
   NEXT_PUBLIC_SUPABASE_URL:process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY};
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,CRON_SECRET:process.env.CRON_SECRET};
  const oldFetch=globalThis.fetch,oldNow=Date.now;
  Object.assign(process.env,{VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:releaseSha,VERCEL_DEPLOYMENT_ID:deploymentId,
   KATIE_OWNER_AUTH_USER_ID:ownerId,NEXT_PUBLIC_SUPABASE_URL:'https://auth.example.test',
-  NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon'});
+  NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public-anon',CRON_SECRET:'fixture-cron-secret-for-authority-79'});
  Date.now=()=>Date.parse('2026-11-18T16:00:00Z');
  t.after(()=>{globalThis.fetch=oldFetch;Date.now=oldNow;for(const [k,v] of Object.entries(env)){
   if(v===undefined)delete process.env[k];else process.env[k]=v;
