@@ -101,10 +101,16 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
       const stepTimeout = () => Math.max(1, Math.min(deployed?20_000:10_000, deadline - Date.now()));
       let assertions = 0;
       try {
-        await page.goto(origin + contract.path, { waitUntil: 'domcontentloaded', timeout: stepTimeout() });
+        // DOMContentLoaded is not proof that Next.js has hydrated its client
+        // event handlers. Under CI load a visible button can be clicked before
+        // React attaches onClick, yielding a false functional failure. Wait for
+        // same-origin subresources to settle; never retry a click or relax any
+        // rendered-state assertion. Bound this by the existing scenario deadline.
+        const navigationReady = deployed ? 'domcontentloaded' : 'networkidle';
+        await page.goto(origin + contract.path, { waitUntil: navigationReady, timeout: stepTimeout() });
         for (const step of scenario.steps) {
           if (Date.now() >= deadline) throw Error('Total browser deadline exceeded');
-          if (step.action === 'goto') await page.goto(origin + step.path, { waitUntil: 'domcontentloaded', timeout: stepTimeout() });
+          if (step.action === 'goto') await page.goto(origin + step.path, { waitUntil: navigationReady, timeout: stepTimeout() });
           else {
             const target = page.locator(step.selector);
             if (step.action === 'click') await target.click({ timeout: stepTimeout() });
