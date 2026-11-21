@@ -84,7 +84,11 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   // for this one-claim test using only disposable row ordering, as existing
   // original Mission79 native qualifications already do.
   await db.query('reset role');
-  await db.query("update mission_assignments set created_at='1800-01-01T00:00:00Z' where id=$1",[assignmentId]);
+  // In production the owner POST commits before cron begins a NEW
+  // transaction. This single-transaction fixture's now() is frozen at BEGIN,
+  // before the owner's clock_timestamp() enqueue, so make available_at
+  // visible to its synthetic follow-on scheduler transaction.
+  await db.query("update mission_assignments set created_at='1800-01-01T00:00:00Z',available_at=now() where id=$1",[assignmentId]);
   await db.query('set role service_role');
   // Confirm original job is SELECT-eligible before the scheduler call;
   // diagnostics are synthetic fixture IDs/status only, never a provider call.
