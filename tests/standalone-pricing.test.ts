@@ -202,7 +202,20 @@ describe("verified Claude five-minute cache writes",()=>{
     for(const [model,write,expected] of [["claude-sonnet-4-5","3750","4065"],["claude-haiku-4-5","1250","1355"],["claude-sonnet-4-6","3750","4065"],["claude-opus-4-6","6250","6775"],["claude-sonnet-5-5","2500","2680"],["claude-opus-5-5","5000","5360"]]) {
       const price=getModelPrice("anthropic",model)!;expect(price.cacheWrite5mNanoUsd).toBe(write);expect(priceTokenUsage(price,1000,100,300,500)).toBe(expected);expect(estimatePreparedRequest(prepare(model)).status).toBe("estimated");
     }
-    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-11-05-v4");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
+    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-11-21-v5");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
+  });
+  it("prices Claude Haiku 5.5 with the documented 100,000-token threshold and cache dimensions",()=>{
+    const haiku=getModelPrice("anthropic","claude-haiku-5-5")!;
+    expect(haiku).toBeDefined();
+    expect(haiku.source).toBe("https://platform.claude.com/docs/en/models/haiku-5-5/overview");
+    expect(haiku.maxContextTokens).toBe(1000000);
+    expect(haiku.maxOutputTokens).toBe(128000);
+    expect(priceTokenUsage(haiku,100000,100)).toBe("10050");
+    expect(priceTokenUsage(haiku,100001,100)).toBe("50251");
+    expect(priceTokenUsage(haiku,1000,100,300,500)).toBe("136");
+    expect(haiku.tiers?.[0]).toMatchObject({aboveInputTokens:100000,inputNanoUsd:"500",outputNanoUsd:"2500",cachedInputNanoUsd:"50",cacheWrite5mNanoUsd:"625"});
+    expect(estimatePreparedRequest(prepare("claude-haiku-5-5")).status).toBe("estimated");
+    expect(getModelPrice("anthropic","claude-haiku-5-5-guessed-alias")).toBeUndefined();
   });
   it("reserves the full-input write allowance plus output without assuming a hit",()=>{
     const request=prepare(),quote=estimatePreparedRequest(request);const body=JSON.parse(JSON.stringify(request.payload));delete body.system[0].cache_control;const uncached=freezePreparedRequest(request.provider,request.model,request.endpoint,body),baseline=estimatePreparedRequest(uncached);
