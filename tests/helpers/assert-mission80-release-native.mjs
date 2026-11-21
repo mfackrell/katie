@@ -102,6 +102,13 @@ export async function assertMission80ReleaseNative(db,{project,missionId,assignm
   assert.deepEqual(original,{status:'completed',calls:2});
   assert.equal(before.status,'completed');assert.equal(before.attempts,2);
   await db.query('set role service_role');
+  if(process.env.KATIE_TEST_MISSION80_WATCHDOG==='1'){
+   const {assertMission80WatchdogNative}=await import('./assert-mission80-watchdog-native.mjs');
+   await assertMission80WatchdogNative(db,{
+    project,missionId,assignmentId,release,generation,deployment,
+    m80:M80,j80:J80,owner:authority.owner_id,decisionId:decision
+   });
+  }
   const claimed=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
   assert.equal(claimed?.job?.id,J80,'Only normal scheduler claims original Mission80 assignment');
   assert.equal(claimed?.job?.attempts,1);assert.ok(claimed?.job?.lease);
