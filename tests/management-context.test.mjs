@@ -185,3 +185,128 @@ test('shared acceptance contracts are referenced losslessly and historical decis
  assert.ok(!JSON.stringify(ctx).includes('Archived repeated contract'));
  assert.equal(ctx.organization[0].objective,x.scopedNodes[1].objective);
 });
+
+
+// The persisted original Mission83 failure, at the management-context boundary
+// before any provider request. The bulk content below is synthetic: it matches
+// the measured production 40-exception/5-outcome/13-node shape and the observed
+// 49,693-character reconstructed overflow, but is NOT the unretained provider
+// prompt or an invented raw model response.
+test('Mission83 saved pre-inference overflow: exact lossless references fit 48k with all 40 open exceptions and 5 assignment outcomes',()=>{
+ const failed={missionId:'2289146a-5728-40e7-bc05-79c5c0bed12d',
+  assignmentId:'95118a8e-8db5-465c-a8d7-98e35631ba30',
+  attempts:1,providerCalls:0,missionStatus:'blocked',assignmentStatus:'failed',
+  detail:'Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.',
+  diagnostic:{stage:'work',errorType:'Error',acceptedIssue:false}};
+ const x=fixture();
+ const root=node('root',null,'project_director',{
+  objective:'Original same-device tic-tac-toe owner goal: preserve gameplay and original approval. '.repeat(6),
+  acceptance:['Approved outcome and same-commit independent acceptance evidence']});
+ const qa=node('qa','root','manager',{
+  objective:'Independently verify the original browser game on its protected Preview.',
+  acceptance:['Independent same-commit QA','No forbidden features','Evidence-backed acceptance']});
+ const planning=node('qa-planning','qa','manager',{objective:'Coordinate QA planning in original authority',acceptance:['QA planning evidence','No development authority']});
+ const execution=node('qa-execution','qa','manager',{objective:'Coordinate QA execution in original authority',acceptance:['Same-commit executed checks','No development authority']});
+ for(const n of [qa,planning,execution]){
+  n.management_contract={
+   purpose:'Verified independent scope',
+   objectives:[n.objective],acceptance:structuredClone(n.acceptance),
+   deliverables:['Authenticated, independently testable result'],
+   reporting:n.id==='qa'?'Project Director':'QA Functional Director'
+  };
+ }
+ x.principalId='qa';
+ x.topology=[root,qa,planning,execution,...Array.from({length:9},(_,i)=>node('other-'+i,'root'))];
+ x.scopedNodes=[root,qa,planning,execution];
+ const contract={path:'/milestone-3-tic-tac-toe',
+  scenarios:[{name:'Saved owner game test contract',steps:[{action:'expectText',selector:'#status',value:'X first'}]}],
+  immutableAcceptance:'The exact approved input and on-page acceptance criteria must remain available. '.repeat(49)};
+ x.project={objective:root.objective,approved_hash:'approved-original-scope',phase:'development',
+  deadline:'2026-11-22T14:00:00Z',milestone_index:0,
+  spec:{requirements:['Original owner gameplay and independent same-commit acceptance'],allowedPaths:['app/milestone-3-tic-tac-toe/'],
+   milestones:[{instruction:'Implement the original approved game',contract}],finalContract:contract}};
+ x.plans=[{node_id:'qa',purpose:'Preserve independent QA of approved milestone',direction:'Exact QA scope and verification requirements'},
+  {node_id:'qa-planning',purpose:'Delegate QA planning',direction:'Use authenticated approved evidence'}];
+ x.dependencies=[];x.scopeGrants=[];
+ x.executionTeam=[{id:'qa-agent',config:{name:'QA',research:true,reviewMode:'always'}},
+  {id:'game-agent',config:{name:'Game Delivery',development:true}},
+  {id:'root-agent',config:{name:'Project Director',reviewMode:'always'}}];
+ const identical='Management session failed twice; saved decisions and charges retained.';
+ x.exceptions=Array.from({length:40},(_,i)=>({
+  id:'saved-exception-'+i,owner_id:i%2?'qa':'qa-planning',origin_id:i%2?'qa-planning':'qa-execution',
+  status:'open',reason:i<26?'objective':'routine',
+  detail:i<26?identical:'Specific independent QA evidence and unresolved correction '+i+': '+('Unverified subordinate outcome. '.repeat(13)),
+  created_at:'2026-11-13T20:00:00Z'
+ }));
+ x.bindings=[
+  {assignment_id:failed.assignmentId,node_id:'qa',created_at:'2026-11-21T20:36:39Z'},
+  {assignment_id:'qa-plan-accepted',node_id:'qa-planning',created_at:'2026-11-14T20:00:00Z'},
+  {assignment_id:'qa-plan-failed',node_id:'qa-planning',created_at:'2026-11-15T20:00:00Z'},
+  {assignment_id:'qa-exec-accepted',node_id:'qa-execution',created_at:'2026-11-14T20:00:00Z'},
+  {assignment_id:'qa-exec-failed',node_id:'qa-execution',created_at:'2026-11-15T20:00:00Z'},
+ ];
+ x.statuses=x.bindings.map(b=>({id:b.assignment_id,status:b.assignment_id===failed.assignmentId||b.assignment_id.endsWith('failed')?'failed':'completed'}));
+ x.evidence=x.bindings.map(b=>({id:b.assignment_id,
+  status:x.statuses.find(z=>z.id===b.assignment_id).status,role:'work',mission_id:b.assignment_id===failed.assignmentId?failed.missionId:'saved-qa-mission',
+  instruction:'Make bounded management decisions. Delegate all technical execution.',
+  payload:{organizationNodeId:b.node_id},
+  result:b.assignment_id===failed.assignmentId?{detail:failed.detail,diagnostic:failed.diagnostic}:{output:'Accepted subordinate decision',decisionId:'saved-decision-'+b.assignment_id}
+ }));
+ x.decisions=Array.from({length:6},(_,i)=>({id:'decision-'+i,node_id:i%2?'qa-planning':'qa',
+  assignment_id:i%2?'qa-plan-accepted':failed.assignmentId,created_at:'2026-11-12T14:00:00Z',
+  decision:[{action:'reject',nodeId:'qa-planning',reason:'Original bounded management decision reasoning and evidence '.repeat(5)}]}));
+ // Pad only a synthetic plan field to the verified current-snapshot size.
+ // The historical failed request was never saved, so no original raw prompt
+ // bytes are claimed or written to the repository.
+ const before0=buildManagementDecisionContext(x,100000);
+ const padding=49693-before0.length;
+ assert.ok(padding>0&&padding<20000,'Synthetic preflight shape must match the observed production size without huge artificial contracts');
+ x.plans[0].direction+='Z'.repeat(padding);
+ const original=buildManagementDecisionContext(x,100000);
+ assert.equal(original.length,49693,'Measured current reconstructed QA context before compression');
+ assert.ok(original.length>48000,'Original production 48k size check would fail before provider dispatch');
+ const compactText=buildManagementDecisionContext(x,48000);
+ assert.ok(compactText.length<48000,'All required evidence now fits the existing limit');
+ const originalContext=JSON.parse(original),compact=JSON.parse(compactText);
+ assert.equal(compact.exceptions.length,40);
+ assert.equal(compact.exceptions.filter(e=>e.status==='open').length,40);
+ assert.equal(compact.evidence.length,5);
+ assert.ok(compact.evidence.some(e=>e.id===failed.assignmentId&&e.result.detail===failed.detail));
+ assert.equal(compact.principal.objective,qa.objective,'SMART issuing manager objective remains verbatim');
+ assert.equal(compact.reporting.organizationNodeCount,13);
+ assert.deepEqual(compact.project.approvedContract.currentMilestone.contract,contract);
+ assert.ok(compact.exceptions.some(e=>Number.isInteger(e.detailRef)));
+ assert.match(compact.contextReferencePolicy,/Resolve every/);
+ const exact=structuredClone(compact);
+ const resolvePointer=pointer=>{
+  assert.match(pointer,/^#\//);
+  return pointer.slice(2).split('/').map(v=>v.replace(/~1/g,'/').replace(/~0/g,'~'))
+   .reduce((o,key)=>o[key],compact);
+ };
+ for(const k of ['principal',...compact.organization.map((_,i)=>'organization.'+i)]){
+  const n=k==='principal'?exact.principal:exact.organization[Number(k.split('.')[1])];
+  const m=n.management_contract;
+  if(Array.isArray(m?.objectives))m.objectives=m.objectives.map(v=>v&&typeof v==='object'&&v.$ref?resolvePointer(v.$ref):v);
+  if(m?.acceptance&&typeof m.acceptance==='object'&&!Array.isArray(m.acceptance)&&m.acceptance.$ref)
+   m.acceptance=resolvePointer(m.acceptance.$ref);
+ }
+ if(exact.reporting.immediateSuperior?.objective?.$ref)
+  exact.reporting.immediateSuperior.objective=resolvePointer(exact.reporting.immediateSuperior.objective.$ref);
+ for(const e of exact.exceptions)if(e.detailRef!==undefined){
+  e.detail=compact.exceptions[e.detailRef].detail;
+  delete e.detailRef;
+ }
+ delete exact.contextReferencePolicy;
+ assert.deepEqual(exact,originalContext,'All current node contracts, exception IDs/details, outcomes, original owner contract and authority round-trip without information loss');
+ assert.equal(failed.providerCalls,0);
+ console.log('MISSION83_CONTEXT_LOSSLESS_PASS '+JSON.stringify({
+  originalChars:original.length,compactChars:compactText.length,limitChars:48000,
+  savedChars:original.length-compactText.length,openExceptions:compact.exceptions.length,selectedAssignmentResults:compact.evidence.length,
+  paidProviderCalls:0}));
+});
+
+test('a uniquely oversized unresolved exception still fails closed without truncation or a paid model call',()=>{
+ const x=fixture();
+ x.exceptions.push({id:'unique-unrepresentable',origin_id:'game',owner_id:'root',status:'open',detail:'Mandatory exact evidence: '+'E'.repeat(95000)});
+ assert.throws(()=>buildManagementDecisionContext(x,48000),/Required management decision evidence exceeds bounded context/);
+});
