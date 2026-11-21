@@ -21,10 +21,11 @@ export function rankBestValueFallbackCandidates<T extends {
   prompt: string;
   context: string;
 }): Array<T & { modeledCostMicrousd: string | null; requiredDepth: "low" | "medium" | "high" }> {
-  const highDepthIntents: RequestIntent[] = [
-    "architecture-review", "technical-debugging", "code-review",
-    "multimodal-reasoning", "assistant-reflection"
-  ];
+  // Stage-one assesses the actual request, not just its intent label. Even
+  // self-criticism, coding and theology can be quick or deeply demanding.
+  // Only genuinely multimodal synthesis requires a conservative high-depth
+  // fallback when selection judges cannot supply task-specific evidence.
+  const highDepthIntents: RequestIntent[] = ["multimodal-reasoning"];
   // Without a trustworthy stage-one complexity assessment, do not assert a
   // short message is easy. Default to medium; even a terse continuation can be
   // contextually demanding. A verified low-complexity classification can
