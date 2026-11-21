@@ -118,6 +118,27 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   const extra=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',
    [retrySha,generation,deployment])).rows[0].c;
   assert.notEqual(extra?.job?.id,assignmentId,'No second simultaneous worker lease');
+  // The old release receipt cannot terminalize a second lease on the new
+  // generation. Test the guarded no-third-retry expiry path in SAVEPOINT.
+  await db.query('savepoint retry_second_lease_expiry');
+  try{
+   await db.query('reset role');
+   await db.query("update mission_assignments set lease_until=clock_timestamp()-interval '10 seconds' where id=$1",[assignmentId]);
+   await db.query('set role service_role');
+   assert.equal((await db.query('select project_org_mission79_retry_settle_expired() ok')).rows[0].ok,true);
+   const settled=(await db.query('select status,attempts,lease from mission_assignments where id=$1',[assignmentId])).rows[0];
+   assert.equal(settled.status,'failed');assert.equal(settled.attempts,2);assert.equal(settled.lease,null);
+   assert.equal((await db.query('select project_org_mission79_retry_settle_expired() ok')).rows[0].ok,false,'Settlement is one-time');
+   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',
+    [project,retrySha,generation,deployment])).rows[0].ok,false,'No third claim after expired attempt two');
+   const receipt=(await db.query('select project_org_mission79_retry_offer($1,$2,$3) r',[owner,project,retrySha])).rows[0].r;
+   assert.equal(receipt.stage,'terminal','Immutable receipt remains spent and visible');
+   console.log('MISSION79_SECOND_LEASE_EXPIRY_TERMINAL_NO_THIRD_PASS');
+  }finally{
+   await db.query('rollback to savepoint retry_second_lease_expiry');
+   await db.query('release savepoint retry_second_lease_expiry');
+   await db.query('set role service_role');
+  }
   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,79);
   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
   console.log('MISSION79_SINGLE_RETRY_NATIVE_PASS: owner, replay, release, cutoff, immutable prior failure, one scheduler lease and no third claim');
