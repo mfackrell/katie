@@ -270,10 +270,18 @@ try {
   await composer.fill("");
   const longTyping = await probeInput("160-message history");
   await composer.fill("Quick Enter should send without waiting for draft debounce.");
+  // The progress indicator can render before the asynchronous request is
+  // transmitted. Assert against the actual intercepted /api/chat payload,
+  // not a spinner that may belong to an earlier recovery cycle.
   await composer.press("Enter");
-  await page.getByLabel("Katie response progress", { exact: true }).waitFor();
+  await page.waitForFunction(
+    () => window.__lastChatPayload?.message !== undefined,
+    null,
+    { timeout: 10_000 },
+  );
   const sent = await page.evaluate(() => window.__lastChatPayload?.message);
   if (sent !== "Quick Enter should send without waiting for draft debounce.") throw new Error("Enter submitted stale composer text: " + sent);
+  await page.getByLabel("Katie response progress", { exact: true }).waitFor();
   await page.evaluate(() => { window.__finishPresentationStream(); window.__closePresentationStream(); });
   await page.getByLabel("Katie response progress", { exact: true }).waitFor({state:"hidden"});
   // Regression: a lost in-flight response stream must recover the exact
