@@ -125,7 +125,7 @@ test('guest cannot invoke executive, project or repository inspection execution'
   assert.match(source,/if\(principal\.isAnonymous \|\| principal\.id!==process\.env\.KATIE_OWNER_AUTH_USER_ID\)/);
   assert.match(source,/const selfInspectionRequest = !isGuestSession && isExplicitKatieSelfInspectionRequest\(message\)/);
   assert.match(source,/const savedBenchmarkProject = !isGuestSession && !currentAgentTask\(\)/);
-  assert.match(source,/const projectReply = !isGuestSession && !pdfProgress\.projectClarification/);
+  assert.match(source,/const projectReply = !sexualBoundaryRefusal && !isGuestSession && !pdfProgress\.projectClarification/);
 });
 
 test('explicit owner sign-out replaces the owner cookie instead of silently reusing it',async t=>{
