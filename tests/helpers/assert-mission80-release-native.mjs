@@ -75,10 +75,22 @@ export async function assertMission80ReleaseNative(db,{project,missionId,assignm
    await db.query('savepoint mission80_invalid');
    try{
     await db.query('reset role');
-    await db.query(update);
+    let immutableDenial=null;
+    try{await db.query(update);}
+    catch(e){immutableDenial=e;}
+    if(immutableDenial){
+     // Existing immutable source controls may reject mutation before the new
+     // release predicate is evaluated. That is the stronger fail-closed case.
+     assert.match(immutableDenial.message,/immutable|deadline|owner-approved scope|not allowed/i);
+    }else{
+     await db.query('set role service_role');
+     assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,false);
+    }
+   }finally{
+    await db.query('rollback to savepoint mission80_invalid');
+    await db.query('release savepoint mission80_invalid');
     await db.query('set role service_role');
-    assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,false);
-   }finally{await db.query('rollback to savepoint mission80_invalid');await db.query('release savepoint mission80_invalid');await db.query('set role service_role');}
+   }
   };
   await rejectedMutation("update agent_missions set project_evidence=project_evidence||'{\"providerContinuationDecision\":\"00000000-0000-0000-0000-000000000000\"}'::jsonb where id='"+M80+"'");
   await rejectedMutation("update work_projects set deadline=clock_timestamp()-interval '1 minute' where id='"+project+"'");
