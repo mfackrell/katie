@@ -1441,6 +1441,11 @@ async function executeChat(request: NextRequest) {
             });
           }
         }
+        // Idempotent replay must not re-expose a previously saved explicit response.
+        const replayBlocked = ownerSexualBoundaryEnabled && (
+          isOwnerEroticRequest(message, history) ||
+          looksLikeEroticAssistantOutput(idempotencyClaim.record.assistantContent ?? "")
+        );
         const replayBody = [
           JSON.stringify({
             type: "metadata",
@@ -1452,9 +1457,9 @@ async function executeChat(request: NextRequest) {
           JSON.stringify({
             type: "content",
             messageId: idempotencyClaim.record.assistantMessageId,
-            text: idempotencyClaim.record.assistantContent ?? "",
-            ...(replayPresentation ? { presentation: replayPresentation } : {}),
-            assets: idempotencyClaim.record.assistantAssets,
+            text: replayBlocked ? OWNER_SEXUAL_BOUNDARY_REPLY : idempotencyClaim.record.assistantContent ?? "",
+            ...(!replayBlocked && replayPresentation ? { presentation: replayPresentation } : {}),
+            assets: replayBlocked ? [] : idempotencyClaim.record.assistantAssets,
             provider: "replay",
             model: idempotencyClaim.record.assistantModel ?? "unknown",
           }),
@@ -1617,9 +1622,11 @@ async function executeChat(request: NextRequest) {
         hasReadableText: Boolean(newAttachments[0].extractedText?.trim() || newAttachments[0].extractedChunks?.some(chunk => chunk.text.trim())),
       });
       if (pdfProgress.projectClarification) await saveTaskProgress(actorId, chatId, pdfProgress);
-      const localResponseText = localKatieResponse.reason === "memory-update"
+      const localRawResponseText = localKatieResponse.reason === "memory-update"
         ? await handleExplicitMemoryMutation(actorId, chatId, localUserMessageId, message)
         : localKatieResponse.text;
+      const localResponseText = ownerSexualBoundaryEnabled && looksLikeEroticAssistantOutput(localRawResponseText)
+        ? OWNER_SEXUAL_BOUNDARY_REPLY : localRawResponseText;
       await saveMessage(chatId, {
         id: localAssistantMessageId,
         role: "assistant",
@@ -4216,7 +4223,7 @@ ${chunkWorkflowSummary}`;
               : { text: boundedAssistantText, presentation: null };
             const assistantText = presentationResult.text;
             const assistantPresentation = presentationResult.presentation;
-            if (presentationFilter && reviewMode !== "always") {
+            if (presentationFilter && reviewMode !== "always" && !ownerSexualBoundaryEnabled) {
               const tail = presentationFilter.finish();
               if (tail) emitChunk({ type: "delta", text: tail });
             }
