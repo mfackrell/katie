@@ -1,0 +1,38 @@
+name: Mission80 exact downstream release authorization
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261121181500_mission80_release_continuation.sql'
+      - 'tests/mission80-release-postgres.test.mjs'
+      - 'tests/helpers/assert-mission80-release-native.mjs'
+      - 'tests/helpers/assert-mission79-watchdog-native.mjs'
+      - '.github/workflows/mission80-release-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  mission80-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install isolated native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Exact Mission80 predecessor, release identity, owner lineage and scheduler one-lease proof
+        run: node --test tests/mission80-release-postgres.test.mjs

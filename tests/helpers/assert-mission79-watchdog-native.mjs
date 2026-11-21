@@ -103,6 +103,11 @@ export async function assertMission79WatchdogNative(db,{project,owner,missionId,
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,nextSha,nextGeneration,nextDeployment])).rows[0].ok,false,'No third attempt');
   const other=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[nextSha,nextGeneration,nextDeployment])).rows[0].c;
   assert.notEqual(other?.job?.id,assignmentId,'Same worker cannot get two leases');
+  if(process.env.KATIE_TEST_MISSION80_CONTINUATION==='1'){
+   const {assertMission80ReleaseNative}=await import('./assert-mission80-release-native.mjs');
+   await assertMission80ReleaseNative(db,{project,missionId,assignmentId,
+    release:nextSha,generation:nextGeneration,deployment:nextDeployment});
+  }
   console.log('MISSION79_WATCHDOG_RACE_NATIVE_PASS: stale watchdog block, owner recovery, new release, one actual lease, zero third attempts');
  }finally{
   await db.query('rollback to savepoint watchdog_recovery_trial');
