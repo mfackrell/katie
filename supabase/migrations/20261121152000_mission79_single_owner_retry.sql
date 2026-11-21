@@ -90,8 +90,8 @@ BEGIN
   OR prior.assignment_id IS DISTINCT FROM j.id
   OR prior.execution_attempt IS DISTINCT FROM '366cee0b-283b-47d6-99b5-afe90ce0baf8'
   OR prior.operation<>'inference' OR prior.resolved_at IS NULL
-  OR (SELECT count(*) FROM project_provider_requests x
-      WHERE x.assignment_id=j.id AND x.operation='inference')<>1
+  OR (receipt.project_id IS NULL AND (SELECT count(*) FROM project_provider_requests x
+      WHERE x.assignment_id=j.id AND x.operation='inference')<>1)
  THEN RAISE EXCEPTION 'Original Mission79 owner, project, release or prior inference evidence changed';END IF;
  IF receipt.project_id IS NOT NULL THEN
   IF receipt.owner_id IS DISTINCT FROM p_owner
