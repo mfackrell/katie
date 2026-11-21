@@ -187,6 +187,29 @@ GRANT EXECUTE ON FUNCTION public.project_org_mission79_watchdog_recover(uuid,uui
 DO $patch$
 DECLARE s text;t text;
 BEGIN
+ -- Operator CLOSE and subsequent OPEN must not strand this exact one paid
+ -- retry while the watchdog-blocked project is wholly unable to run. Keep the
+ -- global lock, the active-lease prohibition, project limits, and all other
+ -- release predicates unchanged. No release migration grants execution.
+ SELECT pg_get_functiondef('public.project_org_retest_set_release_gate(uuid,text,text,text,bigint)'::regprocedure) INTO s;
+ IF (length(s)-length(replace(s,'and (j.lease is not null or j.lease_until is not null','')))/length('and (j.lease is not null or j.lease_until is not null')<>1
+ THEN RAISE EXCEPTION 'Unexpected protected release operator lease fence';END IF;
+ t:=replace(s,'and (j.lease is not null or j.lease_until is not null',
+  'and NOT (j.id=''85e229aa-e571-43ef-9d4a-5cb64f4efcd1''::uuid'||
+  ' and m.id=''b7c2e557-83e1-41cb-b174-bdb0d77d12e5''::uuid'||
+  ' and j.status=''queued'' and j.attempts=1 and j.lease is null and j.lease_until is null'||
+  ' and m.status=''running'' and m.calls=1 and p.status=''blocked'' and p.active_mission_id=m.id'||
+  ' and p.deadline>clock_timestamp()+interval ''5 minutes'''||
+  ' and exists (select 1 from project_mission79_retry_receipts r'||
+  ' where r.project_id=p.id and r.assignment_id=j.id and r.mission_id=m.id'||
+  ' and r.release_sha=g.release_sha and r.release_generation=g.generation - CASE WHEN g.state=''closed'' THEN 1 ELSE 0 END'||
+  ' and r.deployment_id=g.deployment_id and r.prior_attempts=1 and r.prior_calls=1)'||
+  ' and not project_provider_request_pending(p.id))'||
+  chr(10)||'   and (j.lease is not null or j.lease_until is not null');
+ IF t=s OR position('not project_provider_request_pending(p.id))' IN t)=0
+ THEN RAISE EXCEPTION 'Protected release gate queued retry handoff substitution failed';END IF;
+ EXECUTE t;
+
  SELECT pg_get_functiondef('public.project_org_mission79_retry_authorize(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text)'::regprocedure) INTO s;
  IF (length(s)-length(replace(s,'UPDATE work_projects'||chr(10)||'  SET status=''running'',updated_at=stamp,','')))/length('UPDATE work_projects'||chr(10)||'  SET status=''running'',updated_at=stamp,')<>1
  THEN RAISE EXCEPTION 'Unexpected original owner retry project status contract';END IF;
