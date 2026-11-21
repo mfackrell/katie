@@ -105,7 +105,7 @@ function prepared(f:Case, mode=f.mode??'best-answer', overrides:{
     taskProgressContext:'',resumptionContext:'',visualContinuity:null,
   };
   const environment:Record<string,unknown>={
-    cacheablePersona:'Katie actor voice',conversationCacheKey:()=> 'offline-cache',
+    ownerSexualBoundaryEnabled:false,cacheablePersona:'Katie actor voice',conversationCacheKey:()=> 'offline-cache',
     actorId:f.current.actor_id??'actor-fixture',chatId:f.current.chat_id??'chat-fixture',
     requestId:'current-request',name:'Katie',personaForGeneration:'Katie actor voice',
     storedWebsite:{fresh:false,context:'',previousWebsiteEvidence:undefined},
