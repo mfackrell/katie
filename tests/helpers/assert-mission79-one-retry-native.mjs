@@ -84,8 +84,23 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   // for this one-claim test using only disposable row ordering, as existing
   // original Mission79 native qualifications already do.
   await db.query('reset role');
-  await db.query("update mission_assignments set created_at='2000-01-01T00:00:00Z' where id=$1",[assignmentId]);
+  await db.query("update mission_assignments set created_at='1800-01-01T00:00:00Z' where id=$1",[assignmentId]);
   await db.query('set role service_role');
+  // Confirm original job is SELECT-eligible before the scheduler call;
+  // diagnostics are synthetic fixture IDs/status only, never a provider call.
+  const candidates=(await db.query("select a.id,a.created_at,b.project_id from mission_assignments a join agent_missions b on b.id=a.mission_id where a.status='queued' and b.status='running' order by a.created_at limit 5")).rows;
+  const readiness=(await db.query(`select a.id,a.status,a.available_at,b.status mission_status,
+   active_managed_work(a.agent_id,a.id) active,
+   least((select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(b.team) v where v->>'id'=a.agent_id::text),
+   (select (config->>'maxActiveTasks')::integer from managed_agents where id=a.agent_id)) capacity,
+   project_provider_continued_assignment(a.id) membership,
+   project_org_retest_claim_release_authorized_epoch(b.project_id,$2,$3,$4) release_ok
+   from mission_assignments a join agent_missions b on b.id=a.mission_id where a.id=$1`,
+   [assignmentId,retrySha,generation,deployment])).rows[0];
+  assert.equal(readiness.release_ok,true);
+  assert.equal(readiness.membership,true);
+  assert.ok(readiness.active<readiness.capacity,'Original manager must have worker capacity: '+JSON.stringify({readiness,candidates}));
+  console.log('MISSION79_RETRY_NATIVE_PRECLAIM '+JSON.stringify({readiness,candidates}));
   const claimed=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',
    [retrySha,generation,deployment])).rows[0].c;
   assert.equal(claimed?.job?.id,assignmentId,'Normal global-lock claim must lease the same original assignment');
