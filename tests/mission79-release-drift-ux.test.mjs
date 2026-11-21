@@ -55,6 +55,9 @@ test('original owner endpoint rejects drift with precise 409 before a durable au
  let owner=true,rpcWrites=0,legacyReads=0,offerCalls=0;
  const {GET,POST}=modules({
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  // The independent failed-attempt offer is a read-only preflight on current
+  // main. It must not be counted as a durable owner-authorization RPC.
+  '@/lib/projects/mission79-retry':{mission79RetryOffer:async()=>{throw Error('No authorized failed-attempt retry offer');}},
   '@/lib/projects/mission79-future-window':{MISSION79_ID:missionId,MISSION79_ASSIGNMENT:assignmentId,
    mission79FutureWindowOffer:async()=>{offerCalls++;throw Error('Observed epoch does not match current alias');}},
   '@/lib/missions/store':{rpc:async(name,args)=>{
