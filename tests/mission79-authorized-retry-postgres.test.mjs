@@ -13,7 +13,7 @@ test('real PostgreSQL owner authorization preserves first failure and permits ex
   KATIE_TEST_MISSION79_RETRY:'1'};
  delete env.NODE_TEST_CONTEXT;
  const result=await new Promise((resolve,reject)=>{
-  const child=spawn(process.execPath,['--test','tests/benchmark-renewal-postgres.test.mjs'],{
+  const child=spawn(process.execPath,['--test','tests/blocked-owner-committed-concurrency.test.mjs'],{
    env,stdio:['ignore','pipe','pipe']});
   let stdout='',stderr='';
   child.stdout.on('data',bytes=>stdout+=bytes);
@@ -24,6 +24,6 @@ test('real PostgreSQL owner authorization preserves first failure and permits ex
  assert.equal(result.code,0,result.stdout+'\n'+result.stderr);
  assert.match(result.stdout,/MISSION79_SINGLE_RETRY_NATIVE_PASS/,
   'Real PostgreSQL original-project fixture must exercise immutable one-time owner receipt and actual claim');
- assert.match(result.stdout,/MISSION79_NEW_OWNER_WINDOW_TWO_CONNECTION_RACE_PASS|MISSION79_NEW_OWNER_WINDOW_TWO_CONNECTION_RACE/,
-  'Existing owner concurrency tests must continue to pass');
+ assert.match(result.stdout,/BLOCKED_MANAGEMENT_ONCE_COMMITTED_RPC_RACE_PASS/,
+  'Existing two-connection owner authorization race must remain intact');
 });
