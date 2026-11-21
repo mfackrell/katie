@@ -1,5 +1,5 @@
 /** Reviewed first-party global standard rates. Never derive money from model discovery. */
-export const PRICING_VERSION = "standalone-pricing-2026-11-05-v4";
+export const PRICING_VERSION = "standalone-pricing-2026-11-21-v5";
 export type AccountingProvider = "openai" | "anthropic" | "google" | "grok";
 export type PriceTier = { aboveInputTokens: number; inclusive?: boolean; inputNanoUsd: string; outputNanoUsd: string; cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string;cacheWriteNanoUsd?:string;cacheWrite12hNanoUsd?:string };
 export type ModelPrice = {
@@ -30,6 +30,8 @@ const models: ModelPrice[] = [
   ...["gpt-5.5-pro","gpt-5.5-pro-2026-04-23"].map((model):ModelPrice=>({provider:"openai",model,inputNanoUsd:"30000",outputNanoUsd:"180000",cachedInputNanoUsd:"30000",maxContextTokens:1050000,maxOutputTokens:128000,responsesOnly:true,supportsStreaming:false,source:openai+"gpt-5.5-pro"})),
   { provider:"openai", model:"o3-pro", inputNanoUsd:"20000",outputNanoUsd:"80000",maxContextTokens:200000,maxOutputTokens:100000,source:openai+"o3-pro" },
   ...([ ["claude-sonnet-4-5","3000","15000","300","3750"], ["claude-haiku-4-5","1000","5000","100","1250"], ["claude-sonnet-4-6","3000","15000","300","3750"], ["claude-opus-4-6","5000","25000","500","6250"], ["claude-sonnet-5-5","2000","10000","100","2500"], ["claude-opus-5-5","4000","20000","200","5000"] ]).map(([model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd]):ModelPrice => ({provider:"anthropic",model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd,maxContextTokens:model.endsWith("4-5")?200000:1000000,maxOutputTokens:64000,vision:{kind:"claude",maximum:model.endsWith("5-5")?4784:1568},source:claude})),
+  // First-party Haiku 5.5: threshold applies to the entire request above 100,000 input tokens.
+  {provider:"anthropic",model:"claude-haiku-5-5",inputNanoUsd:"100",outputNanoUsd:"500",cachedInputNanoUsd:"10",cacheWrite5mNanoUsd:"125",maxContextTokens:1000000,maxOutputTokens:128000,vision:{kind:"claude",maximum:4784},tiers:[{aboveInputTokens:100000,inputNanoUsd:"500",outputNanoUsd:"2500",cachedInputNanoUsd:"50",cacheWrite5mNanoUsd:"625"}],source:"https://platform.claude.com/docs/en/models/haiku-5-5/overview"},
   // First-party Google Standard prices, 1K image output only (2026-11-05).
   // Image output is billed separately from text/thinking output.
   {provider:"google",model:"gemini-3.1-flash-image",inputNanoUsd:"500",outputNanoUsd:"3000",imageOutputNanoUsd:"60000",imageOutputTokensPerImage:1120,vision:{kind:"geminiImage",maximum:1120},maxContextTokens:131072,maxOutputTokens:32768,source:google},
@@ -39,7 +41,7 @@ const models: ModelPrice[] = [
   ...["grok-4.7","grok-4.6"].map((model):ModelPrice=>({provider:"grok",model,inputNanoUsd:"2000",outputNanoUsd:"6000",cachedInputNanoUsd:"500",maxContextTokens:500000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"4000",outputNanoUsd:"12000",cachedInputNanoUsd:"1000"}],source:grok})),
   {provider:"grok",model:"grok-4.3",inputNanoUsd:"1250",outputNanoUsd:"2500",cachedInputNanoUsd:"200",maxContextTokens:1000000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"2500",outputNanoUsd:"5000",cachedInputNanoUsd:"400"}],source:grok},
 ];
-export const PRICING_SNAPSHOT = deepFreeze({version:PRICING_VERSION,verifiedAt:"2026-10-28",currency:"USD",unit:"microUSD",rateUnit:"nanoUSD/token",scope:"first-party-global-standard",sources:[...new Set(models.map(m=>m.source)),"https://developers.openai.com/api/docs/guides/images-vision","https://platform.claude.com/docs/en/build-with-claude/vision","https://platform.claude.com/docs/en/build-with-claude/prompt-caching","https://ai.google.dev/gemini-api/docs/image-understanding"],models});
+export const PRICING_SNAPSHOT = deepFreeze({version:PRICING_VERSION,verifiedAt:"2026-11-21",currency:"USD",unit:"microUSD",rateUnit:"nanoUSD/token",scope:"first-party-global-standard",sources:[...new Set(models.map(m=>m.source)),"https://developers.openai.com/api/docs/guides/images-vision","https://platform.claude.com/docs/en/build-with-claude/vision","https://platform.claude.com/docs/en/build-with-claude/prompt-caching","https://ai.google.dev/gemini-api/docs/image-understanding"],models});
 /** Cache metadata eligibility, reviewed separately from immutable token rates.
  * Official prompt-caching model comparison: pre-5.6 retention has no additional
  * write charge; only the named earlier models support extended 24-hour retention.
