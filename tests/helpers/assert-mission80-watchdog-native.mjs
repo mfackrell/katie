@@ -64,7 +64,7 @@ export async function assertMission80WatchdogNative(db,{
   await db.query('update project_organization_decisions set created_at=$2 where id=$1',
    [decisionId,new Date(t0+1)]);
   await db.query('update agent_missions set created_at=$2 where id=$1',[m80,new Date(t0+2)]);
-  await db.query("update project_events set created_at=$2 where id=(select e.id from project_events e where e.project_id=$1 and e.event='block' order by e.id desc limit 1)",[project,stamps.blocked_at]);
+  await db.query("update project_events set created_at=$2 where id=(select e.id from project_events e where e.project_id=$1 and e.event='block' and e.data->'impediment'->>'minimumAction' like '%ce8dcc30-e316-49e7-934d-6add6c14a697%' order by e.created_at desc,e.id desc limit 1)",[project,stamps.blocked_at]);
   await db.query("update work_projects set updated_at=$2 where id=$1",[project,stamps.blocked_at]);
   await db.query('set role service_role');
   assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,false,'BLOCKED parent cannot claim');
