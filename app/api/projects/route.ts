@@ -4,6 +4,7 @@ import {managementActivationOffer,ORIGINAL_TTT_PROJECT,APPROVED_TTT_CUTOFF} from
 import {blockedOwnerRecoveryOffer} from '@/lib/projects/blocked-owner-recovery';
 import {blockedManagementRetestOffer} from '@/lib/projects/blocked-management-retest';
 import {mission79FutureWindowOffer} from '@/lib/projects/mission79-future-window';
+import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -55,6 +56,13 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        // A previously spent Mission79 has a separate one-time owner approval
+        // offer, rather than the original unclaimed-window control.
+        try{
+            const retry=await mission79RetryOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:retry.cutoff,
+                priorCutoff:retry.cutoff,receipt:null,mission79Retry:retry};
+        }catch{ /* Not an exact failed Mission79 offer; retain older pathways. */ }
         try{
             const renewal=await mission79FutureWindowOffer(p.id);
             return {projectId:p.id,releaseSha:releaseSha!,cutoff:renewal.cutoff??renewal.priorCutoff,

@@ -9,6 +9,7 @@ import {getMessages} from '@/lib/data/persistence-store';
 import {mission79FutureWindowOffer,MISSION79_ID,MISSION79_ASSIGNMENT} from '@/lib/projects/mission79-future-window';
 import {verifyMission79ActiveProductionSha} from '@/lib/projects/mission79-active-release';
 import {mission79ReleaseIdentityFailure,mission79ReleaseIdentityMessage} from '@/lib/projects/mission79-release-identity';
+import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -78,12 +79,25 @@ const bindMission79ReleaseInput=z.object({
  releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput]);
+const mission79RetryApprovalInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),
+ trialAction:z.literal('authorize_mission79_failed_retry'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ releaseGeneration:z.number().int().positive(),
+ deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
+ missionId:z.literal(MISSION79_ID),assignmentId:z.literal(MISSION79_ASSIGNMENT),
+ authorizationId:z.string().uuid(),
+ cutoff:z.string().datetime({offset:true}),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({mission79Retry:await mission79RetryOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+  catch{ /* No exact failed-attempt owner offer: use prior source-bound controls. */ }
   try{return NextResponse.json({mission79FutureWindow:await mission79FutureWindowOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{
   try{return NextResponse.json({managementRetest:await blockedManagementRetestOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
@@ -102,6 +116,33 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_mission79_failed_retry'){
+  // Owner authorization is distinct from the prior window and the release
+  // operator. Neither rendering the offer nor deploying code admits paid work.
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Exact current production release required'},{status:409});
+  const offer=await mission79RetryOffer(p.projectId);
+  if(offer.stage!=='approve_retry'||offer.releaseSha!==p.releaseSha
+   ||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
+   ||offer.missionId!==p.missionId||offer.assignmentId!==p.assignmentId
+   ||offer.stateHash!==p.stateHash||Date.parse(offer.cutoff)!==Date.parse(p.cutoff)
+   ||Date.parse(offer.cutoff)<=Date.now()+300000)
+   return NextResponse.json({error:'One original failed attempt and future owner cutoff required'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>(
+   'project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const error=mission79ReleaseIdentityFailure(epoch,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(error)return NextResponse.json({error:mission79ReleaseIdentityMessage(error),code:error},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
+   return NextResponse.json({error:'Canonical production release verification required for one retry'},{status:409});
+  return NextResponse.json(await rpc('project_org_mission79_retry_authorize',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
+   p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
+   p_authorization:p.authorizationId,p_cutoff:p.cutoff,p_state_hash:p.stateHash,
+   p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_mission79_future_window'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
    return NextResponse.json({error:'Exact READY production release is required'},{status:409});

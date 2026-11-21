@@ -371,6 +371,12 @@ export async function executeClaim(claim:Claim,model=missionModel){
  await commit(result);
 }
 export async function runMissionBatch(model=missionModel){
+ // After an owner-authorized second Mission79 lease expires, its prior
+ // release receipt cannot satisfy legacy settlement. Safely terminalize only
+ // that expired second attempt under the immutable retry release and global
+ // claim locks. Never requeue it, renew its window or invoke a provider.
+ try{await rpc('project_org_mission79_retry_settle_expired');}
+ catch(error){console.warn('[Mission79] Second-attempt expiry settlement unavailable',error instanceof Error?error.message:'unknown');}
  // Only this runtime understands the larger read-only audit envelope. The RPC
  // is fenced, preserves budgets/attempts and allows one matching recovery.
  try{await rpc('resume_compact_audit_comparison');await rpc('resume_saved_partial_audit_edits');await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}

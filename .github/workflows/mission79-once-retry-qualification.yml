@@ -1,0 +1,47 @@
+name: Mission79 one-time owner retry qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261121152000_mission79_single_owner_retry.sql'
+      - 'lib/projects/mission79-retry.ts'
+      - 'lib/projects/organization.ts'
+      - 'lib/missions/worker.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'app/api/projects/route.ts'
+      - 'components/mission79-retry-control.tsx'
+      - 'components/director-recovery-control.tsx'
+      - 'tests/mission79-authorized-retry*.mjs'
+      - 'tests/helpers/assert-mission79-one-retry-native.mjs'
+      - 'tests/helpers/assert-blocked-management-retest.mjs'
+      - '.github/workflows/mission79-once-retry-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  once-retry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install PostgreSQL native fixture
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Owner and immutable receipt API regression
+        run: node --test tests/mission79-authorized-retry-runtime.test.mjs
+      - name: Exact one-time native PostgreSQL scheduler and replay contract
+        run: node --test tests/mission79-authorized-retry-postgres.test.mjs
