@@ -34,6 +34,18 @@ export async function assertMission79WatchdogNative(db,{project,owner,missionId,
   p=(await db.query('select status,detail,progress_since from work_projects where id=$1',[project])).rows[0];
   assert.equal(p.status,'blocked','The unchanged 45-minute watchdog must still block stale development');
   assert.equal(p.detail,blockedDetail);
+  // The native fixture runs owner approval and watchdog in ONE outer
+  // rollback-only transaction. project_events.created_at defaults to now()
+  // (the transaction start), whereas the owner receipt uses clock_timestamp().
+  // Production uses separate committed HTTP/cron transactions. Mirror that
+  // real chronology by appending the identical observed watchdog event with
+  // its actual statement timestamp in this disposable fixture only.
+  await db.query('reset role');
+  await db.query(`insert into project_events(project_id,event,data,created_at)
+   select project_id,event,data,clock_timestamp()
+   from project_events where project_id=$1 and event='block'
+   order by id desc limit 1`,[project]);
+  await db.query('set role service_role');
 
   // Owner's FIRST immutable retry receipt remains spent and bound to the OLD
   // release: no implicit authorization on the newly deployed corrected SHA.
