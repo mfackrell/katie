@@ -163,6 +163,9 @@ export async function assertMission82IndependentNative(db,{project,m80,j80,owner
  }finally{
   await db.query('rollback to savepoint mission82_native');
   await db.query('release savepoint mission82_native');
-  await db.query('set role service_role');
+  // Called from the parent original-project fixture after RESET ROLE.
+  // Restore that caller role rather than leaking privileged service_role
+  // into its subsequent management-assignment setup.
+  await db.query('reset role');
  }
 }
