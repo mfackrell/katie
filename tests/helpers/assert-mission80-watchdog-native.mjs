@@ -160,6 +160,13 @@ export async function assertMission80WatchdogNative(db,{
    created_at:'1800-01-01T00:00:01Z',available_at:'1800-01-01T00:00:01Z',
    updated_at:new Date().toISOString()};
   await db.query('insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb)).*',[next]);
+  await db.query(`insert into project_organization_assignments
+   (assignment_id,node_id,contract_hash)
+   select $1,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex')
+   from project_organization_nodes n
+   where n.id::text=$2`,[successorJob,sm.project_evidence.organizationNodeId]);
+  assert.equal((await db.query('select count(*)::int n from project_organization_assignments where assignment_id=$1',[successorJob])).rows[0].n,1);
+
   await db.query('set role service_role');
   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,81);
   assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,true,
