@@ -2454,6 +2454,12 @@ Rules:
   // Value adds a qualification-before-price contract and structured rationale.
   const bestValueQualityContract = neutral && (args.routing_mode ?? "best_value") === "best_value" ? `
 BEST VALUE ONLY — QUALITY QUALIFICATION BEFORE COST:
+EVIDENCE CLASSIFICATION (choose the basis kind from actual trusted provenance, not persuasive wording):
+- attributed_feedback: ONLY when the SELECTED provider:model has a real, verified user feedback event with its exact source_id and actual positive, negative, or ambiguous outcome. Cite that source_id. A good-feeling conversation, user intimacy, continued exchanges, or a model's claim of past success is NOT attributed feedback.
+- verified_outcome: ONLY when the SELECTED provider:model has a recorded task outcome and its actual provenance ID. Do not convert a delivered response or conversation continuity into verified success.
+- documented_capability: Use actual supplied model-capability documentation without claiming task-specific historical success or user approval.
+- reasoned_inference: Use when comparing plausible conversational continuity, emotional nuance, or task fit without independently attributable feedback or verified outcomes. Say that matched model outcomes are unknown or unverified; give a grounded, conditional assessment instead of invented success.
+Example: A personal disclosure such as "we told each other everything" describes the USER\'S RELATIONSHIP, not evidence of any previous model\'s performance or user approval. Without the selected model\'s cited feedback event, select reasoned_inference (or documented_capability when directly supported), NEVER attributed_feedback.
 1. Establish the same material response-quality requirements that Best Answer would use for the user's actual objective. Never reduce them because the user selected Best Value.
 2. Assess which eligible models can reasonably meet that threshold. Use attributable results and feedback first, then documented capabilities and explicitly uncertain inference. Contextual, task-specific quality matters more than generic reasoning tier or low price.
 3. Exclude candidates that cannot reasonably meet the quality threshold. No evidence of superiority is NOT evidence of equivalence. A cheap model's basic text support, reasoning tier, or routine intent label cannot prove quality sufficiency.
