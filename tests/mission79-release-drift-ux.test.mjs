@@ -52,9 +52,12 @@ test('owner project status displays a release mismatch, not stale legacy approva
 
 test('original owner endpoint rejects drift with precise 409 before a durable authorization RPC',async t=>{
  env(t);
- let owner=true,rpcWrites=0,legacyReads=0,offerCalls=0;
+ let owner=true,rpcWrites=0,legacyReads=0,offerCalls=0,retryOfferReads=0;
  const {GET,POST}=modules({
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  // The GET route now probes the read-only retry offer before older recovery
+  // paths. Isolate it so a missing retry offer cannot call the real RPC.
+  '@/lib/projects/mission79-retry':{mission79RetryOffer:async()=>{retryOfferReads++;throw Error('No retry offer in drift fixture');}},
   '@/lib/projects/mission79-future-window':{MISSION79_ID:missionId,MISSION79_ASSIGNMENT:assignmentId,
    mission79FutureWindowOffer:async()=>{offerCalls++;throw Error('Observed epoch does not match current alias');}},
   '@/lib/missions/store':{rpc:async(name,args)=>{
@@ -74,6 +77,7 @@ test('original owner endpoint rejects drift with precise 409 before a durable au
   cutoff:new Date(Date.now()+3600000).toISOString(),stateHash:'f'.repeat(64)};
  const readResponse=await GET(read());assert.equal(readResponse.status,409);
  assert.match((await readResponse.json()).error,/Recovery state unavailable/);
+ assert.equal(retryOfferReads,1,'GET checks the optional retry offer without a durable authorization write');
  assert.equal(legacyReads,3,'Legacy read-only GET recovery behavior remains intact');
  const submit=await POST(post(approval));assert.equal(submit.status,409);
  assert.equal((await submit.json()).code,'mission79_release_mismatch');
