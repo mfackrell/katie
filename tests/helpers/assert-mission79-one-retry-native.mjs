@@ -80,6 +80,12 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   ])assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,sha,gen,dep])).rows[0].ok,false);
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',
    [project,retrySha,generation,deployment])).rows[0].ok,true);
+  // Other unrelated fixture missions may be queued. Prioritize the original
+  // for this one-claim test using only disposable row ordering, as existing
+  // original Mission79 native qualifications already do.
+  await db.query('reset role');
+  await db.query("update mission_assignments set created_at='2000-01-01T00:00:00Z' where id=$1",[assignmentId]);
+  await db.query('set role service_role');
   const claimed=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',
    [retrySha,generation,deployment])).rows[0].c;
   assert.equal(claimed?.job?.id,assignmentId,'Normal global-lock claim must lease the same original assignment');
