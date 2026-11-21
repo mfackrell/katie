@@ -101,7 +101,8 @@ BEGIN
    OR receipt.cutoff IS DISTINCT FROM q.cutoff
   THEN RAISE EXCEPTION 'Immutable one-time retry receipt lineage changed';END IF;
   st:=CASE WHEN j.attempts=1 AND j.status='queued' THEN 'authorized'
-          WHEN j.attempts=2 THEN 'claimed' ELSE 'terminal' END;
+          WHEN j.attempts=2 AND j.status='running' THEN 'claimed'
+          ELSE 'terminal' END;
   RETURN jsonb_build_object('projectId',p.id,'stage',st,
    'releaseSha',receipt.release_sha,'releaseGeneration',receipt.release_generation,
    'deploymentId',receipt.deployment_id,'missionId',m.id,'assignmentId',j.id,
