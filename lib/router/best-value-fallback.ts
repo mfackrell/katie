@@ -43,7 +43,13 @@ export function rankBestValueFallbackCandidates<T extends {
     requiredDepth === "high" ? 2048 : requiredDepth === "medium" ? 768 : 384;
 
   return candidates
-    .filter(candidate => depthOrder[candidate.metadata.reasoning_depth_tier] >= depthOrder[requiredDepth])
+    .filter(candidate => {
+      // Legacy metadata can tag gpt-5-mini as high merely because the name
+      // includes gpt-5. This naming collision is not high-depth evidence.
+      const conservativeDepth = /mini|flash|haiku|lite/i.test(candidate.modelId)
+        ? "low" : candidate.metadata.reasoning_depth_tier;
+      return depthOrder[conservativeDepth] >= depthOrder[requiredDepth];
+    })
     .map(candidate => {
       const price = getModelPrice(candidate.providerName, candidate.modelId);
       let modeledCostMicrousd: string | null = null;
