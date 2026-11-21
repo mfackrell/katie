@@ -51,6 +51,37 @@ BEGIN
   WHERE project_id=p_project AND event='block' AND created_at>r.authorized_at
    AND data->>'detail'='No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.'
   ORDER BY created_at DESC LIMIT 1;
+ -- Authenticate historical receipt reads separately from the unclaimed
+ -- offer. A valid owner must still see it once the scheduler has leased or
+ -- completed the permitted second attempt.
+ IF w.project_id IS NOT NULL THEN
+  IF p_project IS DISTINCT FROM 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+   OR p_owner IS NULL OR p.id IS NULL OR a.owner_id IS DISTINCT FROM p_owner
+   OR NOT standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
+   OR r.project_id IS NULL OR r.owner_id IS DISTINCT FROM p_owner
+   OR w.authorization_id IS NULL OR w.owner_id IS DISTINCT FROM p_owner
+   OR w.original_retry_authorization_id IS DISTINCT FROM r.authorization_id
+   OR w.mission_id IS DISTINCT FROM m.id OR w.assignment_id IS DISTINCT FROM j.id
+   OR w.scope_hash IS DISTINCT FROM r.scope_hash OR w.cutoff IS DISTINCT FROM r.cutoff
+   OR g.project_id IS NULL OR g.state<>'active' OR g.alias_name<>'katie-mu.vercel.app'
+   OR w.release_sha IS DISTINCT FROM p_release
+   OR w.release_sha IS DISTINCT FROM g.release_sha
+   OR w.deployment_id IS DISTINCT FROM g.deployment_id
+   OR w.release_generation IS DISTINCT FROM g.generation
+  THEN RAISE EXCEPTION 'Watchdog recovery authority is stale or consumed on another release';END IF;
+  stage:=CASE WHEN j.status IN ('failed','completed') THEN 'terminal'
+   WHEN j.attempts=2 THEN 'claimed'
+   WHEN p.status='running' AND j.status='queued' AND j.attempts=1 THEN 'recovered'
+   ELSE 'terminal' END;
+  RETURN jsonb_build_object('projectId',p.id,'stage',stage,
+   'releaseSha',w.release_sha,'releaseGeneration',w.release_generation,
+   'deploymentId',w.deployment_id,'missionId',m.id,'assignmentId',j.id,
+   'scopeHash',w.scope_hash,'cutoff',w.cutoff,
+   'priorAuthorizationId',r.authorization_id,'authorizationId',w.authorization_id,
+   'authorizedAt',w.authorized_at,'originalAttempts',1,'originalCalls',1,
+   'currentAttempts',j.attempts,'historicalMissions',79,'maxMissions',96,
+   'tokenAllowance',600000,'nodeCount',13);
+ END IF;
  IF p_project IS DISTINCT FROM 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
   OR p_owner IS NULL OR p.id IS NULL OR a.owner_id IS DISTINCT FROM p_owner
   OR NOT standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
@@ -80,23 +111,7 @@ BEGIN
   OR g.release_sha IS DISTINCT FROM p_release OR g.generation<=0
   OR g.deployment_id !~ '^dpl_[A-Za-z0-9]+$'
  THEN RAISE EXCEPTION 'Original Mission79 retry, owner, limits or canonical release changed';END IF;
- IF w.project_id IS NOT NULL THEN
-  IF w.authorization_id IS NULL OR w.owner_id IS DISTINCT FROM p_owner
-   OR w.original_retry_authorization_id IS DISTINCT FROM r.authorization_id
-   OR w.release_sha IS DISTINCT FROM p_release
-   OR w.deployment_id IS DISTINCT FROM g.deployment_id
-   OR w.release_generation IS DISTINCT FROM g.generation
-  THEN RAISE EXCEPTION 'Watchdog recovery authority is stale or consumed on another release';END IF;
-  stage:=CASE WHEN j.attempts=2 THEN 'claimed' WHEN p.status='running' THEN 'recovered' ELSE 'terminal' END;
-  RETURN jsonb_build_object('projectId',p.id,'stage',stage,
-   'releaseSha',w.release_sha,'releaseGeneration',w.release_generation,
-   'deploymentId',w.deployment_id,'missionId',m.id,'assignmentId',j.id,
-   'scopeHash',w.scope_hash,'cutoff',w.cutoff,
-   'priorAuthorizationId',r.authorization_id,'authorizationId',w.authorization_id,
-   'authorizedAt',w.authorized_at,'originalAttempts',1,'originalCalls',1,
-   'currentAttempts',j.attempts,'historicalMissions',79,'maxMissions',96,
-   'tokenAllowance',600000,'nodeCount',13);
- END IF;
+
  IF p.status<>'blocked' OR p.lease IS NOT NULL OR p.lease_until IS NOT NULL
   OR p.detail IS DISTINCT FROM 'No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.'
   OR ev.id IS NULL OR ev.created_at<=r.authorized_at
