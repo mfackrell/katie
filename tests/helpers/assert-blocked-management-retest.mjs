@@ -23,6 +23,10 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   "select to_regprocedure('public.project_org_bind_retest_claim_release(uuid,uuid,text,uuid,uuid,text,bigint,text)') sig"
  )).rows[0].sig;
  if(!releaseInstalled)await observer.query(readFileSync(releaseMigration,'utf8'));
+ if(process.env.KATIE_TEST_MISSION79_RETRY==='1'){
+  // Install only in this disposable native PostgreSQL fixture. No live DB writes.
+  await observer.query(readFileSync('supabase/migrations/20261121152000_mission79_single_owner_retry.sql','utf8'));
+ }
  const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
  assert.ok(claimRelease,"Original worker claim's new exact-release predicate must be installed");
 
@@ -1518,6 +1522,11 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
   console.log('MISSION79_DECISION_POSTLOCK_RACE_RESTORE_SOURCE_INTEGRITY_PASS');
   await first.query('begin');
   await first.query('set role service_role');
+  if(process.env.KATIE_TEST_MISSION79_RETRY==='1'){
+   const {assertMission79OneRetryNative}=await import('./assert-mission79-one-retry-native.mjs');
+   await assertMission79OneRetryNative(first,second,{project,owner,
+    missionId:scheduled.missionId,assignmentId:originalJob.id});
+  }
 
   // Continue the REAL database-claimed management identity into the normal
   // executeClaim dispatcher with an injected deterministic no-network model.
