@@ -30,8 +30,37 @@ export async function assertMission80WatchdogNative(db,{
   const oldReceipt=(await db.query('select to_jsonb(r) receipt from project_mission79_watchdog_recovery_receipts r where project_id=$1',[project])).rows[0].receipt;
   await db.query(newSql);
   await db.query('set role service_role');
-  assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,true,
-   'General authorized management contract admits original queued M80');
+  const dynamicEligible=(await db.query(predicate,[project,release,generation,deployment])).rows[0].ok;
+  if(!dynamicEligible){
+   await db.query('reset role');
+   const diagnostic=(await db.query(`select
+    p.status project_status,p.phase,p.deadline,p.active_mission_id,
+    p.approval_hash=p.approved_hash scope_hash_ok,
+    p.max_missions,p.token_allowance,
+    m.id mission_id,m.status mission_status,m.calls,m.created_at,m.deadline mission_deadline,
+    m.project_kind,m.project_evidence,
+    n.id node_id,n.status node_status,n.kind,n.management_level,n.deadline node_deadline,
+    n.deadline=p.deadline node_deadline_ok,
+    (select count(*) from agent_missions x where x.project_id=p.id) missions,
+    (select count(*) from mission_assignments x where x.mission_id=m.id) jobs,
+    (select count(*) from project_organization_assignments oa where oa.assignment_id=j.id and oa.node_id=n.id) org_assignments,
+    (select max(prior.created_at) from agent_missions prior where prior.project_id=p.id and prior.created_at<m.created_at) prev_at,
+    (select count(*) from agent_missions prev join mission_assignments pj on pj.mission_id=prev.id
+      join project_organization_decisions pd on pd.assignment_id=pj.id and pd.id::text=pj.result->>'decisionId'
+      where prev.project_id=p.id and prev.status='completed' and pj.status='completed'
+       and prev.created_at=(select max(prior.created_at) from agent_missions prior where prior.project_id=p.id and prior.created_at<m.created_at)) predecessor,
+    project_org_retest_exact_scope_grants(p.id) exact_scope,
+    project_org_retest_original_owner_lineage(p.id) owner_lineage,
+    project_provider_continued(p.id) continued,
+    project_provider_continued_assignment(j.id) membership
+    from work_projects p join agent_missions m on m.id=p.active_mission_id
+    join mission_assignments j on j.mission_id=m.id
+    join project_organization_nodes n on n.id::text=m.project_evidence->>'organizationNodeId'
+    where p.id=$1`,[project])).rows[0];
+   console.log('MISSION80_BOUNDED_RELEASE_DIAGNOSTIC '+JSON.stringify(diagnostic));
+   await db.query('set role service_role');
+  }
+  assert.equal(dynamicEligible,true,'General authorized management contract admits original queued M80');
   assert.equal((await db.query(predicate,[project,'f'.repeat(40),generation,deployment])).rows[0].ok,false);
   assert.equal((await db.query(predicate,[project,release,generation+1,deployment])).rows[0].ok,false);
   assert.equal((await db.query(predicate,[project,release,generation,'dpl_WrongRelease'])).rows[0].ok,false);
