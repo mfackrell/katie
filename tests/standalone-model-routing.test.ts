@@ -6,7 +6,7 @@ test("ordinary conversation cannot produce locally arbitrated project reply",()=
   assert.match(route,/const explicitProjectControl = !isGuestSession && \(startProjectIntent\(message\) \|\| followupProjectIntent\(message\) \|\| isProjectStopIntent\(message\)/);
   assert.match(route,/const projectReply = !isGuestSession && !pdfProgress\.projectClarification && !executiveReply && \(benchmarkRelay \|\| explicitProjectControl \|\| softwareBuildIntent\)/);
   // Image-source errors must be handled locally before either saved-image clarification or project logic.
-  assert.match(route,/const localKatieResponse = imageEditUnavailable\s*\?\s*\{reason:"image-source" as const/);
+  assert.match(route,/const localKatieResponse = sexualBoundaryRefusal\s*\?\s*\{reason:\s*"boundary" as const,\s*text:\s*sexualBoundaryRefusal\}\s*:\s*imageEditUnavailable\s*\?\s*\{reason:"image-source" as const/);
   assert.match(route,/: imageFollowup\?\.clarification\s*\?\s*\{reason:"image-source" as const,text:imageFollowup\.clarification\}/);
   assert.match(route,/!standaloneFragment && \(explicitProjectControl \|\| newAttachments\.length > 0\) && pdfProgress\.projectClarification/);
 });
