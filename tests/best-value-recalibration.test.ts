@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rankBestValueFallbackCandidates } from "@/lib/router/best-value-fallback";
+import { getModelPrice } from "@/lib/standalone-accounting/pricing";
 import {
   bestValueEvidenceCost, buildCandidateMetadata, compareBestValueQualifiedJudgments,
   type ProviderName, type RequestComplexity, type RequestIntent,
@@ -57,12 +58,13 @@ test("unknown complexity is treated conservatively; short text does not prove ea
   assert.ok(!result.some(candidate => /mini|haiku|flash/.test(candidate.modelId)));
 });
 
-test("unpriced Haiku remains a qualified low-complexity candidate, not a fabricated bargain", () => {
+test("Haiku stays qualified and uses only independently reviewed pricing from PR 1155", () => {
   const result = rank("Good morning Katie", "general-text", "low");
   const haiku = result.find(candidate => candidate.modelId === "claude-haiku-5-5");
   assert.ok(haiku);
-  assert.equal(haiku.modeledCostMicrousd, null,
-    "PR 1155 owns the price; do not invent or modify it in this PR");
+  assert.equal(haiku.modeledCostMicrousd === null,
+    getModelPrice("anthropic", "claude-haiku-5-5") === undefined,
+    "Before PR 1155, its quote must be unknown; after that independent price merges, use the new verified rate without changing this PR");
 });
 
 test("all four providers are compared on equal price and capability rules", () => {
