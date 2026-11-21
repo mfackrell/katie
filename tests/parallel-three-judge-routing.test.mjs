@@ -38,12 +38,12 @@ test("selection aggregation uses trusted feedback before votes and never fabrica
   "async function select(validJudgments,args) {\n"+section+"\nreturn result;\n}\nglobalThis.select=select;",
   {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}
  ).outputText;
- const ctx=vm.createContext({Map,Math,Date,judgeStartMs:Date.now(),judges:[{}, {}, {}, {}],console:{info:()=>{}}});
+ const ctx=vm.createContext({Map,Math,Date,judgeStartMs:Date.now(),judges:[{}, {}, {}, {}],console:{info:()=>{}},bestValueEvidenceCost:()=>null});
  vm.runInContext(executable,ctx);
  const ballot=(lane,provider,model)=>({lane,provider:"anthropic",modelId:"judge-"+lane,result:{
   selectedProvider:provider,selectedModel:model,selectionJustification:"qualified",selectionComparisons:[]}});
  const a=ballot(0,"openai","candidate-a"),b=ballot(1,"openai","candidate-a"),c=ballot(2,"anthropic","candidate-b");
- const args={candidates:[{providerName:"openai",modelId:"candidate-a",prior_score:9},{providerName:"anthropic",modelId:"candidate-b",prior_score:8}],requestEvidence:{candidates:{
+ const args={routing_mode:"best_answer",candidates:[{providerName:"openai",modelId:"candidate-a",prior_score:9},{providerName:"anthropic",modelId:"candidate-b",prior_score:8}],requestEvidence:{candidates:{
   "openai:candidate-a":{quality:{feedback:{positive:0,negative:1}}},
   "anthropic:candidate-b":{quality:{feedback:{positive:1,negative:0}}}
  }}};
