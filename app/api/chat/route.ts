@@ -1443,7 +1443,7 @@ async function executeChat(request: NextRequest) {
         }
         // Idempotent replay must not re-expose a previously saved explicit response.
         const replayBlocked = ownerSexualBoundaryEnabled && (
-          isOwnerEroticRequest(message, history) ||
+          isOwnerEroticRequest(message, attachmentHistory) ||
           looksLikeEroticAssistantOutput(idempotencyClaim.record.assistantContent ?? "")
         );
         const replayBody = [
@@ -1563,9 +1563,12 @@ async function executeChat(request: NextRequest) {
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
     // Standalone Katie only RELAYS explicit commands to the Developer project
     // controller. Status, scoped approvals and amendments stay durable there.
+    // Preempt project/developer commands and all provider paths, not only the chat router.
+    const sexualBoundaryRefusal = ownerSexualBoundaryEnabled && isOwnerEroticRequest(message, attachmentHistory)
+      ? OWNER_SEXUAL_BOUNDARY_REPLY : null;
     const savedDeveloperCommand = /^(?:(?:(?:what(?:'s| is)|show|check|give me|tell me|how(?:'s| is))\b.{0,36})?(?:project\s+(?:status|progress)|(?:the|my|this)\s+project\s+(?:status|progress)|project\s+(?:note|context|answer)\s*:)|(?:please\s+)?(?:resume|pause|stop|approve)\s+(?:(?:the|my|this)\s+)?project\b|(?:please\s+)?(?:add|change|fix|remove|update|keep|retain|preserve|support|enable)\b.{0,180}\b(?:game|app|website|project|software|multiplayer|keyboard|undo|button)\b)/i.test(message.trim());
     const explicitProjectControl = !isGuestSession && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand);
-    const projectReply = !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !sexualBoundaryRefusal && !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     // A verified, file-only PDF upload has no drafting instruction. Respond
     // with a truthful, source-bound receipt before paid model routing. The
@@ -1574,9 +1577,6 @@ async function executeChat(request: NextRequest) {
       !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
       ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
       : null;
-    // Owner-only pre-routing refusal, persisted as a normal local conversation.
-    const sexualBoundaryRefusal = ownerSexualBoundaryEnabled && isOwnerEroticRequest(message, history)
-      ? OWNER_SEXUAL_BOUNDARY_REPLY : null;
     const localKatieResponse = sexualBoundaryRefusal ? {reason: "boundary" as const, text: sexualBoundaryRefusal} : imageEditUnavailable
       ? {reason:"image-source" as const,text:"The selected image original cannot be reopened. I cannot edit missing pixels or substitute another image."}
       : imageFollowup?.clarification
@@ -1613,7 +1613,7 @@ async function executeChat(request: NextRequest) {
       await saveMessage(chatId, {
         id: localUserMessageId,
         role: "user",
-        content: message,
+        content: sexualBoundaryRefusal ? "[Blocked erotic role-play request; original text not retained.]" : message,
         ...(clarificationAttachments.length ? {attachments: clarificationAttachments} : {}),
       });
 
