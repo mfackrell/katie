@@ -1165,6 +1165,18 @@ export async function chooseProvider(
   const fallbackToDeterministic = (reason: string): Selection => {
     deterministicFallbackUsed = true;
     fallbackReason = reason;
+    // Primary Best Value judges see neutral inventory scores. Only once their
+    // result is unusable do we rank the already-filtered candidates by the
+    // classified request intent. Never allow inventory order to pick fallback.
+    // Best Answer and successful LLM selection retain their existing behavior.
+    if (neutral && (options?.routing_mode ?? "best_value") === "best_value") {
+      rankedCandidates = scoreModelsForIntent(availableByProvider, intent, {
+        registryLookup, preferredProvider, actorRoutingProfile
+      });
+      if (!rankedCandidates.length) {
+        throw new Error(`No compatible Best Value fallback for intent ${intent}.`);
+      }
+    }
     const topCandidate = rankedCandidates[0];
     const provider = topCandidate?.provider ?? availableByProvider[0]?.provider ?? providers[0];
     const modelId = topCandidate?.modelId ?? pickDefaultModel(provider, availableByProvider.find((entry) => entry.provider.name === provider.name)?.models ?? []);

@@ -26,6 +26,8 @@ export async function assertBlockedManagementRetest(first,second,observer,{proje
  if(process.env.KATIE_TEST_MISSION79_RETRY==='1'){
   // Install only in this disposable native PostgreSQL fixture. No live DB writes.
   await observer.query(readFileSync('supabase/migrations/20261121152000_mission79_single_owner_retry.sql','utf8'));
+  if(process.env.KATIE_TEST_MISSION79_WATCHDOG==='1')
+   await observer.query(readFileSync('supabase/migrations/20261121170000_mission79_watchdog_owner_recovery.sql','utf8'));
  }
  const claimRelease=(await observer.query("select to_regprocedure('public.project_org_retest_claim_release_authorized(uuid,text)') sig")).rows[0].sig;
  assert.ok(claimRelease,"Original worker claim's new exact-release predicate must be installed");

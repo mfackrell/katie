@@ -74,6 +74,11 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   const q=(await db.query('select j.status,j.attempts,j.result,m.calls from mission_assignments j join agent_missions m on m.id=j.mission_id where j.id=$1',[assignmentId])).rows[0];
   assert.equal(q.status,'queued');assert.equal(q.attempts,1);assert.equal(q.calls,1);
   assert.deepEqual(q.result,rejection);
+  if(process.env.KATIE_TEST_MISSION79_WATCHDOG==='1'){
+   const {assertMission79WatchdogNative}=await import('./assert-mission79-watchdog-native.mjs');
+   await assertMission79WatchdogNative(db,{project,owner,missionId,assignmentId,
+    retrySha,generation,deployment,oldRetryAuthorization:consent});
+  }
   for(const [sha,gen,dep] of [
    ['8'.repeat(40),generation,deployment],[retrySha,generation+1,deployment],
    [retrySha,generation,'dpl_OtherDeployment']
