@@ -188,9 +188,10 @@ DO $patch$
 DECLARE s text;t text;
 BEGIN
  SELECT pg_get_functiondef('public.project_org_mission79_retry_authorize(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,bigint,text)'::regprocedure) INTO s;
- IF (length(s)-length(replace(s,'SET status=''running'',updated_at=stamp,','')))/length('SET status=''running'',updated_at=stamp,')<>1
- THEN RAISE EXCEPTION 'Unexpected original owner retry status contract';END IF;
- t:=replace(s,'SET status=''running'',updated_at=stamp,','SET status=''running'',progress_since=stamp,updated_at=stamp,');
+ IF (length(s)-length(replace(s,'UPDATE work_projects'||chr(10)||'  SET status=''running'',updated_at=stamp,','')))/length('UPDATE work_projects'||chr(10)||'  SET status=''running'',updated_at=stamp,')<>1
+ THEN RAISE EXCEPTION 'Unexpected original owner retry project status contract';END IF;
+ t:=replace(s,'UPDATE work_projects'||chr(10)||'  SET status=''running'',updated_at=stamp,',
+  'UPDATE work_projects'||chr(10)||'  SET status=''running'',progress_since=stamp,updated_at=stamp,');
  EXECUTE t;
 
  SELECT pg_get_functiondef('public.project_org_mission79_retry_claim_authorized(uuid,text,bigint,text)'::regprocedure) INTO s;
