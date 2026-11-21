@@ -6,6 +6,7 @@ import {blockedManagementRetestOffer} from '@/lib/projects/blocked-management-re
 import {mission79FutureWindowOffer} from '@/lib/projects/mission79-future-window';
 import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import {mission80WatchdogOffer} from '@/lib/projects/mission80-watchdog';
+import {mission82WatchdogOffer} from '@/lib/projects/mission82-watchdog';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -57,6 +58,13 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        // A legitimate Project Director escalation after rejected Mission81 has
+        // a distinct, single-use owner recovery; no spent retry is inherited.
+        try{
+            const m82=await mission82WatchdogOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:m82.cutoff,
+                priorCutoff:m82.cutoff,receipt:null,mission82Recovery:m82};
+        }catch{ /* The exact blocked Mission82 escalation is not recoverable here. */ }
         // The original blocked Mission80 now has its own authenticated, new-release
         // owner recovery. Do not fall back to spent Mission79 authority.
         try{

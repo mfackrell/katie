@@ -149,6 +149,10 @@ export async function assertMission80WatchdogNative(db,{
   await db.query("update mission_assignments set status='completed',lease=null,lease_until=null,result=$2 where id=$1",[j80,{output:'Management decision recorded',decisionId:nextDecision}]);
   await db.query("insert into project_organization_decisions(id,project_id,node_id,assignment_id,decision,created_at) values ($1,$2,$3,$4,'[{\"action\":\"ready\"}]'::jsonb,clock_timestamp())",
    [nextDecision,project,n80.project_evidence.organizationNodeId,j80]);
+  if(process.env.KATIE_TEST_MISSION82_INDEPENDENT==='1'){
+   const {assertMission82IndependentNative}=await import('./assert-mission82-independent-native.mjs');
+   await assertMission82IndependentNative(db,{project,m80,j80,owner,release,generation,deployment});
+  }
   const successor=randomUUID(),successorJob=randomUUID();
   const sm={...n80,id:successor,status:'running',calls:0,actual_tokens:0,
    result:null,detail:null,created_at:new Date(Date.now()+3000).toISOString(),

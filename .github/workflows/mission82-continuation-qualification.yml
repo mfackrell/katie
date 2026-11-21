@@ -1,0 +1,45 @@
+name: Mission82 independent escalation qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261121195500_mission82_independent_continuation.sql'
+      - 'lib/projects/mission82-watchdog.ts'
+      - 'app/api/projects/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'components/director-recovery-control.tsx'
+      - 'components/mission82-watchdog-recovery-control.tsx'
+      - 'tests/mission82-continuation-*.test.mjs'
+      - 'tests/helpers/assert-mission82-independent-native.mjs'
+      - 'tests/helpers/assert-mission80-watchdog-native.mjs'
+      - '.github/workflows/mission82-continuation-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  mission82-continuation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install isolated native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Exact owner first-party authenticated API and replay negatives
+        run: node --test tests/mission82-continuation-runtime.test.mjs
+      - name: Native 79-82 history, SMART rejection, independent root escalation and true scheduler claim
+        run: node --test tests/mission82-continuation-postgres.test.mjs
