@@ -2374,7 +2374,7 @@ export function bestValueEvidenceCost(economics: unknown): string | null {
   const quote = e.serialized_request;
   const raw = e.expected_all_in_micro_usd ??
     (quote?.status === "estimated" ? quote.estimatedCostMicrousd : null);
-  return typeof raw === "string" && /^\\d+$/.test(raw) ? raw : null;
+  return typeof raw === "string" && /^\d+$/.test(raw) ? raw : null;
 }
 
 export async function chooseRoutingWithLLM(args: {
