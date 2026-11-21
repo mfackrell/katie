@@ -367,10 +367,16 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).count(),0);
     assert.equal(await active.getByRole('button',{name:'Accept exposure & continue',exact:true}).count(),0);
     await usage.getByText('Includes estimated infrastructure cost; actual RunPod cost unconfirmed.',{exact:true}).waitFor();
-    await usage.getByRole('button', { name: 'Show model usage for runpod' }).focus();
-    await providerTooltip.waitFor();
-    assert.match(await providerTooltip.innerText(), /Qwen\/Qwen3-VL-8B-Instruct/);
-    assert.doesNotMatch(await providerTooltip.innerText(), /gpt-4o/);
+    await usage.getByRole('button', { name: 'Show model usage for runpod' }).click();
+    const runpodDetails = usage.getByRole('region', { name: 'Model usage for runpod' });
+    await runpodDetails.waitFor();
+    assert.match(await runpodDetails.innerText(), /Qwen\/Qwen3-VL-8B-Instruct/);
+    assert.doesNotMatch(await runpodDetails.innerText(), /gpt-4o/);
+    const runpodBox = await runpodDetails.boundingBox();
+    const runpodRail = await rail.boundingBox();
+    assert.ok(runpodBox && runpodRail && runpodBox.x >= runpodRail.x - 1 &&
+      runpodBox.x + runpodBox.width <= runpodRail.x + runpodRail.width + 1,
+      'RunPod detail also stays inside the status sidebar');
     // Precise infrastructure estimates remain available on explicit disclosure.
     await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
