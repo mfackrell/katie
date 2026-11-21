@@ -81,7 +81,7 @@ export function scopedRootDelegationDirective(args:{
   ' already has development among its tools '+JSON.stringify(existingTools)+
   ', approved scope grant '+String(project.approved_hash)+
   ', and current deadline '+new Date(game.deadline).toISOString()+
-  '. Do not issue a no-op amend_delegation with unchanged tools and deadline or repeat grant_scope for this approved scope. Continue management through the existing hierarchy; any distinct authorized capability or deadline amendment remains possible. This is current context, not a preselected management command.';
+  '. Do not issue a no-op amend_delegation with unchanged tools and deadline or repeat grant_scope for this approved scope. The existing Game Delivery and Independent QA Functional Directors own this approved work: do NOT appoint Managers, Supervisors or Workers from the Project Director, and do NOT appoint another Functional Director for work already assigned to these directorates. Use the existing direct-report Functional Director IDs for lawful management decisions. Subordinate appointments belong to those Functional Directors and their managers. Any genuinely new Project Director appointment must have kind "manager" AND managementLevel "functional_director"; no other kind or managementLevel is permitted. Continue management through the existing hierarchy; any distinct authorized capability or deadline amendment remains possible. This is current context, not a preselected management command.';
  const tasks:string[]=[];
  if(needsDevelopment)tasks.push(
   'Issue amend_delegation for Game Delivery direct report '+game.id+
