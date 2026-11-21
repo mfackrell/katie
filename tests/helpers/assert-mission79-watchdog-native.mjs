@@ -96,6 +96,9 @@ export async function assertMission79WatchdogNative(db,{project,owner,missionId,
   const claimed=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[nextSha,nextGeneration,nextDeployment])).rows[0].c;
   assert.equal(claimed?.job?.id,assignmentId);
   assert.equal(claimed.job.attempts,2);
+  const claimedReceipt=(await db.query('select project_org_mission79_watchdog_offer($1,$2,$3) r',[owner,project,nextSha])).rows[0].r;
+  assert.equal(claimedReceipt.stage,'claimed','Owner can still read immutable authorization after worker claim');
+  assert.equal(claimedReceipt.authorizationId,consent);
   assert.equal((await db.query('select project_org_mission79_retry_execution_authorized($1,$2,$3,$4) ok',[assignmentId,claimed.job.lease,nextSha,nextDeployment])).rows[0].ok,true);
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,nextSha,nextGeneration,nextDeployment])).rows[0].ok,false,'No third attempt');
   const other=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[nextSha,nextGeneration,nextDeployment])).rows[0].c;
