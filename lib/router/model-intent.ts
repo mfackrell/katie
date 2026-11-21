@@ -2502,7 +2502,7 @@ Example: A personal disclosure such as "we told each other everything" describes
 1. Establish the same material response-quality requirements that Best Answer would use for the user's actual objective. Never reduce them because the user selected Best Value.
 2. Assess which eligible models can reasonably meet that threshold. Use attributable results and feedback first, then documented capabilities and explicitly uncertain inference. Contextual, task-specific quality matters more than generic reasoning tier or low price.
 3. Exclude candidates that cannot reasonably meet the quality threshold. No evidence of superiority is NOT evidence of equivalence. A cheap model's basic text support, reasoning tier, or routine intent label cannot prove quality sufficiency. Conversely, a premium family label, emotional-nuance tag or vague possibility of better prose is NOT proof that an economical conversational model fails.
-4. Explicitly assess the lowest-priced credible model(s) in the supplied reviewed quotes, including Claude Haiku where priced and eligible, against THIS request's quality threshold. Only after qualification compare expected total costs of qualified candidates. Select the economical qualified candidate; a premium model needs an identifiable material quality benefit, not just extra capacity. Do not claim a price for an unpriced model. When direct evidence is unavailable, use grounded capability evidence and honest uncertainty; do not invent a quality score.
+4. Explicitly assess the lowest-priced credible model(s) in the supplied reviewed quotes, including Claude Haiku where priced and eligible, against THIS request's quality threshold. If you select a more expensive model for a low-complexity request, include the lowest-quoted eligible candidate among alternatives and explain its specific material shortcoming. Only after qualification compare expected total costs of qualified candidates. Select the economical qualified candidate; a premium model needs an identifiable material quality benefit, not just extra capacity. Do not claim a price for an unpriced model. When direct evidence is unavailable, use grounded capability evidence and honest uncertainty; do not invent a quality score.
 5. For each feedback event, independently assess whether its source task_excerpt, source_intent, original objective and quality requirements are genuinely comparable to this request. Evidence under potentially_comparable is UNSCORED and cannot be counted as a positive or negative quality result until the actual objectives and requirements are demonstrably comparable. A shared intent label does not prove similarity; different labels do not rule it out. Do not generalize creative results to finance, coding, or unrelated work.
 
 For Best Value selections with multiple eligible candidates, ALL SIX quality_qualification fields in the MANDATORY COMPLETE RESPONSE SHAPE above are required, substantive and task-specific. They are not an optional appendix. evidence_basis_kind must be exactly one of: attributed_feedback, verified_outcome, documented_capability, reasoned_inference. If evidence is only inferred, choose reasoned_inference and explicitly acknowledge unknown outcomes.
@@ -2675,6 +2675,27 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       // A successful LLM-primary comparison must contrast the winner with at least
       // one actual eligible alternative whenever a choice exists.
       if (neutral && args.candidates.length > 1 && selectionComparisons.length === 0) return null;
+      // A routine premium recommendation must demonstrate that the cheapest
+      // truly priced eligible alternative was considered. We cannot certify
+      // equivalence from price, but also cannot silently ignore a qualified
+      // economical candidate. Unknown price is never treated as free.
+      if (bestValueRequiresQualification && args.complexity === "low") {
+        const selectedCost = bestValueEvidenceCost(
+          args.requestEvidence?.candidates[`${selectedProvider}:${selectedModel}`]?.economics);
+        if (selectedCost !== null) {
+          const priced = args.candidates.flatMap(candidate => {
+            const price = bestValueEvidenceCost(
+              args.requestEvidence?.candidates[`${candidate.providerName}:${candidate.modelId}`]?.economics);
+            return price !== null ? [{candidate, price: BigInt(price)}] : [];
+          }).sort((a,b) => a.price < b.price ? -1 : a.price > b.price ? 1 : 0);
+          const lowest = priced[0];
+          if (lowest && lowest.price < BigInt(selectedCost) &&
+              !selectionComparisons.some(row =>
+                row.providerName === lowest.candidate.providerName && row.modelId === lowest.candidate.modelId)) {
+            return null;
+          }
+        }
+      }
       return { selectedProvider, selectedModel, selectionJustification, selectionComparisons };
   };
 
@@ -2828,7 +2849,15 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     ranking,
     decisionProviderName: result.provider,
     decisionModelId: result.modelId,
-    selectionJustification: result.result.selectionJustification,
+    selectionJustification: (args.routing_mode ?? "best_value") === "best_value"
+      ? [result.result.selectionJustification,
+          `Arbitration: ${chosen?.votes ?? 0}/${validJudgments.length} valid judges qualified ${chosen?.key ?? "unknown"}; ` +
+          `classified routine=${confirmedRoutine}; ` +
+          `selected native quote=${chosen?.estimatedCostMicrousd ?? "unknown"} microUSD; ` +
+          `attributable same-intent feedback balance=${chosen?.qualityEvidence ?? 0}. ` +
+          "Alternative vote counts are not independent measured response-quality scores."
+        ].join(" ").slice(0, 1100)
+      : result.result.selectionJustification,
     selectionComparisons: result.result.selectionComparisons
   };
 }
