@@ -52,9 +52,12 @@ test('owner project status displays a release mismatch, not stale legacy approva
 
 test('original owner endpoint rejects drift with precise 409 before a durable authorization RPC',async t=>{
  env(t);
- let owner=true,rpcWrites=0,legacyReads=0,offerCalls=0;
+ let owner=true,rpcWrites=0,legacyReads=0,offerCalls=0,mission80Reads=0;
  const {GET,POST}=modules({
   '@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},
+  // Newer Mission80 status is checked first. Mock this independent read-only
+  // offer so the legacy Mission79 drift fixture cannot touch its actual RPC.
+  '@/lib/projects/mission80-watchdog':{mission80WatchdogOffer:async()=>{mission80Reads++;throw Error('No Mission80 recovery offer in drift fixture');}},
   // The independent failed-attempt offer is a read-only preflight on current
   // main. It must not be counted as a durable owner-authorization RPC.
   '@/lib/projects/mission79-retry':{mission79RetryOffer:async()=>{throw Error('No authorized failed-attempt retry offer');}},
@@ -77,6 +80,7 @@ test('original owner endpoint rejects drift with precise 409 before a durable au
   cutoff:new Date(Date.now()+3600000).toISOString(),stateHash:'f'.repeat(64)};
  const readResponse=await GET(read());assert.equal(readResponse.status,409);
  assert.match((await readResponse.json()).error,/Recovery state unavailable/);
+ assert.equal(mission80Reads,1,'GET probes Mission80 read-only recovery without a durable RPC');
  assert.equal(legacyReads,3,'Legacy read-only GET recovery behavior remains intact');
  const submit=await POST(post(approval));assert.equal(submit.status,409);
  assert.equal((await submit.json()).code,'mission79_release_mismatch');
