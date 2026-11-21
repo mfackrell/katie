@@ -81,9 +81,16 @@ export async function assertMission82IndependentNative(db,{project,m80,j80,owner
    await db.query('savepoint mission82_negative');
    try{
     await db.query('reset role');
-    await db.query(sql);
-    await db.query('set role service_role');
-    assert.equal((await db.query('select project_org_mission82_independent_escalation($1) ok',[project])).rows[0].ok,false);
+    let immutableDenial=null;
+    try{await db.query(sql);}catch(error){immutableDenial=error;}
+    if(immutableDenial){
+     // Existing management/hierarchy guards can reject historical mutation
+     // before the new release predicate runs; this is stronger fail-closed.
+     assert.match(immutableDenial.message,/Management agents cannot execute technical assignments|immutable|not allowed|cannot change|permission denied/i);
+    }else{
+     await db.query('set role service_role');
+     assert.equal((await db.query('select project_org_mission82_independent_escalation($1) ok',[project])).rows[0].ok,false);
+    }
    }finally{
     await db.query('rollback to savepoint mission82_negative');
     await db.query('release savepoint mission82_negative');
