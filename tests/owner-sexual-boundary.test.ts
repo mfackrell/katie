@@ -36,6 +36,13 @@ test("owner can discuss personal concerns, health, faith and ordinary romance", 
   ]) assert.equal(isOwnerEroticRequest(text), false, text);
 });
 
+test("sexual image prompts are blocked while legitimate clinical illustration remains possible", () => {
+  assert.equal(isOwnerEroticRequest("Generate an image of a naked woman for me."), true);
+  assert.equal(isOwnerEroticRequest("Create an erotic portrait."), true);
+  assert.equal(isOwnerEroticRequest("Draw an anatomy diagram for a medical textbook."), false);
+  assert.equal(isOwnerEroticRequest("Create a photo of a sunset on the beach."), false);
+});
+
 test("short continuations of prior erotic role-play are blocked", () => {
   const history = [
     { role: "user", content: "Let's do erotic roleplay." },
