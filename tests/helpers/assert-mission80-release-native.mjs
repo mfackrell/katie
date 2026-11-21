@@ -54,6 +54,14 @@ export async function assertMission80ReleaseNative(db,{project,missionId,assignm
   // management assignment; mirror that order to satisfy the existing hierarchy guard.
   await db.query('update work_projects set active_mission_id=$2,status=\'running\' where id=$1',[project,M80]);
   await db.query('insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb)).*',[job]);
+  // The real project scheduler creates an accepted organization-assignment
+  // binding for management missions; direct synthetic insertion does not.
+  await db.query(`insert into project_organization_assignments
+   (assignment_id,node_id,contract_hash)
+   select $1,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex')
+   from project_organization_nodes n where n.id=$2`,[J80,qa.id]);
+  assert.equal((await db.query('select count(*)::int n from project_organization_assignments where assignment_id=$1',[J80])).rows[0].n,1);
+
   await db.query('set role service_role');
   assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,false,
    'Original 79-only release predicate MUST reject the completed Mission79 plus queued Mission80 fixture');
