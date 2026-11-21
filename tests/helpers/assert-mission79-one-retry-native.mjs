@@ -20,8 +20,11 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   assert.equal(start.status,'running');assert.equal(start.attempts,1);assert.equal(start.calls,0);
   const gate=(await db.query('select * from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
   assert.equal(gate.state,'active');
-  assert.equal((await db.query("select count(*)::int n from project_provider_requests where assignment_id=$1 and operation='inference'",[assignmentId])).rows[0].n,0);
+  // The disposable fixture's service_role intentionally has no direct
+  // provider-request table SELECT privilege. Query audit history as fixture
+  // PostgreSQL owner; SQL service-role APIs still enforce their own ACLs.
   await db.query('reset role');
+  assert.equal((await db.query("select count(*)::int n from project_provider_requests where assignment_id=$1 and operation='inference'",[assignmentId])).rows[0].n,0);
   await db.query("update mission_assignments set status='failed',result=$2,detail=$3,lease=null,lease_until=null where id=$1",[assignmentId,rejection,rejection.detail]);
   await db.query("update agent_missions set status='blocked',calls=1,detail=$2 where id=$1",[missionId,rejection.detail]);
   await db.query("update work_projects set status='blocked',lease=null,lease_until=null,detail=$2 where id=$1",[project,rejection.detail]);
