@@ -82,6 +82,6 @@ AS $function$
   AND NOT public.project_provider_request_pending(p.id)
 )
  );
-$function$
+$function$;
 
 COMMIT;
