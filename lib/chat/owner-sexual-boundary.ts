@@ -50,7 +50,7 @@ function isEroticInstruction(message: string): boolean {
   const text = textFromTurn(message);
   if (PREVENTION_DISCUSSION.test(text)) return false;
   return (EROTIC_IMAGE_REQUEST.test(text) && EROTIC_IMAGE_SUBJECT.test(text) && !MEDICAL_IMAGE_CONTEXT.test(text)) ||
-    return (REQUEST_FRAME.test(text) && /\b(?:sexual|erotic)\s+role[- ]?play\b/i.test(text)) ||
+    (REQUEST_FRAME.test(text) && /\b(?:sexual|erotic)\s+role[- ]?play\b/i.test(text)) ||
     DIRECT_EROTIC_INVITATION.test(text) ||
     (ROLEPLAY_FRAME.test(text) && (EROTIC_TOPIC.test(text) || EROTIC_SCENE.test(text))) ||
     (REQUEST_FRAME.test(text) && EROTIC_TOPIC.test(text) && /\b(?:erotic|porn|sext|cybersex|dirty talk|talk dirty|horny|arous|masturbat|orgasm|explicit|steamy|kinky)\b/i.test(text));
