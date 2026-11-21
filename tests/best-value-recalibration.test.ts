@@ -38,7 +38,7 @@ for (const {message, intent, complexity, context} of prompts) {
     assert.ok(ranking.length, "at least one capability-qualified fallback exists");
     assert.ok(ranking[0].modeledCostMicrousd !== null, "reviewed price is required for a quantitative cost conclusion");
     assert.ok(BigInt(ranking[0].modeledCostMicrousd!) > 0n, "cost is not invented as zero");
-    if (complexity === "low" && intent !== "assistant-reflection") {
+    if (complexity === "low") {
       assert.equal(ranking[0].modelId, "gpt-5-mini",
         "a routine conversational request does not require premium capacity");
       assert.ok(ranking.some(c => c.modelId === "claude-sonnet-4-6"),
