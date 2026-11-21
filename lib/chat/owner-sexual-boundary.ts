@@ -26,6 +26,13 @@ const DIRECT_EROTIC_INVITATION =
   /\b(?:turn me on|make me (?:horny|come|cum|orgasm)|talk dirty to me|sext with me|have cybersex|masturbate (?:with|for|to) me|describe (?:how )?(?:you|we) (?:have sex|make love)|(?:let'?s|let us) (?:have sex|sext|masturbate)|i want (?:to|you to) (?:have sex|sext|masturbate))\b/i;
 const EROTIC_SCENE =
   /\b(?:undress(?:ing)?|strip(?:ping)?|naked|nude|breasts?|nipples?|genitals?|penis|vagina|thrust(?:ing)?|penetrat(?:e|ion|ing)|climax(?:ing)?|orgasm(?:ing)?|masturbat(?:e|ing|ion)|jerk(?:ing)? off)\b/i;
+const EROTIC_IMAGE_REQUEST =
+  /\b(?:generate|create|draw|render|make|produce|show me)\b.{0,80}\b(?:image|picture|photo|photograph|portrait)\b/i;
+const EROTIC_IMAGE_SUBJECT =
+  /\b(?:naked|nude|topless|porn(?:ographic)?|erotic|sexually explicit|sexual act|masturbat(?:e|ing|ion)|genitals?)\b/i;
+const MEDICAL_IMAGE_CONTEXT =
+  /\b(?:medical|clinical|health|anatomical|anatomy|educational diagram|textbook)\b/i;
+
 const REQUEST_FRAME =
   /\b(?:please|can (?:you|we)|could (?:you|we)|i want|i need|let'?s|let us|write|create|tell me|describe|show me|start|continue|again|more|be my|pretend|imagine|role[- ]?play)\b/i;
 const CONTINUE_FRAME =
@@ -42,7 +49,8 @@ function textFromTurn(content: string): string {
 function isEroticInstruction(message: string): boolean {
   const text = textFromTurn(message);
   if (PREVENTION_DISCUSSION.test(text)) return false;
-  return (REQUEST_FRAME.test(text) && /\b(?:sexual|erotic)\s+role[- ]?play\b/i.test(text)) ||
+  return (EROTIC_IMAGE_REQUEST.test(text) && EROTIC_IMAGE_SUBJECT.test(text) && !MEDICAL_IMAGE_CONTEXT.test(text)) ||
+    return (REQUEST_FRAME.test(text) && /\b(?:sexual|erotic)\s+role[- ]?play\b/i.test(text)) ||
     DIRECT_EROTIC_INVITATION.test(text) ||
     (ROLEPLAY_FRAME.test(text) && (EROTIC_TOPIC.test(text) || EROTIC_SCENE.test(text))) ||
     (REQUEST_FRAME.test(text) && EROTIC_TOPIC.test(text) && /\b(?:erotic|porn|sext|cybersex|dirty talk|talk dirty|horny|arous|masturbat|orgasm|explicit|steamy|kinky)\b/i.test(text));
