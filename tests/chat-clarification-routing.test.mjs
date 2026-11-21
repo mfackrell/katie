@@ -256,6 +256,9 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     message, messageForGeneration: generationMessage, selectedDocumentSource: null, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     taskProgressAssistantMessageId: 'current-answer', provider, providers: [provider], modelId: 'fixture-haiku',
     ownerCaptureTrace: undefined,
+    // This isolated route-slice fixture runs as a non-owner session; the
+    // owner-only guard is declared in executeChat outside the extracted slice.
+    ownerSexualBoundaryEnabled: false,
     cacheablePersona: 'Katie persona', name: 'Katie', personaForGeneration: 'Katie persona', summary: '', historyForProvider: history,
     attachments: [], images: [], storedWebsite: { fresh: false, context: '', previousWebsiteEvidence: undefined },
     mediaMemory: null, timelineContext: '', hasVideoInput: false, creativeNarrativeRequest: false,
