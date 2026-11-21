@@ -124,8 +124,8 @@ test('Mission81 corrected model guidance explicitly maps SMART parentObjective t
   assert.equal(context.principal.objective,f.manager.objective);
   assert.equal(context.reporting.immediateSuperior.objective,f.root.objective);
   assert.notEqual(context.principal.objective,context.reporting.immediateSuperior.objective);
-  assert.match(instruction,/smart\\.parentObjective EXACTLY from the supplied JSON decision context field principal\\.objective/);
-  assert.match(instruction,/Do NOT use reporting\\.immediateSuperior\\.objective, project\\.objective/);
+  assert.ok(instruction.includes('smart.parentObjective EXACTLY from the supplied JSON decision context field principal.objective'));
+  assert.ok(instruction.includes('Do NOT use reporting.immediateSuperior.objective, project.objective'));
   assert.match(instruction,/never guess or synthesize the missing value/);
   return {text:JSON.stringify([f.command])};
  });
