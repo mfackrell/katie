@@ -20,6 +20,10 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   assert.equal(start.status,'running');assert.equal(start.attempts,1);assert.equal(start.calls,0);
   const gate=(await db.query('select * from project_retest_production_release_gate where project_id=$1',[project])).rows[0];
   assert.equal(gate.state,'active');
+  // pg decodes BIGINT as a string by default. Use numeric generation fencing
+  // rather than JS string concatenation when simulating operator transitions.
+  const oldGeneration=Number(gate.generation);
+  assert.ok(Number.isSafeInteger(oldGeneration)&&oldGeneration>0);
   // The disposable fixture's service_role intentionally has no direct
   // provider-request table SELECT privilege. Query audit history as fixture
   // PostgreSQL owner; SQL service-role APIs still enforce their own ACLs.
@@ -34,11 +38,11 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   // release transition must use fixture DB owner, never service_role.
   await db.query('reset role');
   assert.equal((await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5) r',
-   [project,gate.release_sha,gate.deployment_id,'closed',gate.generation])).rows[0].r.state,'closed');
+   [project,gate.release_sha,gate.deployment_id,'closed',oldGeneration])).rows[0].r.state,'closed');
   assert.equal((await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5) r',
-   [project,retrySha,deployment,'active',gate.generation+1])).rows[0].r.state,'active');
+   [project,retrySha,deployment,'active',oldGeneration+1])).rows[0].r.state,'active');
   await db.query('set role service_role');
-  const generation=gate.generation+2;
+  const generation=oldGeneration+2;
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',
    [project,retrySha,generation,deployment])).rows[0].ok,false,'Failed original is not automatically retried');
   const offer=(await db.query('select project_org_mission79_retry_offer($1,$2,$3) r',
