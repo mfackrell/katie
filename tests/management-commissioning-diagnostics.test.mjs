@@ -74,3 +74,61 @@ test('unknown SQL outcomes and transport failures are never classified as safe r
  const {smartSqlRejection}=modules()('@/lib/projects/smart-diagnostics');
  for(const error of [Error('fetch failed'),Error('Mission state operation failed: gateway timeout'),Error('Mission state operation failed: {"code":"P0001","message":"unrecognized failure"}'),Error('Mission state operation failed: {"code":"40001","message":"SMART requires an explicit bounded file inventory within worker scope"}')])assert.equal(smartSqlRejection(error),null);
 });
+
+
+// Production Mission81 evidence: only the normalized rejected field paths and
+// proposal hash were persisted, not the raw provider command JSON. This test
+// reproduces the exact *kind* of validator rejection; it does NOT pretend that
+// the synthetically wrong parent string was the historical provider response.
+test('saved Mission81 smart.parentObjective rejection remains fail-closed; exact issuer objective passes',async()=>{
+ const saved={
+  missionId:'2d01badf-7d42-4935-93ff-187d7c8d032e',
+  assignmentId:'4a79cc8c-11a8-4552-bf24-be581b59dfe9',
+  code:'smart_contract_fields',action:'assign',position:1,
+  smartFields:['smart.parentObjective'],
+  proposalHash:'23e66ac02e8115571ef09bdb191a6d2543068a2304cbf0cdd8bd5a1237f109f5'
+ };
+ assert.equal(saved.code,'smart_contract_fields');assert.equal(saved.action,'assign');
+ assert.deepEqual(saved.smartFields,['smart.parentObjective']);
+ assert.match(saved.proposalHash,/^[a-f0-9]{64}$/);
+ const issuerObjective='Build the responsive, same-device two-player browser tic-tac-toe game exactly as requested by the owner, managing implementation only within the single coding milestone under app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/ while preserving all no-extra-features constraints.';
+ const superiorObjective='Build a responsive, same-device two-player browser tic-tac-toe game. Start with an empty 3×3 board, X first, and alternate legal moves. Ignore occupied squares without changing the turn. Detect all row, column and diagonal wins and a full-board draw. Display the current turn or result and reject moves after game end. New Game and reload each clear the board and restore X first. No accounts, network play, computer opponent, persistence, new dependencies or extra features. Use a protected Preview and independent same-commit acceptance.';
+ const {smartContractFields}=modules()('@/lib/projects/smart-diagnostics');
+ const f=fixture();f.manager.objective=issuerObjective;
+ f.contract.parentObjective=superiorObjective;
+ assert.deepEqual(Array.from(smartContractFields(f.contract,issuerObjective,'Owner objective','work',f.worker)),['parentObjective']);
+ await assert.rejects(f.run([f.command]),e=>{
+  assert.equal(e.evidence?.code,saved.code);
+  assert.equal(e.evidence?.action,saved.action);
+  assert.equal(e.evidence?.position,saved.position);
+  assert.deepEqual(Array.from(e.evidence.smartFields),saved.smartFields);
+  return true;
+ });
+ assert.equal(f.calls.filter(c=>c.name==='project_org_decide').length,0);
+ // Explicit exact reuse of the actual issuer contract, not filling missing
+ // data by inference. The production manager remains unchanged.
+ f.contract.parentObjective=issuerObjective;
+ assert.deepEqual(Array.from(smartContractFields(f.contract,issuerObjective,'Owner objective','work',f.worker)),[]);
+ await f.run([f.command]);
+ assert.equal(f.calls.filter(c=>c.name==='project_org_decide').length,1);
+});
+
+test('Mission81 corrected model guidance explicitly maps SMART parentObjective to context principal.objective',async()=>{
+ const f=fixture();
+ const execute=f.load('@/lib/projects/organization').executeManagementClaim;
+ let seen=false;
+ await execute(f.claim,async(_claim,instruction,input)=>{
+  seen=true;
+  const context=JSON.parse(input);
+  assert.equal(context.principal.id,f.manager.id);
+  assert.equal(context.principal.objective,f.manager.objective);
+  assert.equal(context.reporting.immediateSuperior.objective,f.root.objective);
+  assert.notEqual(context.principal.objective,context.reporting.immediateSuperior.objective);
+  assert.ok(instruction.includes('smart.parentObjective EXACTLY from the supplied JSON decision context field principal.objective'));
+  assert.ok(instruction.includes('Do NOT use reporting.immediateSuperior.objective, project.objective'));
+  assert.match(instruction,/never guess or synthesize the missing value/);
+  return {text:JSON.stringify([f.command])};
+ });
+ assert.equal(seen,true);
+ assert.equal(f.calls.filter(c=>c.name==='project_org_decide').length,1);
+});

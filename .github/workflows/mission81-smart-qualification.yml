@@ -1,0 +1,38 @@
+name: Mission81 SMART parent objective qualification
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/organization.ts'
+      - 'tests/management-commissioning-diagnostics.test.mjs'
+      - '.github/workflows/mission81-smart-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  smart-parent-objective:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install native PostgreSQL 16 if required
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Exact Mission81 field-level evidence, prompt and unchanged SMART guard
+        run: node --test tests/management-commissioning-diagnostics.test.mjs
+      - name: Unchanged native PostgreSQL management hierarchy and SMART admission
+        run: node --test tests/project-organization-postgres.test.mjs
