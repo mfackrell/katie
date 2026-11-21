@@ -1,0 +1,45 @@
+name: Mission80 exact owner watchdog and successor qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261121185000_mission80_owner_watchdog_continuity.sql'
+      - 'lib/projects/mission80-watchdog.ts'
+      - 'app/api/projects/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'components/director-recovery-control.tsx'
+      - 'components/mission80-watchdog-recovery-control.tsx'
+      - 'tests/mission80-watchdog-recovery-*'
+      - 'tests/helpers/assert-mission80-watchdog-native.mjs'
+      - 'tests/helpers/assert-mission80-release-native.mjs'
+      - '.github/workflows/mission80-watchdog-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  mission80-watchdog:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: First-party authenticated owner recovery and replay negatives
+        run: node --test tests/mission80-watchdog-recovery-runtime.test.mjs
+      - name: Exact original 79/80-mission native watchdog and successor with scheduler leases
+        run: node --test tests/mission80-watchdog-recovery-postgres.test.mjs

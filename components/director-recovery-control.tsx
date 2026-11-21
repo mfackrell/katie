@@ -8,6 +8,8 @@ import type {BlockedOwnerOffer} from "@/lib/projects/blocked-owner-recovery";
 import type {BlockedManagementRetestOffer} from "@/lib/projects/blocked-management-retest";
 import type {Mission79FutureWindowOffer} from "@/lib/projects/mission79-future-window";
 import type {Mission79RetryOffer} from "@/lib/projects/mission79-retry";
+import type {Mission80WatchdogOffer} from "@/lib/projects/mission80-watchdog";
+import {Mission80WatchdogRecoveryControl} from "./mission80-watchdog-recovery-control";
 import {Mission79RetryControl} from "./mission79-retry-control";
 import {Mission79FutureWindowControl} from "./mission79-future-window-control";
 
@@ -31,6 +33,7 @@ export type DirectorRecoveryOffer = {
   managementRetest?:BlockedManagementRetestOffer;
   mission79FutureWindow?:Mission79FutureWindowOffer;
   mission79Retry?:Mission79RetryOffer;
+  mission80Recovery?:Mission80WatchdogOffer;
   managementActivationError?:string;
   hierarchyRecovery?: {decisionId:string;priorCutoff:string;directorCutoff:string;stateHash:string;
     nodeCount:number;maxHours:number;activeMissionId:string|null};
@@ -185,6 +188,9 @@ function LegacyDirectorRecoveryControl({
 
 
 export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;onRefresh:()=>void}){
+ if(props.recovery.mission80Recovery)
+  return <Mission80WatchdogRecoveryControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
+   initial={props.recovery.mission80Recovery} onRefresh={props.onRefresh}/>;
  if(props.recovery.mission79Retry)
   return <Mission79RetryControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
    initial={props.recovery.mission79Retry} onRefresh={props.onRefresh}/>;
