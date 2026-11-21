@@ -207,6 +207,12 @@ test('Mission83 saved pre-inference overflow: exact lossless references fit 48k 
   acceptance:['Independent same-commit QA','No forbidden features','Evidence-backed acceptance']});
  const planning=node('qa-planning','qa','manager',{objective:'Coordinate QA planning in original authority',acceptance:['QA planning evidence','No development authority']});
  const execution=node('qa-execution','qa','manager',{objective:'Coordinate QA execution in original authority',acceptance:['Same-commit executed checks','No development authority']});
+ // Match the measured current QA node objective/acceptance sizes while using
+ // synthetic strings instead of publishing owner-private source contracts.
+ for(const [n,objectiveChars,acceptanceChars] of [[qa,239,405],[planning,224,331],[execution,247,438]]){
+  n.objective=n.objective.padEnd(objectiveChars,'q');
+  n.acceptance=[n.acceptance.join(' | ').padEnd(acceptanceChars-4,'a')];
+ }
  for(const n of [qa,planning,execution]){
   n.management_contract={
    purpose:'Verified independent scope',
