@@ -319,4 +319,58 @@ $retry_execution$;
 REVOKE ALL ON FUNCTION public.project_org_mission79_retry_execution_authorized(uuid,uuid,text,text) FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.project_org_mission79_retry_execution_authorized(uuid,uuid,text,text) TO service_role;
 
+-- The first-retry claim cannot use legacy Mission79 expiry settlement because
+-- that old receipt belongs to a different immutable production release.
+-- A second, expired lease is SETTLED, never requeued or spent again. The normal
+-- mission cron calls this once per tick before attempting any new claim.
+CREATE FUNCTION public.project_org_mission79_retry_settle_expired()
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET search_path TO 'public','pg_temp'
+AS $retry_settle$
+DECLARE j mission_assignments; r project_mission79_retry_receipts;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
+ UPDATE mission_assignments assignment
+ SET status='failed',lease=NULL,lease_until=NULL,updated_at=clock_timestamp(),
+  detail='Original Mission79 owner-authorized second attempt terminally settled after lease expiry; no third retry.'
+ FROM project_mission79_retry_receipts receipt
+ JOIN project_retest_production_release_gate gate ON gate.project_id=receipt.project_id
+ JOIN agent_missions mission ON mission.id=receipt.mission_id
+ JOIN work_projects project ON project.id=receipt.project_id
+ WHERE receipt.project_id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+  AND receipt.mission_id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  AND receipt.assignment_id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+  AND assignment.id=receipt.assignment_id AND assignment.mission_id=mission.id
+  AND assignment.status='running' AND assignment.attempts=2
+  AND assignment.lease IS NOT NULL AND assignment.lease_until<=clock_timestamp()
+  AND mission.calls BETWEEN 1 AND 2
+  AND mission.project_id=project.id AND mission.status='running'
+  AND project.active_mission_id=mission.id
+  AND project.deadline=receipt.cutoff AND mission.deadline=receipt.cutoff
+  AND gate.release_sha=receipt.release_sha
+  AND gate.deployment_id=receipt.deployment_id
+  AND gate.generation=receipt.release_generation
+  AND gate.state='active' AND gate.alias_name='katie-mu.vercel.app'
+  AND NOT project_provider_request_pending(project.id)
+ RETURNING assignment.* INTO j;
+ IF NOT FOUND THEN RETURN false;END IF;
+ SELECT * INTO r FROM project_mission79_retry_receipts WHERE assignment_id=j.id;
+ UPDATE agent_missions SET status='blocked',updated_at=clock_timestamp(),
+  detail='Original Mission79 second attempt expired; result not confirmed, prior owner and provider evidence preserved.'
+ WHERE id=r.mission_id AND status='running';
+ UPDATE work_projects SET status='blocked',updated_at=clock_timestamp(),
+  detail='One owner-authorized Mission79 retry exhausted without terminal result. No additional paid claim.'
+ WHERE id=r.project_id AND active_mission_id=r.mission_id AND status='running';
+ INSERT INTO project_events(project_id,event,data) VALUES(r.project_id,'mission79_retry_expired_terminally_settled',
+  jsonb_build_object('missionId',r.mission_id,'assignmentId',r.assignment_id,
+   'authorizationId',r.authorization_id,'priorAttempts',r.prior_attempts,
+   'finalAttempts',j.attempts,'releaseSha',r.release_sha,
+   'deploymentId',r.deployment_id,'releaseGeneration',r.release_generation,
+   'settledAt',clock_timestamp()));
+ RETURN true;
+END $retry_settle$;
+REVOKE ALL ON FUNCTION public.project_org_mission79_retry_settle_expired() FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.project_org_mission79_retry_settle_expired() TO service_role;
+
 COMMIT;
