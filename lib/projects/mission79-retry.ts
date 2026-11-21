@@ -3,10 +3,10 @@ import {ORIGINAL_TTT_PROJECT,ORIGINAL_TTT_SCOPE} from './management-activation';
 import {MISSION79_ID,MISSION79_ASSIGNMENT} from './mission79-future-window';
 
 export type Mission79RetryOffer={
- projectId:string;stage:'approve_retry'|'authorized'|'claimed'|'terminal';
+ projectId:string;stage:'approve_retry'|'authorized'|'claimed'|'terminal'|'recover_watchdog'|'recovered';
  releaseSha:string;releaseGeneration:number;deploymentId:string;
  missionId:string;assignmentId:string;scopeHash:string;cutoff:string;
- authorizationId:string|null;authorizedAt?:string;
+ authorizationId:string|null;authorizedAt?:string;priorAuthorizationId?:string;
  originalAttempts:number;originalCalls:number;currentAttempts?:number;
  historicalMissions:number;maxMissions:number;tokenAllowance:number;nodeCount:number;
  stateHash?:string;
@@ -19,11 +19,17 @@ export async function mission79RetryOffer(projectId:string):Promise<Mission79Ret
  if(process.env.VERCEL_ENV!=='production'||projectId!==ORIGINAL_TTT_PROJECT
    ||!sha||!/^[0-9a-f]{40}$/.test(sha))
   throw Error('Exact original production retry release required');
- const offer=await rpc<Mission79RetryOffer>('project_org_mission79_retry_offer',{
+ // After the first paid failure was separately authorized, a watchdog may
+ // have blocked the project before the regular scheduler claimed attempt 2.
+ // This is a read-only, NEW-RELEASE owner offer; it is never consent.
+ const current=await rpc<Mission79RetryOffer>('project_org_mission79_watchdog_offer',{
+  p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:projectId,p_release:sha
+ }).catch(()=>null);
+ const offer=current??await rpc<Mission79RetryOffer>('project_org_mission79_retry_offer',{
   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:projectId,p_release:sha
  });
  if(!offer||offer.projectId!==projectId||offer.releaseSha!==sha
-  ||!['approve_retry','authorized','claimed','terminal'].includes(offer.stage)
+  ||!['approve_retry','authorized','claimed','terminal','recover_watchdog','recovered'].includes(offer.stage)
   ||offer.missionId!==MISSION79_ID||offer.assignmentId!==MISSION79_ASSIGNMENT
   ||offer.scopeHash!==ORIGINAL_TTT_SCOPE
   ||!Number.isSafeInteger(offer.releaseGeneration)||offer.releaseGeneration<=0
@@ -32,9 +38,11 @@ export async function mission79RetryOffer(projectId:string):Promise<Mission79Ret
   ||offer.originalAttempts!==1||offer.originalCalls!==1
   ||offer.historicalMissions!==79||offer.maxMissions!==96
   ||offer.tokenAllowance!==600000||offer.nodeCount!==13
-  ||(offer.stage==='approve_retry'&&(offer.authorizationId!==null
+  ||(['approve_retry','recover_watchdog'].includes(offer.stage)&&(offer.authorizationId!==null
     ||typeof offer.stateHash!=='string'||!/^[a-f0-9]{64}$/.test(offer.stateHash)))
-  ||(offer.stage!=='approve_retry'&&
+  ||(offer.stage==='recover_watchdog'&&
+    (!offer.priorAuthorizationId||!/^[0-9a-f-]{36}$/i.test(offer.priorAuthorizationId)))
+  ||(!['approve_retry','recover_watchdog'].includes(offer.stage)&&
     (!offer.authorizationId||!/^[0-9a-f-]{36}$/i.test(offer.authorizationId)
      ||!offer.authorizedAt||!Number.isFinite(Date.parse(offer.authorizedAt)))))
   throw Error('Exact Mission79 retry evidence or release changed');

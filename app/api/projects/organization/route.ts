@@ -90,7 +90,18 @@ const mission79RetryApprovalInput=z.object({
  cutoff:z.string().datetime({offset:true}),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput]);
+const mission79WatchdogRecoveryInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),
+ trialAction:z.literal('authorize_mission79_watchdog_recovery'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ releaseGeneration:z.number().int().positive(),
+ deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
+ missionId:z.literal(MISSION79_ID),assignmentId:z.literal(MISSION79_ASSIGNMENT),
+ authorizationId:z.string().uuid(),priorAuthorizationId:z.string().uuid(),
+ cutoff:z.string().datetime({offset:true}),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
@@ -116,6 +127,36 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_mission79_watchdog_recovery'){
+  // A new deployment invalidates the old retry release binding. This new
+  // owner action only restores the original queued attempt, never creates a
+  // new mission, window, receipt for another retry, or paid provider request.
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Exact current production release required'},{status:409});
+  const offer=await mission79RetryOffer(p.projectId);
+  if(offer.stage!=='recover_watchdog'||offer.releaseSha!==p.releaseSha
+   ||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
+   ||offer.missionId!==p.missionId||offer.assignmentId!==p.assignmentId
+   ||offer.priorAuthorizationId!==p.priorAuthorizationId
+   ||offer.stateHash!==p.stateHash||Date.parse(offer.cutoff)!==Date.parse(p.cutoff)
+   ||Date.parse(offer.cutoff)<=Date.now()+300000)
+   return NextResponse.json({error:'Existing one-time retry and exact watchdog state required'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>(
+   'project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
+   return NextResponse.json({error:'Canonical production release verification required for watchdog recovery'},{status:409});
+  return NextResponse.json(await rpc('project_org_mission79_watchdog_recover',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
+   p_release:p.releaseSha,p_mission:p.missionId,p_assignment:p.assignmentId,
+   p_authorization:p.authorizationId,p_prior_authorization:p.priorAuthorizationId,
+   p_cutoff:p.cutoff,p_state_hash:p.stateHash,
+   p_generation:p.releaseGeneration,p_deployment:p.deploymentId
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_mission79_failed_retry'){
   // Owner authorization is distinct from the prior window and the release
   // operator. Neither rendering the offer nor deploying code admits paid work.
