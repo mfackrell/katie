@@ -28,7 +28,7 @@ export function MemoryCalibration({actorId,actorName,chatId,inChat=false}:{actor
    setBusy(true);setError("");setNotice("");setSelected([]);
    try {
      if(!chatId) throw Error("Start a conversation with this specialist before calibrating memory.");
-     const result=await change("/api/actors","POST",{calibration:"preview",actorId:actorId,chatId},crypto.randomUUID()) as CalibrationResult;
+     const result=await change("/api/actors","POST",{calibration:"preview",actorId,chatId},crypto.randomUUID()) as CalibrationResult;
      setReport(result);
      setNotice("Review the proposed changes below. No memory has been modified.");
    }catch(e){setError(e instanceof Error?e.message:"Calibration failed");}
