@@ -194,12 +194,22 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByLabel('Per request approval threshold (USD)').fill('0.05');
     await usage.getByRole('button', { name: 'Save settings' }).click();
     await usage.getByText('$0.25', { exact: true }).first().waitFor();
-    // Provider tooltip exposes only that provider's model statistics.
-    const providerTooltip = usage.getByRole('tooltip');
-    await usage.getByRole('button', { name: 'Show model usage for openai' }).hover();
-    await providerTooltip.waitFor();
-    assert.match(await providerTooltip.innerText(), /gpt-4o/);
-    await page.mouse.move(0, 0);
+    // Expanded model costs remain inside the narrow rail and do not cover chat.
+    const modelButton = usage.getByRole('button', { name: 'Show model usage for openai' });
+    const providerDetails = usage.getByRole('region', { name: 'Model usage for openai' });
+    await modelButton.click();
+    await providerDetails.waitFor();
+    assert.equal(await modelButton.getAttribute('aria-expanded'), 'true');
+    assert.match(await providerDetails.innerText(), /gpt-4o/);
+    assert.match(await providerDetails.innerText(), /Estimated cost/);
+    const detailsBox = await providerDetails.boundingBox();
+    const railBounds = await rail.boundingBox();
+    assert.ok(detailsBox && railBounds && detailsBox.x >= railBounds.x - 1 &&
+      detailsBox.x + detailsBox.width <= railBounds.x + railBounds.width + 1,
+      'expanded model details remain inside the sidebar without clipping or overlap');
+    assert.equal(await usage.getByRole('tooltip').count(), 0, 'model costs no longer use an overflowing hover tooltip');
+    await modelButton.click();
+    assert.equal(await modelButton.getAttribute('aria-expanded'), 'false');
     // The same rail usage snapshot must make approval actionable in the chat,
     // without mounting a second usage reader or a second polling flight.
     const inlineApproval = page.getByRole('region', { name: 'Spending authorization required' });
