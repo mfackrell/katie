@@ -8,7 +8,7 @@ test("owner boundary checks trusted workflow before provider routing", () => {
   assert.match(route, /const ownerSexualBoundaryEnabled = Boolean\(/);
   assert.match(route, /verifiedWorkflow\?\.workflow\.owner_id === process\.env\.KATIE_OWNER_AUTH_USER_ID/);
   assert.match(route, /const sexualBoundaryRefusal = ownerSexualBoundaryEnabled/);
-  assert.match(route, /isOwnerEroticRequest\(message, history\)/);
+  assert.match(route, /isOwnerEroticRequest\(message, attachmentHistory\)/);
   const gate = route.indexOf("const sexualBoundaryRefusal = ownerSexualBoundaryEnabled");
   const providers = route.indexOf("const configuredProviders = getAvailableProviders()");
   assert.ok(gate >= 0 && providers > gate, "direct erotic requests stop before provider dispatch");
