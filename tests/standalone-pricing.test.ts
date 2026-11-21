@@ -225,7 +225,7 @@ describe("verified Claude five-minute cache writes",()=>{
     const changed=JSON.parse(JSON.stringify(request.payload));changed.system[0].text+="Changed exact cache prefix";expect(freezePreparedRequest(request.provider,request.model,request.endpoint,changed).hash).not.toBe(request.hash);
   });
   it("settles disjoint uncached/read/write counts once using verified TTL evidence",()=>{
-    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-11-05-v4"});
+    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-11-21-v5"});
     expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
     expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cacheReadInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
     expect(priceTokenUsage(getModelPrice("anthropic","claude-haiku-4-5")!,2,0,1,1)).toBe("2");
