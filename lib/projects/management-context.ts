@@ -118,7 +118,8 @@ function compactRepeatedManagementEvidence(payload:Record<string,unknown>):Recor
   if(typeof e.detail!=='string')return e;
   const prior=seen.get(e.detail);
   if(prior===undefined){seen.set(e.detail,i);return e;}
-  const {detail:_,...rest}=e;
+  const rest={...e};
+  delete rest.detail;
   return {...rest,detailRef:prior};
  });
  const current=payload.reporting as ManagementRow;
