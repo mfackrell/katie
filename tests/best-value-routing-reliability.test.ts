@@ -12,6 +12,7 @@ const inventory: Array<{ name: LlmProvider["name"]; models: string[] }> = [
   { name: "openai", models: ["gpt-5.3-codex", "gpt-5.4", "gpt-4.1-mini"] },
   { name: "anthropic", models: ["claude-sonnet-4-6", "claude-haiku-5-5"] },
   { name: "google", models: ["gemini-2.5-flash"] },
+  { name: "grok", models: ["grok-4.3"] },
 ];
 const classification = {
   intent: "social-emotional",
@@ -59,13 +60,13 @@ function registry(): Map<LlmProvider["name"], RegistryRoutingModel[]> {
 
 type JudgeMode = "one-valid" | "all-failed" | "best-answer-valid";
 async function routeIncident(routing_mode: "best_value" | "best_answer", mode: JudgeMode) {
-  const transmissions: Array<{ provider: string; model: string; stage: "classification" | "judge" }> = [];
+  const transmissions: Array<{ provider: string; model: string; stage: "classification" | "judge"; prompt: string }> = [];
   const providers: LlmProvider[] = inventory.map(({ name, models }) => ({
     name,
     listModels: async () => models,
     generate: async params => {
       const stage = params.user.includes("CURRENT_USER_MESSAGE:") ? "classification" : "judge";
-      transmissions.push({ provider: name, model: params.modelId!, stage });
+      transmissions.push({ provider: name, model: params.modelId!, stage, prompt: params.user });
       if (stage === "classification") return {
         provider: name, model: params.modelId!, text: JSON.stringify(classification),
       };
@@ -112,13 +113,18 @@ async function routeIncident(routing_mode: "best_value" | "best_answer", mode: J
 
 function assertOneShotJudges(calls: Awaited<ReturnType<typeof routeIncident>>["transmissions"]) {
   const judges = calls.filter(call => call.stage === "judge");
-  assert.deepEqual(judges.map(call => call.provider).sort(), ["anthropic", "google", "openai"]);
-  assert.equal(new Set(judges.map(call => call.provider + ":" + call.model)).size, 3);
-  assert.equal(judges.length, 3, "each of three independent judges is invoked exactly once");
+  assert.deepEqual(judges.map(call => call.provider).sort(), ["anthropic", "google", "grok", "openai"]);
+  assert.deepEqual(judges.map(call => call.provider + ":" + call.model).sort(), [
+    "anthropic:claude-haiku-5-5", "google:gemini-2.5-flash", "grok:grok-4.3", "openai:gpt-4.1-mini"
+  ]);
+  assert.equal(new Set(judges.map(call => call.provider + ":" + call.model)).size, 4);
+  assert.equal(judges.length, 4, "all four independent judges are invoked exactly once");
+  assert.equal(new Set(judges.map(call => call.prompt)).size, 1,
+    "all four judges receive the exact same routing context, inventory, and instructions");
   assert.equal(calls.filter(call => call.stage === "classification").length, 1);
 }
 
-test("Nov 20: one source-honest Sonnet recommendation survives the other two unavailable judges", async () => {
+test("Nov 20: one source-honest Sonnet recommendation survives the other three unavailable judges", async () => {
   const { result, transmissions } = await routeIncident("best_value", "one-valid");
   assert.equal(result.modelId, "claude-sonnet-4-6");
   assert.equal(result.provider.name, "anthropic");
