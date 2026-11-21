@@ -63,6 +63,6 @@ export function looksLikeEroticAssistantOutput(content: string): boolean {
   const text = textFromTurn(content);
   if (PREVENTION_DISCUSSION.test(text)) return false;
   const narrative = /\b(?:i|you|we|she|he)\b.{0,100}\b(?:undress(?:ing)?|strip(?:ping)?|thrust(?:ing)?|penetrat(?:e|ing)|masturbat(?:e|ing)|orgasm(?:ing)?|climax(?:ing)?|jerk(?:ing)? off)\b/i;
-  const interactive = /\b(?:your|my)\s+(?:breast|nipple|genital|penis|vagina)\b.{0,100}\b(?:kiss|touch|lick|suck|stroke|thrust)\b|\b(?:kiss|touch|lick|suck|stroke|thrust)\b.{0,100}\b(?:your|my)\s+(?:breast|nipple|genital|penis|vagina)\b/i;
+  const interactive = /\b(?:your|my)\s+(?:breasts?|nipples?|genitals?|penis|vagina)\b.{0,100}\b(?:kiss|touch|lick|suck|stroke|thrust)\b|\b(?:kiss|touch|lick|suck|stroke|thrust)\b.{0,100}\b(?:your|my)\s+(?:breasts?|nipples?|genitals?|penis|vagina)\b/i;
   return DIRECT_EROTIC_INVITATION.test(text) || narrative.test(text) || interactive.test(text);
 }
