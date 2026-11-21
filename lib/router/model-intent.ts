@@ -2760,7 +2760,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
   // are more valuable than a bare vote. Any selected model was already checked
   // against the exact eligible candidate set by the shared parser below.
   const winners = new Map<string, {
-    key: string; judgments: typeof validJudgments; votes: number;
+    key: string; judgments: typeof validJudgments; votes: number; priorScore: number;
     qualityEvidence: number; estimatedCostMicrousd: string | null;
   }>();
   for (const judgment of validJudgments) {
@@ -2770,6 +2770,8 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       existing.votes++;
       existing.judgments.push(judgment);
     } else {
+      const candidate = args.candidates.find(c =>
+        c.providerName === judgment.result.selectedProvider && c.modelId === judgment.result.selectedModel);
       const feedback = args.requestEvidence?.candidates[key]?.quality.feedback;
       // Only explicit task-intent-attributed reactions can change evidence
       // strength. Delivery receipts are not treated as proof of answer quality.
@@ -2777,6 +2779,7 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         Math.min(2, feedback?.positive ?? 0) - Math.min(2, feedback?.negative ?? 0)));
       winners.set(key, {
         key, judgments: [judgment], votes: 1,
+        priorScore: candidate?.prior_score ?? 0,
         qualityEvidence,
         estimatedCostMicrousd: bestValueEvidenceCost(args.requestEvidence?.candidates[key]?.economics),
       });
@@ -2790,7 +2793,10 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
   const confirmedRoutine = args.complexity === "low" &&
     (["general-text", "text", "social-emotional", "rewrite", "emotional-analysis"] as RequestIntent[]).includes(args.intent);
   const chosen = [...winners.values()].sort((a, b) =>
-    compareBestValueQualifiedJudgments(a, b, confirmedRoutine))[0];
+    (args.routing_mode ?? "best_value") === "best_value"
+      ? compareBestValueQualifiedJudgments(a, b, confirmedRoutine)
+      : (b.qualityEvidence * 3 + b.votes) - (a.qualityEvidence * 3 + a.votes) ||
+        b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
   const result = chosen?.judgments
     .sort((a, b) => a.lane - b.lane)[0] ?? null;
   console.info("[RoutingJudges] decision", {
