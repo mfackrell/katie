@@ -57,6 +57,7 @@ import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 import { SelfToolsOwnerSession } from "@/components/self-tools-owner-session";
 import { ReviewModeControl } from "@/components/review-mode-control";
+import { MemoryCalibration } from "@/components/memory-calibration";
 import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
@@ -927,6 +928,8 @@ export function ChatPanel({
   const [statusMount, setStatusMount] = useState<HTMLElement | null>(null);
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
   const [modelControlsMount,setModelControlsMount] = useState<HTMLElement|null>(null);
+  const [showMemoryCalibration,setShowMemoryCalibration] = useState(false);
+  useEffect(() => setShowMemoryCalibration(false), [chatId,actorId]);
   useEffect(() => { setModelControlsMount(statusRailOpen ? document.getElementById("katie-model-controls") : null); }, [statusRailOpen,chatId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
@@ -3343,6 +3346,16 @@ export function ChatPanel({
                   ) : null}
                 </div>
               ) : null}
+              {!managedAgentId && (
+                <button type="button"
+                  aria-label="Calibrate memory"
+                  aria-controls="chat-memory-calibration"
+                  aria-expanded={showMemoryCalibration}
+                  onClick={() => setShowMemoryCalibration(open => !open)}
+                  className="inline-flex h-9 items-center rounded-xl border border-white/15 bg-white/[0.05] px-3 text-[11px] font-medium text-zinc-200 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-emerald-500">
+                  Memory {showMemoryCalibration ? "▴" : "▾"}
+                </button>
+              )}
               <ReviewModeControl
                 key={actorId}
                 actorId={actorId}
@@ -3363,6 +3376,15 @@ export function ChatPanel({
 
         </div>
       </header>
+
+      {showMemoryCalibration && !managedAgentId && (
+        <section id="chat-memory-calibration" aria-label="Long-term memory calibration"
+          className="min-h-0 max-h-[55vh] shrink-0 overflow-y-auto overscroll-contain border-b border-white/10 bg-zinc-950/95 px-3 py-3 sm:px-6">
+          <div className="mx-auto max-w-4xl">
+            <MemoryCalibration key={actorId+":"+chatId} actorId={actorId} actorName={activeActorName} chatId={chatId} inChat />
+          </div>
+        </section>
+      )}
 
       {modelControlsMount ? createPortal(
         <section id="model-controls" aria-label="Model selection and display settings" className="space-y-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs text-zinc-300">
