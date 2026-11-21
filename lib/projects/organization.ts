@@ -196,7 +196,21 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const exceptions=[...ownedExceptions,...originExceptions]
   .filter((e,i,a)=>a.findIndex(v=>v.id===e.id)===i);
  const providerControlled=await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id});
- if(providerControlled&&claim.mission.calls>0)throw Error('Trial management inference was already admitted for this mission');
+ if(providerControlled&&claim.mission.calls>0){
+  // Only a *second*, lease-held original Mission79 attempt can pass here,
+  // following a separate immutable owner authorization on this exact release.
+  // All other management missions retain the existing single-call behavior.
+  const authorized=claim.mission.id==='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'
+   &&claim.job.id==='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'
+   &&claim.mission.calls===1&&claim.job.attempts===2
+   &&process.env.VERCEL_ENV==='production'
+   &&await rpc<boolean>('project_org_mission79_retry_execution_authorized',{
+    p_job:claim.job.id,p_lease:claim.job.lease,
+    p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
+    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
+   });
+  if(!authorized)throw Error('Trial management inference was already admitted for this mission');
+ }
  const baseInstruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
