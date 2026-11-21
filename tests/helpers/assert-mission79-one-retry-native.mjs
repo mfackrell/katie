@@ -30,11 +30,14 @@ export async function assertMission79OneRetryNative(db,other,{project,owner,miss
   await db.query("update work_projects set status='blocked',lease=null,lease_until=null,detail=$2 where id=$1",[project,rejection.detail]);
   await db.query("insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash,provider_receipt,resolved_at) values($1,$2,$3,$4,$5,$6,'inference',$7,'fixture-resolved',clock_timestamp())",
    [requestId,project,missionId,assignmentId,start.agent_id,'366cee0b-283b-47d6-99b5-afe90ce0baf8','f'.repeat(64)]);
-  await db.query('set role service_role');
+  // Release operator RPC is postgres-only, by design. The synthetic
+  // release transition must use fixture DB owner, never service_role.
+  await db.query('reset role');
   assert.equal((await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5) r',
    [project,gate.release_sha,gate.deployment_id,'closed',gate.generation])).rows[0].r.state,'closed');
   assert.equal((await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5) r',
    [project,retrySha,deployment,'active',gate.generation+1])).rows[0].r.state,'active');
+  await db.query('set role service_role');
   const generation=gate.generation+2;
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',
    [project,retrySha,generation,deployment])).rows[0].ok,false,'Failed original is not automatically retried');
