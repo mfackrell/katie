@@ -383,3 +383,69 @@ test('scope-only implementation delegation is diagnosed at its actual parent whi
  }
  assert.equal(scopedImplementationDelegationDirective({...game,tools:['manage']},[root,game,manager],[root,{...game,tools:['manage']},manager],grants,project),'');
 });
+
+
+test('saved Mission79 director_appointment evidence reproduces rejection without weakening hierarchy',()=>{
+ // Production retained this exact rejection evidence, not the discarded raw LLM JSON:
+ // {code:'director_appointment',action:'appoint',position:1,priorAppointments:0,targets:[]}.
+ const {assertManagementCommands}=modules()('@/lib/projects/organization');
+ const root={id:'c486ade1-2a9c-4cd5-a80b-90c032e4e03e',kind:'project_director',management_level:'project_director'};
+ const game={id:'9b62ae62-a499-490a-a7ac-6e6c5bb1229d',parent_id:root.id,kind:'manager',management_level:'functional_director'};
+ const qa={id:'4e6503c8-7723-49e7-ad30-22f633feb2f8',parent_id:root.id,kind:'manager',management_level:'functional_director'};
+ const nodes=[root,game,qa];
+ const saved={code:'director_appointment',action:'appoint',position:1,priorAppointments:0,targets:[]};
+ // The discarded raw proposal's exact lower-level role is not recoverable.
+ // Every forbidden managementLevel yields exactly the retained failure signature.
+ for(const level of ['manager','supervisor','worker']){
+  assert.throws(()=>assertManagementCommands(root,nodes,[{action:'appoint',kind:'manager',managementLevel:level}]),
+   error=>{assert.deepEqual(JSON.parse(JSON.stringify({
+    code:error.evidence?.code,action:error.evidence?.action,position:error.evidence?.position,
+    priorAppointments:error.evidence?.priorAppointments,targets:error.evidence?.targets
+   })),saved);return true;});
+ }
+ assert.doesNotThrow(()=>assertManagementCommands(root,nodes,[
+  {action:'appoint',kind:'manager',managementLevel:'functional_director'}
+ ]),'New justified Functional Directors remain lawful');
+ assert.throws(()=>assertManagementCommands(root,nodes,[
+  {action:'appoint',kind:'worker',managementLevel:'functional_director'}
+ ]),/cannot assign execution/);
+ assert.doesNotThrow(()=>assertManagementCommands(game,nodes,[
+  {action:'appoint',kind:'manager',managementLevel:'manager'}
+ ]),'Subordinate management remains permitted under a Functional Director');
+});
+
+test('Mission79 ratified existing directors guide root away from illegal new appointments',()=>{
+ const {scopedRootDelegationDirective}=modules()('@/lib/projects/organization');
+ // Inputs reproduce the actual original project's staffed Game Delivery/Independent QA
+ // directorates, approved source scope and complete delegated development authority.
+ const root='c486ade1-2a9c-4cd5-a80b-90c032e4e03e',
+  game='9b62ae62-a499-490a-a7ac-6e6c5bb1229d',
+  qa='4e6503c8-7723-49e7-ad30-22f633feb2f8',
+  scope='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
+ const tools=['analysis','development','manage','repository_review'];
+ const paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const input={
+  providerControlled:true,principal:{id:root,kind:'project_director'},
+  project:{phase:'development',approved_hash:scope},
+  scopedNodes:[
+   {id:root,kind:'project_director',status:'active'},
+   {id:game,parent_id:root,area:'game_delivery',kind:'manager',
+    management_level:'functional_director',status:'active',tools,deadline:'2026-11-22T14:00:00Z'},
+   {id:qa,parent_id:root,area:'independent_qa',kind:'manager',
+    management_level:'functional_director',status:'active',tools:['manage','analysis','research','repository_review']}
+  ],
+  scopeGrants:[{node_id:root,scope_hash:scope,paths},{node_id:game,scope_hash:scope,paths}],
+  workPackages:[]
+ };
+ const instruction=scopedRootDelegationDirective(input);
+ assert.match(instruction,/CURRENT ROOT DELEGATION ALREADY GRANTED/);
+ assert.match(instruction,/do NOT appoint Managers, Supervisors or Workers from the Project Director/);
+ assert.match(instruction,/do NOT appoint another Functional Director for work already assigned/);
+ assert.match(instruction,/existing direct-report Functional Director IDs/);
+ assert.match(instruction,/kind "manager" AND managementLevel "functional_director"/);
+ assert.match(instruction,new RegExp(game));
+ assert.match(instruction,new RegExp(scope));
+ assert.doesNotMatch(instruction,/Issue amend_delegation|Issue grant_scope/,'Do not repeat prior grants');
+ assert.equal(scopedRootDelegationDirective({...input,providerControlled:false}),'');
+ assert.equal(scopedRootDelegationDirective({...input,project:{...input.project,phase:'research'}}),'');
+});
