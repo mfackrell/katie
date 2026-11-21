@@ -92,6 +92,50 @@ function decisionReference(d:ManagementRow){
  return {id:d.id,node_id:d.node_id,assignment_id:d.assignment_id,created_at:d.created_at,
   decision:Array.isArray(d.decision)?d.decision.map(c=>Object.fromEntries(Object.entries(c).filter(([k])=>fields.has(k)))):d.decision};
 }
+// Lossless, read-only compaction ONLY after the original decision context
+// exceeds its existing limit. Never omit an exception, evidence outcome, node,
+// contract, or approved milestone. The canonical value is in this SAME JSON.
+function compactRepeatedManagementEvidence(payload:Record<string,unknown>):Record<string,unknown>{
+ const node=(value:ManagementNode,path:string):ManagementNode=>{
+  const contract=value.management_contract;
+  if(!contract||typeof contract!=='object'||Array.isArray(contract))return value;
+  const c=contract as ManagementRow;
+  const next={...c};
+  let compacted=false;
+  if(Array.isArray(c.objectives)&&c.objectives.length===1&&c.objectives[0]===value.objective){
+   next.objectives=[{$ref:path+'/objective'}];
+   compacted=true;
+  }
+  if(Array.isArray(c.acceptance)&&Array.isArray(value.acceptance)&&
+   JSON.stringify(c.acceptance)===JSON.stringify(value.acceptance)){
+   next.acceptance={$ref:path+'/acceptance'};
+   compacted=true;
+  }
+  return compacted?{...value,management_contract:next}:value;
+ };
+ const seen=new Map<string,number>();
+ const records=(payload.exceptions as ManagementRow[]).map((e,i)=>{
+  if(typeof e.detail!=='string')return e;
+  const prior=seen.get(e.detail);
+  if(prior===undefined){seen.set(e.detail,i);return e;}
+  const {detail:_,...rest}=e;
+  return {...rest,detailRef:prior};
+ });
+ const current=payload.reporting as ManagementRow;
+ const superior=current.immediateSuperior as ManagementRow|null;
+ const project=payload.project as ManagementRow;
+ const compactSuperior=superior&&superior.objective===project.objective?
+  {...superior,objective:{$ref:'#/project/objective'}}:superior;
+ return {
+  ...payload,
+  principal:node(payload.principal as ManagementNode,'#/principal'),
+  organization:(payload.organization as ManagementNode[]).map((n,i)=>node(n,'#/organization/'+i)),
+  reporting:{...current,immediateSuperior:compactSuperior},
+  exceptions:records,
+  contextReferencePolicy:'Lossless in-document references only. Resolve every {$ref:"#/path"} to the exact value at that JSON path, including array contracts. For exception[i].detailRef, read exceptions[detailRef].detail verbatim. Every exception is separate; never discard a referenced contract, detail, or evidence.',
+ };
+}
+
 export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const {principalId,topology,scopedNodes,project}=input;
  const scope=managementScope(topology,principalId);
@@ -206,6 +250,8 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  };
  const serialized=JSON.stringify(payload);
  required(Number.isSafeInteger(limit)&&limit>0,'configured management input limit');
- if(serialized.length>limit)throw Error('Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.');
- return serialized;
+ if(serialized.length<=limit)return serialized;
+ const compact=JSON.stringify(compactRepeatedManagementEvidence(payload));
+ if(compact.length<=limit)return compact;
+ throw Error('Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.');
 }
