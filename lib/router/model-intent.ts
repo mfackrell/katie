@@ -2338,6 +2338,45 @@ export function filterCandidatesForIntent(
     .filter(({ models }) => models.length > 0);
 }
 
+/**
+ * Compare independent quality-qualified Best Value decisions. Observed feedback
+ * wins over economy; for a classifier-confirmed low-complexity conversation, a
+ * cheaper model that passed a judge's complete qualification is not rejected
+ * merely because more judges recognized a premium model. In demanding tasks,
+ * corroborated quality judgments still precede price. Unknown prices never
+ * become zero-dollar quotes or evidence of model inadequacy.
+ */
+export function compareBestValueQualifiedJudgments(
+  a: { key: string; votes: number; qualityEvidence: number; estimatedCostMicrousd: string | null },
+  b: { key: string; votes: number; qualityEvidence: number; estimatedCostMicrousd: string | null },
+  confirmedRoutine: boolean
+): number {
+  const evidence = b.qualityEvidence - a.qualityEvidence;
+  if (evidence) return evidence;
+  const comparePrice = (): number => {
+    if (a.estimatedCostMicrousd === null || b.estimatedCostMicrousd === null) return 0;
+    const delta = BigInt(a.estimatedCostMicrousd) - BigInt(b.estimatedCostMicrousd);
+    return delta < 0n ? -1 : delta > 0n ? 1 : 0;
+  };
+  if (confirmedRoutine) {
+    const price = comparePrice();
+    if (price) return price;
+  }
+  const votes = b.votes - a.votes;
+  return votes || comparePrice() || a.key.localeCompare(b.key);
+}
+
+/** Only a verified native serialized quote or scenario may enter cost comparison. */
+export function bestValueEvidenceCost(economics: unknown): string | null {
+  if (!economics || typeof economics !== "object") return null;
+  const e = economics as { expected_all_in_micro_usd?: unknown;
+    serialized_request?: { status?: unknown; estimatedCostMicrousd?: unknown } };
+  const quote = e.serialized_request;
+  const raw = e.expected_all_in_micro_usd ??
+    (quote?.status === "estimated" ? quote.estimatedCostMicrousd : null);
+  return typeof raw === "string" && /^\\d+$/.test(raw) ? raw : null;
+}
+
 export async function chooseRoutingWithLLM(args: {
   timeoutMs?: number;
   routing_mode?: RoutingMode;
@@ -2462,8 +2501,8 @@ EVIDENCE CLASSIFICATION (choose the basis kind from actual trusted provenance, n
 Example: A personal disclosure such as "we told each other everything" describes the USER\'S RELATIONSHIP, not evidence of any previous model\'s performance or user approval. Without the selected model\'s cited feedback event, select reasoned_inference (or documented_capability when directly supported), NEVER attributed_feedback.
 1. Establish the same material response-quality requirements that Best Answer would use for the user's actual objective. Never reduce them because the user selected Best Value.
 2. Assess which eligible models can reasonably meet that threshold. Use attributable results and feedback first, then documented capabilities and explicitly uncertain inference. Contextual, task-specific quality matters more than generic reasoning tier or low price.
-3. Exclude candidates that cannot reasonably meet the quality threshold. No evidence of superiority is NOT evidence of equivalence. A cheap model's basic text support, reasoning tier, or routine intent label cannot prove quality sufficiency.
-4. Only after qualification compare expected total costs of qualified candidates. Select the economical qualified candidate. When only a stronger model is sufficiently supported, it may also win Best Value. When direct evidence is unavailable, use grounded capability evidence and honest uncertainty; do not invent a quality score.
+3. Exclude candidates that cannot reasonably meet the quality threshold. No evidence of superiority is NOT evidence of equivalence. A cheap model's basic text support, reasoning tier, or routine intent label cannot prove quality sufficiency. Conversely, a premium family label, emotional-nuance tag or vague possibility of better prose is NOT proof that an economical conversational model fails.
+4. Explicitly assess the lowest-priced credible model(s) in the supplied reviewed quotes, including Claude Haiku where priced and eligible, against THIS request's quality threshold. Only after qualification compare expected total costs of qualified candidates. Select the economical qualified candidate; a premium model needs an identifiable material quality benefit, not just extra capacity. Do not claim a price for an unpriced model. When direct evidence is unavailable, use grounded capability evidence and honest uncertainty; do not invent a quality score.
 5. For each feedback event, independently assess whether its source task_excerpt, source_intent, original objective and quality requirements are genuinely comparable to this request. Evidence under potentially_comparable is UNSCORED and cannot be counted as a positive or negative quality result until the actual objectives and requirements are demonstrably comparable. A shared intent label does not prove similarity; different labels do not rule it out. Do not generalize creative results to finance, coding, or unrelated work.
 
 For Best Value selections with multiple eligible candidates, ALL SIX quality_qualification fields in the MANDATORY COMPLETE RESPONSE SHAPE above are required, substantive and task-specific. They are not an optional appendix. evidence_basis_kind must be exactly one of: attributed_feedback, verified_outcome, documented_capability, reasoned_inference. If evidence is only inferred, choose reasoned_inference and explicitly acknowledge unknown outcomes.
@@ -2721,8 +2760,8 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
   // are more valuable than a bare vote. Any selected model was already checked
   // against the exact eligible candidate set by the shared parser below.
   const winners = new Map<string, {
-    key: string; judgments: typeof validJudgments; votes: number; priorScore: number;
-    qualityEvidence: number;
+    key: string; judgments: typeof validJudgments; votes: number;
+    qualityEvidence: number; estimatedCostMicrousd: string | null;
   }>();
   for (const judgment of validJudgments) {
     const key = `${judgment.result.selectedProvider}:${judgment.result.selectedModel}`;
@@ -2731,8 +2770,6 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
       existing.votes++;
       existing.judgments.push(judgment);
     } else {
-      const candidate = args.candidates.find(c =>
-        c.providerName === judgment.result.selectedProvider && c.modelId === judgment.result.selectedModel);
       const feedback = args.requestEvidence?.candidates[key]?.quality.feedback;
       // Only explicit task-intent-attributed reactions can change evidence
       // strength. Delivery receipts are not treated as proof of answer quality.
@@ -2740,16 +2777,20 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
         Math.min(2, feedback?.positive ?? 0) - Math.min(2, feedback?.negative ?? 0)));
       winners.set(key, {
         key, judgments: [judgment], votes: 1,
-        priorScore: candidate?.prior_score ?? 0, qualityEvidence,
+        qualityEvidence,
+        estimatedCostMicrousd: bestValueEvidenceCost(args.requestEvidence?.candidates[key]?.economics),
       });
     }
   }
-  // Strong direct feedback can outweigh a 2:1 vote; absent trustworthy
-  // quality observations, independent agreement wins. Scorecard prior scores
-  // are only tie-breakers and never counterfeit observed response quality.
+  // A valid judge response has already qualified its exact chosen model
+  // with task-specific evidence. For confirmed routine conversation, prefer
+  // the less costly independently qualified option unless attributable quality
+  // evidence favors another. For demanding/uncertain tasks preserve judge
+  // corroboration ahead of cost. No legacy intent or provider score is used.
+  const confirmedRoutine = args.complexity === "low" &&
+    (["general-text", "text", "social-emotional", "rewrite", "emotional-analysis"] as RequestIntent[]).includes(args.intent);
   const chosen = [...winners.values()].sort((a, b) =>
-    (b.qualityEvidence * 3 + b.votes) - (a.qualityEvidence * 3 + a.votes) ||
-    b.priorScore - a.priorScore || a.key.localeCompare(b.key))[0];
+    compareBestValueQualifiedJudgments(a, b, confirmedRoutine))[0];
   const result = chosen?.judgments
     .sort((a, b) => a.lane - b.lane)[0] ?? null;
   console.info("[RoutingJudges] decision", {
@@ -2760,6 +2801,9 @@ Do not cite direct feedback or verified outcomes unless actually present in the 
     selected: chosen?.key ?? null,
     supportingVotes: chosen?.votes ?? 0,
     qualityEvidence: chosen?.qualityEvidence ?? null,
+    confirmedRoutine,
+    selectedEstimatedCostMicrousd: chosen?.estimatedCostMicrousd ?? null,
+    costBasis: "native serialized quote when present; never registry tier or provider reputation",
   });
 
   if (!result) {
