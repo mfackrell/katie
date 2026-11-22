@@ -61,7 +61,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
   persistConversationAttachment:async(_chat,file,_token,{description})=>{retained.push(file.fileId);return {...file,id:'saved-'+file.fileId,...description};},
   inspectSavedPdf:async(_chat,source,_actor,task,_owns,analysisTask)=>{inspected.push(source.fileId);inspectedTasks.push(task);analysisTasks.push(analysisTask);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
   getChatById:async()=>({actorId:'actor'}),
-  cacheablePersona:'Base',name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,creativeTextNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
+  ownerSexualBoundaryEnabled:false,cacheablePersona:'Base',name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,creativeTextNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
   generationContext:{creativeTextNarrativeRequest:false,responsePolicy:{generationInstruction:null},taskProgressContext:'',resumptionContext:'',visualContinuity:null},
   providerPayloadCapture:false,visualContinuity:null,saveProviderSystemAudit:async()=>{},requestId:'same',console,
  };

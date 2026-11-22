@@ -32,7 +32,7 @@ for (const visual of [false,true]) test(`routing and generation share preparatio
     visualContinuity:visual ? {prompt:'Draw Katie using the retained identity anchor',references:[{image:'data:image/png;base64,aGVsbG8='}]} : null};
   let auditWrites = 0;
   const environment: Record<string,unknown> = {
-    cacheablePersona:'Stable persona',conversationCacheKey:()=>'cache',actorId:'actor',chatId:'chat',requestId:'request',
+    ownerSexualBoundaryEnabled:false,cacheablePersona:'Stable persona',conversationCacheKey:()=>'cache',actorId:'actor',chatId:'chat',requestId:'request',
     name:'Katie',personaForGeneration:'Actor voice',storedWebsite:{fresh:false,context:'Saved website evidence',previousWebsiteEvidence:undefined},
     documentProduction:{pages:2},DOCUMENT_DRAFT_GUIDANCE:'Draft the document',DOCUMENT_REVIEW_GUIDANCE:'Review the document',
     CREATIVE_CONTINUITY_INSTRUCTIONS:'Keep the established narrative',summary:'Conversation memory',historyForProvider:[],

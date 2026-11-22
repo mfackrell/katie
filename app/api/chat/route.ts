@@ -76,6 +76,7 @@ import { refreshShortTermMemory, messagesFromShortTermMemory } from "@/lib/memor
 import { uniqueMessagesById } from "@/lib/memory/history-dedup";
 import { buildProviderPayloadCaptureTrace } from "@/lib/chat/provider-payload-trace";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
+import { isOwnerEroticRequest, looksLikeEroticAssistantOutput, OWNER_SEXUAL_BOUNDARY_INSTRUCTIONS, OWNER_SEXUAL_BOUNDARY_REPLY } from "@/lib/chat/owner-sexual-boundary";
 import { handleExplicitMemoryMutation } from "@/lib/memory/explicit-memory";
 import { saveProviderSystemAudit } from "@/lib/chat/provider-system-audit";
 import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
@@ -862,6 +863,9 @@ async function executeChat(request: NextRequest) {
     // actor, chat, and request in Postgres. Do not revalidate an expiring browser
     // token during execution: that could pause an already-admitted request.
     const isGuestSession=Boolean(verifiedWorkflow) && verifiedWorkflow!.workflow.owner_id!==process.env.KATIE_OWNER_AUTH_USER_ID;
+    // Only a durable authenticated workflow owner activates this boundary.
+    const ownerSexualBoundaryEnabled = Boolean(process.env.KATIE_OWNER_AUTH_USER_ID &&
+      verifiedWorkflow?.workflow.owner_id === process.env.KATIE_OWNER_AUTH_USER_ID);
     if(isGuestSession && payload.activeRepoId)return NextResponse.json({error:'Repository controls require owner access.'},{status:403});
     const {
       actorId,
@@ -1437,6 +1441,11 @@ async function executeChat(request: NextRequest) {
             });
           }
         }
+        // Idempotent replay must not re-expose a previously saved explicit response.
+        const replayBlocked = ownerSexualBoundaryEnabled && (
+          isOwnerEroticRequest(message, attachmentHistory) ||
+          looksLikeEroticAssistantOutput(idempotencyClaim.record.assistantContent ?? "")
+        );
         const replayBody = [
           JSON.stringify({
             type: "metadata",
@@ -1448,9 +1457,9 @@ async function executeChat(request: NextRequest) {
           JSON.stringify({
             type: "content",
             messageId: idempotencyClaim.record.assistantMessageId,
-            text: idempotencyClaim.record.assistantContent ?? "",
-            ...(replayPresentation ? { presentation: replayPresentation } : {}),
-            assets: idempotencyClaim.record.assistantAssets,
+            text: replayBlocked ? OWNER_SEXUAL_BOUNDARY_REPLY : idempotencyClaim.record.assistantContent ?? "",
+            ...(!replayBlocked && replayPresentation ? { presentation: replayPresentation } : {}),
+            assets: replayBlocked ? [] : idempotencyClaim.record.assistantAssets,
             provider: "replay",
             model: idempotencyClaim.record.assistantModel ?? "unknown",
           }),
@@ -1554,9 +1563,12 @@ async function executeChat(request: NextRequest) {
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
     // Standalone Katie only RELAYS explicit commands to the Developer project
     // controller. Status, scoped approvals and amendments stay durable there.
+    // Preempt project/developer commands and all provider paths, not only the chat router.
+    const sexualBoundaryRefusal = ownerSexualBoundaryEnabled && isOwnerEroticRequest(message, attachmentHistory)
+      ? OWNER_SEXUAL_BOUNDARY_REPLY : null;
     const savedDeveloperCommand = /^(?:(?:(?:what(?:'s| is)|show|check|give me|tell me|how(?:'s| is))\b.{0,36})?(?:project\s+(?:status|progress)|(?:the|my|this)\s+project\s+(?:status|progress)|project\s+(?:note|context|answer)\s*:)|(?:please\s+)?(?:resume|pause|stop|approve)\s+(?:(?:the|my|this)\s+)?project\b|(?:please\s+)?(?:add|change|fix|remove|update|keep|retain|preserve|support|enable)\b.{0,180}\b(?:game|app|website|project|software|multiplayer|keyboard|undo|button)\b)/i.test(message.trim());
     const explicitProjectControl = !isGuestSession && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand);
-    const projectReply = !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !sexualBoundaryRefusal && !isGuestSession && !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     // A verified, file-only PDF upload has no drafting instruction. Respond
     // with a truthful, source-bound receipt before paid model routing. The
@@ -1565,7 +1577,7 @@ async function executeChat(request: NextRequest) {
       !pdfProgress.projectClarification && savedDraftReply === null && !explicitProjectControl
       ? verifiedFileOnlyPdfReceipt(message, newAttachments, freshPdfSelection?.fileIds)
       : null;
-    const localKatieResponse = imageEditUnavailable
+    const localKatieResponse = sexualBoundaryRefusal ? {reason: "boundary" as const, text: sexualBoundaryRefusal} : imageEditUnavailable
       ? {reason:"image-source" as const,text:"The selected image original cannot be reopened. I cannot edit missing pixels or substitute another image."}
       : imageFollowup?.clarification
       ? {reason:"image-source" as const,text:imageFollowup.clarification}
@@ -1601,7 +1613,7 @@ async function executeChat(request: NextRequest) {
       await saveMessage(chatId, {
         id: localUserMessageId,
         role: "user",
-        content: message,
+        content: sexualBoundaryRefusal ? "[Blocked erotic role-play request; original text not retained.]" : message,
         ...(clarificationAttachments.length ? {attachments: clarificationAttachments} : {}),
       });
 
@@ -1610,9 +1622,11 @@ async function executeChat(request: NextRequest) {
         hasReadableText: Boolean(newAttachments[0].extractedText?.trim() || newAttachments[0].extractedChunks?.some(chunk => chunk.text.trim())),
       });
       if (pdfProgress.projectClarification) await saveTaskProgress(actorId, chatId, pdfProgress);
-      const localResponseText = localKatieResponse.reason === "memory-update"
+      const localRawResponseText = localKatieResponse.reason === "memory-update"
         ? await handleExplicitMemoryMutation(actorId, chatId, localUserMessageId, message)
         : localKatieResponse.text;
+      const localResponseText = ownerSexualBoundaryEnabled && looksLikeEroticAssistantOutput(localRawResponseText)
+        ? OWNER_SEXUAL_BOUNDARY_REPLY : localRawResponseText;
       await saveMessage(chatId, {
         id: localAssistantMessageId,
         role: "assistant",
@@ -1992,10 +2006,11 @@ async function executeChat(request: NextRequest) {
       });
       return ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
         name,
-        persona: [personaForGeneration, taskProgressContext, objectiveContinuityGuidance, storedWebsite.context,
+        persona: [...(ownerSexualBoundaryEnabled ? [OWNER_SEXUAL_BOUNDARY_INSTRUCTIONS] : []), personaForGeneration, taskProgressContext, objectiveContinuityGuidance, storedWebsite.context,
           ...(documentProduction ? [forReview ? DOCUMENT_REVIEW_GUIDANCE : DOCUMENT_DRAFT_GUIDANCE] : []),
           ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction, "Answer the user's actual request directly and substantively wherever permitted.\nDo not replace the requested objective with unsolicited counseling, moral commentary, unrelated recommendations, or speculation about underlying motives.\nKeep capability, provider, and safety constraints binding. If the exact request cannot be fulfilled, state the limitation accurately and briefly; do not promise an answer or experience that cannot be delivered.\nAvoid asking again for details or confirmations already supplied. Maintain relevant context, continuity, and established expectations."] : []),
-          ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+          ...(creativeTextNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : []),
+          ...(ownerSexualBoundaryEnabled ? [OWNER_SEXUAL_BOUNDARY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
         summary,
         history: historyForProvider,
         message: forReview ? message : visualContinuity
@@ -2788,7 +2803,7 @@ ${savedProjectSourceWarning.retainedObjective}`;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
-              if (reviewMode === "always" || documentProduction || imageGenerationRequested) return;
+              if (reviewMode === "always" || documentProduction || imageGenerationRequested || ownerSexualBoundaryEnabled) return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -4199,12 +4214,16 @@ ${chunkWorkflowSummary}`;
               const acceptedTail = chatAnswerBoundary.flushAccepted();
               if (acceptedTail) enqueueDelta(acceptedTail);
             }
+            // Keep owner text private until the complete response passes screening.
+            const boundedAssistantText = ownerSexualBoundaryEnabled && looksLikeEroticAssistantOutput(rawAssistantText)
+              ? OWNER_SEXUAL_BOUNDARY_REPLY : rawAssistantText;
+            if (boundedAssistantText !== rawAssistantText) imageAssets = [];
             const presentationResult = presentationEnabled
-              ? parsePresentationTail(rawAssistantText, imageAssets)
-              : { text: rawAssistantText, presentation: null };
+              ? parsePresentationTail(boundedAssistantText, imageAssets)
+              : { text: boundedAssistantText, presentation: null };
             const assistantText = presentationResult.text;
             const assistantPresentation = presentationResult.presentation;
-            if (presentationFilter && reviewMode !== "always") {
+            if (presentationFilter && reviewMode !== "always" && !ownerSexualBoundaryEnabled) {
               const tail = presentationFilter.finish();
               if (tail) emitChunk({ type: "delta", text: tail });
             }

@@ -22,7 +22,7 @@ test('Executive commands use dedicated transport before all ordinary chat proces
  const ordinary=route.indexOf("const task = await authorizeManagedChat",dispatch);
  assert.ok(branch>0 && principal>branch && guard>principal && denial>guard && dispatch>denial && ordinary>dispatch,
    'Executive work must require a verified, non-guest owner and dispatch before ordinary chat');
- assert.match(route,/const projectReply = !isGuestSession && !pdfProgress\.projectClarification && !executiveReply/);
+ assert.match(route,/const projectReply = !sexualBoundaryRefusal && !isGuestSession && !pdfProgress\.projectClarification && !executiveReply/);
  const transport=read('lib/executive/transport.ts');
  assert.match(transport,/handleExecutiveManagement\(/);
  assert.doesNotMatch(transport,/getAvailableProviders|assembleContext|runAdaptiveCollaboration/);
