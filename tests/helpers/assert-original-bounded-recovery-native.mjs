@@ -283,6 +283,12 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   // lifecycle scenarios, sometimes with deliberately ancient timestamps.
   // Disable ONLY those disposable jobs for this scheduler assertion; never
   // write the tested assignment to RUNNING or change real prod queue policy.
+  const otherLeases=(await db.query("select count(*)::int n from mission_assignments where id<>$1 and status='running' and lease_until>clock_timestamp()",[J84])).rows[0].n;
+  console.log('M84_SYNTHETIC_GLOBAL_CAP_BEFORE',otherLeases);
+  // Earlier independent synthetic cases can occupy the global three-worker
+  // semaphore. They have no active external inference in this disposable DB.
+  // Expire ONLY their fixture leases; the real scheduler performs cleanup.
+  await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes',lease_until=clock_timestamp()-interval '1 second' where id<>$1 and status='running' and lease_until>clock_timestamp()",[J84]);
   await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes' where id<>$1 and status in ('queued','waiting_external') and available_at<=clock_timestamp()",[J84]);
   await db.query('set role service_role');
   const twice=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
