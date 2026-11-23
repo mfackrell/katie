@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'lib/projects/management-context.ts'
+      - 'supabase/migrations/20261123222303_management_context_release_continuity.sql'
       - 'tests/management-context.test.mjs'
       - 'tests/management-context-growth.test.mjs'
       - 'tests/management-commissioning-diagnostics.test.mjs'
