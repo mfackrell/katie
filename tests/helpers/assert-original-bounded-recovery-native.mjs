@@ -206,6 +206,67 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   assert.equal(claimed.job.attempts,1);assert.ok(claimed.job.lease);
   assert.notEqual((await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c?.job?.id,J84);
 
+  // Reproduced Mission84 defect in rollback-only PostgreSQL fixture:
+  // a valid reservation invalidates its OWN settlement window.
+  const testHash='24b9b813bb17dce66ff93cd7994df4bd33405f521a819c3d1683cdbd84b4ae5a';
+  const providerRequest='select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok';
+  const attempt=claimed.job.lease;
+  await db.query('savepoint m84_before_provider_fix');
+  const beforeId=randomUUID();
+  assert.equal((await db.query(providerRequest,[J84,attempt,beforeId,'model-list',testHash,null,null])).rows[0].ok,true);
+  assert.equal((await db.query('select project_org_bounded_recovery_window_valid($1) ok',[project])).rows[0].ok,false);
+  assert.equal((await db.query(providerRequest,[J84,attempt,beforeId,'model-list',testHash,null,'model-catalog'])).rows[0].ok,false,
+   'PRE-FIX: pending catalog reservation self-invalidates provider confirmation');
+  await db.query('rollback to savepoint m84_before_provider_fix');
+  await db.query('release savepoint m84_before_provider_fix');
+
+  const m84Migration=readFileSync('supabase/migrations/20261123200400_mission84_provider_catalog_settlement.sql','utf8')
+    .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+  await db.query(m84Migration);
+  await db.query('savepoint m84_after_provider_fix');
+  const afterId=randomUUID();
+  assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,null])).rows[0].ok,true);
+  assert.equal((await db.query('select project_provider_request_pending($1) v',[project])).rows[0].v,true);
+  assert.equal((await db.query('select project_org_bounded_recovery_window_valid($1) ok',[project])).rows[0].ok,true,
+   'Only the original signed IN-FLIGHT request may remain pending for settlement');
+  assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,'model-catalog'])).rows[0].ok,true);
+  assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,'model-catalog'])).rows[0].ok,false,
+   'Receipt cannot be replayed');
+  assert.equal((await db.query('select project_provider_request_pending($1) v',[project])).rows[0].v,false);
+  assert.equal((await db.query('select count(*)::int n from mission_calls where job_id=$1',[J84])).rows[0].n,0);
+  await db.query('rollback to savepoint m84_after_provider_fix');
+  await db.query('release savepoint m84_after_provider_fix');
+  console.log('MISSION84_PROVIDER_CATALOG_SETTLEMENT_NATIVE_PASS');
+
+  await db.query('savepoint m84_owner_retry');
+  const originalRequest='58d5926a-7160-42c1-9a04-540351e777dc';
+  assert.equal((await db.query(providerRequest,[J84,attempt,originalRequest,'model-list',testHash,null,null])).rows[0].ok,true);
+  assert.equal((await db.query(providerRequest,[J84,attempt,originalRequest,'model-list',testHash,null,'model-catalog'])).rows[0].ok,true);
+  assert.equal((await db.query('select project_provider_mission_stop($1,$2) v',[J84,attempt])).rows[0].v,true);
+  await db.query('reset role');
+  await db.query("update mission_assignments set lease_until=clock_timestamp()-interval '10 seconds' where id=$1",[J84]);
+  const stoppedEvent=(await db.query("select id from project_events where project_id=$1 and event='provider_execution_stopped' order by created_at desc limit 1",[project])).rows[0].id;
+  await db.query("insert into project_m84_catalog_reconciliations (project_id,request_id,assignment_id,original_lease,stop_event_id,observed_error,catalog_receipt,evidence_source,original_started_at) select $1,id,assignment_id,$2,$3,'Trial provider result could not be confirmed','model-catalog','rollback-only validated catalog',started_at from project_provider_requests where id=$4",[project,attempt,stoppedEvent,originalRequest]);
+  await db.query('set role service_role');
+  const retryOffer=(await db.query('select project_org_m84_provider_retry_offer($1,$2,$3) v',[owner,project,release])).rows[0].v;
+  assert.equal(retryOffer.stage,'authorize');
+  const retryAuth=randomUUID();
+  const retryArgs=[owner,project,release,generation,deployment,M84,J84,retryAuth,retryOffer.stateHash];
+  const retrySql='select project_org_m84_provider_retry_authorize($1,$2,$3,$4,$5,$6,$7,$8,$9) v';
+  await db.query('savepoint m84_wrong_owner');
+  await assert.rejects(db.query(retrySql,[randomUUID(),...retryArgs.slice(1)]));
+  await db.query('rollback to savepoint m84_wrong_owner');
+  await db.query('release savepoint m84_wrong_owner');
+  const approvedRetry=(await db.query(retrySql,retryArgs)).rows[0].v;
+  assert.equal(approvedRetry.stage,'authorized');
+  assert.equal((await db.query('select attempts from mission_assignments where id=$1',[J84])).rows[0].attempts,1);
+  const twice=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
+  assert.equal(twice?.job?.id,J84,'Original Mission84 claimed by normal scheduler');
+  assert.equal(twice.job.attempts,2,'Exactly one owner-approved additional attempt');
+  await db.query('rollback to savepoint m84_owner_retry');
+  await db.query('release savepoint m84_owner_retry');
+  console.log('MISSION84_OWNER_RETRY_NATIVE_PASS');
+
   // Native continuation after one accepted management decision: only the
   // fixture is allowed to synthesize a completed provider outcome.
   const finish=async(mission,job,node)=>{
