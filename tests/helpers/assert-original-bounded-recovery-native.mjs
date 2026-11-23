@@ -75,17 +75,21 @@ export async function assertOriginalBoundedRecoveryNative(db,{project,owner,rele
   // Model the ALREADY-EXPIRED historical owner cutoff under a disposable
   // SAVEPOINT. No new owner consent is fabricated by this fixture.
   await db.query('reset role');
-  const expired=new Date(now-3600000),priorWindow=randomUUID();
+  const expired=new Date(now-3600000),oldStart=new Date(now-7200000),priorWindow=randomUUID();
+  // Historical-state SETUP only: source fixture began with a FUTURE cutoff.
+  // Construct an actual expired valid window (prior_cutoff < cutoff), then
+  // temporarily bypass only the node immutable guard to model already-expired
+  // historical node deadlines. Restore all triggers BEFORE owner approval tests.
   await db.query("insert into project_execution_windows(id,project_id,owner_id,release_sha,decision_id,prior_cutoff,cutoff,prior_release_sha) values($1,$2,$3,$4,$5,$6,$7,$4)",
    [priorWindow,project,owner,originalAuthority.continuation_release_sha,
-    originalAuthority.continuation_decision_id,originalProject.deadline,expired]);
+    originalAuthority.continuation_decision_id,oldStart,expired]);
   await db.query('update project_provider_execution set window_id=$2,deadline=$3 where project_id=$1',[project,priorWindow,expired]);
   await db.query('update work_projects set deadline=$2 where id=$1',[project,expired]);
-  for(const row of (await db.query('select * from project_organization_nodes where project_id=$1 order by depth,id',[project])).rows){
-   await db.query("insert into project_organization_contract_changes(project_id,node_id,window_id,prior_deadline,deadline,prior_tools,tools,prior_submission) values($1,$2,$3,$4,$5,$6,$6,$7)",
-    [project,row.id,priorWindow,row.deadline,expired,row.tools,row.completion_submission]);
-   await db.query('update project_organization_nodes set deadline=$2 where id=$1',[row.id,expired]);
-  }
+  await db.query('alter table project_organization_nodes disable trigger project_org_immutable');
+  try{
+   for(const row of (await db.query('select * from project_organization_nodes where project_id=$1 order by depth,id',[project])).rows)
+    await db.query('update project_organization_nodes set deadline=$2 where id=$1',[row.id,expired]);
+  }finally{await db.query('alter table project_organization_nodes enable trigger project_org_immutable');}
   await db.query("update agent_missions set deadline=$2,status='blocked' where id=$1",[M84,expired]);
   await db.query("update agent_missions set deadline=$2 where id=$1",[M83,expired]);
   const blockEvent=(await db.query("select id,created_at from project_events where project_id=$1 and event='block' order by created_at desc limit 1",[project])).rows[0];
