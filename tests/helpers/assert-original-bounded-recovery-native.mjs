@@ -221,6 +221,15 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   await db.query('release savepoint m84_before_provider_fix');
 
   const m84Migration=readFileSync('supabase/migrations/20261123200400_mission84_provider_catalog_settlement.sql','utf8')
+    // The native fixture substitutes its authenticated owner and manager UUIDs
+    // into the original accepted migration, so its pg_proc MD5 necessarily
+    // differs from production. Remove ONLY the production preimage DO guard
+    // inside this rollback-only synthetic fixture; leave committed DDL guarded.
+    .replace(/DO \$baseline\$[\s\S]*?END \$baseline\$;/,'')
+    .replaceAll('04ed6c05-a586-4a56-ba81-1b50e378746b',owner)
+    .replaceAll('c486ade1-2a9c-4cd5-a80b-90c032e4e03e',root.id)
+    .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
+    .replaceAll('2b04302e-8815-4c61-89aa-e35b9baffa82',oldWindow)
     .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
   await db.query(m84Migration);
   await db.query('savepoint m84_after_provider_fix');
