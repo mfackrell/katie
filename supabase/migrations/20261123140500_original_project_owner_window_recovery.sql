@@ -158,3 +158,131 @@ END
 $original_offer$;
 REVOKE ALL ON FUNCTION public.project_org_original_execution_recovery_offer(uuid,uuid,text) FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.project_org_original_execution_recovery_offer(uuid,uuid,text) TO service_role;
+
+-- The original 84th assignment and every later organically scheduled mission
+-- must independently qualify. No failed command is treated as accepted.
+CREATE FUNCTION public.project_org_original_recovery_claim_authorized(
+ p_project uuid,p_release text,p_generation bigint,p_deployment text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path TO 'public','pg_temp'
+AS $original_claim$
+ SELECT EXISTS(
+  SELECT 1 FROM public.project_original_execution_recovery_receipts r
+  JOIN public.work_projects p ON p.id=r.project_id
+  JOIN public.project_provider_execution a ON a.project_id=p.id
+   AND a.owner_id=r.owner_id AND a.approved_scope=r.scope_hash
+   AND a.deadline=r.cutoff AND a.window_id=r.original_window_id
+  JOIN public.project_retest_production_release_gate g ON g.project_id=p.id
+   AND g.alias_name='katie-mu.vercel.app' AND g.state='active'
+   AND g.release_sha=p_release AND g.generation=p_generation
+   AND g.deployment_id=p_deployment
+   AND g.release_sha=r.release_sha AND g.generation=r.release_generation
+   AND g.deployment_id=r.deployment_id
+  JOIN public.agent_missions m ON m.id=p.active_mission_id
+   AND m.project_id=p.id AND m.status='running' AND m.calls=0
+   AND m.deadline=p.deadline
+  JOIN public.mission_assignments j ON j.mission_id=m.id
+   AND j.status='queued' AND j.lease IS NULL AND j.lease_until IS NULL
+   AND j.available_at<=clock_timestamp() AND j.attempts<=r.approved_retries
+  JOIN public.project_organization_nodes n ON n.id::text=m.project_evidence->>'organizationNodeId'
+   AND n.project_id=p.id AND n.status='active' AND n.deadline=p.deadline
+   AND n.agent_id=j.agent_id
+  JOIN public.project_organization_assignments binding ON binding.node_id=n.id
+   AND binding.assignment_id=j.id
+   AND binding.contract_hash=encode(sha256(convert_to(public.project_canonical(n.acceptance),'UTF8')),'hex')
+  WHERE p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+   AND p.id=p_project AND p.status='running' AND p.phase='development'
+   AND p.deadline=r.cutoff AND r.cutoff>clock_timestamp()
+   AND r.authorized_at<r.cutoff AND p.approved_hash=r.scope_hash
+   AND p.approval_hash=r.scope_hash AND p.max_missions=r.max_missions
+   AND p.max_missions=96 AND p.token_allowance=r.token_allowance
+   AND p.token_allowance=600000 AND r.original_missions=84
+   AND (SELECT count(*) FROM public.agent_missions all_m WHERE all_m.project_id=p.id)
+     BETWEEN 84 AND r.authorized_total_missions
+   AND (SELECT count(*) FROM public.project_organization_nodes all_n
+     WHERE all_n.project_id=p.id AND all_n.status='active')=13
+   AND (SELECT count(*) FROM public.mission_assignments jobs WHERE jobs.mission_id=m.id)=1
+   AND NOT EXISTS(SELECT 1 FROM public.agent_missions newest
+     WHERE newest.project_id=p.id AND newest.created_at>m.created_at)
+   AND m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
+   AND m.project_evidence->>'providerContinuationRelease'=a.continuation_release_sha
+   AND m.project_evidence->>'providerContinuationWindow'=a.window_id::text
+   AND NOT public.project_provider_request_pending(p.id)
+   AND public.project_provider_continued(p.id)
+   AND public.project_provider_continued_assignment(j.id)
+   AND (SELECT coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0)
+      FROM public.agent_missions spent WHERE spent.project_id=p.id)<=p.token_allowance
+   AND (SELECT coalesce(sum(booked.attempts),0) FROM public.mission_assignments booked
+      JOIN public.agent_missions charged ON charged.id=booked.mission_id
+      WHERE charged.project_id=p.id AND
+       (charged.id='18819669-d4cf-4010-a455-19f5bcbf93cb'::uuid
+        OR charged.created_at>=r.authorized_at))<r.approved_claims
+   AND (
+    -- Original unused Project Director escalation is a FIRST claim, not
+    -- a retry of the previously failed QA instruction.
+    (m.id='18819669-d4cf-4010-a455-19f5bcbf93cb'::uuid
+     AND j.id='bd8de51d-0195-4c5f-9c88-9dc39e228636'::uuid
+     AND n.kind='project_director' AND n.parent_id IS NULL
+     AND j.role='work' AND j.job_key='plan'
+     AND EXISTS(SELECT 1 FROM public.project_organization_exceptions e
+       WHERE e.project_id=p.id AND e.owner_id=n.id
+        AND e.origin_id='4e6503c8-7723-49e7-ad30-22f633feb2f8'::uuid
+        AND e.reason='objective' AND e.status='open'
+        AND e.created_at>='2026-11-21 20:37:39Z'::timestamptz
+        AND e.created_at<m.created_at)
+     AND (m.project_evidence->>'previousMissionId') IS NULL)
+    OR
+    (m.created_at>=r.authorized_at AND
+     (
+      -- Every successive leadership mission has its own scheduler-created
+      -- immediate reporting binding and independently valid predecessor.
+      (m.project_kind='management' AND n.kind<>'worker'
+       AND j.role='work' AND j.job_key='plan'
+       AND n.management_level IN('project_director','functional_director','manager','supervisor')
+       AND EXISTS(SELECT 1 FROM public.agent_missions prev
+        JOIN public.mission_assignments pj ON pj.mission_id=prev.id
+        WHERE prev.project_id=p.id
+         AND prev.created_at=(SELECT max(earlier.created_at)
+           FROM public.agent_missions earlier WHERE earlier.project_id=p.id AND earlier.created_at<m.created_at)
+         AND (
+          (prev.status='completed' AND pj.status='completed'
+           AND EXISTS(SELECT 1 FROM public.project_organization_decisions decision
+            WHERE decision.project_id=p.id AND decision.assignment_id=pj.id
+             AND decision.id::text=pj.result->>'decisionId'))
+          OR (prev.status='blocked' AND pj.status='failed'
+           AND (
+            (n.id::text=prev.project_evidence->>'organizationNodeId'
+             AND n.decision_needed
+             AND (SELECT count(*) FROM public.agent_missions prior_fails
+              WHERE prior_fails.project_id=p.id
+               AND prior_fails.project_evidence->>'organizationNodeId'=n.id::text
+               AND prior_fails.status='blocked' AND prior_fails.created_at<=prev.created_at)<=2)
+            OR EXISTS(SELECT 1 FROM public.project_organization_nodes failed_n
+             JOIN public.project_organization_exceptions e ON e.origin_id=failed_n.id
+              AND e.owner_id=n.id AND e.project_id=p.id
+              AND e.reason='objective' AND e.status='open'
+              AND e.detail='Management session failed twice; saved decisions and charges retained.'
+              AND e.created_at>prev.created_at AND e.created_at<m.created_at
+             WHERE failed_n.project_id=p.id AND failed_n.id::text=prev.project_evidence->>'organizationNodeId'
+              AND failed_n.parent_id=n.id AND n.decision_needed))
+           )))
+       ))
+      OR (m.project_kind='organization_work' AND n.kind='worker'
+       AND EXISTS(SELECT 1 FROM public.project_organization_work w
+         WHERE w.project_id=p.id AND w.mission_id=m.id
+          AND w.node_id=n.id AND w.status='running'))
+      OR (m.project_kind='development' AND n.kind='worker'
+       AND EXISTS(SELECT 1 FROM public.project_work_package_attempts att
+         JOIN public.project_work_packages package ON package.id=att.package_id
+          AND package.project_id=p.id
+         JOIN public.project_worker_contracts contract ON contract.package_id=package.id
+          AND contract.worker_id=n.id
+         WHERE att.mission_id=m.id AND package.status IN('running','review','rejected')))
+     ))
+   )
+ );
+$original_claim$;
+REVOKE ALL ON FUNCTION public.project_org_original_recovery_claim_authorized(uuid,text,bigint,text)
+ FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.project_org_original_recovery_claim_authorized(uuid,text,bigint,text)
+ TO service_role;
