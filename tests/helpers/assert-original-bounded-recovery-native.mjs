@@ -279,6 +279,14 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   assert.equal(directClaim,true,'One signed post-reconciliation retry must pass exact-release claimant');
   assert.equal(assignmentLineage,true,'Original provider assignment lineage must remain valid');
   await db.query('reset role');
+  // The fixture keeps the entire multi-mission sequence in one rollback
+  // transaction. PostgreSQL now() is pinned to that transaction's start,
+  // whereas owner approval uses clock_timestamp(). A real cron runs in a NEW
+  // transaction, so make only its target assignment available to that frozen
+  // synthetic now(); never adjust production scheduling or owner deadlines.
+  const clockProbe=(await db.query('select now() as tx_time,clock_timestamp() as wall_time,available_at from mission_assignments where id=$1',[J84])).rows[0];
+  console.log('M84_SYNTHETIC_TX_CLOCK',JSON.stringify(clockProbe));
+  await db.query("update mission_assignments set available_at=now()-interval '1 second' where id=$1 and status='queued' and attempts=1",[J84]);
   // The shared synthetic fixture contains queued jobs from unrelated nested
   // lifecycle scenarios, sometimes with deliberately ancient timestamps.
   // Disable ONLY those disposable jobs for this scheduler assertion; never
