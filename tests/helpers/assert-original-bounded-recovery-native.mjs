@@ -206,6 +206,106 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   assert.equal(claimed.job.attempts,1);assert.ok(claimed.job.lease);
   assert.notEqual((await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c?.job?.id,J84);
 
+  // Reproduced Mission84 defect in rollback-only PostgreSQL fixture:
+  // a valid reservation invalidates its OWN settlement window.
+  const testHash='24b9b813bb17dce66ff93cd7994df4bd33405f521a819c3d1683cdbd84b4ae5a';
+  const providerRequest='select project_provider_request($1,$2,$3,$4,$5,$6,$7) ok';
+  const attempt=claimed.job.lease;
+  await db.query('savepoint m84_before_provider_fix');
+  const beforeId=randomUUID();
+  assert.equal((await db.query(providerRequest,[J84,attempt,beforeId,'model-list',testHash,null,null])).rows[0].ok,true);
+  assert.equal((await db.query('select project_org_bounded_recovery_window_valid($1) ok',[project])).rows[0].ok,false);
+  assert.equal((await db.query(providerRequest,[J84,attempt,beforeId,'model-list',testHash,null,'model-catalog'])).rows[0].ok,false,
+   'PRE-FIX: pending catalog reservation self-invalidates provider confirmation');
+  await db.query('rollback to savepoint m84_before_provider_fix');
+  await db.query('release savepoint m84_before_provider_fix');
+
+  const m84Migration=readFileSync('supabase/migrations/20261123200400_mission84_provider_catalog_settlement.sql','utf8')
+    // The native fixture substitutes its authenticated owner and manager UUIDs
+    // into the original accepted migration, so its pg_proc MD5 necessarily
+    // differs from production. Remove ONLY the production preimage DO guard
+    // inside this rollback-only synthetic fixture; leave committed DDL guarded.
+    .replace(/DO \$baseline\$[\s\S]*?END \$baseline\$;/,'')
+    .replaceAll('04ed6c05-a586-4a56-ba81-1b50e378746b',owner)
+    .replaceAll('c486ade1-2a9c-4cd5-a80b-90c032e4e03e',root.id)
+    .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
+    .replaceAll('2b04302e-8815-4c61-89aa-e35b9baffa82',oldWindow)
+    .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+  await db.query('reset role'); // Fixture DDL requires postgres; no production data is changed.
+  await db.query(m84Migration);
+  await db.query('set role service_role');
+  await db.query('savepoint m84_after_provider_fix');
+  const afterId=randomUUID();
+  assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,null])).rows[0].ok,true);
+  assert.equal((await db.query('select project_provider_request_pending($1) v',[project])).rows[0].v,true);
+  assert.equal((await db.query('select project_org_bounded_recovery_window_valid($1) ok',[project])).rows[0].ok,true,
+   'Only the original signed IN-FLIGHT request may remain pending for settlement');
+  assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,'model-catalog'])).rows[0].ok,true);
+  assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,'model-catalog'])).rows[0].ok,false,
+   'Receipt cannot be replayed');
+  assert.equal((await db.query('select project_provider_request_pending($1) v',[project])).rows[0].v,false);
+  assert.equal((await db.query('select count(*)::int n from mission_calls where job_id=$1',[J84])).rows[0].n,0);
+  await db.query('rollback to savepoint m84_after_provider_fix');
+  await db.query('release savepoint m84_after_provider_fix');
+  console.log('MISSION84_PROVIDER_CATALOG_SETTLEMENT_NATIVE_PASS');
+
+  await db.query('savepoint m84_owner_retry');
+  const originalRequest='58d5926a-7160-42c1-9a04-540351e777dc';
+  assert.equal((await db.query(providerRequest,[J84,attempt,originalRequest,'model-list',testHash,null,null])).rows[0].ok,true);
+  assert.equal((await db.query(providerRequest,[J84,attempt,originalRequest,'model-list',testHash,null,'model-catalog'])).rows[0].ok,true);
+  assert.equal((await db.query('select project_provider_mission_stop($1,$2) v',[J84,attempt])).rows[0].v,true);
+  await db.query('reset role');
+  await db.query("update mission_assignments set status='queued',lease=null,lease_until=null,detail='Worker lease expired; prior model-call reservation remains charged.',updated_at=clock_timestamp() where id=$1",[J84]);
+  const stoppedEvent=(await db.query("select id from project_events where project_id=$1 and event='provider_execution_stopped' order by created_at desc limit 1",[project])).rows[0].id;
+  await db.query("insert into project_m84_catalog_reconciliations (project_id,request_id,assignment_id,original_lease,stop_event_id,observed_error,catalog_receipt,evidence_source,original_started_at) select $1,id,assignment_id,$2,$3,'Trial provider result could not be confirmed','model-catalog','rollback-only validated catalog',started_at from project_provider_requests where id=$4",[project,attempt,stoppedEvent,originalRequest]);
+  await db.query('set role service_role');
+  const retryOffer=(await db.query('select project_org_m84_provider_retry_offer($1,$2,$3) v',[owner,project,release])).rows[0].v;
+  assert.equal(retryOffer.stage,'authorize');
+  const retryAuth=randomUUID();
+  const retryArgs=[owner,project,release,generation,deployment,M84,J84,retryAuth,retryOffer.stateHash];
+  const retrySql='select project_org_m84_provider_retry_authorize($1,$2,$3,$4,$5,$6,$7,$8,$9) v';
+  await db.query('savepoint m84_wrong_owner');
+  await assert.rejects(db.query(retrySql,[randomUUID(),...retryArgs.slice(1)]));
+  await db.query('rollback to savepoint m84_wrong_owner');
+  await db.query('release savepoint m84_wrong_owner');
+  const approvedRetry=(await db.query(retrySql,retryArgs)).rows[0].v;
+  assert.equal(approvedRetry.stage,'authorized');
+  assert.equal((await db.query('select attempts from mission_assignments where id=$1',[J84])).rows[0].attempts,1);
+  // The fixture shares the GLOBAL scheduler with earlier unrelated synthetic
+  // jobs. Give only this rollback-only M84 queued job priority, then use the
+  // unchanged real scheduler (never a direct assignment update to RUNNING).
+  const directClaim=(await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).rows[0].ok;
+  const assignmentLineage=(await db.query('select project_provider_continued_assignment($1) ok',[J84])).rows[0].ok;
+  assert.equal(directClaim,true,'One signed post-reconciliation retry must pass exact-release claimant');
+  assert.equal(assignmentLineage,true,'Original provider assignment lineage must remain valid');
+  await db.query('reset role');
+  // The fixture keeps the entire multi-mission sequence in one rollback
+  // transaction. PostgreSQL now() is pinned to that transaction's start,
+  // whereas owner approval uses clock_timestamp(). A real cron runs in a NEW
+  // transaction, so make only its target assignment available to that frozen
+  // synthetic now(); never adjust production scheduling or owner deadlines.
+  const clockProbe=(await db.query('select now() as tx_time,clock_timestamp() as wall_time,available_at from mission_assignments where id=$1',[J84])).rows[0];
+  console.log('M84_SYNTHETIC_TX_CLOCK',JSON.stringify(clockProbe));
+  await db.query("update mission_assignments set available_at=now()-interval '1 second' where id=$1 and status='queued' and attempts=1",[J84]);
+  // The shared synthetic fixture contains queued jobs from unrelated nested
+  // lifecycle scenarios, sometimes with deliberately ancient timestamps.
+  // Disable ONLY those disposable jobs for this scheduler assertion; never
+  // write the tested assignment to RUNNING or change real prod queue policy.
+  const otherLeases=(await db.query("select count(*)::int n from mission_assignments where id<>$1 and status='running' and lease_until>clock_timestamp()",[J84])).rows[0].n;
+  console.log('M84_SYNTHETIC_GLOBAL_CAP_BEFORE',otherLeases);
+  // Earlier independent synthetic cases can occupy the global three-worker
+  // semaphore. They have no active external inference in this disposable DB.
+  // Expire ONLY their fixture leases; the real scheduler performs cleanup.
+  await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes',lease_until=clock_timestamp()-interval '1 second' where id<>$1 and status='running' and lease_until>clock_timestamp()",[J84]);
+  await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes' where id<>$1 and status in ('queued','waiting_external') and available_at<=clock_timestamp()",[J84]);
+  await db.query('set role service_role');
+  const twice=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
+  assert.equal(twice?.job?.id,J84,'Original Mission84 claimed by normal scheduler');
+  assert.equal(twice.job.attempts,2,'Exactly one owner-approved additional attempt');
+  await db.query('rollback to savepoint m84_owner_retry');
+  await db.query('release savepoint m84_owner_retry');
+  console.log('MISSION84_OWNER_RETRY_NATIVE_PASS');
+
   // Native continuation after one accepted management decision: only the
   // fixture is allowed to synthesize a completed provider outcome.
   const finish=async(mission,job,node)=>{
