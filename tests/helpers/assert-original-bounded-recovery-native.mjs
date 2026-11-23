@@ -102,7 +102,9 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   const ev=(await db.query("insert into project_events(project_id,event,data) values($1,'block',$2) returning id,created_at",
    [project,{detail:'No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.',
     impediment:{kind:'blocked',step:'development',minimumAction:'Restore the stalled worker or external workflow for saved mission '+M84+', then resume within the existing authorization.'}}])).rows[0];
-  await db.query('update work_projects set updated_at=$2 where id=$1',[project,ev.created_at]);
+  // Preserve PostgreSQL microsecond precision: JS Date conversion truncates
+  // event.created_at, breaking the immutable block-event timestamp equality.
+  await db.query('update work_projects set updated_at=(select created_at from project_events where id=$2) where id=$1',[project,ev.id]);
 
   const original83=(await db.query('select to_jsonb(m) m,to_jsonb(j) j from agent_missions m join mission_assignments j on j.mission_id=m.id where m.id=$1',[M83])).rows[0];
   await db.query('set role service_role');
