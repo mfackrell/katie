@@ -231,7 +231,9 @@ export async function assertOriginalBoundedRecoveryNative(db,{
     .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
     .replaceAll('2b04302e-8815-4c61-89aa-e35b9baffa82',oldWindow)
     .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+  await db.query('reset role'); // Fixture DDL requires postgres; no production data is changed.
   await db.query(m84Migration);
+  await db.query('set role service_role');
   await db.query('savepoint m84_after_provider_fix');
   const afterId=randomUUID();
   assert.equal((await db.query(providerRequest,[J84,attempt,afterId,'model-list',testHash,null,null])).rows[0].ok,true);
