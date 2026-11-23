@@ -151,7 +151,7 @@ BEGIN
  RETURN jsonb_build_object('projectId',p.id,'stage','authorize',
    'releaseSha',p_release,'releaseGeneration',g.generation,
    'deploymentId',g.deployment_id,'scopeHash',p.approved_hash,
-   'cutoff',p.deadline,'missionId',m.id,'assignmentId',j.id,
+   'cutoff',p.deadline,'missionId',m.id,'assignmentId',j.id,'principalId',n.id,
    'originalAttempts',j.attempts,'originalCalls',m.calls,'additionalAttempts',1,
    'historicalMissions',count_missions,'maxMissions',96,'tokenAllowance',600000,
    'nodeCount',13,'stateHash',snapshot_hash,'failureDigest',failure_digest,
