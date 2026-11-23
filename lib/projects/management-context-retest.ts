@@ -38,7 +38,8 @@ export async function managementContextRetestOffer(projectId:string):Promise<Man
     if(!offer.authorizationId||!/^[0-9a-f-]{36}$/i.test(offer.authorizationId)
       ||!offer.authorizedAt||!Number.isFinite(Date.parse(offer.authorizedAt))
       ||typeof offer.contextHash!=='string'||!/^[a-f0-9]{64}$/.test(offer.contextHash)
-      ||!Number.isSafeInteger(offer.contextChars)||offer.contextChars<1||offer.contextChars>48000)
+      ||typeof offer.contextChars!=='number'||!Number.isSafeInteger(offer.contextChars)
+      ||offer.contextChars<1||offer.contextChars>48000)
       throw Error('One-time owner retest receipt unavailable');
     return {...offer,cutoff:new Date(offer.cutoff).toISOString()};
   }
