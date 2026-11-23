@@ -107,7 +107,14 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   const original83=(await db.query('select to_jsonb(m) m,to_jsonb(j) j from agent_missions m join mission_assignments j on j.mission_id=m.id where m.id=$1',[M83])).rows[0];
   await db.query('set role service_role');
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).rows[0].ok,false,'Expired old authorization remains denied');
+  // The trusted fixture uses random UUIDs for the authenticated owner,
+  // original Project Director node and manager agent. Substitute ONLY these
+  // literal fixture identities; the actual production migration stays frozen
+  // to the verified original UUIDs, unchanged in Git.
   const migration=readFileSync('supabase/migrations/20261123180500_original_project_bounded_recovery.sql','utf8')
+   .replaceAll('04ed6c05-a586-4a56-ba81-1b50e378746b',owner)
+   .replaceAll('c486ade1-2a9c-4cd5-a80b-90c032e4e03e',root.id)
+   .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
    .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
   await db.query('reset role');
   await db.query(migration);
