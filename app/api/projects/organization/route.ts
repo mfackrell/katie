@@ -12,6 +12,7 @@ import {mission79ReleaseIdentityFailure,mission79ReleaseIdentityMessage} from '@
 import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import {mission80WatchdogOffer,MISSION80_ID,MISSION80_ASSIGNMENT} from '@/lib/projects/mission80-watchdog';
 import {mission82WatchdogOffer,MISSION82_ID,MISSION82_ASSIGNMENT} from '@/lib/projects/mission82-watchdog';
+import {originalExecutionRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-execution-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -123,12 +124,25 @@ const mission82WatchdogRecoveryInput=z.object({
  authorizationId:z.string().uuid(),cutoff:z.string().datetime({offset:true}),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput]);
+const originalExecutionRecoveryInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('authorize_original_execution_recovery'),
+ missionId:z.literal(ORIGINAL_RECOVERY_MISSION),assignmentId:z.literal(ORIGINAL_RECOVERY_ASSIGNMENT),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
+ authorizationId:z.string().uuid(),priorCutoff:z.string().datetime({offset:true}),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.string().datetime({offset:true}),
+ newMissions:z.number().int().min(0).max(12),maxClaims:z.number().int().min(1).max(26),
+ retryLimit:z.number().int().min(0).max(1),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalExecutionRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({originalExecutionRecovery:await originalExecutionRecoveryOffer(ORIGINAL_TTT_PROJECT)},
+    {headers:{'Cache-Control':'no-store'}});}
+  catch{ /* Exact 84-mission recovery is not applicable. */ }
   try{return NextResponse.json({mission82Recovery:await mission82WatchdogOffer(ORIGINAL_TTT_PROJECT)},
     {headers:{'Cache-Control':'no-store'}});}
   catch{ /* Original Mission82 independent escalation is not owner-recoverable. */ }
