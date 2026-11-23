@@ -1,0 +1,42 @@
+name: Mission85 lossless management-context growth qualification
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/management-context.ts'
+      - 'tests/management-context.test.mjs'
+      - 'tests/management-context-growth.test.mjs'
+      - 'tests/management-commissioning-diagnostics.test.mjs'
+      - '.github/workflows/mission85-management-context-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  mission85-context:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify TypeScript contracts
+        run: npm run typecheck
+      - name: Mission83 retained, Mission85 overflow, lossless identity and growth
+        run: node --test tests/management-context.test.mjs tests/management-context-growth.test.mjs tests/management-commissioning-diagnostics.test.mjs
+      - name: Install isolated PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Unchanged native PostgreSQL management and admission contracts
+        run: node --test tests/project-organization-postgres.test.mjs
