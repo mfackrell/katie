@@ -26,7 +26,7 @@ export async function assertContext90RetestNative(db,{
   for(let ordinal=sourceCount;ordinal<90;ordinal++){
    const latest=ordinal===89,mission=randomUUID(),assignment=randomUUID(),decision=randomUUID();
    const timestamp=new Date(Date.now()+(ordinal-sourceCount+2)*1000).toISOString();
-   const m={...base,id:mission,status:latest?'blocked':'completed',
+   const m={...base,id:mission,project_kind:'management',team:[{id:root.agent_id,config:root.config}],status:latest?'blocked':'completed',
     calls:latest?0:1,actual_tokens:0,reserved_tokens:0,result:latest?null:'Management decisions committed',
     detail:latest?OVERFLOW:null,deadline:firstReal.cutoff,
     created_at:timestamp,updated_at:timestamp,
