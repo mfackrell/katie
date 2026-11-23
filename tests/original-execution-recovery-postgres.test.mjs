@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+
+test('native PostgreSQL 16 original 84-mission expired owner window, M83 preservation, three scheduler claims',{timeout:300000},async()=>{
+ const env={...process.env,
+  KATIE_TEST_COMPLETION_CONTROLS:'1',KATIE_TEST_AMENDMENT_SUCCESSOR:'1',
+  KATIE_TEST_CAPACITY_RENEWAL:'1',KATIE_TEST_LIFECYCLE_AUTHORIZATION:'1',
+  KATIE_TEST_ORDINARY_AUTHORITY:'1',KATIE_TEST_PROJECT_ORGANIZATION:'1',
+  KATIE_TEST_MISSION79_RETRY:'1',KATIE_TEST_MISSION79_WATCHDOG:'1',
+  KATIE_TEST_MISSION80_CONTINUATION:'1',KATIE_TEST_MISSION80_WATCHDOG:'1',
+  KATIE_TEST_MISSION82_INDEPENDENT:'1',KATIE_TEST_ORIGINAL_WINDOW:'1'
+ };
+ delete env.NODE_TEST_CONTEXT;
+ const result=await new Promise((resolve,reject)=>{
+  const child=spawn(process.execPath,['--test','tests/blocked-owner-committed-concurrency.test.mjs'],{
+   env,stdio:['ignore','pipe','pipe']
+  });
+  let stdout='',stderr='';
+  child.stdout.on('data',b=>stdout+=b);
+  child.stderr.on('data',b=>stderr+=b);
+  child.on('error',reject);
+  child.on('close',code=>resolve({code,stdout,stderr}));
+ });
+ assert.equal(result.code,0,result.stdout+'\n'+result.stderr);
+ assert.match(result.stdout,/MISSION82_NATIVE_PASS/);
+ assert.match(result.stdout,/ORIGINAL_WINDOW_NATIVE_PASS/);
+ assert.match(result.stdout,/MISSION80_WATCHDOG_AND_SUCCESSOR_NATIVE_PASS/);
+ assert.match(result.stdout,/MISSION79_WATCHDOG_RACE_NATIVE_PASS/);
+});

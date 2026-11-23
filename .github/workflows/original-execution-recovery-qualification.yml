@@ -1,0 +1,47 @@
+name: Original 84-mission owner window and successor qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261123140500_original_project_owner_window_recovery.sql'
+      - 'lib/projects/original-execution-recovery.ts'
+      - 'components/original-execution-recovery-control.tsx'
+      - 'components/director-recovery-control.tsx'
+      - 'app/api/projects/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'tests/original-execution-recovery-*.test.mjs'
+      - 'tests/helpers/assert-original-recovery-native.mjs'
+      - 'tests/helpers/assert-mission82-independent-native.mjs'
+      - '.github/workflows/original-execution-recovery-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  native-signed-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install isolated native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Exact first-party owner session, deadline, claims and approval negatives
+        run: node --test tests/original-execution-recovery-runtime.test.mjs
+      - name: Native 84-mission expiry, original history, new signed window, and three scheduler claims
+        run: node --test tests/original-execution-recovery-postgres.test.mjs
+      - name: Unchanged SMART contract and required management evidence
+        run: node --test tests/management-context.test.mjs tests/management-commissioning-diagnostics.test.mjs

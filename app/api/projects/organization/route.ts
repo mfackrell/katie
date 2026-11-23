@@ -12,6 +12,7 @@ import {mission79ReleaseIdentityFailure,mission79ReleaseIdentityMessage} from '@
 import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import {mission80WatchdogOffer,MISSION80_ID,MISSION80_ASSIGNMENT} from '@/lib/projects/mission80-watchdog';
 import {mission82WatchdogOffer,MISSION82_ID,MISSION82_ASSIGNMENT} from '@/lib/projects/mission82-watchdog';
+import {originalExecutionRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-execution-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -123,12 +124,25 @@ const mission82WatchdogRecoveryInput=z.object({
  authorizationId:z.string().uuid(),cutoff:z.string().datetime({offset:true}),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput]);
+const originalExecutionRecoveryInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),trialAction:z.literal('authorize_original_execution_recovery'),
+ missionId:z.literal(ORIGINAL_RECOVERY_MISSION),assignmentId:z.literal(ORIGINAL_RECOVERY_ASSIGNMENT),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
+ authorizationId:z.string().uuid(),priorCutoff:z.string().datetime({offset:true}),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.string().datetime({offset:true}),
+ newMissions:z.number().int().min(0).max(12),maxClaims:z.number().int().min(1).max(26),
+ retryLimit:z.number().int().min(0).max(1),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalExecutionRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({originalExecutionRecovery:await originalExecutionRecoveryOffer(ORIGINAL_TTT_PROJECT)},
+    {headers:{'Cache-Control':'no-store'}});}
+  catch{ /* Exact 84-mission recovery is not applicable. */ }
   try{return NextResponse.json({mission82Recovery:await mission82WatchdogOffer(ORIGINAL_TTT_PROJECT)},
     {headers:{'Cache-Control':'no-store'}});}
   catch{ /* Original Mission82 independent escalation is not owner-recoverable. */ }
@@ -155,6 +169,36 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_original_execution_recovery'){
+  // Neither a migration nor the old 79-82 receipts can sign these NEW terms.
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Exact canonical production release required'},{status:409});
+  const offer=await originalExecutionRecoveryOffer(p.projectId),deadline=Date.parse(p.cutoff);
+  if(offer.stage!=='authorize'||offer.releaseSha!==p.releaseSha
+   ||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
+   ||offer.missionId!==p.missionId||offer.assignmentId!==p.assignmentId
+   ||offer.stateHash!==p.stateHash
+   ||Date.parse(offer.priorCutoff)!==Date.parse(p.priorCutoff)
+   ||!Number.isFinite(deadline)||deadline<=Date.now()+600000||deadline>Date.now()+72*3600000
+   ||p.maxClaims>2*(1+p.newMissions)
+   ||offer.historicalMissions!==84||offer.maxMissions!==96||offer.tokenAllowance!==600000)
+   return NextResponse.json({error:'Original saved project and explicit new owner terms required'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>(
+   'project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
+   return NextResponse.json({error:'Canonical production SHA and deployment could not be verified'},{status:409});
+  return NextResponse.json(await rpc('project_org_original_execution_recover',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
+   p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
+   p_authorization:p.authorizationId,p_state_hash:p.stateHash,
+   p_new_cutoff:p.cutoff,p_new_missions:p.newMissions,
+   p_new_claims:p.maxClaims,p_retry_limit:p.retryLimit
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_mission82_watchdog_recovery'){
   // This action is submitted only by the authenticated first-party Katie
   // owner. A release migration or a stale Mission79 retry is NOT consent.
