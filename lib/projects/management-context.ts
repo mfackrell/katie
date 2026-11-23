@@ -137,6 +137,42 @@ function compactRepeatedManagementEvidence(payload:Record<string,unknown>):Recor
  };
 }
 
+
+// If exact repeated values still cannot fit, represent the same exception
+// ledger as a positional table. This is a third, last-resort lossless
+// representation INSIDE the decision JSON: no database row is omitted.
+function compactExceptionRows(payload:Record<string,unknown>):Record<string,unknown>|null{
+ const source=payload.exceptions as ManagementRow[];
+ if(!source.every((e,i)=>typeof e.id==='string'&&typeof e.owner_id==='string'&&typeof e.origin_id==='string'
+   &&typeof e.reason==='string'&&typeof e.status==='string'&&typeof e.created_at==='string'
+   &&(typeof e.detail==='string'||(Number.isInteger(e.detailRef)&&Number(e.detailRef)>=0&&Number(e.detailRef)<i))
+   &&(e.resolution==null||typeof e.resolution==='string')))return null;
+ const identityIds:string[]=[];
+ const identityIndex=(id:string)=>{
+  let i=identityIds.indexOf(id);
+  if(i<0){i=identityIds.length;identityIds.push(id);}
+  return i;
+ };
+ const standard=new Set(['id','origin_id','owner_id','reason','detail','detailRef','status','created_at','resolution']);
+ const rows=source.map(e=>{
+  const detail=typeof e.detail==='string'?e.detail:[e.detailRef as number];
+  const extras=Object.fromEntries(Object.entries(e).filter(([k])=>!standard.has(k)));
+  const row:unknown[]=[e.id,identityIndex(e.origin_id as string),identityIndex(e.owner_id as string),
+   e.reason,detail,e.status,e.created_at];
+  if(e.resolution!=null||Object.keys(extras).length)row.push(e.resolution??null);
+  if(Object.keys(extras).length)row.push(extras);
+  return row;
+ });
+ return {...payload,exceptions:rows,
+  exceptionFields:['id','origin_id','owner_id','reason','detail','status','created_at','resolution','extraFields'],
+  exceptionNodeIds:identityIds,
+  contextReferencePolicy:String(payload.contextReferencePolicy)+
+   ' When exceptions entries are arrays, each is a complete row ordered by exceptionFields. '+
+   ' origin_id and owner_id are integer indexes into exceptionNodeIds (look up the exact UUID). '+
+   ' A detail array [i] means the exact detail of prior exceptions row i; resolve it before acting. '+
+   ' A missing resolution element means no resolution. Preserve every distinct exception id and status.'};
+}
+
 export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const {principalId,topology,scopedNodes,project}=input;
  const scope=managementScope(topology,principalId);
@@ -252,7 +288,13 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const serialized=JSON.stringify(payload);
  required(Number.isSafeInteger(limit)&&limit>0,'configured management input limit');
  if(serialized.length<=limit)return serialized;
- const compact=JSON.stringify(compactRepeatedManagementEvidence(payload));
+ const deduplicated=compactRepeatedManagementEvidence(payload);
+ const compact=JSON.stringify(deduplicated);
  if(compact.length<=limit)return compact;
+ const compressed=compactExceptionRows(deduplicated);
+ if(compressed){
+  const table=JSON.stringify(compressed);
+  if(table.length<=limit)return table;
+ }
  throw Error('Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.');
 }
