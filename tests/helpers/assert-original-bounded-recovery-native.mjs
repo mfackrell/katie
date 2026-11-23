@@ -223,6 +223,14 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,lease]);
    await db.query('set role service_role');
    const result=(await db.query('select project_org_schedule($1,$2) v',[project,lease])).rows[0].v;
+   if(!result?.missionId){
+    const nodeState=(await db.query(`select area,kind,management_level,depth,status,decision_needed,deadline,
+      project_org_dependencies_ready(id) as deps_ready,project_org_plan_ready(id) as plan_ready
+      from project_organization_nodes where project_id=$1 order by depth,area,id`,[project])).rows;
+    const projectState=(await db.query(`select status,phase,deadline,active_mission_id,lease,lease_until,max_missions,organization_version
+      from work_projects where id=$1`,[project])).rows[0];
+    console.log('ORIGINAL_84_SCHEDULE_DIAGNOSTIC '+JSON.stringify({result,projectState,nodeState}));
+   }
    assert.ok(result?.missionId,'Original hierarchy must schedule a successor');
    const row=(await db.query('select j.id,m.id mission_id,m.status,m.project_evidence from mission_assignments j join agent_missions m on m.id=j.mission_id where m.id=$1',[result.missionId])).rows[0];
    assert.ok(row?.id);return row;
