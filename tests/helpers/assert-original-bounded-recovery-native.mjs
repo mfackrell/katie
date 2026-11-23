@@ -80,13 +80,18 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   // create a fixture-only chain of legitimate source-preserving deadline
   // amendment rows. No old production window or accepted decision is edited.
   const oldWindow=randomUUID();
+  // Seed an already-expired historical window in this disposable fixture.
+  // Native fixture construction initially built a future window, so the
+  // immutable node deadline guard is disabled ONLY while transplanting this
+  // synthetic past checkpoint. Re-enable before testing the actual owner RPC.
+  // No production trigger/permission is modified by the migration itself.
   await db.query("insert into project_execution_windows(id,project_id,owner_id,release_sha,decision_id,prior_cutoff,cutoff,prior_release_sha) values($1,$2,$3,$4,$5,$6,$7,$4)",
-   [oldWindow,project,owner,provider.continuation_release_sha,provider.continuation_decision_id,prior.deadline,expired]);
-  for(const n of (await db.query('select * from project_organization_nodes where project_id=$1 order by depth,id',[project])).rows){
-   await db.query("insert into project_organization_contract_changes(project_id,node_id,window_id,prior_deadline,deadline,prior_tools,tools,prior_submission) values($1,$2,$3,$4,$5,$6,$6,$7)",
-    [project,n.id,oldWindow,n.deadline,expired,n.tools,n.completion_submission]);
-   await db.query('update project_organization_nodes set deadline=$2 where id=$1',[n.id,expired]);
-  }
+   [oldWindow,project,owner,provider.continuation_release_sha,provider.continuation_decision_id,'2026-11-21T14:00:00Z',expired]);
+  await db.query('alter table project_organization_nodes disable trigger project_org_immutable');
+  await db.query('update project_organization_nodes set deadline=$2 where project_id=$1',[project,expired]);
+  await db.query('alter table project_organization_nodes enable trigger project_org_immutable');
+  assert.equal((await db.query("select count(*)::int n from pg_trigger where tgrelid='project_organization_nodes'::regclass and tgname='project_org_immutable' and tgenabled='O'")).rows[0].n,1,
+   'Immutable hierarchy guard restored before signed owner recovery');
   await db.query('update project_provider_execution set deadline=$2,window_id=$3 where project_id=$1',[project,expired,oldWindow]);
   await db.query("update work_projects set deadline=$2,status='blocked',lease=null,lease_until=null,progress_since=clock_timestamp()-interval '46 minutes',detail=$3 where id=$1",
    [project,expired,'No new completed artifact or external execution transition for 00:45:00 in development. Work is blocked; saved results and charges are retained.']);
