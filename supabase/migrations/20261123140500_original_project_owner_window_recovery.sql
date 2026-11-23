@@ -286,3 +286,220 @@ REVOKE ALL ON FUNCTION public.project_org_original_recovery_claim_authorized(uui
  FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.project_org_original_recovery_claim_authorized(uuid,text,bigint,text)
  TO service_role;
+
+-- Original consent once admitted keeps the legacy provider-window identity as
+-- provenance; its mutable CURRENT cutoff advances only on a signed receipt.
+CREATE OR REPLACE FUNCTION public.project_provider_continued(p_project uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+ select exists(select 1 from project_provider_execution a
+ join project_organization_decisions d on d.id=a.continuation_decision_id and d.project_id=a.project_id
+ join project_organization_nodes n on n.id=d.node_id and n.project_id=a.project_id and n.kind='project_director' and n.parent_id is null
+ join mission_assignments j on j.id=d.assignment_id and j.status='completed'
+ join agent_missions m on m.id=j.mission_id and m.project_id=a.project_id and m.status='completed'
+ left join project_director_recoveries r on r.project_id=a.project_id and r.owner_id=a.owner_id
+ left join project_execution_windows w on w.id=a.window_id and w.project_id=a.project_id and w.owner_id=a.owner_id
+  and w.decision_id=d.id and (w.release_sha=a.continuation_release_sha or (project_org_scoped_retry_release(w.id,a.continuation_release_sha) or (project_org_management_resume_release(w.id,a.continuation_release_sha) or project_org_blocked_owner_release(w.id,a.continuation_release_sha)))) and (w.cutoff=a.deadline OR EXISTS (
+ SELECT 1 FROM public.project_original_execution_recovery_receipts renewed
+ JOIN public.project_retest_production_release_gate active_gate ON active_gate.project_id=renewed.project_id
+ WHERE renewed.project_id=a.project_id AND renewed.owner_id=a.owner_id
+  AND renewed.original_window_id=a.window_id AND renewed.prior_cutoff=w.cutoff
+  AND renewed.cutoff=a.deadline AND renewed.scope_hash=a.approved_scope
+  AND active_gate.release_sha=renewed.release_sha
+  AND active_gate.generation=renewed.release_generation
+  AND active_gate.deployment_id=renewed.deployment_id
+  AND active_gate.state='active'
+  AND renewed.cutoff>clock_timestamp()
+))
+ where a.project_id=p_project and a.continued_at is not null and a.continuation_release_sha ~ '^[0-9a-f]{40}$'
+ and ((r.project_id is not null and d.assignment_id=r.assignment_id) or w.id is not null)
+ and (a.window_id is null or w.id is not null));
+$function$;
+-- Original single-mission historical branches are untouched. The final
+-- alternative admits subsequent validated work under THIS owner-signed window.
+CREATE OR REPLACE FUNCTION public.project_org_retest_claim_release_authorized_epoch(p_project uuid, p_release text, p_generation bigint, p_deployment text)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+ SELECT (
+  (coalesce(p_generation>0,false)
+   AND public.project_org_retest_claim_release_authorized(p_project,p_release)
+   AND EXISTS (
+    SELECT 1 FROM public.project_retest_production_release_gate g
+    JOIN public.project_retest_claim_release_receipts receipt ON receipt.project_id=g.project_id
+     AND receipt.bound_release_sha=p_release
+     AND receipt.bound_release_generation=p_generation
+     AND receipt.bound_deployment_id=p_deployment
+    WHERE g.project_id=p_project AND g.release_sha=p_release
+     AND g.state='active' AND g.alias_name='katie-mu.vercel.app'
+     AND g.generation=p_generation AND g.deployment_id=p_deployment
+   ))
+  OR public.project_org_mission79_retry_claim_authorized(p_project,p_release,p_generation,p_deployment)
+  -- This branch is the original owner's bounded downstream management
+  -- continuation, not a reuse of the one-time Mission79 retry. Every new
+  -- assignment must independently qualify under the live source, limits,
+  -- org membership and release epoch. Initial attempts ONLY.
+  OR EXISTS (
+   SELECT 1 FROM public.work_projects p
+   JOIN public.project_provider_execution a ON a.project_id=p.id
+    AND a.approved_scope=p.approved_hash AND a.deadline=p.deadline
+   JOIN public.project_retest_future_window_receipts q ON q.project_id=p.id
+    AND q.owner_id=a.owner_id AND q.authorization_id=a.window_id
+    AND q.cutoff=p.deadline AND q.scope_hash=p.approved_hash
+   JOIN public.project_execution_windows ow ON ow.id=a.window_id
+    AND ow.project_id=p.id AND ow.owner_id=a.owner_id
+    AND ow.decision_id=a.continuation_decision_id AND ow.cutoff=p.deadline
+   JOIN public.project_mission79_retry_receipts r79 ON r79.project_id=p.id
+    AND r79.owner_id=a.owner_id AND r79.cutoff=p.deadline
+    AND r79.scope_hash=p.approved_hash AND r79.prior_attempts=1 AND r79.prior_calls=1
+   JOIN public.project_mission79_watchdog_recovery_receipts w79 ON w79.project_id=p.id
+    AND w79.original_retry_authorization_id=r79.authorization_id
+    AND w79.owner_id=a.owner_id AND w79.mission_id=r79.mission_id
+    AND w79.assignment_id=r79.assignment_id AND w79.scope_hash=p.approved_hash
+    AND w79.cutoff=p.deadline
+   JOIN public.agent_missions m79 ON m79.id=r79.mission_id
+    AND m79.project_id=p.id AND m79.status='completed' AND m79.calls=2
+   JOIN public.mission_assignments j79 ON j79.id=r79.assignment_id
+    AND j79.mission_id=m79.id AND j79.status='completed'
+    AND j79.attempts=2 AND j79.lease IS NULL
+   JOIN public.project_organization_decisions d79 ON d79.project_id=p.id
+    AND d79.assignment_id=j79.id AND d79.id::text=j79.result->>'decisionId'
+   JOIN public.agent_missions m ON m.id=p.active_mission_id
+    AND m.project_id=p.id AND m.status='running' AND m.calls=0
+    AND m.project_kind='management' AND m.deadline=p.deadline
+   JOIN public.mission_assignments j ON j.mission_id=m.id
+    AND j.status='queued' AND j.attempts=0 AND j.role='work'
+    AND j.job_key='plan' AND j.lease IS NULL AND j.lease_until IS NULL
+    AND j.available_at<=clock_timestamp()
+   JOIN public.project_organization_nodes n ON n.id::text=m.project_evidence->>'organizationNodeId'
+    AND n.project_id=p.id AND n.status='active'
+    AND n.agent_id=j.agent_id AND n.kind<>'worker'
+    AND n.deadline=p.deadline AND n.management_level IN
+     ('project_director','functional_director','manager','supervisor')
+   JOIN public.project_organization_assignments oa ON oa.node_id=n.id
+    AND oa.assignment_id=j.id
+   JOIN public.project_retest_production_release_gate g ON g.project_id=p.id
+    AND g.state='active' AND g.alias_name='katie-mu.vercel.app'
+    AND g.release_sha=p_release AND g.generation=p_generation
+    AND g.deployment_id=p_deployment
+   WHERE p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    AND p.id=p_project AND p.status='running' AND p.phase='development'
+    AND p.deadline>clock_timestamp() AND p.approval_hash=p.approved_hash
+    AND p.max_missions=96 AND p.token_allowance=600000
+    AND r79.mission_id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    AND r79.assignment_id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+    AND m.id<>m79.id AND m.created_at>d79.created_at
+    AND w79.authorized_at<d79.created_at
+    AND (SELECT count(*) FROM public.agent_missions x WHERE x.project_id=p.id) BETWEEN 80 AND 96
+    AND (SELECT count(*) FROM public.mission_assignments x WHERE x.mission_id=m.id)=1
+    AND (SELECT count(*) FROM public.project_organization_nodes x
+     WHERE x.project_id=p.id AND x.status='active')=13
+    AND NOT EXISTS (SELECT 1 FROM public.agent_missions newer
+     WHERE newer.project_id=p.id AND newer.created_at>m.created_at)
+    AND (
+     EXISTS (
+     SELECT 1 FROM public.agent_missions prev
+     JOIN public.mission_assignments prev_job ON prev_job.mission_id=prev.id
+      AND prev_job.status='completed'
+     JOIN public.project_organization_decisions prev_decision ON prev_decision.project_id=p.id
+      AND prev_decision.assignment_id=prev_job.id
+      AND prev_decision.id::text=prev_job.result->>'decisionId'
+     WHERE prev.project_id=p.id AND prev.status='completed'
+      AND prev.created_at=(
+       SELECT max(prior.created_at) FROM public.agent_missions prior
+       WHERE prior.project_id=p.id AND prior.created_at<m.created_at)
+    )
+     OR (m.id='53f28eed-631a-4e7e-b868-7b36a34be616'::uuid
+      AND j.id='0e358d94-6f36-4607-998f-e603646d33de'::uuid
+      AND public.project_org_mission82_independent_escalation(p.id))
+    )
+    AND m.project_evidence->>'providerContinuationWindow'=a.window_id::text
+    AND m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
+    AND m.project_evidence->>'providerContinuationRelease'=a.continuation_release_sha
+    AND public.project_org_retest_exact_scope_grants(p.id)
+    AND public.project_org_retest_original_owner_lineage(p.id)
+    AND public.project_provider_continued(p.id)
+    AND public.project_provider_continued_assignment(j.id)
+    AND NOT public.project_provider_request_pending(p.id)
+    AND (SELECT coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0)
+         FROM public.agent_missions spent WHERE spent.project_id=p.id)<=p.token_allowance
+  )
+  OR public.project_org_original_recovery_claim_authorized(p_project,p_release,p_generation,p_deployment)
+ );
+$function$;
+-- Honor the owner's selected total mission ceiling at issuance time, too;
+-- all other projects preserve the existing p.max_missions guard.
+CREATE OR REPLACE FUNCTION public.project_org_schedule_hierarchy(p_project uuid, p_lease uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare p work_projects; n project_organization_nodes; mid uuid; j uuid; previous_mid uuid; w project_organization_work; begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from work_projects where id=p_project and lease=p_lease and p_lease is not null and lease_until>now() and status='running' and deadline>now();
+ if p.id is null then raise exception 'Project lease required';end if;
+ if p.organization_version=0 then return null;end if;
+ if p.active_mission_id is not null then
+ if exists(select 1 from agent_missions where id=p.active_mission_id and project_kind='management') then
+ if exists(select 1 from agent_missions where id=p.active_mission_id and status in ('blocked','stopped')) then
+ select * into n from project_organization_nodes where id=(select (project_evidence->>'organizationNodeId')::uuid from agent_missions where id=p.active_mission_id);
+ if (select count(*) from agent_missions where project_id=p.id and project_kind='management' and project_evidence->>'organizationNodeId'=n.id::text and status in ('blocked','stopped') and (not project_provider_mode(p.id) or p.phase<>'development' or p.approved_hash is null or created_at>=coalesce((select max(s.approved_at) from project_scope_ratification_approvals s where s.project_id=p.id and s.scope_hash=p.approved_hash),'-infinity'::timestamptz)))>=2 then
+ if n.parent_id is null then return jsonb_build_object('blocked','Project management cannot achieve its objective within bounded retry authority');end if;
+ insert into project_organization_exceptions(project_id,origin_id,owner_id,reason,detail) values(p.id,n.id,n.parent_id,'objective','Management session failed twice; saved decisions and charges retained.');
+ update project_organization_nodes set decision_needed=(id=n.parent_id) where id in(n.id,n.parent_id);
+ else update project_organization_nodes set decision_needed=true where id=n.id;end if;
+ update work_projects set active_mission_id=(select (project_evidence->>'previousMissionId')::uuid from agent_missions where id=p.active_mission_id) where id=p.id;
+ end if;return jsonb_build_object('waiting',true);end if;
+ if exists(select 1 from agent_missions where id=p.active_mission_id and project_kind='organization_work') then
+ if exists(select 1 from agent_missions where id=p.active_mission_id and status in ('completed','blocked','stopped')) then
+ update project_organization_work set status=case when (select status from agent_missions where id=p.active_mission_id)='completed' then 'completed' else 'blocked' end where mission_id=p.active_mission_id returning * into w;
+ update project_organization_nodes set decision_needed=true where id=(select parent_id from project_organization_nodes where id=w.node_id);
+ update work_projects set active_mission_id=(select (project_evidence->>'previousMissionId')::uuid from agent_missions where id=p.active_mission_id) where id=p.id;
+ end if;return jsonb_build_object('waiting',true);end if;
+ if not exists(select 1 from agent_missions where id=p.active_mission_id and status in ('completed','blocked')) and not project_smart_pending(p.active_mission_id) then return null;end if;
+ previous_mid:=p.active_mission_id;
+ end if;
+ if p.phase='assessment' and previous_mid is not null and not exists(select 1 from project_organization_closures where project_id=p.id) then update project_organization_nodes set decision_needed=true where project_id=p.id and kind='project_director';end if;
+ select * into n from project_organization_nodes where project_id=p.id and kind<>'worker' and status='active' and decision_needed and deadline>now() and project_org_dependencies_ready(id) order by case when kind='project_director' and not project_org_plan_ready(id) then 0 else 1 end,case when p.phase='development' and p.approved_hash is not null and not exists(select 1 from project_work_packages pkg where pkg.project_id=p.id and pkg.milestone_index=p.milestone_index) then depth else -depth end,created_at,id limit 1;
+ if n.id is null then
+ select * into w from project_organization_work where project_id=p.id and status='queued' and project_org_dependencies_ready(node_id) order by created_at,id limit 1;
+ if w.id is null then
+ if exists(select 1 from project_organization_nodes where project_id=p.id and kind<>'worker' and status='active' and decision_needed) or exists(select 1 from project_organization_work where project_id=p.id and status='queued') then return jsonb_build_object('waiting',true,'detail','Organizations are coordinating their accepted dependencies.');end if;
+ return null;end if;
+ select * into n from project_organization_nodes where id=w.node_id;
+ end if;
+ -- Planning uses the existing project authorization, never an implicit new allowance.
+ if not project_provider_mode(p.id) and not exists(select 1 from project_organization_authority where project_id=p.id and objective_hash=encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex')) then return jsonb_build_object('waiting',true,'detail','Project financial authority is required before management inference');end if;
+ if not project_provider_mode(p.id) and n.token_limit<10000 then return jsonb_build_object('blocked','Delegated management capacity unavailable');end if;
+ if (select count(*) from agent_missions where project_id=p.id)>=least(
+ p.max_missions,coalesce((select r.authorized_total_missions
+ from public.project_original_execution_recovery_receipts r
+ where r.project_id=p.id and r.cutoff=p.deadline
+ and r.cutoff>clock_timestamp()),p.max_missions)
+) then return jsonb_build_object('blocked','Approved project mission limit reached');end if;
+ if exists(select 1 from project_organization_dependencies d join project_organization_nodes x on x.id=d.depends_on where d.node_id in(n.id,n.parent_id) and x.status<>'accepted') then return jsonb_build_object('blocked','Delegated organization dependency is incomplete');end if;
+ mid:=gen_random_uuid();
+ if n.kind='worker' then
+ perform create_mission(mid,w.instruction,array[n.agent_id],20,case when w.capability='repository_review' then p.repository_id else null end);
+ update work_projects set active_mission_id=mid where id=p.id;
+ update agent_missions set project_id=p.id,project_kind='organization_work',project_evidence=jsonb_build_object('organizationNodeId',n.id,'previousMissionId',previous_mid,'approvedScopeHash',p.approved_hash),token_allowance=case when project_provider_mode(p.id) then token_allowance else least(60000,n.token_limit)::int end,deadline=least(p.deadline,n.deadline),status='running' where id=mid;
+ -- Fixed assignment: the manager already planned this work; no worker may appoint agents.
+ update mission_assignments set role='work',payload=jsonb_build_object('capability',w.capability),instruction=w.instruction where mission_id=mid;
+ update project_organization_work set mission_id=mid,status='running' where id=w.id;
+ return jsonb_build_object('missionId',mid,'nodeId',n.id);
+ end if;
+ -- create_mission validates definitions/capacity; create its plan as an execution identity first,
+ -- then bind the management-only assignment after the project lease owns this mission.
+ perform create_mission(mid,n.objective,array[p.team[1]],20,null);
+ update work_projects set active_mission_id=mid where id=p.id;
+ update agent_missions set project_id=p.id,project_kind='management',project_evidence=jsonb_build_object('organizationNodeId',n.id,'previousMissionId',previous_mid),team=jsonb_build_array((select to_jsonb(a) from managed_agents a where a.id=n.agent_id)),token_allowance=case when project_provider_mode(p.id) then token_allowance else least(60000,n.token_limit)::int end,deadline=least(p.deadline,n.deadline),status='running' where id=mid;
+ update mission_assignments set role='work',agent_id=n.agent_id,payload=jsonb_build_object('organizationNodeId',n.id),instruction='Make bounded management decisions. Delegate all technical execution.' where mission_id=mid returning id into j;
+ insert into project_organization_assignments values(j,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex'),now());
+ return jsonb_build_object('missionId',mid,'nodeId',n.id);
+end $function$;
