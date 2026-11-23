@@ -274,8 +274,16 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   // The fixture shares the GLOBAL scheduler with earlier unrelated synthetic
   // jobs. Give only this rollback-only M84 queued job priority, then use the
   // unchanged real scheduler (never a direct assignment update to RUNNING).
+  const directClaim=(await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).rows[0].ok;
+  const assignmentLineage=(await db.query('select project_provider_continued_assignment($1) ok',[J84])).rows[0].ok;
+  assert.equal(directClaim,true,'One signed post-reconciliation retry must pass exact-release claimant');
+  assert.equal(assignmentLineage,true,'Original provider assignment lineage must remain valid');
   await db.query('reset role');
-  await db.query("update mission_assignments set created_at='1799-01-01T00:00:00Z'::timestamptz where id=$1 and status='queued' and attempts=1",[J84]);
+  // The shared synthetic fixture contains queued jobs from unrelated nested
+  // lifecycle scenarios, sometimes with deliberately ancient timestamps.
+  // Disable ONLY those disposable jobs for this scheduler assertion; never
+  // write the tested assignment to RUNNING or change real prod queue policy.
+  await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes' where id<>$1 and status in ('queued','waiting_external') and available_at<=clock_timestamp()",[J84]);
   await db.query('set role service_role');
   const twice=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
   assert.equal(twice?.job?.id,J84,'Original Mission84 claimed by normal scheduler');
