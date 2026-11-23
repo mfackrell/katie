@@ -115,6 +115,7 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    .replaceAll('04ed6c05-a586-4a56-ba81-1b50e378746b',owner)
    .replaceAll('c486ade1-2a9c-4cd5-a80b-90c032e4e03e',root.id)
    .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
+   .replaceAll('2b04302e-8815-4c61-89aa-e35b9baffa82',oldWindow)
    .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
   await db.query('reset role');
   await db.query(migration);
