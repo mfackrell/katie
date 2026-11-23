@@ -154,6 +154,10 @@ export async function assertMission82IndependentNative(db,{project,m80,j80,owner
   assert.equal((await db.query(predicate,[project,release,generation,deployment])).rows[0].ok,false);
   const second=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
   assert.notEqual(second?.job?.id,J82,'Duplicate claim denied');
+  if(process.env.KATIE_TEST_ORIGINAL_BOUNDED_RECOVERY==='1'){
+   const {assertOriginalBoundedRecoveryNative}=await import('./assert-original-bounded-recovery-native.mjs');
+   await assertOriginalBoundedRecoveryNative(db,{project,owner,release,generation,deployment,m82:M82,j82:J82});
+  }
   assert.deepEqual((await db.query('select to_jsonb(j) r from mission_assignments j where id=$1',[J81])).rows[0].r,badSnapshot);
   assert.deepEqual((await db.query('select to_jsonb(j) r from mission_assignments j where id=$1',[j80])).rows[0].r,goodSnapshot);
   const limits=(await db.query('select max_missions,token_allowance from work_projects where id=$1',[project])).rows[0];
