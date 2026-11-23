@@ -60,8 +60,14 @@ export async function assertOriginalBoundedRecoveryNative(db,{project,owner,rele
   await db.query('insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb)).*',[j84]);
   await db.query("insert into project_organization_assignments(assignment_id,node_id,contract_hash) select $1,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex') from project_organization_nodes n where n.id=$2",[J84,root.id]);
   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,84);
-  // The unchanged real 45-minute watchdog first blocks the saved original.
+  // Original watchdog must first record the new progress signature, then
+  // a second *unchanged* 45-minute inactivity tick blocks the parent.
+  const initialLease=randomUUID();
+  await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,initialLease]);
+  await db.query('set role service_role');
+  assert.equal((await db.query("select finish_work_project($1,$2,'wait','{}'::jsonb) ok",[project,initialLease])).rows[0].ok,true);
   const projectLease=randomUUID();
+  await db.query('reset role');
   await db.query("update work_projects set progress_since=clock_timestamp()-interval '46 minutes',lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,projectLease]);
   await db.query('set role service_role');
   assert.equal((await db.query("select finish_work_project($1,$2,'wait','{}'::jsonb) ok",[project,projectLease])).rows[0].ok,true);
