@@ -73,7 +73,7 @@ export function OriginalBoundedRecoveryControl({initial,onRefresh}:{
    existing 84 missions and original Mission 84 assignment, not a new project.
   </p>
   <p className="mt-2 text-sm">
-   All prior management decisions, Mission 83's failed pre-inference attempt,
+   All prior management decisions, Mission 83&apos;s failed pre-inference attempt,
    provider records and original organization remain intact. The original Mission 84
    has zero attempts and is the only assignment this approval will resume.
   </p>
