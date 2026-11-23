@@ -118,7 +118,10 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    .replaceAll('c486ade1-2a9c-4cd5-a80b-90c032e4e03e',root.id)
    .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
    .replaceAll('2b04302e-8815-4c61-89aa-e35b9baffa82',oldWindow)
-   .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+   .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'')
+   // Read-only diagnostics in disposable PG16 only; the production SQL is untouched.
+   .replace("THEN RAISE EXCEPTION 'New owner window cannot admit original Mission84 via normal scheduler';END IF;",
+    "THEN RAISE EXCEPTION 'Original scheduler predicate diagnostic: %', jsonb_build_object('windowValid',public.project_org_bounded_recovery_window_valid(p.id),'claimValid',public.project_org_bounded_recovery_claim_authorized(p.id,p_release,p_generation,p_deployment),'providerContinued',public.project_provider_continued(p.id),'assignmentContinued',public.project_provider_continued_assignment(j84.id),'activeMission',p.active_mission_id,'nodeDeadlineCount',(select count(*) from project_organization_nodes n where n.project_id=p.id and n.deadline=p_cutoff and n.status='active'),'contractCount',(select count(*) from project_organization_contract_changes c where c.project_id=p.id and c.window_id=p_authorization),'receiptExists',(select count(*) from project_bounded_recovery_receipts r where r.project_id=p.id));END IF;");
   await db.query('reset role');
   await db.query(migration);
   await db.query('set role service_role');
