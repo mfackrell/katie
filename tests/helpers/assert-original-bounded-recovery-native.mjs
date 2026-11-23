@@ -93,6 +93,11 @@ export async function assertOriginalBoundedRecoveryNative(db,{project,owner,rele
   await db.query("update agent_missions set deadline=$2,status='blocked' where id=$1",[M84,expired]);
   await db.query("update agent_missions set deadline=$2 where id=$1",[M83,expired]);
   const blockEvent=(await db.query("select id,created_at from project_events where project_id=$1 and event='block' order by created_at desc limit 1",[project])).rows[0];
+  // The nested fixture inherited the earlier M82 watchdog signature. Real
+  // production recorded M84's blocked event, so repair only this disposable
+  // fixture event to the exact current active mission identifier.
+  await db.query("update project_events set data=jsonb_set(data,'{impediment,minimumAction}',to_jsonb($2::text),true) where id=$1",
+   [blockEvent.id,'Restore the stalled worker or external workflow for saved mission '+M84+', then resume within the existing authorization.']);
   await db.query('update work_projects set updated_at=$2 where id=$1',[project,blockEvent.created_at]);
   await db.query('set role service_role');
   assert.equal((await db.query(queryClaim,[project,release,generation,deployment])).rows[0].allowed,false,
