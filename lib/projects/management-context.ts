@@ -154,7 +154,7 @@ function compactExceptionRows(payload:Record<string,unknown>):Record<string,unkn
   return i;
  };
  const standard=new Set(['id','origin_id','owner_id','reason','detail','detailRef','status','created_at','resolution']);
- const rows=source.map((e,i)=>{
+ const rows=source.map(e=>{
   const detail=typeof e.detail==='string'?e.detail:[e.detailRef as number];
   const extras=Object.fromEntries(Object.entries(e).filter(([k])=>!standard.has(k)));
   const row:unknown[]=[e.id,identityIndex(e.origin_id as string),identityIndex(e.owner_id as string),
