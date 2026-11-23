@@ -237,6 +237,12 @@ export async function assertOriginalBoundedRecoveryNative(db,{
     console.log('ORIGINAL_84_SCHEDULE_DIAGNOSTIC '+JSON.stringify({result,projectState,nodeState}));
    }
    assert.ok(result?.missionId,'Original hierarchy must schedule a successor');
+   // The real scheduler runs in a NEW transaction after owner consent.
+   // Here all phases share one rollback transaction, where now() is frozen
+   // before the receipt; make only synthetic successor creation timestamps
+   // reflect genuine post-consent clock order.
+   const dated=await db.query('update agent_missions set created_at=clock_timestamp() where id=$1 and created_at<(select authorized_at from project_bounded_recovery_receipts where project_id=$2)',[result.missionId,project]);
+   assert.equal(dated.rowCount,1,'Synthetic scheduled successor must postdate owner authorization');
    const row=(await db.query('select j.id,m.id mission_id,m.status,m.project_evidence from mission_assignments j join agent_missions m on m.id=j.mission_id where m.id=$1',[result.missionId])).rows[0];
    assert.ok(row?.id);return row;
   };
