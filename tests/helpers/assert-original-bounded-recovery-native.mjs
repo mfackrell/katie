@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 
+const M80='ce8dcc30-e316-49e7-934d-6add6c14a697';
+const M81='2d01badf-7d42-4935-93ff-187d7c8d032e';
 const M83='2289146a-5728-40e7-bc05-79c5c0bed12d';
 const J83='95118a8e-8db5-465c-a8d7-98e35631ba30';
 const M84='18819669-d4cf-4010-a455-19f5bcbf93cb';
@@ -37,6 +39,18 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   const acceptedM82=new Date(stamp-10000);
   const decision82=randomUUID();
   await db.query("update agent_missions set status='completed',calls=1,result='Management decisions committed',created_at=$2 where id=$1",[m82,acceptedM82]);
+  // Earlier nested Mission80/81 fixtures intentionally use future synthetic
+  // clocks. Normalize only their creation order in this rollback-only fixture,
+  // so the original M84 is genuinely the latest mission at owner consent.
+  const artificialFuture=(await db.query(
+   'select id from agent_missions where project_id=$1 and created_at>$2 order by id',
+   [project,new Date(stamp+2000)])).rows.map(row=>row.id);
+  assert.deepEqual(artificialFuture,[M80,M81].sort(),
+   'Exactly two prior synthetic mission timestamps must be normalized');
+  await db.query(
+   'update agent_missions set created_at=case when id=$2 then $4::timestamptz else $5::timestamptz end where project_id=$1 and id in ($2,$3)',
+   [project,M80,M81,new Date(stamp-20000),new Date(stamp-15000)]);
+
   await db.query("insert into project_organization_decisions(id,project_id,node_id,assignment_id,decision,created_at) values($1,$2,$3,$4,'[{\"action\":\"ready\"}]'::jsonb,$5)",[decision82,project,root.id,j82,new Date(stamp-5000)]);
   await db.query("update mission_assignments set status='completed',lease=null,lease_until=null,result=$2 where id=$1",[j82,{output:'Management decision recorded',decisionId:decision82}]);
   const m83={
@@ -118,10 +132,7 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    .replaceAll('c486ade1-2a9c-4cd5-a80b-90c032e4e03e',root.id)
    .replaceAll('c10c9dc2-d69a-46fe-9129-866fa7f5faa6',root.agent_id)
    .replaceAll('2b04302e-8815-4c61-89aa-e35b9baffa82',oldWindow)
-   .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'')
-   // Read-only diagnostics in disposable PG16 only; the production SQL is untouched.
-   .replace("THEN RAISE EXCEPTION 'New owner window cannot admit original Mission84 via normal scheduler';END IF;",
-    "THEN RAISE EXCEPTION 'Original scheduler predicate diagnostic: %', jsonb_build_object('windowValid',public.project_org_bounded_recovery_window_valid(p.id),'claimValid',public.project_org_bounded_recovery_claim_authorized(p.id,p_release,p_generation,p_deployment),'providerContinued',public.project_provider_continued(p.id),'assignmentContinued',public.project_provider_continued_assignment(j84.id),'activeMission',p.active_mission_id,'nodeDeadlineCount',(select count(*) from project_organization_nodes chk where chk.project_id=p.id and chk.deadline=p_cutoff and chk.status='active'),'contractCount',(select count(*) from project_organization_contract_changes c where c.project_id=p.id and c.window_id=p_authorization),'receiptExists',(select count(*) from project_bounded_recovery_receipts r where r.project_id=p.id),'newerMissions',(select count(*) from agent_missions candidate where candidate.project_id=p.id and candidate.created_at>(select created_at from agent_missions where id=m84.id)),'nodeBound',(select count(*) from project_organization_assignments binding join project_organization_nodes checked_node on checked_node.id=binding.node_id where binding.assignment_id=j84.id and binding.contract_hash=encode(sha256(convert_to(public.project_canonical(checked_node.acceptance),'UTF8')),'hex')),'nodeMatch',(select count(*) from project_organization_nodes checked_node where checked_node.id::text=(select project_evidence->>'organizationNodeId' from agent_missions where id=m84.id) and checked_node.agent_id=j84.agent_id and checked_node.deadline=p_cutoff and checked_node.status='active'),'missionMatch',(select count(*) from agent_missions checked_mission where checked_mission.id=p.active_mission_id and checked_mission.status='running' and checked_mission.calls=0 and checked_mission.deadline=p_cutoff),'jobMatch',(select count(*) from mission_assignments checked_job where checked_job.id=j84.id and checked_job.status='queued' and checked_job.attempts=0 and checked_job.lease is null and checked_job.lease_until is null and checked_job.available_at<=clock_timestamp()),'receiptAt',(select authorized_at from project_bounded_recovery_receipts where project_id=p.id),'m84Created',(select created_at from agent_missions where id=m84.id));END IF;");
+   .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
   await db.query('reset role');
   await db.query(migration);
   await db.query('set role service_role');
