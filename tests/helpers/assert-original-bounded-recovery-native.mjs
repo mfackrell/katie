@@ -375,6 +375,10 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   assert.deepEqual(quotas,{max_missions:96,token_allowance:600000});
   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
   console.log('ORIGINAL_84_BOUNDED_NATIVE_PASS: expired denial, authenticated owner cutoff, preserved M83, original M84 single lease, refreshed watchdog, two subsequent real scheduler claims');
+  if(process.env.KATIE_TEST_CONTEXT_90_RETEST==='1'){
+   const {assertContext90RetestNative}=await import('./assert-management-context-90-native.mjs');
+   await assertContext90RetestNative(db,{project,owner,release,generation,deployment,root,finalNext,finish});
+  }
  }finally{
   await db.query('rollback to savepoint original_84_recovery');
   await db.query('release savepoint original_84_recovery');
