@@ -84,6 +84,11 @@ export async function assertOriginalBoundedRecoveryNative(db,{project,owner,rele
    [priorWindow,project,owner,originalAuthority.continuation_release_sha,
     originalAuthority.continuation_decision_id,oldStart,expired]);
   await db.query('update project_provider_execution set window_id=$2,deadline=$3 where project_id=$1',[project,priorWindow,expired]);
+  // Both synthetic historical missions were originally commissioned under
+  // the same just-created expired owner window. Preserve that exact binding;
+  // the original nested M82 fixture used a DIFFERENT, future window.
+  await db.query("update agent_missions set project_evidence=jsonb_set(project_evidence,'{providerContinuationWindow}',to_jsonb($2::text)) where id in ($1,$3)",
+   [M84,priorWindow,M83]);
   await db.query('update work_projects set deadline=$2 where id=$1',[project,expired]);
   await db.query('alter table project_organization_nodes disable trigger project_org_immutable');
   try{
