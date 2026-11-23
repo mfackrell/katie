@@ -142,6 +142,7 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    from work_projects p join project_provider_execution a on a.project_id=p.id
    join project_execution_windows w on w.id=a.window_id
    join agent_missions m84 on m84.id=$2
+   join mission_assignments j84 on j84.mission_id=m84.id
    join agent_missions m83 on m83.id=$3
    where p.id=$1`,[project,M84,M83])).rows[0];
   console.log('ORIGINAL_84_NATIVE_PREFLIGHT '+JSON.stringify(preflight));
