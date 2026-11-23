@@ -169,6 +169,36 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_original_execution_recovery'){
+  // Neither a migration nor the old 79-82 receipts can sign these NEW terms.
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Exact canonical production release required'},{status:409});
+  const offer=await originalExecutionRecoveryOffer(p.projectId),deadline=Date.parse(p.cutoff);
+  if(offer.stage!=='authorize'||offer.releaseSha!==p.releaseSha
+   ||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
+   ||offer.missionId!==p.missionId||offer.assignmentId!==p.assignmentId
+   ||offer.stateHash!==p.stateHash
+   ||Date.parse(offer.priorCutoff)!==Date.parse(p.priorCutoff)
+   ||!Number.isFinite(deadline)||deadline<=Date.now()+600000||deadline>Date.now()+72*3600000
+   ||p.maxClaims>2*(1+p.newMissions)
+   ||offer.historicalMissions!==84||offer.maxMissions!==96||offer.tokenAllowance!==600000)
+   return NextResponse.json({error:'Original saved project and explicit new owner terms required'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>(
+   'project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
+   return NextResponse.json({error:'Canonical production SHA and deployment could not be verified'},{status:409});
+  return NextResponse.json(await rpc('project_org_original_execution_recover',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
+   p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
+   p_authorization:p.authorizationId,p_state_hash:p.stateHash,
+   p_new_cutoff:p.cutoff,p_new_missions:p.newMissions,
+   p_new_claims:p.maxClaims,p_retry_limit:p.retryLimit
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_mission82_watchdog_recovery'){
   // This action is submitted only by the authenticated first-party Katie
   // owner. A release migration or a stale Mission79 retry is NOT consent.
