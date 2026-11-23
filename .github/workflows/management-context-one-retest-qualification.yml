@@ -1,0 +1,48 @@
+name: One authenticated management-context retest qualification
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/management-context-preflight.ts'
+      - 'lib/projects/management-context-retest.ts'
+      - 'components/management-context-retest-control.tsx'
+      - 'components/director-recovery-control.tsx'
+      - 'app/api/projects/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'supabase/migrations/20261123230000_management_context_one_retest.sql'
+      - 'tests/management-context-one-retest-*.test.mjs'
+      - 'tests/helpers/assert-management-context-90-native.mjs'
+      - 'tests/helpers/assert-original-bounded-recovery-native.mjs'
+      - '.github/workflows/management-context-one-retest-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  context90:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Strict TypeScript contracts
+        run: npm run typecheck
+      - name: First-party owner origin, state, release, evidence and one-time claim negatives
+        run: node --test tests/management-context-one-retest-runtime.test.mjs tests/management-context.test.mjs tests/management-context-growth.test.mjs tests/management-commissioning-diagnostics.test.mjs
+      - name: Install isolated native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Actual native source and one scheduler retry after preserved 90-mission failure
+        run: node --test tests/management-context-one-retest-postgres.test.mjs
