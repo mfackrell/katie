@@ -244,7 +244,7 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   assert.equal((await db.query(providerRequest,[J84,attempt,originalRequest,'model-list',testHash,null,'model-catalog'])).rows[0].ok,true);
   assert.equal((await db.query('select project_provider_mission_stop($1,$2) v',[J84,attempt])).rows[0].v,true);
   await db.query('reset role');
-  await db.query("update mission_assignments set lease_until=clock_timestamp()-interval '10 seconds' where id=$1",[J84]);
+  await db.query("update mission_assignments set status='queued',lease=null,lease_until=null,detail='Worker lease expired; prior model-call reservation remains charged.',updated_at=clock_timestamp() where id=$1",[J84]);
   const stoppedEvent=(await db.query("select id from project_events where project_id=$1 and event='provider_execution_stopped' order by created_at desc limit 1",[project])).rows[0].id;
   await db.query("insert into project_m84_catalog_reconciliations (project_id,request_id,assignment_id,original_lease,stop_event_id,observed_error,catalog_receipt,evidence_source,original_started_at) select $1,id,assignment_id,$2,$3,'Trial provider result could not be confirmed','model-catalog','rollback-only validated catalog',started_at from project_provider_requests where id=$4",[project,attempt,stoppedEvent,originalRequest]);
   await db.query('set role service_role');
