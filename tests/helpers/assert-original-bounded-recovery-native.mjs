@@ -229,12 +229,15 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    await db.query('set role service_role');
    const result=(await db.query('select project_org_schedule($1,$2) v',[project,lease])).rows[0].v;
    if(!result?.missionId){
+    // Diagnostic inspection only: the production scheduler remains under service_role.
+    await db.query('reset role');
     const nodeState=(await db.query(`select area,kind,management_level,depth,status,decision_needed,deadline,
       project_org_dependencies_ready(id) as deps_ready,project_org_plan_ready(id) as plan_ready
       from project_organization_nodes where project_id=$1 order by depth,area,id`,[project])).rows;
     const projectState=(await db.query(`select status,phase,deadline,active_mission_id,lease,lease_until,max_missions,organization_version
       from work_projects where id=$1`,[project])).rows[0];
     console.log('ORIGINAL_84_SCHEDULE_DIAGNOSTIC '+JSON.stringify({result,projectState,nodeState}));
+    await db.query('set role service_role');
    }
    assert.ok(result?.missionId,'Original hierarchy must schedule a successor');
    // The real scheduler runs in a NEW transaction after owner consent.
