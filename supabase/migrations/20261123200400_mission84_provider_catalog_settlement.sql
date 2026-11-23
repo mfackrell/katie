@@ -164,9 +164,9 @@ BEGIN
  OR p.phase<>'development' OR p.deadline IS DISTINCT FROM '2026-11-26T19:45:00Z'::timestamptz
  OR m.status<>'running' OR m.calls<>0 OR m.project_id IS DISTINCT FROM p.id
  OR j.id IS NULL OR j.mission_id IS DISTINCT FROM m.id
- OR j.status<>'running' OR j.attempts<>1 OR j.lease IS NULL
- OR j.lease::text IS DISTINCT FROM q.execution_attempt
- OR j.lease_until>=clock_timestamp()
+ OR j.status<>'queued' OR j.attempts<>1 OR j.lease IS NOT NULL OR j.lease_until IS NOT NULL
+ OR j.detail IS DISTINCT FROM 'Worker lease expired; prior model-call reservation remains charged.'
+ OR q.execution_attempt IS DISTINCT FROM 'df8a5e69-cd8a-4d1b-a666-aba8f9c53df3'
  OR q.project_id IS DISTINCT FROM p.id OR q.mission_id IS DISTINCT FROM m.id
  OR q.assignment_id IS DISTINCT FROM j.id OR q.worker_id IS DISTINCT FROM j.agent_id
  OR q.operation<>'model-list' OR q.provider_receipt IS NOT NULL OR q.resolved_at IS NOT NULL
@@ -184,7 +184,7 @@ BEGIN
  THEN RAISE EXCEPTION 'Original Mission84 catalog result cannot be conclusively reconciled';END IF;
  INSERT INTO public.project_m84_catalog_reconciliations
  (project_id,request_id,assignment_id,original_lease,stop_event_id,observed_error,catalog_receipt,evidence_source,original_started_at)
- VALUES(p.id,q.id,j.id,j.lease,e.id,'Trial provider result could not be confirmed','model-catalog',
+ VALUES(p.id,q.id,j.id,q.execution_attempt::uuid,e.id,'Trial provider result could not be confirmed','model-catalog',
  'Vercel dpl_4mDDTZqvvGi7VgkbsRCL97Xuhkj7 /api/internal/missions/run request 5j8zq-1795463439167-46739714445f 2026-11-23T19:50:45.062Z; source lib/missions/model.ts trialProviderRequest',q.started_at);
  UPDATE public.project_provider_requests SET provider_receipt='model-catalog',resolved_at=clock_timestamp()
  WHERE id=q.id AND resolved_at IS NULL AND provider_receipt IS NULL;
@@ -192,7 +192,7 @@ BEGIN
  INSERT INTO public.project_events(project_id,event,data)
  VALUES(p.id,'mission84_catalog_runtime_evidence_reconciled',jsonb_build_object(
  'requestId',q.id,'sourceError','Trial provider result could not be confirmed',
- 'originalLease',j.lease,'originalStartedAt',q.started_at,'externalResponseId',null,
+ 'originalLease',q.execution_attempt,'originalStartedAt',q.started_at,'externalResponseId',null,
  'paidInference',false,'evidenceClass','application_returned_valid_catalog_before_persistence_rejection'));
  RETURN jsonb_build_object('stage','reconciled','existing',false,'requestId',q.id,
   'receipt','model-catalog','paidInference',false);
@@ -245,9 +245,9 @@ BEGIN
    'tokenAllowance',600000,'nodeCount',13,'newPaidAttempts',1);
  END IF;
  IF p.status<>'stopped' OR p.active_mission_id IS DISTINCT FROM m.id
- OR j.status<>'running' OR j.attempts<>1 OR j.lease IS NULL
- OR j.lease_until>=clock_timestamp() OR j.lease IS DISTINCT FROM c.original_lease
- OR q.execution_attempt IS DISTINCT FROM j.lease::text OR j.result IS NOT NULL
+ OR j.status<>'queued' OR j.attempts<>1 OR j.lease IS NOT NULL OR j.lease_until IS NOT NULL
+ OR j.detail IS DISTINCT FROM 'Worker lease expired; prior model-call reservation remains charged.'
+ OR q.execution_attempt IS DISTINCT FROM c.original_lease::text OR j.result IS NOT NULL
  THEN RAISE EXCEPTION 'Expired original running lease and stopped parent required';END IF;
  fingerprint:=encode(sha256(convert_to(concat_ws('|',p.id,p.status,p.deadline,p.updated_at,p.progress_since,
   m.id,m.status,m.calls,j.id,j.status,j.attempts,j.lease,j.lease_until,
@@ -293,12 +293,12 @@ BEGIN
   original_lease,prior_attempts,prior_calls,release_sha,release_generation,
   deployment_id,scope_hash,cutoff,state_hash)
  VALUES(p.id,p_authorization,p_owner,m.id,j.id,
-  '58d5926a-7160-42c1-9a04-540351e777dc'::uuid,j.lease,1,0,
+  '58d5926a-7160-42c1-9a04-540351e777dc'::uuid,(SELECT original_lease FROM public.project_m84_catalog_reconciliations WHERE project_id=p.id),1,0,
   p_release,p_generation,p_deployment,p.approved_hash,p.deadline,p_state_hash);
  UPDATE public.mission_assignments
  SET status='queued',lease=NULL,lease_until=NULL,available_at=stamp,updated_at=stamp,
   detail='Original catalog response reconciled; one additional authenticated owner retry queued.'
- WHERE id=j.id AND status='running' AND attempts=1 AND lease=j.lease;
+ WHERE id=j.id AND status='queued' AND attempts=1 AND lease IS NULL AND lease_until IS NULL;
  IF NOT FOUND THEN RAISE EXCEPTION 'Original assignment was changed under approval lock';END IF;
  UPDATE public.work_projects SET status='running',progress_since=stamp,updated_at=stamp,
   detail='Owner authorized one additional Mission84 attempt under original deadline.',impediment=NULL
@@ -309,7 +309,7 @@ BEGIN
  INSERT INTO public.project_events(project_id,event,data)
  VALUES(p.id,'mission84_one_additional_owner_retry_authorized',jsonb_build_object(
   'authorizationId',p_authorization,'requestId','58d5926a-7160-42c1-9a04-540351e777dc',
-  'originalLease',j.lease,'originalAttempts',1,'originalCalls',0,
+  'originalLease',(SELECT original_lease FROM public.project_m84_catalog_reconciliations WHERE project_id=p.id),'originalAttempts',1,'originalCalls',0,
   'newPaidAttempts',1,'releaseSha',p_release,'generation',p_generation,'deploymentId',p_deployment,
   'watchdogRefreshedAt',stamp,'cutoff',p.deadline));
  RETURN jsonb_build_object('projectId',p.id,'stage','authorized','existing',false,
