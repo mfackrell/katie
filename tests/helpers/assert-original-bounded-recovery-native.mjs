@@ -246,8 +246,14 @@ export async function assertOriginalBoundedRecoveryNative(db,{
    // reflect genuine post-consent clock order.
    await db.query('reset role');
    const dated=await db.query('update agent_missions set created_at=clock_timestamp() where id=$1 and created_at<$2::timestamptz',[result.missionId,approved.authorizedAt]);
+   // The production worker claimant is GLOBAL. Prior unrelated disposable
+   // fixture jobs must not win this focused original-project assertion.
+   // Set only this rollback-only scheduled assignment ahead of that backlog,
+   // then still lease it using the unchanged genuine global claimant.
+   const priority=await db.query("update mission_assignments set created_at='1799-01-01T00:00:00Z'::timestamptz where mission_id=$1 and status='queued' and attempts=0",[result.missionId]);
    await db.query('set role service_role');
    assert.equal(dated.rowCount,1,'Synthetic scheduled successor must postdate owner authorization');
+   assert.equal(priority.rowCount,1,'One scheduled original-project assignment receives fixture-only queue priority');
    const row=(await db.query('select j.id,m.id mission_id,m.status,m.project_evidence from mission_assignments j join agent_missions m on m.id=j.mission_id where m.id=$1',[result.missionId])).rows[0];
    assert.ok(row?.id);return row;
   };
