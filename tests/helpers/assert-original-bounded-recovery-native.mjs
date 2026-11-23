@@ -30,11 +30,15 @@ export async function assertOriginalBoundedRecoveryNative(db,{
 
   // Simulate exactly the saved accepted M82 followed by original M83's
   // zero-provider, single pre-inference rejection; not a paid mock result.
+  // The fixture's earlier M82 used test-only future timestamps. Place the
+  // accepted M82 and its two historical successors in verified clock order
+  // BEFORE owner authorization; original production records are untouched.
+  const stamp=Date.now()-30000;
+  const acceptedM82=new Date(stamp-10000);
   const decision82=randomUUID();
-  await db.query("insert into project_organization_decisions(id,project_id,node_id,assignment_id,decision,created_at) values($1,$2,$3,$4,'[{\"action\":\"ready\"}]'::jsonb,clock_timestamp())",[decision82,project,root.id,j82]);
-  await db.query("update agent_missions set status='completed',calls=1,result='Management decisions committed' where id=$1",[m82]);
+  await db.query("update agent_missions set status='completed',calls=1,result='Management decisions committed',created_at=$2 where id=$1",[m82,acceptedM82]);
+  await db.query("insert into project_organization_decisions(id,project_id,node_id,assignment_id,decision,created_at) values($1,$2,$3,$4,'[{\"action\":\"ready\"}]'::jsonb,$5)",[decision82,project,root.id,j82,new Date(stamp-5000)]);
   await db.query("update mission_assignments set status='completed',lease=null,lease_until=null,result=$2 where id=$1",[j82,{output:'Management decision recorded',decisionId:decision82}]);
-  const stamp=Date.now()+10000;
   const m83={
    ...m82row,id:M83,status:'blocked',calls:0,actual_tokens:0,reserved_tokens:0,
    result:null,detail:historical,deadline:expired,
