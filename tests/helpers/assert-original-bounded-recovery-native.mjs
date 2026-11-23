@@ -271,6 +271,12 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   const approvedRetry=(await db.query(retrySql,retryArgs)).rows[0].v;
   assert.equal(approvedRetry.stage,'authorized');
   assert.equal((await db.query('select attempts from mission_assignments where id=$1',[J84])).rows[0].attempts,1);
+  // The fixture shares the GLOBAL scheduler with earlier unrelated synthetic
+  // jobs. Give only this rollback-only M84 queued job priority, then use the
+  // unchanged real scheduler (never a direct assignment update to RUNNING).
+  await db.query('reset role');
+  await db.query("update mission_assignments set created_at='1799-01-01T00:00:00Z'::timestamptz where id=$1 and status='queued' and attempts=1",[J84]);
+  await db.query('set role service_role');
   const twice=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) c',[release,generation,deployment])).rows[0].c;
   assert.equal(twice?.job?.id,J84,'Original Mission84 claimed by normal scheduler');
   assert.equal(twice.job.attempts,2,'Exactly one owner-approved additional attempt');
