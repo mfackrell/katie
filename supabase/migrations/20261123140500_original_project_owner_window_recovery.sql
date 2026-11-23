@@ -503,3 +503,134 @@ declare p work_projects; n project_organization_nodes; mid uuid; j uuid; previou
  insert into project_organization_assignments values(j,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex'),now());
  return jsonb_build_object('missionId',mid,'nodeId',n.id);
 end $function$;
+
+-- Sole mutation path: the first-party verified owner approves a NEW bounded
+-- cutoff and exact lease ceilings. No old failure or provider receipt is reset.
+CREATE FUNCTION public.project_org_original_execution_recover(
+ p_owner uuid,p_project uuid,p_release text,p_generation bigint,p_deployment text,
+ p_authorization uuid,p_state_hash text,p_new_cutoff timestamptz,
+ p_new_missions integer,p_new_claims integer,p_retry_limit integer)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path TO 'public','pg_temp'
+AS $original_recover$
+DECLARE offer jsonb;p work_projects;a project_provider_execution;
+ m84 agent_missions;j84 mission_assignments;m83 agent_missions;j83 mission_assignments;
+ node project_organization_nodes;event_row project_events;stamp timestamptz;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
+ SELECT * INTO p FROM public.work_projects WHERE id=p_project FOR UPDATE;
+ SELECT * INTO a FROM public.project_provider_execution WHERE project_id=p_project FOR UPDATE;
+ PERFORM 1 FROM public.project_retest_production_release_gate WHERE project_id=p_project FOR UPDATE;
+ SELECT * INTO m84 FROM public.agent_missions
+  WHERE id='18819669-d4cf-4010-a455-19f5bcbf93cb'::uuid AND project_id=p_project FOR UPDATE;
+ SELECT * INTO j84 FROM public.mission_assignments
+  WHERE id='bd8de51d-0195-4c5f-9c88-9dc39e228636'::uuid AND mission_id=m84.id FOR UPDATE;
+ SELECT * INTO m83 FROM public.agent_missions
+  WHERE id='2289146a-5728-40e7-bc05-79c5c0bed12d'::uuid AND project_id=p_project FOR UPDATE;
+ SELECT * INTO j83 FROM public.mission_assignments
+  WHERE id='95118a8e-8db5-465c-a8d7-98e35631ba30'::uuid AND mission_id=m83.id FOR UPDATE;
+ IF p_authorization IS NULL OR p_state_hash IS NULL OR p_new_cutoff IS NULL
+  OR NOT isfinite(p_new_cutoff)
+  OR p_new_cutoff<=clock_timestamp()+interval '10 minutes'
+  OR p_new_cutoff>clock_timestamp()+interval '72 hours'
+  OR p_new_missions IS NULL OR p_new_missions NOT BETWEEN 0 AND 12
+  OR p_new_claims IS NULL OR p_new_claims NOT BETWEEN 1 AND 26
+  OR p_retry_limit IS NULL OR p_retry_limit NOT IN (0,1)
+  OR p_new_claims>2*(1+p_new_missions)
+  OR EXISTS(SELECT 1 FROM public.project_original_execution_recovery_receipts r WHERE r.project_id=p_project)
+ THEN RAISE EXCEPTION 'Fresh explicit cutoff and bounded worker-claim terms require owner approval';END IF;
+ offer:=public.project_org_original_execution_recovery_offer(p_owner,p_project,p_release);
+ IF offer->>'stage' IS DISTINCT FROM 'authorize'
+  OR offer->>'stateHash' IS DISTINCT FROM p_state_hash
+  OR offer->>'releaseSha' IS DISTINCT FROM p_release
+  OR (offer->>'releaseGeneration')::bigint IS DISTINCT FROM p_generation
+  OR offer->>'deploymentId' IS DISTINCT FROM p_deployment
+  OR (offer->>'priorCutoff')::timestamptz IS DISTINCT FROM p.deadline
+  OR (offer->>'historicalMissions')::int<>84
+  OR offer->>'missionId' IS DISTINCT FROM m84.id::text
+  OR offer->>'assignmentId' IS DISTINCT FROM j84.id::text
+ THEN RAISE EXCEPTION 'Owner, state, history or release identity changed under lock';END IF;
+ PERFORM 1 FROM public.project_organization_nodes
+  WHERE project_id=p.id ORDER BY depth,id FOR UPDATE;
+ IF (SELECT count(*) FROM public.project_organization_nodes WHERE project_id=p.id AND deadline=p.deadline)<>13
+ THEN RAISE EXCEPTION 'Organizational contract cutoff changed under owner lock';END IF;
+ SELECT * INTO event_row FROM public.project_events e
+  WHERE e.project_id=p.id AND e.event='block' AND e.created_at=p.updated_at
+  ORDER BY e.created_at DESC LIMIT 1;
+ IF event_row.id IS NULL THEN RAISE EXCEPTION 'Original watchdog evidence changed';END IF;
+ stamp:=clock_timestamp();
+ INSERT INTO public.project_original_execution_recovery_receipts
+ (project_id,authorization_id,owner_id,original_window_id,release_sha,
+  release_generation,deployment_id,scope_hash,prior_cutoff,cutoff,original_missions,
+  max_missions,authorized_total_missions,approved_claims,approved_retries,
+  token_allowance,node_count,original_m83,original_m84,state_hash,blocked_event_id,authorized_at)
+ VALUES(p.id,p_authorization,p_owner,a.window_id,p_release,p_generation,
+  p_deployment,p.approved_hash,p.deadline,p_new_cutoff,84,96,84+p_new_missions,
+  p_new_claims,p_retry_limit,600000,13,
+  jsonb_build_object('missionId',m83.id,'status',m83.status,'calls',m83.calls,
+   'deadline',m83.deadline,'assignmentId',j83.id,'jobStatus',j83.status,
+   'attempts',j83.attempts,'result',j83.result),
+  jsonb_build_object('missionId',m84.id,'status',m84.status,'calls',m84.calls,
+   'deadline',m84.deadline,'assignmentId',j84.id,'jobStatus',j84.status,
+   'attempts',j84.attempts,'result',j84.result),
+  p_state_hash,event_row.id,stamp);
+ INSERT INTO public.project_execution_windows
+  (id,project_id,owner_id,release_sha,decision_id,prior_cutoff,cutoff,prior_release_sha)
+ VALUES(p_authorization,p.id,p_owner,p_release,a.continuation_decision_id,
+  p.deadline,p_new_cutoff,a.continuation_release_sha);
+ -- Keep the original provider source WINDOW ID; only the mutable current
+ -- deadline advances, and only after this immutable owner receipt is written.
+ UPDATE public.project_provider_execution SET deadline=p_new_cutoff
+  WHERE project_id=p.id AND owner_id=p_owner AND deadline=p.deadline;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Owner provider continuation changed';END IF;
+ UPDATE public.work_projects SET deadline=p_new_cutoff,status='running',
+  progress_since=stamp,updated_at=stamp,impediment=NULL,
+  detail='Owner-approved original execution recovery: same queued Mission84, no historical replay.'
+ WHERE id=p.id AND status='blocked' AND active_mission_id=m84.id
+  AND lease IS NULL AND lease_until IS NULL;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Original parent blocked state changed';END IF;
+ FOR node IN SELECT * FROM public.project_organization_nodes
+   WHERE project_id=p.id ORDER BY depth,id FOR UPDATE LOOP
+  INSERT INTO public.project_organization_contract_changes
+   (project_id,node_id,window_id,prior_deadline,deadline,prior_tools,tools,prior_submission)
+  VALUES(p.id,node.id,p_authorization,node.deadline,p_new_cutoff,
+   node.tools,node.tools,node.completion_submission);
+  UPDATE public.project_organization_nodes SET deadline=p_new_cutoff WHERE id=node.id;
+ END LOOP;
+ UPDATE public.agent_missions SET deadline=p_new_cutoff,status='running',updated_at=stamp
+  WHERE id=m84.id AND project_id=p.id AND status='blocked' AND calls=0
+   AND deadline=p.deadline;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Original unclaimed Mission84 state changed';END IF;
+ IF NOT public.project_provider_continued(p.id)
+  OR NOT public.project_provider_continued_assignment(j84.id)
+  OR NOT public.project_org_original_recovery_claim_authorized(p.id,p_release,p_generation,p_deployment)
+  OR (SELECT count(*) FROM public.project_organization_nodes n
+      WHERE n.project_id=p.id AND n.status='active' AND n.deadline=p_new_cutoff)<>13
+ THEN RAISE EXCEPTION 'Original owner recovery failed native claim or contract guards';END IF;
+ INSERT INTO public.project_events(project_id,event,data)
+ VALUES(p.id,'original_project_owner_recovered',jsonb_build_object(
+  'authorizationId',p_authorization,'ownerId',p_owner,
+  'missionId',m84.id,'assignmentId',j84.id,
+  'priorCutoff',p.deadline,'newCutoff',p_new_cutoff,
+  'originalMissions',84,'authorizedTotalMissions',84+p_new_missions,
+  'approvedClaims',p_new_claims,'approvedRetries',p_retry_limit,
+  'scopeHash',p.approved_hash,'releaseSha',p_release,
+  'releaseGeneration',p_generation,'deploymentId',p_deployment,
+  'restoredAt',stamp));
+ RETURN jsonb_build_object('projectId',p.id,'stage','recovered',
+  'authorizationId',p_authorization,'authorizedAt',stamp,
+  'releaseSha',p_release,'releaseGeneration',p_generation,
+  'deploymentId',p_deployment,'cutoff',p_new_cutoff,
+  'priorCutoff',p.deadline,'scopeHash',p.approved_hash,
+  'historicalMissions',84,'maxMissions',96,'authorizedTotalMissions',84+p_new_missions,
+  'approvedClaims',p_new_claims,'approvedRetries',p_retry_limit,
+  'tokenAllowance',600000,'nodeCount',13,
+  'missionId',m84.id,'assignmentId',j84.id,'currentAttempts',0,'existing',false);
+END
+$original_recover$;
+REVOKE ALL ON FUNCTION public.project_org_original_execution_recover(uuid,uuid,text,bigint,text,uuid,text,timestamptz,integer,integer,integer)
+ FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.project_org_original_execution_recover(uuid,uuid,text,bigint,text,uuid,text,timestamptz,integer,integer,integer)
+ TO service_role;
+COMMIT;
