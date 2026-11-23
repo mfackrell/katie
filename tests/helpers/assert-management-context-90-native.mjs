@@ -86,12 +86,15 @@ export async function assertContext90RetestNative(db,{
   await denied(args.map((x,i)=>i===2?'f'.repeat(40):x));
   await denied(args.map((x,i)=>i===8?'c'.repeat(64):x));
   await denied(args.map((x,i)=>i===10?48001:x));
+  await db.query('reset role'); // Secret receipt is inaccessible to service_role by design.
   assert.equal((await db.query('select count(*)::int n from project_context_retest_receipts where project_id=$1',[project])).rows[0].n,0);
   const previousProgress=(await db.query('select progress_since from work_projects where id=$1',[project])).rows[0].progress_since;
+  await db.query('set role service_role');
   const approved=(await db.query(approval,args)).rows[0].result;
   assert.equal(approved.stage,'authorized');
   assert.equal(approved.historicalMissions,90);
   assert.equal(approved.originalAttempts,1);
+  await db.query('reset role'); // Read immutable private receipt only as the fixture DBA.
   const approvedRow=(await db.query('select * from project_context_retest_receipts where project_id=$1',[project])).rows[0];
   assert.equal(approvedRow.source_assignment_id,selected.assignment);
   assert.deepEqual(approvedRow.original_assignment_result,baseline.result);
@@ -101,8 +104,11 @@ export async function assertContext90RetestNative(db,{
   const projectState=(await db.query('select status,progress_since from work_projects where id=$1',[project])).rows[0];
   assert.equal(projectState.status,'running');
   assert(projectState.progress_since>previousProgress);
+  await db.query('set role service_role');
   await denied(args);
+  await db.query('reset role');
   assert.equal((await db.query('select count(*)::int n from project_context_retest_receipts where project_id=$1',[project])).rows[0].n,1);
+  await db.query('set role service_role');
   assert.equal((await db.query('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).rows[0].ok,true);
   await db.query('reset role');
   // Fixture-only queue prioritization: earlier synthetic queued workers must
