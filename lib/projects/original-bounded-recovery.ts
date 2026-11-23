@@ -36,8 +36,8 @@ export async function originalBoundedRecoveryOffer(projectId:string):Promise<Ori
   ||(offer.stage==='authorize'&&(
    offer.cutoff!==null||offer.authorizationId!==null
    ||offer.maxWindowHours!==72||offer.remainingMissions!==12
-   ||!Number.isSafeInteger(offer.usedTokens)||offer.usedTokens<0
-   ||!Number.isSafeInteger(offer.remainingTokens)
+   ||typeof offer.usedTokens!=='number'||!Number.isSafeInteger(offer.usedTokens)||offer.usedTokens<0
+   ||typeof offer.remainingTokens!=='number'||!Number.isSafeInteger(offer.remainingTokens)
    ||offer.usedTokens+offer.remainingTokens!==600000
    ||!/^[a-f0-9]{64}$/.test(offer.stateHash??'')))
   ||(offer.stage==='authorized'&&(
