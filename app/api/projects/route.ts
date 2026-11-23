@@ -8,6 +8,7 @@ import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import {mission80WatchdogOffer} from '@/lib/projects/mission80-watchdog';
 import {mission82WatchdogOffer} from '@/lib/projects/mission82-watchdog';
 import {originalBoundedRecoveryOffer} from '@/lib/projects/original-bounded-recovery';
+import {mission84ProviderRetryOffer} from '@/lib/projects/mission84-provider-retry';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -59,6 +60,12 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        // A reconciled stopped Mission84 needs its own fresh signed owner retry.
+        try{
+            const m84=await mission84ProviderRetryOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:m84.cutoff,
+                priorCutoff:m84.cutoff,receipt:null,mission84ProviderRetry:m84};
+        }catch{ /* No reconciled single-retry offer; historical controls remain read only. */ }
         // The current 84-mission blocked/expired original project must offer
         // owner-selected NEW authority before any spent legacy recovery control.
         try{
