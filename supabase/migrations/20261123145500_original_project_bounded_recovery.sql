@@ -220,7 +220,16 @@ BEGIN
  IF NOT public.project_provider_continued(p.id)
   OR (SELECT count(*) FROM project_organization_nodes WHERE project_id=p.id AND deadline=p_cutoff)<>13
   OR NOT public.project_org_original_new_window_claim_allowed(p.id,p_release,p_generation,p_deployment)
- THEN RAISE EXCEPTION 'Owner-approved continuation cannot be claimed under current release';END IF;
+ THEN RAISE EXCEPTION 'Owner claim diagnostics: continued %, member %, scope %, lineage %, qualified %, providerPending %, newerCount %, activeCount %, currentDeadline %, missionDeadline %, window %, expectedPrior %, projectStatus %, release %',
+    public.project_provider_continued(p.id),
+    public.project_provider_continued_assignment(j.id),
+    public.project_org_retest_exact_scope_grants(p.id),
+    public.project_org_retest_original_owner_lineage(p.id),
+    public.project_org_original_new_window_claim_allowed(p.id,p_release,p_generation,p_deployment),
+    public.project_provider_request_pending(p.id),
+    (SELECT count(*) FROM agent_missions x WHERE x.project_id=p.id AND x.created_at>m.created_at),
+    (SELECT count(*) FROM project_organization_nodes x WHERE x.project_id=p.id AND x.status='active' AND x.deadline=p_cutoff),
+    p_cutoff,m.deadline,a.window_id,previous_window,p.status,p_release;END IF;
  INSERT INTO project_events(project_id,event,data) VALUES(p.id,'original_project_owner_window_recovered',
   jsonb_build_object('authorizationId',p_authorization,'ownerId',p_owner,
    'priorWindowId',previous_window,'priorCutoff',previous_cutoff,'cutoff',p_cutoff,
