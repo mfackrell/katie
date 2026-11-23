@@ -135,3 +135,109 @@ END
 $offer$;
 REVOKE ALL ON FUNCTION public.project_org_original_recovery_offer(uuid,uuid,text) FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.project_org_original_recovery_offer(uuid,uuid,text) TO service_role;
+
+CREATE FUNCTION public.project_org_original_window_authorize(
+ p_owner uuid,p_project uuid,p_release text,p_generation bigint,p_deployment text,
+ p_authorization uuid,p_cutoff timestamptz,p_mission_ceiling integer,p_token_ceiling bigint,
+ p_initial_attempts integer,p_prior_retry_allowance integer,p_state_hash text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp'
+AS $authorize$
+DECLARE p work_projects;a project_provider_execution;
+ m agent_missions;j mission_assignments;n project_organization_nodes;
+ offer jsonb;previous_window uuid;previous_cutoff timestamptz;watchdog uuid;stamp timestamptz;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.claim',0));
+ SELECT * INTO p FROM work_projects WHERE id=p_project FOR UPDATE;
+ SELECT * INTO a FROM project_provider_execution WHERE project_id=p_project FOR UPDATE;
+ PERFORM 1 FROM project_retest_production_release_gate WHERE project_id=p_project FOR UPDATE;
+ SELECT * INTO m FROM agent_missions WHERE id='18819669-d4cf-4010-a455-19f5bcbf93cb'::uuid AND project_id=p_project FOR UPDATE;
+ SELECT * INTO j FROM mission_assignments WHERE id='bd8de51d-0195-4c5f-9c88-9dc39e228636'::uuid AND mission_id=m.id FOR UPDATE;
+ offer:=public.project_org_original_recovery_offer(p_owner,p_project,p_release);
+ IF offer->>'stage' IS DISTINCT FROM 'authorize'
+  OR offer->>'stateHash' IS DISTINCT FROM p_state_hash
+  OR offer->>'releaseSha' IS DISTINCT FROM p_release
+  OR (offer->>'releaseGeneration')::bigint IS DISTINCT FROM p_generation
+  OR offer->>'deploymentId' IS DISTINCT FROM p_deployment
+  OR p_authorization IS NULL
+  OR p_token_ceiling<>600000
+  OR p_initial_attempts<>1 OR p_prior_retry_allowance<>0
+  OR p_mission_ceiling NOT BETWEEN 84 AND 96
+  OR p_cutoff IS NULL OR NOT isfinite(p_cutoff)
+  OR p_cutoff<=clock_timestamp()+interval '30 minutes'
+  OR p_cutoff>clock_timestamp()+interval '7 days'
+  OR EXISTS (SELECT 1 FROM project_execution_windows WHERE id=p_authorization)
+  OR EXISTS (SELECT 1 FROM project_original_execution_recovery_receipts WHERE project_id=p_project)
+ THEN RAISE EXCEPTION 'Explicit unchanged-scope original project owner recovery terms required';END IF;
+ previous_window:=a.window_id;previous_cutoff:=p.deadline;
+ SELECT id INTO watchdog FROM project_events WHERE project_id=p_project AND event='block'
+  AND created_at=p.updated_at ORDER BY created_at DESC LIMIT 1;
+ IF watchdog IS NULL OR m.status<>'blocked' OR m.calls<>0
+  OR j.status<>'queued' OR j.attempts<>0 OR j.lease IS NOT NULL OR j.lease_until IS NOT NULL
+ THEN RAISE EXCEPTION 'Original blocked and unattempted Mission84 state changed';END IF;
+ PERFORM 1 FROM project_organization_nodes WHERE project_id=p.id ORDER BY depth,id FOR UPDATE;
+ IF (SELECT count(*) FROM project_organization_nodes WHERE project_id=p.id AND status='active' AND deadline=previous_cutoff)<>13
+  OR project_provider_request_pending(p.id)
+  OR (SELECT count(*) FROM agent_missions WHERE project_id=p.id)<>84
+ THEN RAISE EXCEPTION 'Existing organization or resource authority changed';END IF;
+ -- Keep the original owner decision and provider continuation release; the
+ -- new execution window is bound separately to the CURRENT canonical release.
+ INSERT INTO project_execution_windows(id,project_id,owner_id,release_sha,decision_id,
+  prior_cutoff,cutoff,prior_release_sha)
+ VALUES(p_authorization,p.id,p_owner,a.continuation_release_sha,
+  a.continuation_decision_id,previous_cutoff,p_cutoff,a.continuation_release_sha);
+ stamp:=clock_timestamp();
+ INSERT INTO project_original_execution_recovery_receipts(project_id,authorization_id,
+  owner_id,prior_window_id,prior_cutoff,cutoff,release_sha,deployment_id,
+  release_generation,approved_scope,prior_block_event_id,original_mission_id,
+  original_assignment_id,historical_missions,authorized_mission_ceiling,
+  total_token_ceiling,initial_attempts_per_assignment,prior_failure_retry_allowance,authorized_at)
+ VALUES(p.id,p_authorization,p_owner,previous_window,previous_cutoff,p_cutoff,
+  p_release,p_deployment,p_generation,p.approved_hash,watchdog,m.id,j.id,84,
+  p_mission_ceiling,p_token_ceiling,1,0,stamp);
+ UPDATE project_provider_execution SET window_id=p_authorization,deadline=p_cutoff
+  WHERE project_id=p.id AND owner_id=p_owner;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Original provider owner binding changed';END IF;
+ UPDATE work_projects SET deadline=p_cutoff,status='running',
+  progress_since=stamp,updated_at=stamp,impediment=NULL,
+  detail='Authenticated owner approved bounded continuation of original Mission84.'
+  WHERE id=p.id AND status='blocked' AND active_mission_id=m.id
+   AND lease IS NULL AND lease_until IS NULL;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Original blocked project changed under recovery locks';END IF;
+ FOR n IN SELECT * FROM project_organization_nodes WHERE project_id=p.id ORDER BY depth,id FOR UPDATE LOOP
+  INSERT INTO project_organization_contract_changes(project_id,node_id,window_id,
+   prior_deadline,deadline,prior_tools,tools,prior_submission)
+   VALUES(p.id,n.id,p_authorization,n.deadline,p_cutoff,n.tools,n.tools,n.completion_submission);
+  UPDATE project_organization_nodes SET deadline=p_cutoff WHERE id=n.id AND deadline=previous_cutoff;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Original node deadline drifted';END IF;
+ END LOOP;
+ -- The owner explicitly authorizes resumption of the ORIGINAL unclaimed
+ -- mission; its assignment stays QUEUED/attempts=0 and all prior failures stay.
+ UPDATE agent_missions SET deadline=p_cutoff,status='running',updated_at=stamp
+  WHERE id=m.id AND project_id=p.id AND status='blocked' AND calls=0
+   AND deadline=previous_cutoff;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Original Mission84 state changed';END IF;
+ IF NOT public.project_provider_continued(p.id)
+  OR (SELECT count(*) FROM project_organization_nodes WHERE project_id=p.id AND deadline=p_cutoff)<>13
+  OR NOT public.project_org_original_new_window_claim_allowed(p.id,p_release,p_generation,p_deployment)
+ THEN RAISE EXCEPTION 'Owner-approved continuation cannot be claimed under current release';END IF;
+ INSERT INTO project_events(project_id,event,data) VALUES(p.id,'original_project_owner_window_recovered',
+  jsonb_build_object('authorizationId',p_authorization,'ownerId',p_owner,
+   'priorWindowId',previous_window,'priorCutoff',previous_cutoff,'cutoff',p_cutoff,
+   'releaseSha',p_release,'generation',p_generation,'deploymentId',p_deployment,
+   'missionCeiling',p_mission_ceiling,'tokenCeiling',p_token_ceiling,
+   'initialAttemptsPerAssignment',1,'priorFailureRetryAllowance',0,
+   'missionId',m.id,'assignmentId',j.id,'historicalMissions',84,'authorizedAt',stamp));
+ RETURN jsonb_build_object('projectId',p.id,'stage','recovered','existing',false,
+  'authorizationId',p_authorization,'authorizedAt',stamp,
+  'releaseSha',p_release,'releaseGeneration',p_generation,'deploymentId',p_deployment,
+  'scopeHash',p.approved_hash,'cutoff',p_cutoff,'priorCutoff',previous_cutoff,
+  'historicalMissions',84,'maxMissions',96,'missionCeiling',p_mission_ceiling,
+  'tokenAllowance',p_token_ceiling,'nodeCount',13,'initialAttemptsPerAssignment',1,
+  'priorFailureRetryAllowance',0,'missionId',m.id,'assignmentId',j.id,
+  'currentAttempts',j.attempts);
+END
+$authorize$;
+REVOKE ALL ON FUNCTION public.project_org_original_window_authorize(uuid,uuid,text,bigint,text,uuid,timestamptz,integer,bigint,integer,integer,text)
+ FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.project_org_original_window_authorize(uuid,uuid,text,bigint,text,uuid,timestamptz,integer,bigint,integer,integer,text) TO service_role;
