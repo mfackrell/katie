@@ -100,6 +100,21 @@ export async function assertOriginalBoundedRecoveryNative(db,{project,owner,rele
   await db.query('reset role');
   await db.query(code);
   await db.query('set role service_role');
+  const diagnostics=(await db.query(
+   "select p.status,p.phase,p.organization_version,p.deadline,p.updated_at,p.active_mission_id,"+
+   "(select count(*)::int from project_organization_nodes where project_id=p.id and status='active' and deadline=p.deadline) nodes,"+
+   "(select count(*)::int from project_work_packages where project_id=p.id) packages,"+
+   "(select count(*)::int from agent_missions where project_id=p.id) missions,"+
+   "(select jsonb_build_object('id',e.id,'created',e.created_at,'action',e.data->'impediment'->>'minimumAction') from project_events e where e.project_id=p.id and e.event='block' and e.created_at=p.updated_at limit 1) event,"+
+   "(select jsonb_build_object('status',m.status,'calls',m.calls,'deadline',m.deadline) from agent_missions m where m.id=$2) m84,"+
+   "(select jsonb_build_object('status',j.status,'attempts',j.attempts,'result',j.result,'lease',j.lease,'lease_until',j.lease_until) from mission_assignments j where j.id=$3) j84,"+
+   "(select jsonb_build_object('status',m.status,'calls',m.calls,'deadline',m.deadline) from agent_missions m where m.id=$4) m83,"+
+   "(select jsonb_build_object('status',j.status,'attempts',j.attempts,'result',j.result) from mission_assignments j where j.id=$5) j83,"+
+   "(select count(*)::int from project_organization_exceptions ex join project_organization_nodes qa on qa.id=ex.origin_id where ex.project_id=p.id and ex.owner_id=$6 and qa.id=$7 and qa.parent_id=$6 and ex.status='open' and ex.reason='objective' and ex.created_at>(select created_at from agent_missions where id=$4) and ex.created_at<(select created_at from agent_missions where id=$2)) valid_escalations,"+
+   "(select jsonb_build_object('window',a.window_id,'deadline',a.deadline,'window_cutoff',w.cutoff,'owner',a.owner_id) from project_provider_execution a join project_execution_windows w on w.id=a.window_id where a.project_id=p.id) authority"+
+   " from work_projects p where p.id=$1",
+   [project,M84,J84,M83,J83,root.id,qa.id])).rows[0];
+  console.log('ORIGINAL_84_OFFER_DIAGNOSTIC '+JSON.stringify(diagnostics));
   const offer=(await db.query('select project_org_original_recovery_offer($1,$2,$3) offer',[owner,project,release])).rows[0].offer;
   assert.equal(offer.stage,'authorize');assert.equal(offer.historicalMissions,84);
   assert.equal(offer.missionId,M84);assert.equal(offer.assignmentId,J84);
