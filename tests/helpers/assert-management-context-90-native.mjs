@@ -44,6 +44,9 @@ export async function assertContext90RetestNative(db,{
     available_at:'1800-01-01T00:00:04Z',created_at:latest?'1799-01-01T00:00:00Z':'1800-01-01T00:00:01Z',
     updated_at:timestamp};
    await db.query('insert into agent_missions select (jsonb_populate_record(null::agent_missions,$1::jsonb)).*',[m]);
+   // The existing management-agent guard only admits an authentic active
+   // management mission. Real scheduling installs this binding before the job.
+   await db.query('update work_projects set active_mission_id=$2 where id=$1',[project,mission]);
    await db.query('insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb)).*',[j]);
    await db.query("insert into project_organization_assignments(assignment_id,node_id,contract_hash) select $1,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex') from project_organization_nodes n where n.id=$2",[assignment,root.id]);
    if(!latest)await db.query("insert into project_organization_decisions(id,project_id,node_id,assignment_id,decision,created_at) values($1,$2,$3,$4,'[{\"action\":\"ready\"}]'::jsonb,$5)",[decision,project,root.id,assignment,timestamp]);
