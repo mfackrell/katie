@@ -12,6 +12,7 @@ import {mission79ReleaseIdentityFailure,mission79ReleaseIdentityMessage} from '@
 import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import {mission80WatchdogOffer,MISSION80_ID,MISSION80_ASSIGNMENT} from '@/lib/projects/mission80-watchdog';
 import {mission82WatchdogOffer,MISSION82_ID,MISSION82_ASSIGNMENT} from '@/lib/projects/mission82-watchdog';
+import {originalExecutionRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-execution-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
@@ -123,12 +124,31 @@ const mission82WatchdogRecoveryInput=z.object({
  authorizationId:z.string().uuid(),cutoff:z.string().datetime({offset:true}),
  stateHash:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
-const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput]);
+const originalExecutionRecoveryInput=z.object({
+ projectId:z.literal(ORIGINAL_TTT_PROJECT),
+ trialAction:z.literal('authorize_original_project_recovery'),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),
+ releaseGeneration:z.number().int().positive(),
+ deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
+ missionId:z.literal(ORIGINAL_RECOVERY_MISSION),
+ assignmentId:z.literal(ORIGINAL_RECOVERY_ASSIGNMENT),
+ authorizationId:z.string().uuid(),
+ cutoff:z.string().datetime({offset:true}),
+ missionCeiling:z.number().int().min(84).max(96),
+ tokenCeiling:z.literal(600000),
+ initialAttemptsPerAssignment:z.literal(1),
+ priorFailureRetryAllowance:z.literal(0),
+ stateHash:z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+const input=z.union([financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalExecutionRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({originalExecutionRecovery:await originalExecutionRecoveryOffer(ORIGINAL_TTT_PROJECT)},
+    {headers:{'Cache-Control':'no-store'}});}
+  catch{ /* Only the exact expired original 84-mission project is eligible. */ }
   try{return NextResponse.json({mission82Recovery:await mission82WatchdogOffer(ORIGINAL_TTT_PROJECT)},
     {headers:{'Cache-Control':'no-store'}});}
   catch{ /* Original Mission82 independent escalation is not owner-recoverable. */ }
@@ -155,6 +175,34 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_original_project_recovery'){
+  if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
+   return NextResponse.json({error:'Exact current production release required'},{status:409});
+  const offer=await originalExecutionRecoveryOffer(p.projectId);
+  if(offer.stage!=='authorize'||offer.stateHash!==p.stateHash
+   ||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration
+   ||offer.deploymentId!==p.deploymentId||offer.missionId!==p.missionId
+   ||offer.assignmentId!==p.assignmentId||offer.currentAttempts!==0
+   ||offer.tokenAllowance!==p.tokenCeiling
+   ||Date.parse(p.cutoff)<=Date.now()+30*60*1000
+   ||Date.parse(p.cutoff)>Date.now()+7*24*60*60*1000)
+   return NextResponse.json({error:'Explicit bounded new window and unchanged original state required'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>(
+   'project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{
+   releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId
+  },process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
+   return NextResponse.json({error:'Current canonical production identity required'},{status:409});
+  return NextResponse.json(await rpc('project_org_original_window_authorize',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
+   p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
+   p_authorization:p.authorizationId,p_cutoff:p.cutoff,p_mission_ceiling:p.missionCeiling,
+   p_token_ceiling:p.tokenCeiling,p_initial_attempts:p.initialAttemptsPerAssignment,
+   p_prior_retry_allowance:p.priorFailureRetryAllowance,p_state_hash:p.stateHash
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_mission82_watchdog_recovery'){
   // This action is submitted only by the authenticated first-party Katie
   // owner. A release migration or a stale Mission79 retry is NOT consent.
