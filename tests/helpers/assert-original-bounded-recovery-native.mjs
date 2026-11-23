@@ -121,6 +121,30 @@ export async function assertOriginalBoundedRecoveryNative(db,{
   await db.query(migration);
   await db.query('set role service_role');
 
+  const preflight=(await db.query(`select
+   p.status,p.deadline,p.updated_at,p.progress_since,p.active_mission_id,
+   a.window_id,a.deadline as provider_deadline,a.approved_scope,
+   w.id as prior_window,w.cutoff as prior_cutoff,w.release_sha as prior_release,
+   m84.id as mission84,m84.status as mission84_status,m84.deadline as mission84_deadline,
+   m84.created_at as mission84_created,m83.created_at as mission83_created,
+   j84.status as job84_status,j84.attempts as job84_attempts,j84.available_at,
+   (select count(*) from agent_missions x where x.project_id=p.id) as mission_count,
+   (select count(*) from mission_assignments x where x.mission_id=m84.id) as assignment_count,
+   (select count(*) from project_organization_nodes n where n.project_id=p.id and n.status='active' and n.deadline=p.deadline) as current_nodes,
+   (select count(*) from project_work_packages x where x.project_id=p.id) as package_count,
+   (select count(*) from project_events e where e.project_id=p.id and e.event='block'
+     and e.created_at=p.updated_at and e.data->'impediment'->>'minimumAction' like '%18819669-d4cf-4010-a455-19f5bcbf93cb%') as block_events,
+   project_provider_continued(p.id) as continued,
+   project_org_retest_original_owner_lineage(p.id) as owner_lineage,
+   project_org_retest_exact_scope_grants(p.id) as original_scope,
+   project_provider_request_pending(p.id) as pending,
+   (select coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0) from agent_missions x where x.project_id=p.id) as spent
+   from work_projects p join project_provider_execution a on a.project_id=p.id
+   join project_execution_windows w on w.id=a.window_id
+   join agent_missions m84 on m84.id=$2
+   join agent_missions m83 on m83.id=$3
+   where p.id=$1`,[project,M84,M83])).rows[0];
+  console.log('ORIGINAL_84_NATIVE_PREFLIGHT '+JSON.stringify(preflight));
   const offer=(await db.query('select project_org_bounded_recovery_offer($1,$2,$3) offer',[owner,project,release])).rows[0].offer;
   assert.equal(offer.stage,'authorize');
   assert.equal(offer.historicalMissions,84);assert.equal(offer.remainingMissions,12);
