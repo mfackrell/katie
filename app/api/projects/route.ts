@@ -7,6 +7,7 @@ import {mission79FutureWindowOffer} from '@/lib/projects/mission79-future-window
 import {mission79RetryOffer} from '@/lib/projects/mission79-retry';
 import {mission80WatchdogOffer} from '@/lib/projects/mission80-watchdog';
 import {mission82WatchdogOffer} from '@/lib/projects/mission82-watchdog';
+import {originalExecutionRecoveryOffer} from '@/lib/projects/original-execution-recovery';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -58,6 +59,12 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        // This exact 84-mission owner window supersedes spent watchdog offers.
+        try{
+            const renewed=await originalExecutionRecoveryOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:renewed.cutoff??renewed.priorCutoff,
+                priorCutoff:renewed.priorCutoff,receipt:null,originalExecutionRecovery:renewed};
+        }catch{ /* No exact original owner recovery offer; retain old controls. */ }
         // A legitimate Project Director escalation after rejected Mission81 has
         // a distinct, single-use owner recovery; no spent retry is inherited.
         try{
