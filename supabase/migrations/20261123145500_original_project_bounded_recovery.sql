@@ -367,3 +367,155 @@ REVOKE ALL ON FUNCTION public.project_org_original_new_window_claim_allowed(uuid
  FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.project_org_original_new_window_claim_allowed(uuid,text,bigint,text)
  TO service_role;
+
+-- Preserve all previous one-time authorities. Add the current-window admission
+-- as one independent alternative, without rewriting historical receipts.
+CREATE OR REPLACE FUNCTION public.project_provider_continued_assignment(p_job uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+ select exists(select 1 from mission_assignments j join agent_missions m on m.id=j.mission_id
+ join project_provider_execution a on a.project_id=m.project_id
+ left join project_director_recoveries r on r.project_id=a.project_id
+ where j.id=p_job and j.id is distinct from r.assignment_id and m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
+ and m.project_evidence->>'providerContinuationRelease'=a.continuation_release_sha
+ and (case when m.id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+  and exists(select 1 from project_retest_future_window_receipts new_window where new_window.project_id=a.project_id)
+  then j.id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+   and public.project_org_retest_renewed_assignment(m.id,j.id)
+  else ((m.project_evidence->>'providerContinuationWindow') is not distinct from a.window_id::text
+   or public.project_org_retest_renewed_assignment(m.id,j.id)) end)
+  and public.project_provider_continued(a.project_id)
+  or (
+   j.id='bd8de51d-0195-4c5f-9c88-9dc39e228636'::uuid
+   and m.id='18819669-d4cf-4010-a455-19f5bcbf93cb'::uuid
+   and exists (
+    select 1 from project_original_execution_recovery_receipts r
+    where r.project_id=m.project_id and r.project_id=a.project_id
+     and r.original_mission_id=m.id and r.original_assignment_id=j.id
+     and r.authorization_id=a.window_id and r.cutoff=a.deadline
+     and r.approved_scope=a.approved_scope and r.owner_id=a.owner_id
+     and m.project_evidence->>'providerContinuationWindow'=r.prior_window_id::text
+     and m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
+     and m.project_evidence->>'providerContinuationRelease'=a.continuation_release_sha
+     and public.project_provider_continued(a.project_id)
+   )
+  )
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.project_org_retest_claim_release_authorized_epoch(p_project uuid, p_release text, p_generation bigint, p_deployment text)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+ SELECT (
+  (coalesce(p_generation>0,false)
+   AND public.project_org_retest_claim_release_authorized(p_project,p_release)
+   AND EXISTS (
+    SELECT 1 FROM public.project_retest_production_release_gate g
+    JOIN public.project_retest_claim_release_receipts receipt ON receipt.project_id=g.project_id
+     AND receipt.bound_release_sha=p_release
+     AND receipt.bound_release_generation=p_generation
+     AND receipt.bound_deployment_id=p_deployment
+    WHERE g.project_id=p_project AND g.release_sha=p_release
+     AND g.state='active' AND g.alias_name='katie-mu.vercel.app'
+     AND g.generation=p_generation AND g.deployment_id=p_deployment
+   ))
+  OR public.project_org_mission79_retry_claim_authorized(p_project,p_release,p_generation,p_deployment)
+  -- This branch is the original owner's bounded downstream management
+  -- continuation, not a reuse of the one-time Mission79 retry. Every new
+  -- assignment must independently qualify under the live source, limits,
+  -- org membership and release epoch. Initial attempts ONLY.
+  OR EXISTS (
+   SELECT 1 FROM public.work_projects p
+   JOIN public.project_provider_execution a ON a.project_id=p.id
+    AND a.approved_scope=p.approved_hash AND a.deadline=p.deadline
+   JOIN public.project_retest_future_window_receipts q ON q.project_id=p.id
+    AND q.owner_id=a.owner_id AND q.authorization_id=a.window_id
+    AND q.cutoff=p.deadline AND q.scope_hash=p.approved_hash
+   JOIN public.project_execution_windows ow ON ow.id=a.window_id
+    AND ow.project_id=p.id AND ow.owner_id=a.owner_id
+    AND ow.decision_id=a.continuation_decision_id AND ow.cutoff=p.deadline
+   JOIN public.project_mission79_retry_receipts r79 ON r79.project_id=p.id
+    AND r79.owner_id=a.owner_id AND r79.cutoff=p.deadline
+    AND r79.scope_hash=p.approved_hash AND r79.prior_attempts=1 AND r79.prior_calls=1
+   JOIN public.project_mission79_watchdog_recovery_receipts w79 ON w79.project_id=p.id
+    AND w79.original_retry_authorization_id=r79.authorization_id
+    AND w79.owner_id=a.owner_id AND w79.mission_id=r79.mission_id
+    AND w79.assignment_id=r79.assignment_id AND w79.scope_hash=p.approved_hash
+    AND w79.cutoff=p.deadline
+   JOIN public.agent_missions m79 ON m79.id=r79.mission_id
+    AND m79.project_id=p.id AND m79.status='completed' AND m79.calls=2
+   JOIN public.mission_assignments j79 ON j79.id=r79.assignment_id
+    AND j79.mission_id=m79.id AND j79.status='completed'
+    AND j79.attempts=2 AND j79.lease IS NULL
+   JOIN public.project_organization_decisions d79 ON d79.project_id=p.id
+    AND d79.assignment_id=j79.id AND d79.id::text=j79.result->>'decisionId'
+   JOIN public.agent_missions m ON m.id=p.active_mission_id
+    AND m.project_id=p.id AND m.status='running' AND m.calls=0
+    AND m.project_kind='management' AND m.deadline=p.deadline
+   JOIN public.mission_assignments j ON j.mission_id=m.id
+    AND j.status='queued' AND j.attempts=0 AND j.role='work'
+    AND j.job_key='plan' AND j.lease IS NULL AND j.lease_until IS NULL
+    AND j.available_at<=clock_timestamp()
+   JOIN public.project_organization_nodes n ON n.id::text=m.project_evidence->>'organizationNodeId'
+    AND n.project_id=p.id AND n.status='active'
+    AND n.agent_id=j.agent_id AND n.kind<>'worker'
+    AND n.deadline=p.deadline AND n.management_level IN
+     ('project_director','functional_director','manager','supervisor')
+   JOIN public.project_organization_assignments oa ON oa.node_id=n.id
+    AND oa.assignment_id=j.id
+   JOIN public.project_retest_production_release_gate g ON g.project_id=p.id
+    AND g.state='active' AND g.alias_name='katie-mu.vercel.app'
+    AND g.release_sha=p_release AND g.generation=p_generation
+    AND g.deployment_id=p_deployment
+   WHERE p.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+    AND p.id=p_project AND p.status='running' AND p.phase='development'
+    AND p.deadline>clock_timestamp() AND p.approval_hash=p.approved_hash
+    AND p.max_missions=96 AND p.token_allowance=600000
+    AND r79.mission_id='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'::uuid
+    AND r79.assignment_id='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'::uuid
+    AND m.id<>m79.id AND m.created_at>d79.created_at
+    AND w79.authorized_at<d79.created_at
+    AND (SELECT count(*) FROM public.agent_missions x WHERE x.project_id=p.id) BETWEEN 80 AND 96
+    AND (SELECT count(*) FROM public.mission_assignments x WHERE x.mission_id=m.id)=1
+    AND (SELECT count(*) FROM public.project_organization_nodes x
+     WHERE x.project_id=p.id AND x.status='active')=13
+    AND NOT EXISTS (SELECT 1 FROM public.agent_missions newer
+     WHERE newer.project_id=p.id AND newer.created_at>m.created_at)
+    AND (
+     EXISTS (
+     SELECT 1 FROM public.agent_missions prev
+     JOIN public.mission_assignments prev_job ON prev_job.mission_id=prev.id
+      AND prev_job.status='completed'
+     JOIN public.project_organization_decisions prev_decision ON prev_decision.project_id=p.id
+      AND prev_decision.assignment_id=prev_job.id
+      AND prev_decision.id::text=prev_job.result->>'decisionId'
+     WHERE prev.project_id=p.id AND prev.status='completed'
+      AND prev.created_at=(
+       SELECT max(prior.created_at) FROM public.agent_missions prior
+       WHERE prior.project_id=p.id AND prior.created_at<m.created_at)
+    )
+     OR (m.id='53f28eed-631a-4e7e-b868-7b36a34be616'::uuid
+      AND j.id='0e358d94-6f36-4607-998f-e603646d33de'::uuid
+      AND public.project_org_mission82_independent_escalation(p.id))
+    )
+    AND m.project_evidence->>'providerContinuationWindow'=a.window_id::text
+    AND m.project_evidence->>'providerContinuationDecision'=a.continuation_decision_id::text
+    AND m.project_evidence->>'providerContinuationRelease'=a.continuation_release_sha
+    AND public.project_org_retest_exact_scope_grants(p.id)
+    AND public.project_org_retest_original_owner_lineage(p.id)
+    AND public.project_provider_continued(p.id)
+    AND public.project_provider_continued_assignment(j.id)
+    AND NOT public.project_provider_request_pending(p.id)
+    AND (SELECT coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0)
+         FROM public.agent_missions spent WHERE spent.project_id=p.id)<=p.token_allowance
+  )
+  OR public.project_org_original_new_window_claim_allowed(p_project,p_release,p_generation,p_deployment)
+ );
+$function$;
+COMMIT;
