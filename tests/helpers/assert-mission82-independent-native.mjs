@@ -159,6 +159,10 @@ export async function assertMission82IndependentNative(db,{project,m80,j80,owner
   const limits=(await db.query('select max_missions,token_allowance from work_projects where id=$1',[project])).rows[0];
   assert.equal(limits.max_missions,96);assert.equal(limits.token_allowance,600000);
   assert.equal((await db.query('select count(*)::int n from project_work_packages where project_id=$1',[project])).rows[0].n,0);
+  if(process.env.KATIE_TEST_ORIGINAL_WINDOW==='1'){
+   const {assertOriginalRecoveryNative}=await import('./assert-original-recovery-native.mjs');
+   await assertOriginalRecoveryNative(db,{project,m82:M82,j82:J82,owner,release,generation,deployment});
+  }
   console.log('MISSION82_NATIVE_PASS: authentic 81 failure preserved; independent root exception; negative unauthorized successor; real watchdog; one owner receipt; global scheduler one lease');
  }finally{
   await db.query('rollback to savepoint mission82_native');
