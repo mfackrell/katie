@@ -215,6 +215,11 @@ export async function assertOriginalBoundedRecoveryNative(db,{
     [decision,project,node,job]);
    await db.query("update agent_missions set status='completed',calls=1,result='Management decisions committed' where id=$1",[mission]);
    await db.query("update mission_assignments set status='completed',lease=null,lease_until=null,result=$2 where id=$1",[job,{output:'Management decision recorded',decisionId:decision}]);
+   // Mirror project_org_record_management_decision's final transition.
+   // The native test inserts accepted synthetic decisions only inside SAVEPOINT:
+   // actual application completion clears the active mission to previousMissionId.
+   const cleared=await db.query("update work_projects set active_mission_id=(select (project_evidence->>'previousMissionId')::uuid from agent_missions where id=$2) where id=$1 and active_mission_id=$2",[project,mission]);
+   assert.equal(cleared.rowCount,1,'Synthetic accepted decision must detach its completed active mission');
    await db.query('set role service_role');
   };
   const schedule=async()=>{
