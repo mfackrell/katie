@@ -1,0 +1,47 @@
+name: Original84 bounded owner execution recovery qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261123145500_original_project_bounded_recovery.sql'
+      - 'lib/projects/original-execution-recovery.ts'
+      - 'app/api/projects/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'components/director-recovery-control.tsx'
+      - 'components/original-execution-recovery-control.tsx'
+      - 'tests/original-project-window-*.test.mjs'
+      - 'tests/helpers/assert-original-bounded-recovery-native.mjs'
+      - 'tests/helpers/assert-mission82-independent-native.mjs'
+      - '.github/workflows/original84-recovery-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  original84-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install native PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Authenticated owner, window identity, approval and replay controls
+        run: node --test tests/original-project-window-runtime.test.mjs
+      - name: Actual PostgreSQL 16 original 84 history, owner renewal, and two scheduler leases
+        run: node --test tests/original-project-window-postgres.test.mjs
+      - name: Preserve SMART and lossless management context
+        run: node --test tests/management-context.test.mjs tests/management-commissioning-diagnostics.test.mjs
