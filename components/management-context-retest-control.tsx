@@ -2,9 +2,12 @@
 import {useRef,useState} from "react";
 import {ownerSessionBearer} from "@/lib/tools/browser-owner-session";
 import type {ManagementContextRetestOffer} from "@/lib/projects/management-context-retest";
+import type {ManagementFailureRetestOffer} from "@/lib/projects/management-failure-retest";
 
-export function ManagementContextRetestControl({initial,onRefresh}:{
- initial:ManagementContextRetestOffer;onRefresh:()=>void;
+export function ManagementContextRetestControl({initial,onRefresh,trialAction='authorize_management_context_one_retest'}:{
+ initial:ManagementContextRetestOffer|ManagementFailureRetestOffer;
+ onRefresh:()=>void;
+ trialAction?:'authorize_management_context_one_retest'|'authorize_management_failure_retest';
 }){
  const submitting=useRef(false);
  const [pending,setPending]=useState(false);
@@ -25,7 +28,7 @@ export function ManagementContextRetestControl({initial,onRefresh}:{
     method:'POST',
     headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},
     body:JSON.stringify({
-     trialAction:'authorize_management_context_one_retest',
+     trialAction,
      projectId:initial.projectId,releaseSha:initial.releaseSha,
      releaseGeneration:initial.releaseGeneration,deploymentId:initial.deploymentId,
      scopeHash:initial.scopeHash,stateHash:initial.stateHash,
@@ -58,8 +61,8 @@ export function ManagementContextRetestControl({initial,onRefresh}:{
   finally{setPending(false);submitting.current=false;}
  }
  return <aside aria-label="One live management-context retest" className="mx-3 my-3 rounded-xl border border-white/20 p-4">
-  <h3 className="font-semibold">Original Developer Orchestrator — one context retest</h3>
-  <p className="mt-2 text-sm">The latest Project Director management assignment failed before provider inference. The original failure, source mission and one spent attempt remain recorded. The corrected lossless management context has been independently checked against current project evidence.</p>
+  <h3 className="font-semibold">Original Developer Orchestrator — one source-bound management retest</h3>
+  <p className="mt-2 text-sm">The latest management assignment failed before provider inference. Its original failure, mission identity and attempted execution remain recorded. The full current management context was verified without truncation; no previous retry receipt is reused.</p>
   <ul className="mt-2 list-disc pl-5 text-sm">
    <li>Original project: {initial.projectId}</li>
    <li>Historical missions: {initial.historicalMissions} of 96, unchanged</li>
