@@ -80,6 +80,23 @@ function fixture(){
 }
 function restorePacked(c){
  const result=structuredClone(c),fields=c.exceptionFields,ids=c.exceptionNodeIds;
+ // The final lossless dictionary tier may be needed only after further
+ // history growth. Restore it before the existing positional-row decoder.
+ if(Array.isArray(result.exceptionDetailFragments)){
+  result.exceptions=result.exceptions.map(row=>{
+   const r=[...row];
+   r[3]=result.exceptionReasonValues[r[3]];
+   r[5]=result.exceptionStatusValues[r[5]];
+   r[6]=result.exceptionDateValues[r[6][0]]+r[6][1];
+   if(Array.isArray(r[4])&&r[4][0]===null)
+    r[4]=r[4].slice(1).map(p=>typeof p==='number'?result.exceptionDetailFragments[p]:p).join('');
+   return r;
+  });
+  delete result.exceptionReasonValues;
+  delete result.exceptionStatusValues;
+  delete result.exceptionDateValues;
+  delete result.exceptionDetailFragments;
+ }
  assert.deepEqual(fields,['id','origin_id','owner_id','reason','detail','status','created_at','resolution','extraFields']);
  assert(Array.isArray(ids)&&ids.length>0);
  result.exceptions=c.exceptions.map((row,i)=>{
@@ -91,7 +108,7 @@ function restorePacked(c){
    if(j===1||j===2)e[k]=ids[row[j]];
    else if(j===4&&Array.isArray(row[j])){
     assert.equal(row[j].length,1);assert(row[j][0]<i);
-    e.detail=c.exceptions[row[j][0]][4];
+    e.detail=result.exceptions[row[j][0]][4];
    }else e[k]=row[j];
   }
   return e;
