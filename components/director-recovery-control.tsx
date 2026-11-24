@@ -14,6 +14,8 @@ import type {Mission84ProviderRetryOffer} from "@/lib/projects/mission84-provide
 import {Mission84ProviderRetryControl} from "./mission84-provider-retry-control";
 import type {ManagementContextRetestOffer} from "@/lib/projects/management-context-retest";
 import {ManagementContextRetestControl} from "./management-context-retest-control";
+import type {FollowupManagementRetestOffer} from "@/lib/projects/management-followup-retest";
+import {FollowupManagementRetestControl} from "./management-followup-retest-control";
 import {Mission80WatchdogRecoveryControl} from "./mission80-watchdog-recovery-control";
 import {Mission82WatchdogRecoveryControl} from "./mission82-watchdog-recovery-control";
 import type {OriginalBoundedRecoveryOffer} from "@/lib/projects/original-bounded-recovery";
@@ -44,6 +46,7 @@ export type DirectorRecoveryOffer = {
   mission80Recovery?:Mission80WatchdogOffer;
   mission82Recovery?:Mission82WatchdogOffer;
   managementContextRetest?:ManagementContextRetestOffer;
+  followupManagementRetest?:FollowupManagementRetestOffer;
   mission84ProviderRetry?:Mission84ProviderRetryOffer;
   originalBoundedRecovery?:OriginalBoundedRecoveryOffer;
   managementActivationError?:string;
@@ -200,6 +203,9 @@ function LegacyDirectorRecoveryControl({
 
 
 export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;onRefresh:()=>void}){
+ if(props.recovery.followupManagementRetest)
+  return <FollowupManagementRetestControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
+   initial={props.recovery.followupManagementRetest} onRefresh={props.onRefresh}/>;
  if(props.recovery.managementContextRetest)
   return <ManagementContextRetestControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
    initial={props.recovery.managementContextRetest} onRefresh={props.onRefresh}/>;

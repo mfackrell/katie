@@ -80,9 +80,26 @@ function fixture(){
 }
 function restorePacked(c){
  const result=structuredClone(c),fields=c.exceptionFields,ids=c.exceptionNodeIds;
+ // The final lossless dictionary tier may be needed only after further
+ // history growth. Restore it before the existing positional-row decoder.
+ if(Array.isArray(result.exceptionDetailFragments)){
+  result.exceptions=result.exceptions.map(row=>{
+   const r=[...row];
+   r[3]=result.exceptionReasonValues[r[3]];
+   r[5]=result.exceptionStatusValues[r[5]];
+   r[6]=result.exceptionDateValues[r[6][0]]+r[6][1];
+   if(Array.isArray(r[4])&&r[4][0]===null)
+    r[4]=r[4].slice(1).map(p=>typeof p==='number'?result.exceptionDetailFragments[p]:p).join('');
+   return r;
+  });
+  delete result.exceptionReasonValues;
+  delete result.exceptionStatusValues;
+  delete result.exceptionDateValues;
+  delete result.exceptionDetailFragments;
+ }
  assert.deepEqual(fields,['id','origin_id','owner_id','reason','detail','status','created_at','resolution','extraFields']);
  assert(Array.isArray(ids)&&ids.length>0);
- result.exceptions=c.exceptions.map((row,i)=>{
+ result.exceptions=result.exceptions.map((row,i)=>{
   const e={};
   for(let j=0;j<row.length;j++){
    if(j===8){Object.assign(e,row[j]);continue}
@@ -91,7 +108,7 @@ function restorePacked(c){
    if(j===1||j===2)e[k]=ids[row[j]];
    else if(j===4&&Array.isArray(row[j])){
     assert.equal(row[j].length,1);assert(row[j][0]<i);
-    e.detail=c.exceptions[row[j][0]][4];
+    e.detail=result.exceptions[row[j][0]][4];
    }else e[k]=row[j];
   }
   return e;
@@ -147,4 +164,28 @@ test('Successive management growth preserves all identity, detail, status and as
  x.exceptions.push({id:uuid(3000),origin_id:EXEC,owner_id:QA,status:'open',reason:'objective',
   detail:'Unique mandatory source evidence '+'E'.repeat(90000),created_at:'2026-11-24T08:00:00Z'});
  assert.throws(()=>buildManagementDecisionContext(x,48000),/exceeds bounded context/);
+});
+
+test('post-Mission85 growth: repeated open exceptions plus archived assignments remain lossless',()=>{
+ const x=fixture();
+ for(let i=0;i<5;i++){
+  const assignment_id=uuid(3900+i);
+  x.bindings.push({assignment_id,node_id:i%2?PLAN:EXEC,created_at:'2026-01-01T00:00:00Z'});
+  x.statuses.push({id:assignment_id,status:'completed'});
+  x.exceptions.push({
+   id:uuid(5100+i),origin_id:i%2?PLAN:EXEC,owner_id:QA,reason:'objective',status:'open',
+   detail:'Management session failed twice; saved decisions and charges retained.',
+   created_at:'2026-11-24T15:'+String(i+35).padStart(2,'0')+':00Z'
+  });
+ }
+ const full=JSON.parse(buildManagementDecisionContext(x,200000));
+ const compressed=buildManagementDecisionContext(x,48000),parsed=JSON.parse(compressed);
+ assert.ok(compressed.length<=48000);
+ assert.equal(parsed.exceptions.length,52);
+ assert.deepEqual(restorePacked(parsed),full);
+ assert.equal(parsed.historyReferences.omittedHistoricalAssignments,
+  x.bindings.length-parsed.historyReferences.selectedAssignmentIds.length);
+ console.log('MISSION95_LATE_GROWTH_PASS '+JSON.stringify({
+  fullChars:JSON.stringify(full).length,compressedChars:compressed.length,exceptions:52
+ }));
 });
