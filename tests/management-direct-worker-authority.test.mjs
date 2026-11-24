@@ -152,3 +152,40 @@ test('Mission99 signed appointment eligibility uses actual original roster, excl
  const noDev=registry.map(a=>a.id===coder?{...a,config:{...a.config,development:false}}:a);
  assert.throws(()=>requireCommissioningAgentPair(eligibleCommissioningAgents(roster,noDev)),/resource constraint/);
 });
+
+
+test('Mission102 exact committed package identities exclude the prior analyst and supervisor; reviewer has no write or repository authority',()=>{
+ const {codingCapacityManagerStage,committedCommissioningPackageRoles,commissioningPackageRoleInstruction,assertCommissioningPackageRoles}=modules()('@/lib/projects/organization');
+ const scope='a'.repeat(64),paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const coderId='08e792df-1046-4282-89dc-83994a8a6b7e',reviewerId='1cf12044-d9ba-4e8b-9ef4-8b7e5aa004a5';
+ const coder={...node(coderId,MANAGER,'worker',['development','analysis']),scope_hash:scope,name:'Game Development Specialist v1',area:'tic_tac_toe_implementation',agent_id:'8421786a-0874-4d86-992e-f0f087d8018e'};
+ const reviewer={...node(reviewerId,MANAGER,'worker',['analysis']),scope_hash:scope,name:'Project Lead',area:'tic_tac_toe_technical_review',agent_id:'e7d25ada-a761-41bf-8f65-f87056f175fa'};
+ const supervisor=node('0e10e20e-e5a9-4443-a636-7c4866a66a5f',MANAGER,'manager',['manage','analysis','repository_review']);
+ const after=[...topology,supervisor,coder,reviewer];
+ const grants=[{node_id:MANAGER,scope_hash:scope,paths},{node_id:coderId,parent_id:MANAGER,scope_hash:scope,paths}];
+ const team=[{id:coder.agent_id,archived:false,config:{development:true}},{id:reviewer.agent_id,archived:false,config:{development:false}}];
+ const appointment=n=>({action:'appoint',kind:'worker',name:n.name,area:n.area,tools:n.tools,reuseAgentId:n.agent_id});
+ const d={node_id:MANAGER,assignment_id:'1e6d47e0-1515-4cd7-997a-47148d6d52f4',decision:[appointment(coder),appointment(reviewer),{action:'ready'}]};
+ const statuses=[{id:d.assignment_id,status:'completed'}];
+ const stage=codingCapacityManagerStage(manager,after,grants,scope);
+ const roles=committedCommissioningPackageRoles(manager,after,team,[d],statuses,grants,scope,stage,0);
+ assert.deepEqual(roles,{workerId:coderId,writerId:coderId,reviewerId,milestoneIndex:0,paths});
+ assert.match(commissioningPackageRoleInstruction(roles),new RegExp(reviewerId));
+ assert.match(commissioningPackageRoleInstruction(roles),/tasks.review.paths must be \[\]/);
+ const valid={action:'commission_package',...roles,tasks:{development:{paths:[paths[0]+'page.tsx']},compose:{paths:[]},review:{paths:[]}}};
+ assert.doesNotThrow(()=>assertCommissioningPackageRoles(manager,after,roles,stage,[valid]));
+ let rejected=0;
+ for(const writerId of [coderId,reviewerId,ANALYST,supervisor.id])for(const proposedReviewerId of [coderId,reviewerId,ANALYST,supervisor.id]){
+  if(writerId===coderId&&proposedReviewerId===reviewerId)continue;
+  assert.throws(()=>assertCommissioningPackageRoles(manager,after,roles,stage,[{...valid,writerId,reviewerId:proposedReviewerId}]),e=>e.evidence?.code==='commissioning_package_roles');rejected++;
+ }
+ assert.equal(rejected,15);
+ for(const change of [{workerId:ANALYST},{reviewerId:QA},{writerId:QA},{milestoneIndex:1},{milestoneIndex:undefined},{milestoneIndex:-1},{paths:['app/']},
+  {tasks:{...valid.tasks,development:{paths:[paths[0]]}}},{tasks:{...valid.tasks,development:{paths:[paths[0]+'../other.ts']}}},{tasks:{...valid.tasks,review:{paths:[paths[0]+'page.tsx']}}}]){
+  assert.throws(()=>assertCommissioningPackageRoles(manager,after,roles,stage,[{...valid,...change}]),e=>e.evidence?.code==='commissioning_package_roles');
+ }
+ assert.throws(()=>committedCommissioningPackageRoles(manager,after,team,[],statuses,grants,scope,stage,0));
+ assert.throws(()=>committedCommissioningPackageRoles(manager,after,team,[d],[{id:d.assignment_id,status:'failed'}],grants,scope,stage,0));
+ assert.throws(()=>committedCommissioningPackageRoles(manager,after,team.map(a=>({...a,archived:true})),[d],statuses,grants,scope,stage,0));
+ assert.throws(()=>committedCommissioningPackageRoles(manager,after.map(n=>n.id===coderId?{...n,tools:['analysis']}:n),team,[d],statuses,grants,scope,stage,0));
+});

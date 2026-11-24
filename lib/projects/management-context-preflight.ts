@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {
-  completeManagementRows,eligibleCommissioningAgents,requireCommissioningAgentPair,
+  completeManagementRows,eligibleCommissioningAgents,requireCommissioningAgentPair,codingCapacityManagerStage,committedCommissioningPackageRoles,type CommissioningPackageRoles,
 } from './organization';
 import {
   buildManagementDecisionContext,managementScope,selectManagementEvidenceIds,
@@ -17,12 +17,12 @@ async function rowsByIds<T>(ids:string[],factory:(batch:string[])=>unknown,order
 
 export type ManagementContextPreflight={
   principalId:string;chars:number;sha256:string;inputLimit:number;
-  selectedAssignments:number;unresolvedExceptions:number;organizationNodes:number;
+  selectedAssignments:number;unresolvedExceptions:number;organizationNodes:number;packageRoles?:CommissioningPackageRoles;
 };
 
 // The exact production assembler, fed from its ordinary durable data sources.
 // This never calls a model, reserves tokens or mutates database state.
-export async function preflightManagementContext(projectId:string,principalId:string,commissioningAppointment=false):Promise<ManagementContextPreflight>{
+export async function preflightManagementContext(projectId:string,principalId:string,commissioningAppointment=false,commissioningPackage=false):Promise<ManagementContextPreflight>{
   const db=getSupabaseAdminClient();
   const [topology,projectRecord]=await Promise.all([
     completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes')
@@ -69,6 +69,14 @@ export async function preflightManagementContext(projectId:string,principalId:st
   const exceptions=[...owned,...origin].filter((e,i,a)=>a.findIndex(v=>v.id===e.id)===i);
   const eligible=commissioningAppointment?eligibleCommissioningAgents(topology,team):null;
   if(eligible)requireCommissioningAgentPair(eligible);
+  let packageRoles:CommissioningPackageRoles|undefined;
+  if(commissioningPackage){
+    if(packages.length)throw Error('Current milestone package already exists');
+    const principal=focused.find(n=>n.id===principalId);
+    if(!principal)throw Error('Persisted Delivery Manager unavailable');
+    const stage=codingCapacityManagerStage(principal,focused,grants,project.approved_hash);
+    packageRoles=committedCommissioningPackageRoles(principal,focused,team,decisions,statuses,grants,project.approved_hash,stage,project.milestone_index);
+  }
   const serialized=buildManagementDecisionContext({
     principalId,topology,scopedNodes:focused,project,executionTeam:eligible??team,
     exceptions,bindings,statuses,evidence,plans,dependencies,scopeGrants:grants,
@@ -79,6 +87,6 @@ export async function preflightManagementContext(projectId:string,principalId:st
     sha256:createHash('sha256').update(serialized).digest('hex'),
     inputLimit:48000,selectedAssignments:chosen.length,
     unresolvedExceptions:exceptions.filter(e=>e.status==='open').length,
-    organizationNodes:topology.length,
+    organizationNodes:topology.length,packageRoles,
   };
 }

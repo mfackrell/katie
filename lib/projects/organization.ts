@@ -286,6 +286,9 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?codingCapacityManagerStage(node,focused,grants,project.approved_hash):null;
  const appointmentAgents=commissioningStage?.action==='appoint'?eligibleCommissioningAgents(topology,team):null;
  if(appointmentAgents)requireCommissioningAgentPair(appointmentAgents);
+ const packageRoles=commissioningStage?.action==='commission_package'
+  ?committedCommissioningPackageRoles(node,focused,team,decisions,statuses,grants,project.approved_hash,commissioningStage,project.milestone_index):null;
+ if(packageRoles&&milestonePackages.length)throw Error('A package already exists for the approved commissioning milestone');
  const baseInstruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
@@ -294,11 +297,12 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   :baseInstruction+scopedRootDelegationDirective({
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
   })+scopedImplementationDelegationDirective(node,topology,focused,grants,project)
-  +(providerControlled?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'')
+  +(providerControlled&&!packageRoles?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'')
   +(signedCommissioning
    ?'\nOWNER-SIGNED COMMISSIONING-ONLY WINDOW: use the existing authorized implementation line, no new management hierarchy, no rejection cycles, no historical exception closure without evidence, and no unrelated work. The Game Delivery Functional Director hands off with one reject directed to its existing Delivery Manager, plus optional ready. The Delivery Manager may appoint only missing direct execution workers (at most one coder plus distinct analysis reviewer and optional writer), grant them only existing scope, then commission_package in a distinct turn. No other actions except ready accompanying substantive work. Use newly appointed workers for the package roles. The window stops at the first real package; no automatic retry.': '')
   +(commissioningStage?codingCapacityStageInstruction(commissioningStage):'')
-  +(appointmentAgents?commissioningAgentInstruction(appointmentAgents):'');
+  +(appointmentAgents?commissioningAgentInstruction(appointmentAgents):'')
+  +(packageRoles?commissioningPackageRoleInstruction(packageRoles):'');
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:appointmentAgents??team,exceptions,bindings,statuses,
@@ -318,6 +322,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  if(commissioningStage){
   try{assertCodingCapacityManagerStage(node,topology,commissioningStage,batch);
    if(appointmentAgents)assertCommissioningWorkerIdentities(topology,appointmentAgents,batch);
+   if(packageRoles)assertCommissioningPackageRoles(node,topology,packageRoles,commissioningStage,batch);
   }
   catch(error){
    if(error instanceof ManagementCommandRejection)error.evidence.proposalHash=proposalHash;
@@ -427,6 +432,62 @@ export function codingCapacityManagerStage(principal:ManagementNode,nodes:Manage
  if(g&&(!Array.isArray(coderPaths)||!coderPaths.every(x=>typeof x==='string')))throw Error('Current coder scope is unreadable');
  return {action:!coder?'appoint':!g?'grant_scope':'commission_package',coderId:coder?.id??null,parentPaths:parent.paths as string[],coderPaths:(coderPaths??[]) as string[]};
 }
+// The signed commissioning window already persists appointments as accepted
+// decisions. Bind package roles to that actual batch, not to every direct
+// analysis worker. Node IDs are distinct from managed-agent registry IDs.
+export type CommissioningPackageRoles={workerId:string;writerId:string;reviewerId:string;milestoneIndex:0;paths:string[]};
+export function committedCommissioningPackageRoles(principal:ManagementNode,nodes:ManagementNode[],team:ManagementRow[],decisions:ManagementRow[],statuses:AssignmentStatus[],grants:ManagementRow[],scopeHash:unknown,stage:CodingCapacityStage,milestone:unknown):CommissioningPackageRoles{
+ if(stage.action!=='commission_package'||milestone!==0||!stage.coderId)
+  throw Error('Signed package requires the approved zero-based milestone and committed coder grant');
+ const parent=nodes.find(n=>n.id===principal.id);
+ const eligible=(n:ManagementNode)=>n.parent_id===principal.id&&n.kind==='worker'&&n.status==='active'
+  &&n.scope_hash===scopeHash&&Array.isArray(n.tools)&&n.tools.includes('analysis')
+  &&team.some(a=>a.id===n.agent_id&&a.archived===false);
+ const coder=nodes.find(n=>n.id===stage.coderId);
+ if(!parent||!coder||!eligible(coder)||!Array.isArray(coder.tools)||!coder.tools.includes('development')
+  ||!team.some(a=>a.id===coder.agent_id&&(a.config as ManagementRow|null)?.development===true))
+  throw Error('Persisted scoped development and composition worker is not eligible');
+ const batch=decisions.filter(d=>d.node_id===principal.id&&statuses.some(s=>s.id===d.assignment_id&&s.status==='completed')
+  &&Array.isArray(d.decision)&&d.decision.some(c=>c?.action==='appoint'&&c.kind==='worker'&&c.reuseAgentId===coder.agent_id));
+ if(batch.length!==1)throw Error('Unique accepted commissioning appointment evidence required');
+ const appointments=(batch[0].decision as ManagementRow[]).filter(c=>c.action==='appoint'&&c.kind==='worker');
+ const matches=(n:ManagementNode)=>appointments.some(c=>c.reuseAgentId===n.agent_id
+  &&c.name===n.name&&c.area===n.area&&Array.isArray(c.tools)&&Array.isArray(n.tools)
+  &&JSON.stringify([...c.tools].sort())===JSON.stringify([...n.tools].sort()));
+ if(!matches(coder))throw Error('Committed coder differs from its accepted appointment');
+ const reviewers=nodes.filter(n=>n.id!==coder.id&&eligible(n)&&matches(n)&&Array.isArray(n.tools)
+  &&!n.tools.includes('development')&&team.some(a=>a.id===n.agent_id&&(a.config as ManagementRow|null)?.development===false)
+  &&!grants.some(g=>g.node_id===n.id&&g.scope_hash===scopeHash));
+ if(reviewers.length!==1||appointments.length!==2)
+  throw Error('Commissioning requires exactly the two committed eligible implementation/review workers');
+ if(grants.some(g=>g.node_id===coder.id&&g.scope_hash===scopeHash&&g.parent_id!==principal.id))
+  throw Error('Persisted coder grant must belong to its immediate manager');
+ return {workerId:coder.id,writerId:coder.id,reviewerId:reviewers[0].id,milestoneIndex:0,paths:[...stage.coderPaths]};
+}
+export function commissioningPackageRoleInstruction(roles:CommissioningPackageRoles):string{
+ return '\nSIGNED PACKAGE ROLE CONTRACT — MANDATORY, overrides general candidate lists and examples: Use EXACTLY these persisted node IDs and zero-based milestone in the single commission_package command: '+JSON.stringify(roles)+
+  '. The developer is also the technical writer (composition); the reviewer is the distinct analysis-only worker from the accepted appointment batch. No planning supervisor, Repository Scope Analyst, other historical worker, agent-registry ID, new appointment or grant may be used. The review task consumes supplied evidence, not repository access: tasks.review.paths must be []. tasks.compose.paths may be [] or exact scoped files. tasks.development.paths must be a nonempty exact file inventory within package paths and the existing coder grant; no directory suffix, wildcard or traversal. Preserve all existing SMART fields, use the exact principal.objective for each parentObjective, respect each worker deadline and context limit, maxAssignments <= package.maxAttempts, estimate.tokens * maxAssignments <= tokens, and do not set package tokens or ceilingMicrousd for this provider-controlled trial. This is a required role binding only; the manager must produce the actual task contracts and command. Do not change any historical decisions.';
+}
+export function assertCommissioningPackageRoles(principal:ReportingNode,nodes:ReportingNode[],roles:CommissioningPackageRoles,stage:CodingCapacityStage,batch:ManagementRow[]):void{
+ const at=batch.findIndex(c=>c.action==='commission_package'),c=batch[at];
+ const reject=(reason:string,fields:string[]=[])=>{throw new ManagementCommandRejection(reason,'commissioning_package_roles',at+1,c?.action,fields.map(f=>reportingTarget(f,c?.[f],principal.id,nodes)));};
+ if(!c||c.workerId!==roles.workerId||c.writerId!==roles.writerId||c.reviewerId!==roles.reviewerId||c.milestoneIndex!==roles.milestoneIndex)
+  reject('Package must use the committed coder as worker and writer, the distinct committed reviewer, and milestoneIndex 0',['workerId','writerId','reviewerId']);
+ const fits=(path:unknown,prefixes:string[])=>typeof path==='string'&&path.length>0&&!path.startsWith('/')
+  &&!/(^|\/)\.\.?(\/|$)/.test(path)&&!/[?*]/.test(path)
+  &&prefixes.some(prefix=>path===prefix||prefix.endsWith('/')&&path.startsWith(prefix));
+ const paths=c.paths;
+ if(!Array.isArray(paths)||paths.length===0||new Set(paths).size!==paths.length
+  ||paths.some(p=>!fits(p,stage.parentPaths)||!fits(p,roles.paths)))reject('Package paths must remain inside the persisted manager and coder grants',['workerId']);
+ const task=c.tasks as ManagementRow|null;
+ const dev=(task?.development as ManagementRow|null)?.paths,compose=(task?.compose as ManagementRow|null)?.paths,review=(task?.review as ManagementRow|null)?.paths;
+ if(!Array.isArray(review)||review.length!==0)reject('Independent analysis reviewer has no repository grant; review paths must be empty',['reviewerId']);
+ const exact=(p:unknown)=>typeof p==='string'&&!p.endsWith('/')&&Array.isArray(paths)&&fits(p,paths as string[])&&fits(p,roles.paths);
+ if(!Array.isArray(dev)||dev.length===0||new Set(dev).size!==dev.length||dev.some(p=>!exact(p))
+  ||!Array.isArray(compose)||new Set(compose).size!==compose.length||compose.some(p=>!exact(p)))
+  reject('Development and composition SMART paths must be exact files inside the approved package grant',['workerId','writerId']);
+}
+
 export function codingCapacityStageInstruction(s:CodingCapacityStage):string{
  const prefix='\nSIGNED COMMISSIONING — EXACT CURRENT TURN (mandatory; supersedes general command examples): ';
  if(s.action==='appoint')return prefix+
