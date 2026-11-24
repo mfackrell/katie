@@ -119,6 +119,24 @@ export function scopedImplementationDelegationDirective(principal:ManagementNode
   '. These reports already hold approved scope, but cannot commission coding. For any report responsible for the approved implementation milestone, propose amend_delegation adding development within your own authority before ready. Do not repeat its scope grant or replace its leader to fix missing tools. Analysis-only reports remain analysis-only; QA never receives development. The database independently validates every proposal.';
 }
 
+// Ground the command vocabulary in the actual immediate reporting contracts.
+// A direct manager is not an execution worker; neither is a descendant worker.
+const assignmentCapabilities=['analysis','research','writing','repository_review'] as const;
+function canAssignCapability(tools:unknown,capability:unknown):boolean{
+ return Array.isArray(tools)&&assignmentCapabilities.some(c=>c===capability)&&
+  tools.includes(capability==='writing'?'analysis':capability);
+}
+export function workerDelegationDirective(principal:ManagementNode,focused:ManagementNode[],now=Date.now()):string{
+ if(principal.kind==='project_director')return '';
+ const workers=focused.filter(n=>n.parent_id===principal.id&&n.kind==='worker'&&
+  typeof n.deadline==='string'&&Date.parse(n.deadline)>now)
+  .map(n=>({nodeId:n.id,name:n.name,tools:n.tools,
+   assignCapabilities:assignmentCapabilities.filter(c=>canAssignCapability(n.tools,c)),deadline:n.deadline}));
+ if(!workers.length)return '\nNO DIRECT EXECUTION WORKERS: Do not emit assign, commission_package, or authorize_assignment for any ID. A manager is not a worker, and a descendant worker belongs to its immediate manager. Advance through existing direct managers using only applicable management actions and real evidence. If an individual worker is genuinely required and within your existing authority, appoint lawfully; never invent an ID or assign a worker in the same batch as an uncommitted appointment. No ready-only abandonment of owned exceptions.';
+ return '\nDIRECT EXECUTION WORKER TARGETS (authoritative current reporting contracts): '+JSON.stringify(workers)+
+  '. assign requires an existing listed worker and its listed assignCapabilities; writing requires analysis. commission_package requires existing listed workers with development for the coder and analysis for composition/review. authorize_assignment requires a real queued assignment of a direct worker. Never target a manager, a descendant, an expired worker or an uncommitted appointment. The database independently validates every decision.';
+}
+
 export function directorRecoveryRelease(claim:Claim):string|undefined {
  return (claim.mission.project_evidence as {directorRecoveryRelease?:string}|null)?.directorRecoveryRelease;
 }
@@ -219,7 +237,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?baseInstruction+'\nONE-SHOT RECOVERY: Use only plan, appoint Functional Directors, and ready. Do not create dependency commands or use IDs for appointments that have yet to be committed. Downstream management and execution are paused after this decision.'
   :baseInstruction+scopedRootDelegationDirective({
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
-  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project);
+  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project)+workerDelegationDirective(node,focused);
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:team,exceptions,bindings,statuses,
@@ -230,7 +248,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  let commands:unknown;
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
- assertManagementCommands(node,topology,commands,Boolean(recovery));
+ assertManagementCommands(node,topology.map(n=>focused.find(f=>f.id===n.id)??n),commands,Boolean(recovery));
  const batch=commands as ManagementRow[];
  const proposalHash=createHash('sha256').update(JSON.stringify(commands)).digest('hex');
  if(batch.every(c=>c.action==='ready')&&exceptions.some(e=>e.owner_id===principalId&&e.status==='open')){
@@ -267,7 +285,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
 }
 
 const managementActions=new Set(['plan','appoint','amend_delegation','grant_scope','authorize_assignment','assign','commission_package','evaluate_package','repair_package','dependency','exception','resolve','escalate','submit_component','certify','reject','replace_leader','reorganize','ready','close']);
-type ReportingNode={id:string;parent_id?:string|null};
+type ReportingNode={id:string;parent_id?:string|null;kind?:string;tools?:unknown};
 type ReportingTarget={field:string;status:'missing'|'malformed'|'unknown'|'direct_report'|'not_direct_report';id?:string;idHash?:string};
 
 export class ManagementCommandRejection extends Error {
@@ -311,6 +329,18 @@ export function assertManagementCommands(principal:{id:string;kind:string;manage
    ['assign','certify','reject','grant_scope','amend_delegation','reorganize','replace_leader','dependency'].includes(c.action)
     ?['nodeId',...(c.action==='reorganize'?['underId']:c.action==='dependency'?['dependsOn']:[])]:[];
   if(fields.some(field=>!nodes.some(n=>n.id===c[field]&&n.parent_id===principal.id)))reject('Management decisions require immediate reporting authority','immediate_reporting_authority',fields);
+  if(c.action==='assign'){
+   const target=nodes.find(n=>n.id===c.nodeId);
+   if(target?.kind!=='worker'||!canAssignCapability(target.tools,c.capability))
+    reject('Worker assignment outside delegated authority: target must be a direct worker with the requested capability','worker_delegation_authority',['nodeId']);
+  }
+  if(c.action==='commission_package'){
+   const targets=[['workerId','development'],['writerId','analysis'],['reviewerId','analysis']];
+   if(targets.some(([field,cap])=>{
+    const target=nodes.find(n=>n.id===c[field]);
+    return target?.kind!=='worker'||!Array.isArray(target.tools)||!target.tools.includes(cap);
+   }))reject('Package requires direct workers with delegated execution capabilities','worker_delegation_authority',['workerId','writerId','reviewerId']);
+  }
   if(!managementActions.has(c.action))reject('Unknown management command','invalid_command');
   if(c.action==='dependency'&&c.nodeId===c.dependsOn)reject('A report cannot depend on itself','invalid_dependency',['nodeId','dependsOn']);
   if(c.action==='appoint')priorAppointments++;

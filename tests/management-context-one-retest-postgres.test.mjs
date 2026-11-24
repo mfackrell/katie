@@ -26,4 +26,5 @@ test('native PostgreSQL16: current-context 90-mission blocked owner retry, immut
  assert.equal(result.code,0,result.stdout+'\n'+result.stderr);
  assert.match(result.stdout,/ORIGINAL_84_BOUNDED_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION_CONTEXT90_NATIVE_PASS/);
+ assert.match(result.stdout,/MISSION_CONTEXT_SOURCE_RECOVERY_NATIVE_PASS/);
 });

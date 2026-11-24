@@ -201,7 +201,7 @@ function LegacyDirectorRecoveryControl({
 
 export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;onRefresh:()=>void}){
  if(props.recovery.managementContextRetest)
-  return <ManagementContextRetestControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
+  return <ManagementContextRetestControl key={props.recovery.projectId+':'+props.recovery.releaseSha+':'+props.recovery.managementContextRetest.missionId}
    initial={props.recovery.managementContextRetest} onRefresh={props.onRefresh}/>;
  if(props.recovery.mission84ProviderRetry)
   return <Mission84ProviderRetryControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
