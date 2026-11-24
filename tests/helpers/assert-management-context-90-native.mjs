@@ -122,6 +122,69 @@ export async function assertContext90RetestNative(db,{
   assert.ok(claim.job.lease);
   assert.notEqual((await db.query('select claim_mission_work_release_epoch($1,$2,$3) claim',[release,generation,deployment])).rows[0].claim?.job?.id,selected.assignment);
   console.log('MISSION_CONTEXT90_NATIVE_PASS: 90/96 immutable history, owner/window/release negatives, one signed receipt, watchdog refresh, global scheduler one lease at attempts2');
+
+  // A different later pre-inference failure must never consume the previous
+  // authorization. Keep the original receipt, apply the successor migration
+  // and prove exact new source admission through the existing owner RPC.
+  await finish(selected.mission,selected.assignment,root.id);
+  await db.query('reset role');
+  const oldReceipt=(await db.query('select to_jsonb(r) value from project_context_retest_receipts r where project_id=$1',[project])).rows[0].value;
+  const oldMission=(await db.query('select to_jsonb(m) m,to_jsonb(j) j from agent_missions m join mission_assignments j on j.mission_id=m.id where m.id=$1',[selected.mission])).rows[0];
+  const successor=readFileSync('supabase/migrations/20261124160000_context_retest_source_receipt.sql','utf8')
+   .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+  await db.query(successor);
+  let nextSource=null;
+  for(let ordinal=90;ordinal<95;ordinal++){
+   const latest=ordinal===94,mission=randomUUID(),assignment=randomUUID(),decision=randomUUID();
+   const timestamp=new Date(Date.parse(selected.time)+(ordinal-89)*1000).toISOString();
+   const m={...base,id:mission,project_kind:'management',team:[{id:root.agent_id,config:root.config}],
+    status:latest?'blocked':'completed',calls:latest?0:1,actual_tokens:0,reserved_tokens:0,
+    result:latest?null:'Management decisions committed',detail:latest?OVERFLOW:null,
+    deadline:firstReal.cutoff,created_at:timestamp,updated_at:timestamp,
+    project_evidence:{...base.project_evidence,previousMissionId:null,organizationNodeId:root.id,
+     providerContinuationWindow:provider.window_id,providerContinuationRelease:provider.continuation_release_sha,
+     providerContinuationDecision:provider.continuation_decision_id}};
+   const j={...baseJob,id:assignment,mission_id:mission,status:latest?'failed':'completed',
+    attempts:1,lease:null,lease_until:null,heartbeat_at:null,agent_id:root.agent_id,role:'work',job_key:'plan',
+    result:latest?{detail:OVERFLOW,diagnostic:{stage:'work',errorType:'Error',acceptedIssue:false}}:
+     {output:'Management decision recorded',decisionId:decision},
+    detail:latest?OVERFLOW:null,payload:{organizationNodeId:root.id},
+    available_at:'1800-01-01T00:00:04Z',created_at:timestamp,updated_at:timestamp};
+   await db.query('insert into agent_missions select (jsonb_populate_record(null::agent_missions,$1::jsonb)).*',[m]);
+   await db.query('update work_projects set active_mission_id=$2 where id=$1',[project,mission]);
+   await db.query('insert into mission_assignments select (jsonb_populate_record(null::mission_assignments,$1::jsonb)).*',[j]);
+   await db.query("insert into project_organization_assignments(assignment_id,node_id,contract_hash) select $1,n.id,encode(sha256(convert_to(project_canonical(n.acceptance),'UTF8')),'hex') from project_organization_nodes n where n.id=$2",[assignment,root.id]);
+   if(!latest)await db.query("insert into project_organization_decisions(id,project_id,node_id,assignment_id,decision,created_at) values($1,$2,$3,$4,'[{\"action\":\"ready\"}]'::jsonb,$5)",[decision,project,root.id,assignment,timestamp]);
+   else nextSource={mission,assignment};
+  }
+  assert(nextSource);
+  await db.query('update project_organization_nodes set decision_needed=true where id=$1',[root.id]);
+  await db.query("update work_projects set status='blocked',detail=$3,active_mission_id=$2,lease=null,lease_until=null,progress_since=clock_timestamp()-interval '5 minutes',updated_at=clock_timestamp() where id=$1",[project,nextSource.mission,BLOCKED]);
+  assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,95);
+  await db.query('set role service_role');
+  assert.equal((await db.query('select project_org_context_retest_claim_authorized($1,$2,$3,$4) ok',[project,release,generation,deployment])).rows[0].ok,false);
+  const newOffer=(await db.query('select project_org_context_retest_offer($1,$2,$3) offer',[owner,project,release])).rows[0].offer;
+  assert.equal(newOffer.stage,'authorize');assert.equal(newOffer.missionId,nextSource.mission);
+  assert.equal(newOffer.assignmentId,nextSource.assignment);assert.equal(newOffer.historicalMissions,95);
+  const newArgs=[owner,project,release,generation,deployment,nextSource.mission,nextSource.assignment,randomUUID(),newOffer.stateHash,'c'.repeat(64),45037];
+  await denied(args); // consumed older source and its exact old receipt cannot authorize again
+  await denied(newArgs.map((v,i)=>i===0?randomUUID():v));
+  await denied(newArgs.map((v,i)=>i===5?selected.mission:v));
+  await denied(newArgs.map((v,i)=>i===8?'a'.repeat(64):v));
+  const newApproval=(await db.query(approval,newArgs)).rows[0].result;
+  assert.equal(newApproval.stage,'authorized');assert.equal(newApproval.historicalMissions,95);
+  await denied(newArgs);
+  await db.query('reset role');
+  assert.equal((await db.query('select count(*)::int n from project_context_retest_receipts where project_id=$1',[project])).rows[0].n,2);
+  assert.deepEqual((await db.query('select to_jsonb(r) value from project_context_retest_receipts r where project_id=$1 and source_mission_id=$2',[project,selected.mission])).rows[0].value,oldReceipt);
+  assert.deepEqual((await db.query('select to_jsonb(m) m,to_jsonb(j) j from agent_missions m join mission_assignments j on j.mission_id=m.id where m.id=$1',[selected.mission])).rows[0],oldMission);
+  assert.deepEqual((await db.query('select max_missions,token_allowance from work_projects where id=$1',[project])).rows[0],{max_missions:96,token_allowance:600000});
+  await db.query('set role service_role');
+  const newClaim=(await db.query('select claim_mission_work_release_epoch($1,$2,$3) claim',[release,generation,deployment])).rows[0].claim;
+  assert.equal(newClaim?.job?.id,nextSource.assignment);assert.equal(newClaim.job.attempts,2);
+  assert.notEqual((await db.query('select claim_mission_work_release_epoch($1,$2,$3) claim',[release,generation,deployment])).rows[0].claim?.job?.id,nextSource.assignment);
+  console.log('MISSION_CONTEXT_SOURCE_RECOVERY_NATIVE_PASS: 95/96 preserved, previous receipt immutable, new owner authorization only for new source, replay denied, one actual scheduler claim');
+
  } finally {
   await db.query('rollback to savepoint owner_context_90');
   await db.query('release savepoint owner_context_90');

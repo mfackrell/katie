@@ -173,6 +173,62 @@ function compactExceptionRows(payload:Record<string,unknown>):Record<string,unkn
    ' A missing resolution element means no resolution. Preserve every distinct exception id and status.'};
 }
 
+// A fourth, lossless fallback for exception details which are not identical
+// but contain repeated verbatim text/UUIDs. Keep all row identities and evidence.
+// Integer indexes refer to exact strings in the same JSON, never another store.
+function compactExceptionDetailFragments(payload:Record<string,unknown>):Record<string,unknown>|null{
+ const rows=payload.exceptions as unknown[][];
+ if(!Array.isArray(rows)||!rows.every(row=>Array.isArray(row)&&row.length>=7))return null;
+ const details=rows.map(row=>row[4]).filter((v):v is string=>typeof v==='string');
+ if(details.reduce((total,t)=>total+t.length,0)>1000000)return null;
+ const candidates=new Set<string>();
+ for(const t of details){
+  for(const m of t.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi))candidates.add(m[0]);
+  for(const m of t.matchAll(/"(?:\\.|[^"\\])*"/g))if(m[0].length>=32)candidates.add(m[0]);
+  for(const m of t.matchAll(/[^,.;:!?"\n]{32,}[,.;:!?]?/g))candidates.add(m[0]);
+  if(candidates.size>4096)return null;
+ }
+ let chunks:(string|number)[][]=details.map(t=>[t]);
+ const dictionary:string[]=[];
+ const encoded=(value:unknown)=>JSON.stringify(value).length;
+ const estimate=(s:string,index:number)=>{
+  let n=0;
+  for(const arr of chunks)for(const part of arr)if(typeof part==='string')n+=part.split(s).length-1;
+  return n*(encoded(s)-encoded(index)-4)-encoded(s)-1;
+ };
+ for(let iteration=0;iteration<256;iteration++){
+  let best:string|null=null,bestSave=0;
+  for(const s of candidates){
+   const gain=estimate(s,dictionary.length);
+   if(gain>bestSave){bestSave=gain;best=s;}
+  }
+  if(best===null)break;
+  candidates.delete(best);
+  const index=dictionary.length,fragment=best;
+  dictionary.push(fragment);
+  chunks=chunks.map(arr=>arr.flatMap(part=>{
+   if(typeof part==='number')return [part];
+   const out:(string|number)[]=[];
+   part.split(fragment).forEach((s,i)=>{if(i)out.push(index);if(s)out.push(s);});
+   return out;
+  }));
+ }
+ if(!dictionary.length)return null;
+ let j=0;
+ const packed=rows.map(row=>{
+  if(typeof row[4]!=='string')return row;
+  const parts=chunks[j++];
+  if(!parts.some(x=>typeof x==='number'))return row;
+  // Verify the exact original string before emitting any reference.
+  if(parts.map(x=>typeof x==='number'?dictionary[x]:x).join('')!==row[4])
+   throw Error('Management exception fragment round-trip failed');
+  return row.map((value,index)=>index===4?{parts}:value);
+ });
+ return {...payload,exceptions:packed,exceptionDetailFragments:dictionary,
+  contextReferencePolicy:String(payload.contextReferencePolicy)+
+   ' For a detail object {parts:[...]}, concatenate its string parts and the exact string at each integer index of exceptionDetailFragments, in order; no separator. Resolve prior-row references as usual.'};
+}
+
 export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const {principalId,topology,scopedNodes,project}=input;
  const scope=managementScope(topology,principalId);
@@ -295,6 +351,11 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  if(compressed){
   const table=JSON.stringify(compressed);
   if(table.length<=limit)return table;
+  const fragmented=compactExceptionDetailFragments(compressed);
+  if(fragmented){
+   const packed=JSON.stringify(fragmented);
+   if(packed.length<=limit)return packed;
+  }
  }
  throw Error('Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.');
 }

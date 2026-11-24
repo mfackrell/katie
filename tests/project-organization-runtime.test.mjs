@@ -52,12 +52,12 @@ test('original envelope requires authenticated explicit autonomous-execution con
 test('dispatch preserves Functional Director authority and rejects executive worker supervision',()=>{
  const {assertManagementCommands}=modules()('@/lib/projects/organization');
  const root={id:'root',kind:'project_director'},director={id:'director',kind:'manager'},manager={id:'manager',kind:'manager'};
- const nodes=[root,{...director,parent_id:root.id},{...manager,parent_id:director.id},{id:'worker',parent_id:manager.id},{id:'direct-worker',parent_id:director.id}];
+ const nodes=[root,{...director,parent_id:root.id},{...manager,parent_id:director.id},{id:'worker',parent_id:manager.id,kind:'worker',tools:['analysis']},{id:'direct-worker',parent_id:director.id,kind:'worker',tools:['analysis']}];
  assertManagementCommands(root,nodes,[{action:'appoint',kind:'manager'}]);
  for(const kind of ['worker',null,'project_director'])assert.throws(()=>assertManagementCommands(root,nodes,[{action:'appoint',kind,reuseAgentId:'existing'}]),/only Functional Directors/);
  assert.throws(()=>assertManagementCommands(root,nodes,[{action:'assign',nodeId:'worker'}]),/cannot assign execution/);
- assertManagementCommands(director,nodes,[{action:'appoint',kind:'worker'},{action:'appoint',kind:'manager'},{action:'assign',nodeId:'direct-worker'},{action:'submit_component'}]);
- assertManagementCommands(manager,nodes,[{action:'assign',nodeId:'worker'}]);
+ assertManagementCommands(director,nodes,[{action:'appoint',kind:'worker'},{action:'appoint',kind:'manager'},{action:'assign',nodeId:'direct-worker',capability:'analysis'},{action:'submit_component'}]);
+ assertManagementCommands(manager,nodes,[{action:'assign',nodeId:'worker',capability:'analysis'}]);
  for(const action of ['assign','certify','reject','grant_scope','replace_leader'])assert.throws(()=>assertManagementCommands(director,nodes,[{action,nodeId:'worker'}]),/immediate reporting authority/);
  assert.throws(()=>assertManagementCommands(root,nodes,[{action:'submit_component'}]),/responsible Functional Director/);
  assert.throws(()=>assertManagementCommands(director,nodes,[{action:'submit_component',nodeId:'manager'}]),/responsible Functional Director/);
@@ -67,7 +67,7 @@ test('dispatch preserves Functional Director authority and rejects executive wor
 test('coding packages require immediate Functional Director authority at dispatch',()=>{
  const {assertManagementCommands}=modules()('@/lib/projects/organization');
  const root={id:'root',kind:'project_director'},manager={id:'manager',kind:'manager'};
- const nodes=[root,{...manager,parent_id:root.id},{id:'coder',parent_id:manager.id},{id:'writer',parent_id:manager.id},{id:'reviewer',parent_id:manager.id}];
+ const nodes=[root,{...manager,parent_id:root.id},{id:'coder',parent_id:manager.id,kind:'worker',tools:['development']},{id:'writer',parent_id:manager.id,kind:'worker',tools:['analysis']},{id:'reviewer',parent_id:manager.id,kind:'worker',tools:['analysis']}];
  const command={action:'commission_package',workerId:'coder',writerId:'writer',reviewerId:'reviewer'};
  assertManagementCommands(manager,nodes,[command]);
  assert.throws(()=>assertManagementCommands(root,nodes,[command]),/cannot assign execution/);
@@ -448,4 +448,23 @@ test('Mission79 ratified existing directors guide root away from illegal new app
  assert.doesNotMatch(instruction,/Issue amend_delegation|Issue grant_scope/,'Do not repeat prior grants');
  assert.equal(scopedRootDelegationDirective({...input,providerControlled:false}),'');
  assert.equal(scopedRootDelegationDirective({...input,project:{...input.project,phase:'research'}}),'');
+});
+
+test('actual immediate manager-only topology prohibits worker commands while lawful worker delegation remains available',()=>{
+ const {assertManagementCommands,workerDelegationDirective}=modules()('@/lib/projects/organization');
+ const director={id:'d',kind:'manager',management_level:'functional_director'};
+ const manager={id:'m',parent_id:director.id,kind:'manager',tools:['manage','analysis','development']};
+ const worker={id:'w',parent_id:manager.id,kind:'worker',tools:['analysis','repository_review'],deadline:'2099-01-01T00:00:00Z'};
+ const nodes=[director,manager,worker];
+ const instruction=workerDelegationDirective(director,nodes,Date.parse('2026-11-24T00:00:00Z'));
+ assert.match(instruction,/NO DIRECT EXECUTION WORKERS/);
+ assert.match(instruction,/Do not emit assign, commission_package/);
+ assert.throws(()=>assertManagementCommands(director,nodes,[{action:'assign',nodeId:manager.id,capability:'analysis'}]),/outside delegated authority/);
+ assert.throws(()=>assertManagementCommands(director,nodes,[{action:'assign',nodeId:worker.id,capability:'analysis'}]),/immediate reporting authority/);
+ assert.throws(()=>assertManagementCommands(director,nodes,[{action:'commission_package',workerId:manager.id,writerId:manager.id,reviewerId:manager.id}]),/direct workers/);
+ assert.match(workerDelegationDirective(manager,nodes,Date.parse('2026-11-24T00:00:00Z')),/DIRECT EXECUTION WORKER TARGETS/);
+ for(const capability of ['analysis','writing','repository_review'])
+  assertManagementCommands(manager,nodes,[{action:'assign',nodeId:worker.id,capability}]);
+ for(const capability of ['development','research',undefined])
+  assert.throws(()=>assertManagementCommands(manager,nodes,[{action:'assign',nodeId:worker.id,capability}]),/outside delegated authority/);
 });

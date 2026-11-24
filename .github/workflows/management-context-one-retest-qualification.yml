@@ -2,6 +2,11 @@ name: One authenticated management-context retest qualification
 on:
   pull_request:
     paths:
+      - 'lib/projects/management-context.ts'
+      - 'lib/projects/organization.ts'
+      - 'tests/management-context-growth.test.mjs'
+      - 'tests/project-organization-runtime.test.mjs'
+      - 'supabase/migrations/20261124160000_context_retest_source_receipt.sql'
       - 'lib/projects/management-context-preflight.ts'
       - 'lib/projects/management-context-retest.ts'
       - 'components/management-context-retest-control.tsx'
@@ -37,7 +42,7 @@ jobs:
       - name: Strict TypeScript contracts
         run: npm run typecheck
       - name: First-party owner origin, state, release, evidence and one-time claim negatives
-        run: node --test tests/management-context-one-retest-runtime.test.mjs tests/management-context.test.mjs tests/management-context-growth.test.mjs tests/management-commissioning-diagnostics.test.mjs
+        run: node --test tests/management-context-one-retest-runtime.test.mjs tests/management-context.test.mjs tests/management-context-growth.test.mjs tests/management-commissioning-diagnostics.test.mjs tests/project-organization-runtime.test.mjs
       - name: Install isolated native PostgreSQL 16
         run: |
           if ! test -x /usr/lib/postgresql/16/bin/initdb; then

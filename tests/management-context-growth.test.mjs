@@ -80,6 +80,19 @@ function fixture(){
 }
 function restorePacked(c){
  const result=structuredClone(c),fields=c.exceptionFields,ids=c.exceptionNodeIds;
+ const detailAt=i=>{
+  const detail=c.exceptions[i][4];
+  if(Array.isArray(detail)){assert.equal(detail.length,1);assert(detail[0]<i);return detailAt(detail[0]);}
+  if(detail&&typeof detail==='object'){
+   assert(Array.isArray(detail.parts));assert(Array.isArray(c.exceptionDetailFragments));
+   return detail.parts.map(p=>{
+    if(typeof p==='string')return p;
+    assert(Number.isInteger(p)&&p>=0&&p<c.exceptionDetailFragments.length);
+    return c.exceptionDetailFragments[p];
+   }).join('');
+  }
+  assert.equal(typeof detail,'string');return detail;
+ };
  assert.deepEqual(fields,['id','origin_id','owner_id','reason','detail','status','created_at','resolution','extraFields']);
  assert(Array.isArray(ids)&&ids.length>0);
  result.exceptions=c.exceptions.map((row,i)=>{
@@ -89,10 +102,8 @@ function restorePacked(c){
    if(j===7&&row[j]===null)continue;
    const k=fields[j];
    if(j===1||j===2)e[k]=ids[row[j]];
-   else if(j===4&&Array.isArray(row[j])){
-    assert.equal(row[j].length,1);assert(row[j][0]<i);
-    e.detail=c.exceptions[row[j][0]][4];
-   }else e[k]=row[j];
+   else if(j===4)e.detail=detailAt(i);
+   else e[k]=row[j];
   }
   return e;
  });
@@ -104,7 +115,7 @@ function restorePacked(c){
  }
  if(result.reporting.immediateSuperior?.objective?.$ref)
   result.reporting.immediateSuperior.objective=pointer(result.reporting.immediateSuperior.objective.$ref);
- delete result.exceptionFields;delete result.exceptionNodeIds;delete result.contextReferencePolicy;
+ delete result.exceptionFields;delete result.exceptionNodeIds;delete result.contextReferencePolicy;delete result.exceptionDetailFragments;
  return result;
 }
 test('Mission85 recurring context overflow: lossless exception identity table preserves every open case',()=>{
@@ -147,4 +158,25 @@ test('Successive management growth preserves all identity, detail, status and as
  x.exceptions.push({id:uuid(3000),origin_id:EXEC,owner_id:QA,status:'open',reason:'objective',
   detail:'Unique mandatory source evidence '+'E'.repeat(90000),created_at:'2026-11-24T08:00:00Z'});
  assert.throws(()=>buildManagementDecisionContext(x,48000),/exceeds bounded context/);
+});
+
+test('nonidentical exception details with repeated verbatim fragments round-trip under successive growth',()=>{
+ const x=fixture();
+ const shared='Advance independent acceptance only with actual authenticated subordinate evidence; preserve every saved contract and exact protected same-commit Preview identity. '.repeat(8);
+ const detail=i=>JSON.stringify(['Unique case '+i+' for '+QA+' with origin '+PLAN,shared,'Never fabricate evidence or change delegated authority.']);
+ x.exceptions=x.exceptions.map((e,i)=>({...e,detail:detail(i)}));
+ for(let wave=0;wave<4;wave++){
+  if(wave)for(let i=0;i<2;i++)x.exceptions.push({
+   id:uuid(4500+wave*2+i),origin_id:EXEC,owner_id:QA,status:'open',reason:'objective',
+   detail:detail(100+wave*2+i),created_at:'2026-11-24T08:00:00Z'
+  });
+  const original=JSON.parse(buildManagementDecisionContext(x,1000000));
+  const packedText=buildManagementDecisionContext(x,48000),packed=JSON.parse(packedText);
+  assert(original.exceptions.length>=47);
+  assert(Array.isArray(packed.exceptionDetailFragments)&&packed.exceptionDetailFragments.length>0);
+  assert(packedText.length<=48000);
+  assert.equal(packed.principal.objective,x.scopedNodes[1].objective);
+  assert.deepEqual(restorePacked(packed),original);
+  console.log('DISTINCT_EXCEPTION_FRAGMENTS_GROWTH_PASS '+JSON.stringify({wave,rows:packed.exceptions.length,raw:JSON.stringify(original).length,packed:packedText.length}));
+ }
 });
