@@ -119,6 +119,38 @@ export function scopedImplementationDelegationDirective(principal:ManagementNode
   '. These reports already hold approved scope, but cannot commission coding. For any report responsible for the approved implementation milestone, propose amend_delegation adding development within your own authority before ready. Do not repeat its scope grant or replace its leader to fix missing tools. Analysis-only reports remain analysis-only; QA never receives development. The database independently validates every proposal.';
 }
 
+
+// The SQL validator correctly requires the ASSIGN target to be an immediate
+// active worker. A manager with the "development" tool is still a manager,
+// and a grandchild worker is not directly owned by this decision principal.
+// Present the exact SOURCE-derived eligible IDs before paid command generation.
+export function immediateWorkerAssignmentDirective(
+ principal:ManagementNode,scopedNodes:ManagementNode[],workPackages:ManagementRow[]
+):string{
+ const children=scopedNodes.filter(n=>n.parent_id===principal.id&&n.status==='active');
+ const directWorkers=children.filter(n=>n.kind==='worker').map(n=>({
+  nodeId:n.id,name:n.name,tools:Array.isArray(n.tools)?n.tools:[],
+  scopePaths:Array.isArray(n.scope_paths)?n.scope_paths:[],
+ }));
+ const managerIds=children.filter(n=>n.kind!=='worker').map(n=>n.id);
+ const disclaimer=' Worker assignment requires target.kind="worker" AND target.parent_id=principal.id. '+
+  'A manager, supervisor, functional director, sibling or worker nested under any manager is NEVER a direct assign target. '+
+  'Development capability on a manager does not convert that manager to a worker. '+
+  'The existing SQL hierarchy/SMART validator is authoritative; model-provided IDs do not grant permission.';
+ return '\nVERIFIED DIRECT WORKER AUTHORITY FOR THIS MANAGEMENT TURN: principal='+principal.id+
+  '; direct active worker IDs and inherited capabilities='+JSON.stringify(directWorkers)+
+  '; direct manager/report IDs (NOT worker assignment targets)='+JSON.stringify(managerIds)+'.'+disclaimer+
+  (directWorkers.length===0?
+   ' There are NO directly reporting workers. Do NOT emit assign or authorize_assignment; '+
+   'do NOT commission a new package using a manager or a grandchild worker ID. '+
+   'To move implementation forward, manage the existing immediate child director/manager, who must independently '+
+   'decide and lawfully commission their own directly reporting workers. Do not invent appointments or accepted work.':
+   ' For assign, use ONLY a listed direct worker whose tools include the proposed capability, and retain its SMART '+
+   'contract and actual inherited scope. For commission_package, every worker/writer/reviewer must be a distinct '+
+   'listed direct worker with the required tools and grant; if no valid complete set exists, do not propose the package.')+
+  (workPackages.length===0?' No coding packages currently exist; do not claim a package has been commissioned.':'');
+}
+
 export function directorRecoveryRelease(claim:Claim):string|undefined {
  return (claim.mission.project_evidence as {directorRecoveryRelease?:string}|null)?.directorRecoveryRelease;
 }
@@ -219,7 +251,8 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?baseInstruction+'\nONE-SHOT RECOVERY: Use only plan, appoint Functional Directors, and ready. Do not create dependency commands or use IDs for appointments that have yet to be committed. Downstream management and execution are paused after this decision.'
   :baseInstruction+scopedRootDelegationDirective({
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
-  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project);
+  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project)+
+    immediateWorkerAssignmentDirective(node,focused,packages);
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:team,exceptions,bindings,statuses,
