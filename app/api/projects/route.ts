@@ -10,6 +10,7 @@ import {mission82WatchdogOffer} from '@/lib/projects/mission82-watchdog';
 import {originalBoundedRecoveryOffer} from '@/lib/projects/original-bounded-recovery';
 import {mission84ProviderRetryOffer} from '@/lib/projects/mission84-provider-retry';
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
+import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -61,6 +62,13 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        // Signed followup after a prior accepted owner recovery, never a
+        // continuation inferred from its spent historical receipt.
+        try{
+            const latest=await followupManagementRetestOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:latest.cutoff,
+                priorCutoff:latest.cutoff,receipt:null,followupManagementRetest:latest};
+        }catch{ /* Exact current late-stage owner recovery not eligible. */ }
         // A current pre-inference management overflow must pass the exact
         // live decision assembler before any new one-attempt owner approval.
         try{
