@@ -457,7 +457,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   assert.equal(decisionWrites,writes,'Rejected role never reached decision RPC');
   rejectedCombinations++;
  }
- assert.equal(rejectedCombinations,9);
+ assert.equal(rejectedCombinations,11); // Eight invalid direct-role pairs and three invalid milestone values.
  // The existing SQL authority ALREADY accepts the correct role binding.
  // Run the genuine package writer under a nested savepoint then roll it back,
  // proving the database is not the defect.
