@@ -234,7 +234,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const [focused,bindings,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work,decisions]=await Promise.all([
   managementRowsByIds<ManagementNode>(scope.contextIds,ids=>db.from('project_organization_nodes').select('*').in('id',ids),'id'),
   completeManagementRows<AssignmentBinding>(()=>db.from('project_organization_assignments').select('assignment_id,node_id,created_at').in('node_id',scope.decisionIds),'assignment_id'),
-  managementRowsByIds<ManagementRow>(project.team??[],ids=>db.from('managed_agents').select('id,config').in('id',ids),'id'),
+  managementRowsByIds<ManagementRow>(project.team??[],ids=>db.from('managed_agents').select('id,config,archived').in('id',ids),'id'),
   managementRowsByIds<ManagementRow>(scope.contextIds,ids=>db.from('project_organization_scope_grants').select('*').in('node_id',ids),'node_id'),
   managementRowsByIds<ManagementRow>(scope.contextIds,ids=>db.from('project_organization_plans').select('*').in('node_id',ids),'node_id'),
   completeManagementRows<ManagementRow>(()=>db.from('project_organization_dependencies').select('*').in('node_id',scope.decisionIds),['node_id','depends_on']),
@@ -284,6 +284,8 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const signedCommissioning=typeof (claim.mission.project_evidence as ManagementRow|null)?.codingCapacityAuthorizationId==='string';
  const commissioningStage=signedCommissioning&&node.area==='delivery_management'&&node.management_level==='manager'
   ?codingCapacityManagerStage(node,focused,grants,project.approved_hash):null;
+ const appointmentAgents=commissioningStage?.action==='appoint'?eligibleCommissioningAgents(topology,team):null;
+ if(appointmentAgents)requireCommissioningAgentPair(appointmentAgents);
  const baseInstruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
@@ -295,10 +297,11 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   +(providerControlled?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'')
   +(signedCommissioning
    ?'\nOWNER-SIGNED COMMISSIONING-ONLY WINDOW: use the existing authorized implementation line, no new management hierarchy, no rejection cycles, no historical exception closure without evidence, and no unrelated work. The Game Delivery Functional Director hands off with one reject directed to its existing Delivery Manager, plus optional ready. The Delivery Manager may appoint only missing direct execution workers (at most one coder plus distinct analysis reviewer and optional writer), grant them only existing scope, then commission_package in a distinct turn. No other actions except ready accompanying substantive work. Use newly appointed workers for the package roles. The window stops at the first real package; no automatic retry.': '')
-  +(commissioningStage?codingCapacityStageInstruction(commissioningStage):'');
+  +(commissioningStage?codingCapacityStageInstruction(commissioningStage):'')
+  +(appointmentAgents?commissioningAgentInstruction(appointmentAgents):'');
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
-  executionTeam:team,exceptions,bindings,statuses,
+  executionTeam:appointmentAgents??team,exceptions,bindings,statuses,
   evidence,plans,dependencies,scopeGrants:grants,workerContracts,
   workPackages:packages,workPackageAttempts:attempts,work,decisions,
  },missionInputLimit(claim));
@@ -313,7 +316,9 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  // The unchanged database still independently enforces original roster,
  // reporting, scope, deadlines, capability, SMART, and package admission.
  if(commissioningStage){
-  try{assertCodingCapacityManagerStage(node,topology,commissioningStage,batch);}
+  try{assertCodingCapacityManagerStage(node,topology,commissioningStage,batch);
+   if(appointmentAgents)assertCommissioningWorkerIdentities(topology,appointmentAgents,batch);
+  }
   catch(error){
    if(error instanceof ManagementCommandRejection)error.evidence.proposalHash=proposalHash;
    throw error;
@@ -357,11 +362,55 @@ type ReportingNode={id:string;parent_id?:string|null};
 type ReportingTarget={field:string;status:'missing'|'malformed'|'unknown'|'direct_report'|'not_direct_report';id?:string;idHash?:string};
 
 export class ManagementCommandRejection extends Error {
- readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number;smartFields?:string[];proposalHash?:string};
+ readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number;smartFields?:string[];proposalHash?:string;agentIdentity?:{requestedAgentId:string|null;existingNodeId:string|null}};
  constructor(message:string,code:string,position:number|null=null,action:unknown=null,targets:ReportingTarget[]=[],priorAppointments=0){
   super(message);
   this.name='ManagementCommandRejection';
   this.evidence={code,reason:message,position,action:typeof action==='string'&&managementActions.has(action)?action:null,targets,priorAppointments};
+ }
+}
+
+// Analysis is the ordinary managed-agent task capability; development and
+// research are explicitly opt-in. Never treat a node ID as a reusable agent ID.
+// All organization nodes, including blocked/accepted nodes, own their agent.
+export function eligibleCommissioningAgents(topology:ManagementNode[],team:ManagementRow[]):ManagementRow[]{
+ const used=new Set(topology.map(n=>String(n.agent_id??'').toLowerCase()));
+ const seen=new Set<string>();
+ return team.filter(a=>{
+  const id=typeof a.id==='string'?a.id.toLowerCase():'',config=a.config as ManagementRow|null;
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)||used.has(id)||seen.has(id)
+   ||a.archived!==false||!config||typeof config.development!=='boolean'||typeof config.research!=='boolean'
+   ||!['always','adaptive'].includes(String(config.reviewMode)))return false;
+  seen.add(id);return true;
+ });
+}
+export function requireCommissioningAgentPair(agents:ManagementRow[]):void{
+ if(agents.length<2||!agents.some(a=>(a.config as ManagementRow)?.development===true))
+  throw Error('Commissioning resource constraint: original execution team requires an unassigned development-capable agent and a distinct unassigned analysis reviewer');
+}
+export function commissioningAgentInstruction(agents:ManagementRow[]):string{
+ return '\nSIGNED APPOINTMENT IDENTITY CONTRACT — MANDATORY: Use only these currently unassigned, non-archived members of the original execution team. Each appointment MUST include its exact reuseAgentId. Available identities and permitted tools: '+JSON.stringify(agents.map(a=>({reuseAgentId:a.id,name:(a.config as ManagementRow).name,tools:(a.config as ManagementRow).development===true?['analysis','development']:['analysis']})))+
+  '. Appoint exactly one coder with analysis and development, and a distinct analysis-only technical reviewer. The coder may also compose. Do not appoint a separate writer unless a third eligible unused agent exists. Never reuse an assigned identity, including the existing Repository Scope Analyst / Project Research, even if earlier history or generic command examples mention it. Do not invent identities, omit reuseAgentId, or delegate live research. Use only direct worker appointments under yourself, with empty initial paths. No scope grants or package commands yet.';
+}
+export function assertCommissioningWorkerIdentities(topology:ManagementNode[],agents:ManagementRow[],batch:ManagementRow[]):void{
+ const used=new Set(topology.map(n=>String(n.agent_id??'').toLowerCase())),selected=new Set<string>();
+ for(const [i,c] of batch.entries()){
+  if(c.action!=='appoint')continue;
+  const id=typeof c.reuseAgentId==='string'?c.reuseAgentId.toLowerCase():'';
+  const owner=topology.find(n=>String(n.agent_id??'').toLowerCase()===id);
+  const reject=(message:string)=>{
+   const e=new ManagementCommandRejection(message,'commissioning_agent_identity',i+1,c.action,[],batch.slice(0,i).filter(x=>x.action==='appoint').length);
+   e.evidence.agentIdentity={requestedAgentId:id||null,existingNodeId:owner?.id??null};throw e;
+  };
+  if(c.kind!=='worker'||c.parentId!=null||c.underId!=null||c.nodeId!=null)reject('Signed commissioning permits only direct worker appointments under the current manager');
+  if(!id||used.has(id))reject('Appointment must reuse an unassigned original execution-team agent; existing ownership is not reusable');
+  if(selected.has(id))reject('Duplicate execution-team agent in appointment batch');
+  const candidate=agents.find(a=>String(a.id).toLowerCase()===id),config=candidate?.config as ManagementRow|undefined;
+  if(!candidate||!config)reject('Appointment agent is not in the current eligible execution-team registry');
+  const tools=c.tools;
+  if(!Array.isArray(tools)||!tools.includes('analysis')||tools.some(t=>t!=='analysis'&&t!=='development')
+   ||tools.includes('development')&&config?.development!==true)reject('Requested worker capabilities exceed registered commissioning agent permissions');
+  selected.add(id);
  }
 }
 

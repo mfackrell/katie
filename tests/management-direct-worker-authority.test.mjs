@@ -119,3 +119,36 @@ test('signed commissioning requires the persisted appointment then grant then pa
  rejects(after,ready,[command,command]);rejects(after,ready,[{...command,reviewerId:coder.id}]);
  assert.doesNotThrow(()=>assertCodingCapacityManagerStage(manager,after,ready,[command]));
 });
+
+
+test('Mission99 signed appointment eligibility uses actual original roster, excludes assigned/archived identities, and validates permissions before SQL',()=>{
+ const {eligibleCommissioningAgents,requireCommissioningAgentPair,commissioningAgentInstruction,assertCommissioningWorkerIdentities}=modules()('@/lib/projects/organization');
+ const conflict='0c491807-490a-4bfb-a56b-115d4dece4bf',coder='8421786a-0874-4d86-992e-f0f087d8018e',reviewer='e7d25ada-a761-41bf-8f65-f87056f175fa';
+ const roster=topology.map(n=>n.id===ANALYST?{...n,agent_id:conflict}:n);
+ const registry=[{id:conflict,archived:false,config:{name:'Project Research',development:false,research:true,reviewMode:'always'}},
+  {id:coder,archived:false,config:{name:'Game Development Specialist v1',development:true,research:true,reviewMode:'always'}},
+  {id:reviewer,archived:false,config:{name:'Project Lead',development:false,research:false,reviewMode:'always'}}];
+ const eligible=eligibleCommissioningAgents(roster,registry);
+ assert.deepEqual(eligible.map(x=>x.id),[coder,reviewer]);
+ assert.doesNotThrow(()=>requireCommissioningAgentPair(eligible));
+ assert.match(commissioningAgentInstruction(eligible),new RegExp(coder));
+ assert.match(commissioningAgentInstruction(eligible),new RegExp(reviewer));
+ assert.doesNotMatch(commissioningAgentInstruction(eligible),new RegExp(conflict));
+ const good=[{action:'appoint',kind:'worker',reuseAgentId:coder,tools:['analysis','development']},
+  {action:'appoint',kind:'worker',reuseAgentId:reviewer,tools:['analysis']}];
+ assert.doesNotThrow(()=>assertCommissioningWorkerIdentities(roster,eligible,good));
+ const invalid=[good.map((c,i)=>i?{...c,reuseAgentId:conflict}:c),
+  [good[0],{...good[1],reuseAgentId:coder.toUpperCase()}],
+  [{...good[0],reuseAgentId:reviewer},good[1]],
+  [good[0],{...good[1],reuseAgentId:undefined}],
+  [good[0],{...good[1],reuseAgentId:QA}],
+  [good[0],{...good[1],parentId:QA}],
+  [good[0],{...good[1],tools:['analysis','research']}]];
+ for(const batch of invalid)assert.throws(()=>assertCommissioningWorkerIdentities(roster,eligible,batch),e=>e.evidence?.code==='commissioning_agent_identity');
+ const blocked=roster.map(n=>n.id===ANALYST?{...n,status:'blocked'}:n);
+ assert.deepEqual(eligibleCommissioningAgents(blocked,registry).map(a=>a.id),[coder,reviewer]);
+ const archived=registry.map(a=>a.id===reviewer?{...a,archived:true}:a);
+ assert.throws(()=>requireCommissioningAgentPair(eligibleCommissioningAgents(roster,archived)),/resource constraint/);
+ const noDev=registry.map(a=>a.id===coder?{...a,config:{...a.config,development:false}}:a);
+ assert.throws(()=>requireCommissioningAgentPair(eligibleCommissioningAgents(roster,noDev)),/resource constraint/);
+});

@@ -13,6 +13,18 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  const qa=nodes.find(n=>n.area==='independent_qa'&&n.management_level==='functional_director');
  const analyst=nodes.find(n=>n.area==='delivery_repository_assessment');
  assert.equal(nodes.length,13); assert.ok(game&&manager&&qa&&analyst);
+ // Substitute the exact existing production execution-team identities and
+ // capability snapshots in this disposable fixture BEFORE any preservation
+ // snapshot. Restore the ordinary immutable hierarchy trigger immediately.
+ const actualTeam=[{"id":"e7d25ada-a761-41bf-8f65-f87056f175fa","config":{"name":"Project Lead","research":false,"reviewMode":"always","attachments":false,"development":false,"instructions":"Manage the original user outcome. Preserve acceptance requirements across milestones. Deliver only evidence-backed integrated results; a plan or partial milestone is not project completion.","maxInputChars":16000,"maxActiveTasks":1}},{"id":"0c491807-490a-4bfb-a56b-115d4dece4bf","config":{"name":"Project Research","research":true,"reviewMode":"always","attachments":false,"development":false,"instructions":"Research primary evidence, distinguish facts and gaps, independently challenge unsupported conclusions. Do not invent findings or actions.","maxInputChars":16000,"maxActiveTasks":1}},{"id":"8421786a-0874-4d86-992e-f0f087d8018e","config":{"name":"Game Development Specialist v1","research":true,"reviewMode":"always","attachments":false,"development":true,"instructions":"Implement only approved game requirements. Read lib/game-development/GAME_CONTRACT.md. Separate a self-contained pure transition(state,action) engine from UI, persistence, bot and network behavior. Preserve source-grounded edition/rules, approved interpretations and unresolved decisions. Execute registered model and real-browser scenarios through the existing independent workflow. Repair proven gameplay defects only; preserve verified source on infrastructure failures. Return exact commit, receipts and usable Preview. Do not merge, publish production, expand scope or change orchestration, secrets, dependencies or services.","maxInputChars":16000,"maxActiveTasks":1}}];
+ const [leadIdentity,conflictIdentity,developerIdentity]=actualTeam.map(a=>a.id);
+ for(const a of actualTeam)await db.query('insert into managed_agents(id,actor_id,config,archived) values($1,$2,$3,false)',[a.id,p0.actor_id,a.config]);
+ await db.query('alter table project_organization_nodes disable trigger project_org_immutable');
+ await db.query('update project_organization_nodes set agent_id=$2 where id=$1',[analyst.id,conflictIdentity]);
+ await db.query('alter table project_organization_nodes enable trigger project_org_immutable');
+ analyst.agent_id=conflictIdentity;
+ await db.query('update work_projects set team=$2 where id=$1',[project,actualTeam.map(a=>a.id)]);
+ assert.equal((await one('select agent_id from project_organization_nodes where id=$1',[analyst.id])).agent_id,conflictIdentity);
  // Reconstruct the final two settled historical sessions inside the disposable
  // outer rollback fixture. No historical production data is touched.
  const decision95=randomUUID(),decision96=randomUUID(),mission96=randomUUID(),job96=randomUUID();
@@ -148,7 +160,13 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  };
  const execute=async(c,commands)=>executeManagementClaim(c,async(_claim,instruction,input,tools)=>{
   assert.equal(tools,'none');assert.match(instruction,/OWNER-SIGNED COMMISSIONING-ONLY WINDOW/);
-  assert.equal(JSON.parse(input).principal.id,c.job.payload.organizationNodeId);
+  const context=JSON.parse(input);
+  assert.equal(context.principal.id,c.job.payload.organizationNodeId);
+  if(c.job.payload.organizationNodeId===manager.id&&instruction.includes('SIGNED APPOINTMENT IDENTITY CONTRACT')){
+   assert.deepEqual(context.executionTeam.map(a=>a.id).sort(),[leadIdentity,developerIdentity].sort());
+   assert.match(instruction,new RegExp(developerIdentity));assert.match(instruction,new RegExp(leadIdentity));
+   assert.ok(!context.executionTeam.some(a=>a.id===conflictIdentity));
+  }
   await settle(c);
   return {text:JSON.stringify(commands)};
  });
@@ -165,7 +183,10 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  const supervisor=nodes.find(n=>n.parent_id===manager.id&&n.area==='delivery_planning');
  assert.ok(supervisor&&analyst);
  const targets=[analyst,supervisor];
- const legitimateAppointments=[appointment('Capacity Coder',['analysis','development'],'delivery_implementation'),appointment('Capacity Reviewer',['analysis'],'delivery_package_review')];
+ const legitimateAppointments=[
+  {...appointment('Capacity Coder',['analysis','development'],'delivery_implementation'),reuseAgentId:developerIdentity},
+  {...appointment('Capacity Reviewer',['analysis'],'delivery_package_review'),reuseAgentId:leadIdentity}
+ ];
  for(const target of targets){
   const grant={action:'grant_scope',nodeId:target.id,paths:scopePaths};
   for(const batch of [[grant],[...legitimateAppointments,grant,{action:'ready'}]]){
@@ -187,6 +208,32 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await deny(()=>execute(c,[{...appointment('Forbidden',['analysis'],'delivery_planning'),kind:'manager',managementLevel:'manager'}]));
  await deny(()=>execute(c,[appointment('Unauthorized',['analysis','production_deploy'],'delivery_implementation')]));
  await deny(()=>execute(c,[legitimateAppointments[0],legitimateAppointments[0],{action:'ready'}]));
+ const collision=[legitimateAppointments[0],{...legitimateAppointments[1],reuseAgentId:conflictIdentity}];
+ // Exact historical response is unavailable; this is a reconstruction of
+ // the saved conflicting ID and actual SQL uniqueness failure.
+ await deny(async()=>{
+  await settle(c);
+  await db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify(collision)]);
+ },e=>e.code==='23505'&&e.constraint==='project_organization_nodes_project_id_agent_id_key'&&e.detail.includes(conflictIdentity));
+ const preIdentityWrites=decisionWrites;
+ for(const bad of [collision,
+  [{...legitimateAppointments[0],reuseAgentId:leadIdentity},legitimateAppointments[1]],
+  [legitimateAppointments[0],{...legitimateAppointments[1],reuseAgentId:developerIdentity}],
+  [legitimateAppointments[0],{...legitimateAppointments[1],reuseAgentId:randomUUID()}],
+  [legitimateAppointments[0],{...legitimateAppointments[1],reuseAgentId:undefined}],
+  [legitimateAppointments[0],{...legitimateAppointments[1],parentId:qa.id}]]){
+  await deny(()=>execute(c,bad),e=>e.name==='ManagementCommandRejection'&&['commissioning_agent_identity','commissioning_stage'].includes(e.evidence?.code));
+ }
+ assert.equal(decisionWrites,preIdentityWrites);
+ await db.query('reset role');
+ await db.query('savepoint missing_reviewer_identity');
+ await db.query('update managed_agents set archived=true where id=$1',[leadIdentity]);
+ await db.query('set role service_role');
+ await assert.rejects(()=>execute(c,legitimateAppointments),/Commissioning resource constraint/);
+ await db.query('reset role');
+ await db.query('rollback to savepoint missing_reviewer_identity');await db.query('release savepoint missing_reviewer_identity');
+ await db.query('set role service_role');
+ console.log('MISSION99_IDENTITY_REGRESSION_PASS: actual assigned ID and native 23505 reproduced; assigned, duplicate, unknown, missing, incapable and cross-hierarchy identities rejected before RPC; unavailable reviewer fails before inference');
  // Qualify exact successor approval from the settled, actually rejected
  // M98 fixture. Preserve original history/receipt; only the isolated fixture
  // substitutes original IDs and production release identity.
@@ -269,6 +316,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  const newWorkers=(await db.query('select * from project_organization_nodes where parent_id=$1 order by id',[manager.id])).rows;
  const newCoder=newWorkers.find(x=>x.name==='Capacity Coder'),newReviewer=newWorkers.find(x=>x.name==='Capacity Reviewer');
  assert.ok(newCoder&&newReviewer);assert.notEqual(newCoder.id,newReviewer.id);
+ assert.equal(newCoder.agent_id,developerIdentity);assert.equal(newReviewer.agent_id,leadIdentity);
  assert.equal(newCoder.parent_id,manager.id);assert.equal(newReviewer.parent_id,manager.id);
  c=await schedule(manager);
  await deny(()=>execute(c,[{action:'grant_scope',nodeId:analyst.id,paths:scopePaths}]));
@@ -303,6 +351,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await execute(c,[...legitimateAppointments,{action:'ready'}]);
  const children=(await db.query('select * from project_organization_nodes where parent_id=$1 order by id',[manager.id])).rows;
  const coder=children.find(x=>x.name==='Capacity Coder'),reviewer=children.find(x=>x.name==='Capacity Reviewer');assert.ok(coder&&reviewer);
+ assert.equal(coder.agent_id,developerIdentity);assert.equal(reviewer.agent_id,leadIdentity);
  assert.equal(coder.kind,'worker');assert.equal(coder.tools.includes('development'),true);
  c=await schedule(manager);
  const beforeGrantDecision=decisionWrites;

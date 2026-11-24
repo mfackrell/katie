@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {
-  completeManagementRows,
+  completeManagementRows,eligibleCommissioningAgents,requireCommissioningAgentPair,
 } from './organization';
 import {
   buildManagementDecisionContext,managementScope,selectManagementEvidenceIds,
@@ -22,7 +22,7 @@ export type ManagementContextPreflight={
 
 // The exact production assembler, fed from its ordinary durable data sources.
 // This never calls a model, reserves tokens or mutates database state.
-export async function preflightManagementContext(projectId:string,principalId:string):Promise<ManagementContextPreflight>{
+export async function preflightManagementContext(projectId:string,principalId:string,commissioningAppointment=false):Promise<ManagementContextPreflight>{
   const db=getSupabaseAdminClient();
   const [topology,projectRecord]=await Promise.all([
     completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes')
@@ -38,7 +38,7 @@ export async function preflightManagementContext(projectId:string,principalId:st
     rowsByIds<ManagementNode>(scope.contextIds,ids=>db.from('project_organization_nodes').select('*').in('id',ids),'id'),
     completeManagementRows<AssignmentBinding>(()=>db.from('project_organization_assignments')
       .select('assignment_id,node_id,created_at').in('node_id',scope.decisionIds),'assignment_id'),
-    rowsByIds<ManagementRow>(project.team??[],ids=>db.from('managed_agents').select('id,config').in('id',ids),'id'),
+    rowsByIds<ManagementRow>(project.team??[],ids=>db.from('managed_agents').select('id,config,archived').in('id',ids),'id'),
     rowsByIds<ManagementRow>(scope.contextIds,ids=>db.from('project_organization_scope_grants').select('*').in('node_id',ids),'node_id'),
     rowsByIds<ManagementRow>(scope.contextIds,ids=>db.from('project_organization_plans').select('*').in('node_id',ids),'node_id'),
     completeManagementRows<ManagementRow>(()=>db.from('project_organization_dependencies').select('*').in('node_id',scope.decisionIds),['node_id','depends_on']),
@@ -67,8 +67,10 @@ export async function preflightManagementContext(projectId:string,principalId:st
       .select('*').in('package_id',ids),['package_id','attempt']),
   ]);
   const exceptions=[...owned,...origin].filter((e,i,a)=>a.findIndex(v=>v.id===e.id)===i);
+  const eligible=commissioningAppointment?eligibleCommissioningAgents(topology,team):null;
+  if(eligible)requireCommissioningAgentPair(eligible);
   const serialized=buildManagementDecisionContext({
-    principalId,topology,scopedNodes:focused,project,executionTeam:team,
+    principalId,topology,scopedNodes:focused,project,executionTeam:eligible??team,
     exceptions,bindings,statuses,evidence,plans,dependencies,scopeGrants:grants,
     workerContracts:contracts,workPackages:packages,workPackageAttempts:attempts,work,decisions,
   },48000);
