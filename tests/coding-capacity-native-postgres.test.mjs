@@ -33,6 +33,9 @@ test('native PostgreSQL16: exhausted original project, one bounded owner authori
  assert.match(result.stdout,/MISSION98_RESUME_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION99_IDENTITY_REGRESSION_PASS/);
  assert.match(result.stdout,/MISSION99_RESUME_NATIVE_PASS/);
+ assert.match(result.stdout,/MISSION102_ROLE_REGRESSION_PASS/);
+ assert.match(result.stdout,/MISSION102_FINAL_PACKAGE_NATIVE_PASS/);
+ console.log(result.stdout.split('\n').filter(l=>/MISSION102_(ROLE_REGRESSION|FINAL_PACKAGE_NATIVE)_PASS/.test(l)).join('\n'));
  console.log(result.stdout.split('\n').filter(l=>/MISSION99_(IDENTITY_REGRESSION|RESUME_NATIVE)_PASS/.test(l)).join('\n'));
  console.log(result.stdout.split('\n').filter(l=>l.includes('MISSION98_RESUME_NATIVE_PASS')).join('\n'));
  console.log(result.stdout.split('\n').filter(l=>l.includes('MISSION98_EXHAUSTIVE_TARGET_REPRODUCTION_PASS')).join('\n'));
