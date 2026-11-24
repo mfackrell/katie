@@ -181,13 +181,27 @@ function compactExceptionDetailFragments(payload:Record<string,unknown>):Record<
  if(!Array.isArray(rows)||!rows.every(row=>Array.isArray(row)&&row.length>=7))return null;
  const details=rows.map(row=>row[4]).filter((v):v is string=>typeof v==='string');
  if(details.reduce((total,t)=>total+t.length,0)>1000000)return null;
- const candidates=new Set<string>();
+ const candidates=new Set<string>(),phraseCounts=new Map<string,number>();
  for(const t of details){
   for(const m of t.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi))candidates.add(m[0]);
   for(const m of t.matchAll(/"(?:\\.|[^"\\])*"/g))if(m[0].length>=32)candidates.add(m[0]);
   for(const m of t.matchAll(/[^,.;:!?"\n]{32,}[,.;:!?]?/g))candidates.add(m[0]);
-  if(candidates.size>4096)return null;
+  // Repeated meaningful word spans can cross punctuation and differ in
+  // surrounding text. Keep the search bounded and the references readable.
+  const tokens=[...t.matchAll(/\S+\s*/g)];
+  for(let i=0;i<tokens.length;i++)for(const count of [4,8,16,32]){
+   if(i+count>tokens.length)continue;
+   const last=tokens[i+count-1];
+   const fragment=t.slice(tokens[i].index,last.index+last[0].length);
+   if(fragment.length>=32&&fragment.length<=1024)
+    phraseCounts.set(fragment,(phraseCounts.get(fragment)??0)+1);
+  }
+  if(candidates.size>4096||phraseCounts.size>100000)return null;
  }
+ const phraseGain=([fragment,count]:[string,number])=>(count-1)*(JSON.stringify(fragment).length-5);
+ for(const [fragment] of [...phraseCounts].filter(([,count])=>count>1)
+  .sort((a,b)=>phraseGain(b)-phraseGain(a)||a[0].localeCompare(b[0])).slice(0,512))
+  candidates.add(fragment);
  let chunks:(string|number)[][]=details.map(t=>[t]);
  const dictionary:string[]=[];
  const encoded=(value:unknown)=>JSON.stringify(value).length;
