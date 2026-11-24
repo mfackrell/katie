@@ -138,7 +138,7 @@ test('Mission104 existing-package consent binds the exact owner, release, packag
  const packageId='f88d4d10-dfe4-479e-a2cf-41b3e8209e47';
  let owner=false,canonical=true,writes=0,epoch={active:true,generation,deploymentId:deployment},terms;
  const offer=()=>({stage:'authorize',projectId,packageId,priorAuthorizationId:ownerId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,cutoff,stateHash,contractFingerprint:'c'.repeat(64),managerId:ownerId,coderId:authorizationId,writerId:authorizationId,reviewerId:projectId,paths:[],developmentPaths:[],terms});
- const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/missions/store':{rpc:async(n,a)=>{
+ const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async request=>owner&&(request.method==='GET'||request.headers.get('origin')===new URL(request.url).origin)},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/missions/store':{rpc:async(n,a)=>{
   if(n==='project_org_package_execution_offer'){assert.equal(a.p_owner,ownerId);if(writes)throw Error('Receipt already exists');return offer();}
   if(n==='project_org_retest_release_epoch')return epoch;
   assert.equal(n,'project_org_package_execution_authorize');
