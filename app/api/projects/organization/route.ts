@@ -15,6 +15,7 @@ import {mission82WatchdogOffer,MISSION82_ID,MISSION82_ASSIGNMENT} from '@/lib/pr
 import {mission84ProviderRetryOffer,M84_PROVIDER_MISSION,M84_PROVIDER_ASSIGNMENT} from '@/lib/projects/mission84-provider-retry';
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
 import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
+import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
 import {originalBoundedRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-bounded-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -169,12 +170,22 @@ const contextRetestInput=z.object({
 const followupRetestInput=contextRetestInput.extend({
  trialAction:z.literal('authorize_management_followup_one_retest')
 }).strict();
-const input=z.union([followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
+const codingCapacityInput=z.object({
+ trialAction:z.literal('authorize_coding_capacity'),projectId:z.literal(ORIGINAL_TTT_PROJECT),authorizationId:z.string().uuid(),
+ releaseSha:z.string().regex(/^[a-f0-9]{40}$/),releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
+ scopeHash:z.string().regex(/^[a-f0-9]{64}$/),stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.string().datetime({offset:true}),
+ historicalMissions:z.literal(96),additionalMissions:z.number().int().min(1).max(8),maxMissions:z.number().int().min(97).max(104),
+ paidInferenceLimit:z.number().int().min(1).max(8),paidInferenceConsent:z.literal(true),retryLimit:z.literal(0),
+ tokenAllowance:z.literal(600000),remainingRecordedTokens:z.number().int().min(0).max(600000),additionalTokens:z.literal(0),additionalSpendingAuthority:z.literal(0),
+}).strict();
+const input=z.union([codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({codingCapacityRecovery:await codingCapacityOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
+  catch{ /* No new exhausted-project commissioning offer. */ }
   try{return NextResponse.json({followupManagementRetest:await followupManagementRetestOffer(ORIGINAL_TTT_PROJECT)},
    {headers:{'Cache-Control':'no-store'}});}
   catch{ /* Existing one-attempt followup is not presently owner-eligible. */ }
@@ -212,6 +223,25 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_coding_capacity'){
+  const offer=await codingCapacityOffer(p.projectId);
+  if(offer.stage!=='authorize'||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration
+   ||offer.deploymentId!==p.deploymentId||offer.scopeHash!==p.scopeHash||offer.stateHash!==p.stateHash
+   ||Date.parse(offer.cutoff)!==Date.parse(p.cutoff)||Date.now()>=Date.parse(offer.cutoff)-300000
+   ||p.maxMissions!==96+p.additionalMissions||p.paidInferenceLimit!==p.additionalMissions
+   ||p.remainingRecordedTokens!==offer.remainingRecordedTokens)
+   return NextResponse.json({error:'Selected commissioning capacity or current authority changed'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId},process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
+   return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
+  return NextResponse.json(await rpc('project_org_coding_capacity_authorize',{
+   p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
+   p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_scope:p.scopeHash,p_cutoff:p.cutoff,p_additional:p.additionalMissions,
+   p_max:p.maxMissions,p_paid_limit:p.paidInferenceLimit,p_retry_limit:p.retryLimit,p_tokens:p.tokenAllowance,p_remaining:p.remainingRecordedTokens
+  }),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_management_followup_one_retest'){
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
     return NextResponse.json({error:'Exact current production SHA required'},{status:409});

@@ -11,6 +11,7 @@ import {originalBoundedRecoveryOffer} from '@/lib/projects/original-bounded-reco
 import {mission84ProviderRetryOffer} from '@/lib/projects/mission84-provider-retry';
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
 import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
+import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -62,6 +63,10 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        try{
+            const coding=await codingCapacityOffer(p.id);
+            return {projectId:p.id,releaseSha:releaseSha!,cutoff:coding.cutoff,priorCutoff:coding.cutoff,receipt:null,codingCapacityRecovery:coding};
+        }catch{ /* Not the exact exhausted original commissioning state. */ }
         // Signed followup after a prior accepted owner recovery, never a
         // continuation inferred from its spent historical receipt.
         try{

@@ -285,7 +285,9 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   :baseInstruction+scopedRootDelegationDirective({
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
   })+scopedImplementationDelegationDirective(node,topology,focused,grants,project)
-  +(providerControlled?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'');
+  +(providerControlled?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'')
+  +(typeof (claim.mission.project_evidence as ManagementRow|null)?.codingCapacityAuthorizationId==='string'
+   ?'\nOWNER-SIGNED COMMISSIONING-ONLY WINDOW: use the existing authorized implementation line, no new management hierarchy, no rejection cycles, no historical exception closure without evidence, and no unrelated work. The Game Delivery Functional Director hands off with one reject directed to its existing Delivery Manager, plus optional ready. The Delivery Manager may appoint only missing direct execution workers (at most one coder plus distinct analysis reviewer and optional writer), grant them only existing scope, then commission_package in a distinct turn. No other actions except ready accompanying substantive work. Use newly appointed workers for the package roles. The window stops at the first real package; no automatic retry.': '');
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:team,exceptions,bindings,statuses,
