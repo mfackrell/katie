@@ -243,7 +243,7 @@ BEGIN
     ($old$OR p_additional IS DISTINCT FROM 3 OR (o->>'historicalMissions')::integer NOT IN (98,99)
  OR p_max IS DISTINCT FROM ((o->>'historicalMissions')::integer+3) OR p_paid_limit IS DISTINCT FROM 3$old$,
      $new$OR (o->>'historicalMissions')::integer NOT IN (98,99,102)
- OR p_additional IS DISTINCT FROM CASE WHEN (o->>'historicalMissions')::integer=102 THEN 1 ELSE 3 END
+ OR p_additional IS DISTINCT FROM (CASE WHEN (o->>'historicalMissions')::integer=102 THEN 1 ELSE 3 END)
  OR p_max IS DISTINCT FROM ((o->>'historicalMissions')::integer+p_additional) OR p_paid_limit IS DISTINCT FROM p_additional$new$),
     ($old$VALUES(p.id,p_authorization,CASE WHEN (o->>'historicalMissions')::integer=99 THEN$old$,
      $new$VALUES(p.id,p_authorization,CASE WHEN (o->>'historicalMissions')::integer IN (99,102) THEN$new$),
@@ -288,7 +288,11 @@ BEGIN
    IF (length(b)-length(replace(b,a,'')))/length(a)<>1 THEN RAISE EXCEPTION 'Unexpected final live guard anchor'; END IF;
    b:=replace(b,a,t);
   END IF;
-  EXECUTE b;
+  BEGIN
+   EXECUTE b;
+  EXCEPTION WHEN syntax_error THEN
+   RAISE EXCEPTION 'Mission102 migration cannot compile %: %',k.sig,SQLERRM USING ERRCODE=SQLSTATE;
+  END;
  END LOOP;
 END
 $patch$;

@@ -514,7 +514,8 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   const hash=(await one('select md5(prosrc) h from pg_proc where oid=$1::regprocedure',[match[1]])).h;
   sql102=sql102.replace("'"+match[2]+"'","'"+hash+"'");
  }
- await db.query(sql102);await db.query('DISCARD PLANS');
+ try{await db.query(sql102);}catch(e){console.error('MISSION102_MIGRATION_DIAGNOSTIC',JSON.stringify({message:e.message,code:e.code,position:e.position,internalPosition:e.internalPosition,internalQuery:e.internalQuery,where:e.where,detail:e.detail}));throw e;}
+ await db.query('DISCARD PLANS');
  assert.deepEqual(await preserve102(),saved102);
  assert.deepEqual(await one('select * from work_projects where id=$1',[project]),blocked102);
  assert.equal((await one('select count(*)::int n from project_coding_capacity_resume_receipts where project_id=$1',[project])).n,2);
