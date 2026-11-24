@@ -101,7 +101,13 @@ BEGIN
  OR p.spec->'allowedPaths' IS DISTINCT FROM to_jsonb(r.scope_paths)
  OR encode(sha256(convert_to(p.objective||p.clarifications,'UTF8')),'hex') IS DISTINCT FROM r.objective_hash
  OR encode(sha256(convert_to(project_canonical(p.spec),'UTF8')),'hex') IS DISTINCT FROM r.spec_hash
- OR NOT project_provider_continued(p.id) OR NOT project_org_bounded_recovery_window_valid(p.id)
+ -- The historical M84 live-window predicate is intentionally capped at
+ -- 96 missions. It is not current execution authority after the signed
+ -- initial commissioning receipt. Preserve its actual immutable lineage.
+ OR NOT project_provider_continued(p.id) OR NOT project_org_m84_provider_release_valid(p.id)
+ OR NOT EXISTS(SELECT 1 FROM project_bounded_recovery_receipts b WHERE b.project_id=p.id AND b.owner_id=r.owner_id
+   AND b.scope_hash=r.scope_hash AND b.cutoff=r.cutoff AND b.max_missions=96 AND b.token_allowance=600000
+   AND b.historical_missions=84 AND b.additional_paid_retries=0)
  OR NOT project_org_retest_original_owner_lineage(p.id) OR NOT project_org_retest_exact_scope_grants(p.id)
  OR (SELECT array_agg(id ORDER BY id) FROM project_organization_nodes WHERE project_id=p.id) IS DISTINCT FROM r.original_node_ids
  OR EXISTS(SELECT 1 FROM project_organization_nodes WHERE project_id=p.id AND kind='worker' AND 'development'=ANY(tools))
