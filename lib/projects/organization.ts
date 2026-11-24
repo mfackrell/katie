@@ -399,7 +399,7 @@ export function assertCodingCapacityManagerStage(principal:ReportingNode,nodes:R
  };
  const work=batch.map((c,i)=>({c,i})).filter(({c})=>c.action!=='ready');
  for(const {c,i} of work){
-  if(c.action!==stage.action)reject('Signed commissioning must commit '+stage.action+' in this turn before later stages',
+  if(c.action!==stage.action)reject(i,'Signed commissioning must commit '+stage.action+' in this turn before later stages',
     c.action==='grant_scope'?['nodeId']:c.action==='commission_package'?['workerId','writerId','reviewerId']:[]);
  }
  if(batch.length-work.length>1||!work.length)reject(0,'One substantive commissioning stage and at most one ready required');
