@@ -128,6 +128,10 @@ export async function assertFollowupManagementNative(db,{project,owner,release,g
   assert.notEqual((await db.query('select claim_mission_work_release_epoch($1,$2,$3) result',[release,generation,deployment])).rows[0].result?.job?.id,current.jid);
   assert.equal((await db.query('select count(*)::int n from agent_missions where project_id=$1',[project])).rows[0].n,95);
   console.log('MISSION95_ONE_FOLLOWUP_NATIVE_PASS: preserved 95 missions, prior owner receipt, M92 rejection and M94 overflow, source-bound one signed attempt, normal scheduler one claim at attempts2');
+  if(process.env.KATIE_TEST_CODING_CAPACITY==='1'){
+   const {assertCodingCapacityNative}=await import('./assert-coding-capacity-native.mjs');
+   await assertCodingCapacityNative(db,{project,owner,release,generation,deployment,current,claimed});
+  }
  }finally{
   await db.query('rollback to savepoint followup_95');
   await db.query('release savepoint followup_95');

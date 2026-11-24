@@ -1,0 +1,43 @@
+name: Exhausted coding capacity recovery qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261124173000_owner_coding_capacity_recovery.sql'
+      - 'lib/projects/coding-capacity-recovery.ts'
+      - 'lib/projects/organization.ts'
+      - 'components/coding-capacity-recovery-control.tsx'
+      - 'components/director-recovery-control.tsx'
+      - 'app/api/projects/**'
+      - 'tests/coding-capacity-*.test.mjs'
+      - 'tests/helpers/assert-coding-capacity-native.mjs'
+      - 'tests/helpers/assert-management-followup-native.mjs'
+      - '.github/workflows/coding-capacity-recovery-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  coding-capacity-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs
+      - name: Install PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Original 96-mission recovery and real commissioning, rollback only
+        run: node --test tests/coding-capacity-native-postgres.test.mjs
