@@ -277,6 +277,13 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?await completeManagementRows<ManagementRow>(()=>db.from('project_work_packages')
    .select('id,manager_id,milestone_index').eq('project_id',claim.mission.project_id)
    .eq('milestone_index',project.milestone_index!),'id'):[];
+ // The receipt's original roster has no development worker. A direct coder
+ // that exists now is therefore a committed new worker, not an appointment
+ // proposed in this model response. Keep this restriction local to the signed
+ // commissioning manager; general organizational grants are unchanged.
+ const signedCommissioning=typeof (claim.mission.project_evidence as ManagementRow|null)?.codingCapacityAuthorizationId==='string';
+ const commissioningStage=signedCommissioning&&node.area==='delivery_management'&&node.management_level==='manager'
+  ?codingCapacityManagerStage(node,focused,grants,project.approved_hash):null;
  const baseInstruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
@@ -286,8 +293,9 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
   })+scopedImplementationDelegationDirective(node,topology,focused,grants,project)
   +(providerControlled?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'')
-  +(typeof (claim.mission.project_evidence as ManagementRow|null)?.codingCapacityAuthorizationId==='string'
-   ?'\nOWNER-SIGNED COMMISSIONING-ONLY WINDOW: use the existing authorized implementation line, no new management hierarchy, no rejection cycles, no historical exception closure without evidence, and no unrelated work. The Game Delivery Functional Director hands off with one reject directed to its existing Delivery Manager, plus optional ready. The Delivery Manager may appoint only missing direct execution workers (at most one coder plus distinct analysis reviewer and optional writer), grant them only existing scope, then commission_package in a distinct turn. No other actions except ready accompanying substantive work. Use newly appointed workers for the package roles. The window stops at the first real package; no automatic retry.': '');
+  +(signedCommissioning
+   ?'\nOWNER-SIGNED COMMISSIONING-ONLY WINDOW: use the existing authorized implementation line, no new management hierarchy, no rejection cycles, no historical exception closure without evidence, and no unrelated work. The Game Delivery Functional Director hands off with one reject directed to its existing Delivery Manager, plus optional ready. The Delivery Manager may appoint only missing direct execution workers (at most one coder plus distinct analysis reviewer and optional writer), grant them only existing scope, then commission_package in a distinct turn. No other actions except ready accompanying substantive work. Use newly appointed workers for the package roles. The window stops at the first real package; no automatic retry.': '')
+  +(commissioningStage?codingCapacityStageInstruction(commissioningStage):'');
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:team,exceptions,bindings,statuses,
@@ -301,6 +309,16 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  assertManagementCommands(node,topology,commands,Boolean(recovery));
  const batch=commands as ManagementRow[];
  const proposalHash=createHash('sha256').update(JSON.stringify(commands)).digest('hex');
+ // Never forward a mixed appointment/grant or an ineligible grant to SQL.
+ // The unchanged database still independently enforces original roster,
+ // reporting, scope, deadlines, capability, SMART, and package admission.
+ if(commissioningStage){
+  try{assertCodingCapacityManagerStage(node,topology,commissioningStage,batch);}
+  catch(error){
+   if(error instanceof ManagementCommandRejection)error.evidence.proposalHash=proposalHash;
+   throw error;
+  }
+ }
  if(batch.every(c=>c.action==='ready')&&exceptions.some(e=>e.owner_id===principalId&&e.status==='open')){
   const rejected=new ManagementCommandRejection('Ready-only response cannot abandon an owned open exception; correct, resolve with verified evidence, or escalate','unresolved_management_exception',1,'ready');
   rejected.evidence.proposalHash=proposalHash;throw rejected;
@@ -344,6 +362,80 @@ export class ManagementCommandRejection extends Error {
   super(message);
   this.name='ManagementCommandRejection';
   this.evidence={code,reason:message,position,action:typeof action==='string'&&managementActions.has(action)?action:null,targets,priorAppointments};
+ }
+}
+
+type CodingCapacityStage={action:'appoint'|'grant_scope'|'commission_package';coderId:string|null;parentPaths:string[];coderPaths:string[]};
+export function codingCapacityManagerStage(principal:ManagementNode,nodes:ManagementNode[],grants:ManagementRow[],scopeHash:unknown):CodingCapacityStage{
+ const grant=(id:string)=>grants.find(g=>g.node_id===id&&g.scope_hash===scopeHash&&Array.isArray(g.paths)&&g.paths.length>0);
+ const parent=grant(principal.id);
+ if(typeof scopeHash!=='string'||!parent||!Array.isArray(parent.paths)||!parent.paths.every(x=>typeof x==='string'))
+  throw Error('Signed commissioning requires current approved parent scope');
+ const coders=nodes.filter(n=>n.parent_id===principal.id&&n.kind==='worker'&&n.status==='active'&&Array.isArray(n.tools)&&n.tools.includes('development'));
+ if(coders.length>1)throw Error('Signed commissioning requires exactly one committed development worker');
+ const coder=coders[0],g=coder?grant(coder.id):undefined;
+ const coderPaths=g?.paths;
+ if(g&&(!Array.isArray(coderPaths)||!coderPaths.every(x=>typeof x==='string')))throw Error('Current coder scope is unreadable');
+ return {action:!coder?'appoint':!g?'grant_scope':'commission_package',coderId:coder?.id??null,parentPaths:parent.paths as string[],coderPaths:(coderPaths??[]) as string[]};
+}
+export function codingCapacityStageInstruction(s:CodingCapacityStage):string{
+ const prefix='\nSIGNED COMMISSIONING — EXACT CURRENT TURN (mandatory; supersedes general command examples): ';
+ if(s.action==='appoint')return prefix+
+  'APPOINT ONLY. Return two worker appointments (one development+analysis coder and one distinct analysis reviewer) or those two plus an analysis writer, with empty paths, followed optionally by one ready. No grant_scope commands at all in this response, not even to an existing direct report, an agent UUID, or a proposed worker UUID. No assign, package, or other management action. The next management turn receives database-created node identities. Do not invent IDs. The existing planning supervisor and repository scope analyst are not newly commissioned package workers.';
+ if(s.action==='grant_scope')return prefix+
+  'GRANT ONLY. The one committed eligible direct development worker has nodeId '+s.coderId+
+  '. Issue one grant_scope to this exact node ID, with paths restricted to '+JSON.stringify(s.parentPaths)+
+  '. Optionally append one ready. No appointment, other grant, or package in this turn. Wait for the persisted scope grant.';
+ return prefix+'COMMISSION ONLY. The committed scoped coder is '+s.coderId+
+  ' with grant '+JSON.stringify(s.coderPaths)+
+  '. Issue exactly one commission_package with that workerId, an eligible newly appointed direct analysis writer and a distinct newly appointed direct analysis reviewer. No grant_scope, appointment, or other action; optional ready. Copy principal.objective verbatim into all three SMART parentObjective fields.';
+}
+export function assertCodingCapacityManagerStage(principal:ReportingNode,nodes:ReportingNode[],stage:CodingCapacityStage,batch:ManagementRow[]){
+ const reject=(i:number,message:string,fields:string[]=[])=>{
+  const c=batch[i];
+  const error=new ManagementCommandRejection(message,'commissioning_stage',i+1,c?.action,
+   fields.map(f=>reportingTarget(f,c?.[f],principal.id,nodes)),batch.slice(0,i).filter(x=>x.action==='appoint').length);
+  throw error;
+ };
+ const work=batch.map((c,i)=>({c,i})).filter(({c})=>c.action!=='ready');
+ for(const {c,i} of work){
+  if(c.action!==stage.action)reject(i,'Signed commissioning must commit '+stage.action+' in this turn before later stages',
+    c.action==='grant_scope'?['nodeId']:c.action==='commission_package'?['workerId','writerId','reviewerId']:[]);
+ }
+ if(batch.length-work.length>1||!work.length)reject(0,'One substantive commissioning stage and at most one ready required');
+ if(stage.action==='appoint'){
+  if(work.length<2||work.length>3)reject(work[0]?.i??0,'Appoint one coder and a distinct reviewer, optionally a writer, together before any scope grant');
+  let developers=0;const reuse=new Set<string>(),names=new Set<string>();
+  for(const {c,i} of work){
+   const tools=c.tools;
+   if(c.kind!=='worker'||(c.managementLevel!=null&&c.managementLevel!=='worker')
+     ||!Array.isArray(tools)||!tools.includes('analysis')||tools.some(t=>!['analysis','development','repository_review'].includes(String(t)))
+     ||!Array.isArray(c.paths)||c.paths.length!==0)
+    reject(i,'Commissioning appointments must be direct worker contracts with permitted tools and empty initial paths');
+   if((tools as unknown[]).includes('development'))developers++;
+   if(typeof c.name!=='string'||!c.name.trim()||names.has(c.name))reject(i,'Distinct named commissioning workers required');
+   names.add(String(c.name));
+   if(c.reuseAgentId!=null){
+    const id=String(c.reuseAgentId);
+    if(reuse.has(id))reject(i,'Duplicate execution worker reuse is forbidden');
+    reuse.add(id);
+   }
+  }
+  if(developers!==1)reject(work[0].i,'Exactly one development-capable coder and separate analysis worker required');
+  return;
+ }
+ if(work.length!==1)reject(work[1]?.i??work[0]?.i??0,'Exactly one '+stage.action+' command is permitted in this turn');
+ const {c,i}=work[0];
+ if(stage.action==='grant_scope'){
+  if(c.nodeId!==stage.coderId)reject(i,'Scope may be granted only to the committed direct development worker for this stage',['nodeId']);
+  const paths=c.paths;
+  if(!Array.isArray(paths)||!paths.length||new Set(paths).size!==paths.length||paths.some(p=>
+   typeof p!=='string'||!p||p.startsWith('/')||/(^|\/)\.\.?(\/|$)/.test(p)||
+   !stage.parentPaths.some(prefix=>p===prefix||prefix.endsWith('/')&&p.startsWith(prefix))))
+   reject(i,'Scope grant exceeds the current approved parent paths',['nodeId']);
+ }else{
+  if(c.workerId!==stage.coderId||c.reviewerId===c.workerId||c.reviewerId===c.writerId)
+   reject(i,'Use the committed scoped coder and a separate direct technical reviewer',['workerId','writerId','reviewerId']);
  }
 }
 

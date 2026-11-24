@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'supabase/migrations/20261124173000_owner_coding_capacity_recovery.sql'
+      - 'supabase/migrations/20261124193000_mission98_coding_capacity_resume.sql'
       - 'lib/projects/coding-capacity-recovery.ts'
       - 'lib/projects/organization.ts'
       - 'components/coding-capacity-recovery-control.tsx'
@@ -32,7 +33,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs
+      - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
       - name: Install PostgreSQL 16
         run: |
           if ! test -x /usr/lib/postgresql/16/bin/initdb; then

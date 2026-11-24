@@ -174,7 +174,8 @@ const codingCapacityInput=z.object({
  trialAction:z.literal('authorize_coding_capacity'),projectId:z.literal(ORIGINAL_TTT_PROJECT),authorizationId:z.string().uuid(),
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
  scopeHash:z.string().regex(/^[a-f0-9]{64}$/),stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.string().datetime({offset:true}),
- historicalMissions:z.literal(96),additionalMissions:z.number().int().min(1).max(8),maxMissions:z.number().int().min(97).max(104),
+ historicalMissions:z.union([z.literal(96),z.literal(98)]),additionalMissions:z.number().int().min(1).max(8),maxMissions:z.number().int().min(97).max(104),
+ priorAuthorizationId:z.string().uuid().optional(),sourceMissionId:z.string().uuid().optional(),sourceAssignmentId:z.string().uuid().optional(),
  paidInferenceLimit:z.number().int().min(1).max(8),paidInferenceConsent:z.literal(true),retryLimit:z.literal(0),
  tokenAllowance:z.literal(600000),remainingRecordedTokens:z.number().int().min(0).max(600000),additionalTokens:z.literal(0),additionalSpendingAuthority:z.literal(0),
 }).strict();
@@ -228,7 +229,11 @@ export async function POST(request:NextRequest){
   if(offer.stage!=='authorize'||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration
    ||offer.deploymentId!==p.deploymentId||offer.scopeHash!==p.scopeHash||offer.stateHash!==p.stateHash
    ||Date.parse(offer.cutoff)!==Date.parse(p.cutoff)||Date.now()>=Date.parse(offer.cutoff)-300000
-   ||p.maxMissions!==96+p.additionalMissions||p.paidInferenceLimit!==p.additionalMissions
+   ||offer.historicalMissions!==p.historicalMissions
+   ||p.maxMissions!==p.historicalMissions+p.additionalMissions||p.paidInferenceLimit!==p.additionalMissions
+   ||(p.historicalMissions===98?(p.additionalMissions!==3||p.maxMissions!==101||p.priorAuthorizationId!==offer.priorAuthorizationId
+     ||p.sourceMissionId!==offer.sourceMissionId||p.sourceAssignmentId!==offer.sourceAssignmentId||!p.priorAuthorizationId||!p.sourceMissionId||!p.sourceAssignmentId)
+    :p.priorAuthorizationId!==undefined||p.sourceMissionId!==undefined||p.sourceAssignmentId!==undefined)
    ||p.remainingRecordedTokens!==offer.remainingRecordedTokens)
    return NextResponse.json({error:'Selected commissioning capacity or current authority changed'},{status:409});
   const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
@@ -236,10 +241,11 @@ export async function POST(request:NextRequest){
   if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
    return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
-  return NextResponse.json(await rpc('project_org_coding_capacity_authorize',{
+  return NextResponse.json(await rpc(p.historicalMissions===98?'project_org_coding_capacity_resume_authorize':'project_org_coding_capacity_authorize',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
    p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_scope:p.scopeHash,p_cutoff:p.cutoff,p_additional:p.additionalMissions,
-   p_max:p.maxMissions,p_paid_limit:p.paidInferenceLimit,p_retry_limit:p.retryLimit,p_tokens:p.tokenAllowance,p_remaining:p.remainingRecordedTokens
+   p_max:p.maxMissions,p_paid_limit:p.paidInferenceLimit,p_retry_limit:p.retryLimit,p_tokens:p.tokenAllowance,p_remaining:p.remainingRecordedTokens,
+   ...(p.historicalMissions===98?{p_prior_authorization:p.priorAuthorizationId,p_source_mission:p.sourceMissionId,p_source_assignment:p.sourceAssignmentId}:{})
   }),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='authorize_management_followup_one_retest'){
