@@ -16,6 +16,7 @@ import {mission84ProviderRetryOffer,M84_PROVIDER_MISSION,M84_PROVIDER_ASSIGNMENT
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
 import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
 import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
+import {packageExecutionOffer,ORIGINAL_PACKAGE,matchesPackageTerms} from '@/lib/projects/package-execution-authorization';
 import {originalBoundedRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-bounded-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -179,12 +180,15 @@ const codingCapacityInput=z.object({
  paidInferenceLimit:z.number().int().min(1).max(8),paidInferenceConsent:z.literal(true),retryLimit:z.literal(0),
  tokenAllowance:z.literal(600000),remainingRecordedTokens:z.number().int().min(0).max(600000),additionalTokens:z.literal(0),additionalSpendingAuthority:z.literal(0),
 }).strict();
-const input=z.union([codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
+const packageExecutionInput=z.object({trialAction:z.literal('authorize_existing_package_execution'),projectId:z.literal(ORIGINAL_TTT_PROJECT),packageId:z.literal(ORIGINAL_PACKAGE),authorizationId:z.string().uuid(),releaseSha:z.string().regex(/^[a-f0-9]{40}$/),releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),stateHash:z.string().regex(/^[a-f0-9]{64}$/),terms:z.unknown().refine(matchesPackageTerms),paidInferenceConsent:z.literal(true)}).strict();
+const input=z.union([packageExecutionInput,codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+   if(new URL(request.url).searchParams.get('packageId')===ORIGINAL_PACKAGE)
+    return NextResponse.json({packageExecutionRecovery:await packageExecutionOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});
   try{return NextResponse.json({codingCapacityRecovery:await codingCapacityOffer(ORIGINAL_TTT_PROJECT)},{headers:{'Cache-Control':'no-store'}});}
   catch{ /* No new exhausted-project commissioning offer. */ }
   try{return NextResponse.json({followupManagementRetest:await followupManagementRetestOffer(ORIGINAL_TTT_PROJECT)},
@@ -224,6 +228,15 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_existing_package_execution'){
+  const offer=await packageExecutionOffer(p.projectId);
+  if(offer.packageId!==p.packageId||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId||offer.stateHash!==p.stateHash||!matchesPackageTerms(p.terms))return NextResponse.json({error:'Stale or changed package authority'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId},process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
+  return NextResponse.json(await rpc('project_org_package_execution_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_package:p.packageId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_terms:p.terms,p_consent:p.paidInferenceConsent}),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&p.trialAction==='authorize_coding_capacity'){
   const offer=await codingCapacityOffer(p.projectId);
   if(offer.stage!=='authorize'||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration
