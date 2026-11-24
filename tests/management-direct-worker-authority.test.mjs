@@ -54,3 +54,33 @@ test('direct Delivery Manager receives only its lawful analyst; no delegated dev
   [{action:'assign',nodeId:QA,capability:'repository_review'}]),/immediate reporting authority/);
  assert.equal(topology.filter(n=>n.kind==='worker'&&n.parent_id===DELIVERY).length,0);
 });
+
+
+test('persisted delivery chain identifies the unused developer and sequential lawful package prerequisites',()=>{
+ const {implementationCommissioningDirective}=modules()('@/lib/projects/organization');
+ const paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const scope='a'.repeat(64),project={phase:'development',approved_hash:scope,milestone_index:0};
+ const d={...director,tools:['manage','analysis','development','repository_review'],management_level:'functional_director',area:'game_delivery'};
+ const m={...manager,tools:['manage','analysis','development','repository_review'],area:'delivery_management',decision_needed:false};
+ const supervisor=node('0e10e20e-e5a9-4443-a636-7c4866a66a5f',m.id,'manager',['manage','analysis','repository_review']);
+ const scoped=[root,d,m,supervisor,analyst,qa];
+ const grants=[root,d,m].map(n=>({node_id:n.id,scope_hash:scope,paths}));
+ const developerId='8421786a-0874-4d86-992e-f0f087d8018e';
+ const team=[{id:developerId,config:{name:'Game Development Specialist v1',development:true}}];
+ const input=(principal,focused=scoped,extra={})=>({principal,topology:focused,focused,grants,team,project,milestonePackages:[],...extra});
+ const handoff=implementationCommissioningDirective(input(d));
+ assert.match(handoff,/IMPLEMENTATION COMMISSIONING HANDOFF/);assert.ok(handoff.includes(m.id));
+ const appointment=implementationCommissioningDirective(input(m));
+ assert.match(appointment,/APPOINT WORKERS/);assert.ok(appointment.includes(developerId));
+ assert.match(appointment,/distinct analysis-capable technical reviewer/);
+ assert.equal(implementationCommissioningDirective(input(qa)), '');
+ const coder={...node('8d4f1ba7-1fa9-498c-a8ee-09b7b3750975',m.id,'worker',['analysis','development']),agent_id:developerId};
+ const reviewer=node('8d4f1ba7-1fa9-498c-a8ee-09b7b3750976',m.id,'worker',['analysis']);
+ const next=[...scoped,coder,reviewer];
+ assert.match(implementationCommissioningDirective(input(m,next)),/GRANT CODER SCOPE/);
+ const commission=implementationCommissioningDirective(input(m,next,{grants:[...grants,{node_id:coder.id,scope_hash:scope,paths}]}));
+ assert.match(commission,/PACKAGE PREREQUISITES/);assert.ok(commission.includes(coder.id));assert.ok(commission.includes(reviewer.id));
+ assert.match(commission,/SMART development.paths must list exact files/);
+ assert.equal(implementationCommissioningDirective(input(m,next,{milestonePackages:[{id:'existing'}]})),'');
+ assert.equal(implementationCommissioningDirective(input(m,scoped,{grants:[]})),'');
+});
