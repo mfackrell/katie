@@ -197,6 +197,20 @@ function compactExceptionIdentityReferences(payload:Record<string,unknown>):Reco
   if(!statuses.includes(status))statuses.push(status);
   next[3]=reasons.indexOf(reason);
   next[5]=statuses.indexOf(status);
+  // UTC timestamps retain their exact original fractional precision. Integer
+  // epoch MICROseconds are within JS safe-integer range for the current
+  // project; unexpected formats keep the original string, never an estimate.
+  const at=next[6];
+  if(typeof at==='string'){
+   const match=/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\.(\d{1,6})\+00:00$/.exec(at);
+   if(match){
+    const second=Date.parse(match[1]+'Z');
+    const micros=second*1000+Number(match[2].padEnd(6,'0'));
+    if(Number.isSafeInteger(micros)){
+     next[6]=match[2].length===6?micros:[micros,match[2].length];
+    }
+   }
+  }
   if(typeof next[4]==='string'){
    next[4]=(next[4] as string).replace(/~|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g,token=>{
     if(token==='~')return '~~';
@@ -211,7 +225,9 @@ function compactExceptionIdentityReferences(payload:Record<string,unknown>):Reco
   contextReferencePolicy:String(payload.contextReferencePolicy)+
    ' In each exception row, reason and status are exact indexes into exceptionReasonDictionary and exceptionStatusDictionary. '+
    ' In a detail string, decode ~~ as literal ~ and ~N; as the exact UUID in exceptions[N][0]. '+
-   ' Decode left-to-right. Existing detail array [i] still means the exact resolved detail of preceding exception row i. '+
+   ' Decode left-to-right. In created_at, an integer is the exact UTC Unix microsecond timestamp with six decimal digits, '+
+   ' and [integer,precision] records a shorter original fractional precision (1–5 digits); preserve the original +00:00 suffix. '+
+   ' A string timestamp is literal and unchanged. Existing detail array [i] still means the exact resolved detail of preceding exception row i. '+
    ' No UUID, case, reason, status, exception or detail may be omitted or inferred.'};
 }
 
