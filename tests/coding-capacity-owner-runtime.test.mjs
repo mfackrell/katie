@@ -51,3 +51,29 @@ test('Mission98 successor reuses authenticated owner route with exact three miss
  epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};canonical=false;assert.equal((await post()).status,409);canonical=true;
  assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
 });
+
+test('Mission99 successor reuses authenticated owner route with exact three missions, new ceiling, source IDs and no replay',async t=>{
+ const env={VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,VERCEL_DEPLOYMENT_ID:deployment,KATIE_OWNER_AUTH_USER_ID:ownerId};
+ const old=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]])),clock=Date.now;
+ Object.assign(process.env,env);Date.now=()=>Date.parse('2026-11-24T19:00:00Z');
+ t.after(()=>{Date.now=clock;for(const k in old){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}});
+ const priorAuthorizationId='dcbfc493-6311-44eb-af33-bcba213c3d64',sourceMissionId='43af2c7c-0b7c-48e6-a247-016e599f3349',sourceAssignmentId='fb7c3e64-64ba-4612-9bba-a4084c11aafe';
+ let owner=false,canonical=true,stage='authorize',writes=0,epoch={active:true,generation,deploymentId:deployment};
+ const offer=()=>({projectId,stage,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,stateHash,cutoff,
+  historicalMissions:99,priorMaxMissions:101,remainingRecordedTokens:600000,priorAuthorizationId,sourceMissionId,sourceAssignmentId,additionalMissions:3,maxMissions:102,paidInferenceLimit:3,authorizationId:stage==='authorize'?null:authorizationId});
+ const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},'@/lib/projects/coding-capacity-recovery':{codingCapacityOffer:async()=>offer()},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/missions/store':{rpc:async(n,a)=>{
+  if(n==='project_org_retest_release_epoch')return epoch;
+  assert.equal(n,'project_org_coding_capacity_resume_authorize');writes++;
+  assert.deepEqual(JSON.parse(JSON.stringify(a)),{p_owner:ownerId,p_project:projectId,p_release:sha,p_generation:generation,p_deployment:deployment,p_authorization:authorizationId,p_state_hash:stateHash,p_scope:scopeHash,p_cutoff:cutoff,p_additional:3,p_max:102,p_paid_limit:3,p_retry_limit:0,p_tokens:600000,p_remaining:600000,p_prior_authorization:priorAuthorizationId,p_source_mission:sourceMissionId,p_source_assignment:sourceAssignmentId});
+  stage='authorized';return {...offer(),status:'running'};
+ }},'@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ const route=mock('@/app/api/projects/organization/route');
+ const payload={trialAction:'authorize_coding_capacity',projectId,authorizationId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,stateHash,cutoff,historicalMissions:99,additionalMissions:3,maxMissions:102,paidInferenceLimit:3,paidInferenceConsent:true,retryLimit:0,tokenAllowance:600000,remainingRecordedTokens:600000,additionalTokens:0,additionalSpendingAuthority:0,priorAuthorizationId,sourceMissionId,sourceAssignmentId};
+ const post=body=>route.POST(new Request('https://katie.test/api/projects/organization',{method:'POST',headers:{Origin:'https://katie.test','Content-Type':'application/json'},body:JSON.stringify(body??payload)}));
+ assert.equal((await post()).status,403);owner=true;
+ assert.equal((await (await route.GET(new Request('https://katie.test/api/projects/organization?projectId='+projectId))).json()).codingCapacityRecovery.historicalMissions,99);
+ for(const change of [{historicalMissions:96,additionalMissions:5,maxMissions:102},{additionalMissions:2,maxMissions:101,paidInferenceLimit:2},{additionalMissions:4,maxMissions:103,paidInferenceLimit:4},{maxMissions:103},{paidInferenceLimit:4},{priorAuthorizationId:undefined},{sourceMissionId:authorizationId},{sourceAssignmentId:authorizationId},{releaseSha:'c'.repeat(40)},{releaseGeneration:generation+1},{deploymentId:'dpl_Wrong'},{stateHash:'c'.repeat(64)},{scopeHash:'c'.repeat(64)},{cutoff:'2026-11-27T19:45:00.000Z'},{paidInferenceConsent:false},{retryLimit:1},{tokenAllowance:600001},{additionalTokens:1},{additionalSpendingAuthority:1},{remainingRecordedTokens:599999}])
+  assert.notEqual((await post({...payload,...change})).status,200,JSON.stringify(change));
+ epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};canonical=false;assert.equal((await post()).status,409);canonical=true;
+ assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
+});
