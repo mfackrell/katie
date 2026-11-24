@@ -312,7 +312,118 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await deny(()=>db.query('update work_projects set max_missions=102 where id=$1',[project]));
  receipt={authorization_id:newAuth};
  c=await schedule(manager);
- assert.ok(!preservedIds.includes(c.mission.id));await execute(c,[...legitimateAppointments,{action:'ready'}]);
+ assert.ok(!preservedIds.includes(c.mission.id));
+ // Reproduce and settle M99 under the real preceding owner receipt. The
+ // historical provider body was not retained; reconstruct the exact
+ // conflicting existing ID with the native constraint.
+ const m99Claim=c;
+ await db.query('savepoint mission99_identity_resume');
+ await settle(c);
+ await deny(()=>db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify(collision)]),
+  e=>e.code==='23505'&&e.constraint==='project_organization_nodes_project_id_agent_id_key'&&e.detail.includes(conflictIdentity));
+ const failure99='Mission state operation failed: '+JSON.stringify({code:'23505',details:'Key (project_id, agent_id)=('+project+', '+conflictIdentity+') already exists.',hint:null,message:'duplicate key value violates unique constraint "project_organization_nodes_project_id_agent_id_key"'});
+ assert.equal((await one("select commit_mission_work($1,$2,$3,'[]','failed','blocked',null) ok",[c.job.id,c.job.lease,JSON.stringify({detail:failure99,diagnostic:{stage:'work',errorType:'Error',acceptedIssue:false}})])).ok,true);
+ await db.query('reset role');
+ const failureLease99=randomUUID();
+ await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,failureLease99]);
+ await db.query('set role service_role');
+ const failed99=(await one('select project_org_schedule($1,$2) r',[project,failureLease99])).r;
+ assert.equal(failed99.blocked,'Commissioning assignment failed; automatic retries are not authorized');
+ assert.equal((await one("select finish_work_project($1,$2,'block',$3) ok",[project,failureLease99,JSON.stringify({detail:failed99.blocked})])).ok,true);
+ await db.query('reset role');
+ const history99Ids=(await db.query('select id from agent_missions where project_id=$1 order by id',[project])).rows.map(x=>x.id);
+ assert.equal(history99Ids.length,99);
+ const preserve99=async()=>({
+  original:await preserved(),
+  m99:await one('select to_jsonb(m) m,to_jsonb(j) j from agent_missions m join mission_assignments j on j.mission_id=m.id where m.id=$1',[m99Claim.mission.id]),
+  requests:(await db.query('select to_jsonb(q) v from project_provider_requests q where mission_id=$1 order by id',[m99Claim.mission.id])).rows,
+  prior:await one("select to_jsonb(s)-'supersedes_authorization_id' v from project_coding_capacity_resume_receipts s where project_id=$1 and historical_missions=98",[project]),
+  team:(await db.query('select to_jsonb(a) v from managed_agents a where id=any($1::uuid[]) order by id',[actualTeam.map(a=>a.id)])).rows
+ });
+ const saved99=await preserve99();
+ const blocked99=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(blocked99.status,'blocked');assert.equal(blocked99.max_missions,101);assert.equal(blocked99.active_mission_id,c.mission.id);
+ let sql99=readFileSync('supabase/migrations/20261124195000_mission99_commissioning_identity_resume.sql','utf8')
+  .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+ for(const [a,b] of [['dcbfc493-6311-44eb-af33-bcba213c3d64',newAuth],
+  ['b3094d37a99ebe4b9a0cc9e86ef2f35515b655f8',newRelease],['dpl_CsCXnyzKQbLkYYD7WGbMLr51ihej',newDeployment],
+  ['43af2c7c-0b7c-48e6-a247-016e599f3349',c.mission.id],['fb7c3e64-64ba-4612-9bba-a4084c11aafe',c.job.id],
+  ['s.release_generation<>43','s.release_generation<>'+claimGeneration]]){
+  assert.ok(sql99.includes(a));sql99=sql99.replaceAll(a,b);
+ }
+ for(const match of [...sql99.matchAll(/\('([^']+)'[,\s]+'([a-f0-9]{32})'\)/g)]){
+  const hash=(await one('select md5(prosrc) h from pg_proc where oid=$1::regprocedure',[match[1]])).h;
+  sql99=sql99.replace("'"+match[2]+"'","'"+hash+"'");
+ }
+ await db.query(sql99);
+ assert.deepEqual(await preserve99(),saved99);
+ assert.deepEqual(await one('select * from work_projects where id=$1',[project]),blocked99);
+ assert.equal((await one('select count(*)::int n from project_coding_capacity_resume_receipts where project_id=$1',[project])).n,1);
+ const identityRelease='e'.repeat(40),identityDeployment='dpl_Mission99Corrected',identityGeneration=claimGeneration+2;
+ await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5)',[project,newRelease,newDeployment,'closed',claimGeneration]);
+ await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5)',[project,identityRelease,identityDeployment,'active',claimGeneration+1]);
+ await db.query('set role service_role');
+ const offer99=(await one('select project_org_coding_capacity_offer($1,$2,$3) o',[owner,project,identityRelease])).o;
+ assert.equal(offer99.stage,'authorize');assert.equal(offer99.historicalMissions,99);assert.equal(offer99.priorMaxMissions,101);
+ assert.equal(offer99.remainingMissions,2);assert.equal(offer99.additionalMissions,3);assert.equal(offer99.maxMissions,102);
+ assert.equal(offer99.priorAuthorizationId,newAuth);assert.equal(offer99.sourceMissionId,c.mission.id);assert.equal(offer99.sourceAssignmentId,c.job.id);
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,identityRelease,identityGeneration,identityDeployment])).ok,false);
+ await deny(()=>db.query('select authorize_work_project_resources($1,$2,$3,600000,null,102,null,$4,$5)',[project,pre.actor_id,pre.chat_id,randomUUID(),'Unauthorized successor capacity renewal test']));
+ const auth99=randomUUID(),args99=[owner,project,identityRelease,identityGeneration,identityDeployment,auth99,offer99.stateHash,offer99.scopeHash,offer99.cutoff,3,102,3,0,600000,offer99.remainingRecordedTokens,newAuth,c.mission.id,c.job.id];
+ for(const [i,v] of [[0,randomUUID()],[2,newRelease],[3,identityGeneration-2],[4,newDeployment],[5,newAuth],[6,'a'.repeat(64)],[7,'e'.repeat(64)],[8,new Date(Date.now()+1e8).toISOString()],[9,2],[10,103],[11,4],[12,1],[13,600001],[14,offer99.remainingRecordedTokens-1],[15,initialReceipt.authorization_id],[16,randomUUID()],[17,randomUUID()]]){
+  await deny(()=>db.query(resumeSql,args99.map((x,j)=>j===i?v:x)));
+ }
+ const authorized99=(await one(resumeSql,args99)).r;
+ assert.equal(authorized99.stage,'authorized');assert.equal(authorized99.authorizationId,auth99);assert.equal(authorized99.remainingMissions,3);
+ await deny(()=>db.query(resumeSql,args99));
+ await db.query('reset role');
+ assert.deepEqual(await preserve99(),saved99);
+ const resumed99=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(resumed99.status,'running');assert.equal(resumed99.active_mission_id,null);assert.equal(resumed99.max_missions,102);
+ assert.equal(resumed99.token_allowance,600000);assert.deepEqual(resumed99.deadline,blocked99.deadline);assert(resumed99.progress_since>blocked99.progress_since);
+ const receipt99=await one('select * from project_coding_capacity_resume_receipts where project_id=$1 and historical_missions=99',[project]);
+ await deny(()=>db.query('update project_coding_capacity_resume_receipts set paid_inference_limit=4 where project_id=$1 and historical_missions=99',[project]));
+ await deny(()=>db.query('update work_projects set max_missions=103 where id=$1',[project]));
+ receipt={authorization_id:auth99};claimRelease=identityRelease;claimGeneration=identityGeneration;claimDeployment=identityDeployment;
+ c=await schedule(manager);
+ assert.ok(!history99Ids.includes(c.mission.id));
+ await deny(()=>execute(c,collision),e=>e.evidence?.code==='commissioning_agent_identity');
+ await execute(c,[...legitimateAppointments,{action:'ready'}]);
+ const workers99=(await db.query('select * from project_organization_nodes where parent_id=$1 order by id',[manager.id])).rows;
+ const coder99=workers99.find(x=>x.name==='Capacity Coder'),reviewer99=workers99.find(x=>x.name==='Capacity Reviewer');
+ assert.ok(coder99&&reviewer99);assert.equal(coder99.agent_id,developerIdentity);assert.equal(reviewer99.agent_id,leadIdentity);
+ assert.equal(coder99.parent_id,manager.id);assert.equal(reviewer99.parent_id,manager.id);assert.notEqual(coder99.id,reviewer99.id);
+ c=await schedule(manager);
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:analyst.id,paths:scopePaths}]));
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:['app/']}]));
+ await execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:scopePaths},{action:'ready'}]);
+ c=await schedule(manager);
+ const files99=['app/milestone-3-tic-tac-toe/page.tsx','lib/milestone-3-tic-tac-toe/game.ts','tests/milestone-3-tic-tac-toe/game.test.ts'];
+ const smart99=(role,paths)=>({objective:role+' bounded milestone output',deliverable:role+' evidence',instruction:'Complete the exact approved milestone contract for '+role,parentObjective:manager.objective,capability:'analysis',acceptance:[{criterion:'Approved browser contract passes',evidence:'Same source verification'}],inventory:[{item:'Approved tic-tac-toe milestone',contextChars:1000}],estimate:{basis:'declared_inventory',rationale:'One bounded deliverable',uncertainty:'Verify actual output',tokens:1000,seconds:30},tokens:2000,maxAssignments:2,deadline,paths});
+ const packageCommand99={action:'commission_package',workerId:coder99.id,writerId:coder99.id,reviewerId:reviewer99.id,milestoneIndex:0,objective:'Implement approved tic-tac-toe game',deliverables:['Playable game and scoped tests'],interfaces:[],acceptance:['Approved browser contract passes'],dependencies:[],paths:scopePaths,deadline,maxAttempts:2,tasks:{development:smart99('development',files99),compose:smart99('compose',[]),review:smart99('review',[])}};
+ await deny(()=>execute(c,[packageCommand99,packageCommand99]));
+ await deny(()=>execute(c,[{...packageCommand99,reviewerId:coder99.id}]));
+ await deny(()=>execute(c,[{...packageCommand99,tasks:{...packageCommand99.tasks,development:{...packageCommand99.tasks.development,parentObjective:'Wrong parent objective'}}}]));
+ await execute(c,[packageCommand99]);
+ await db.query('reset role');
+ const final99=await one('select * from work_projects where id=$1',[project]),pkg99=await one('select * from project_work_packages where project_id=$1',[project]);
+ assert.equal(final99.status,'paused');assert.equal(final99.max_missions,102);assert.equal(final99.active_mission_id,null);
+ assert.equal(pkg99.status,'queued');assert.equal(pkg99.worker_id,coder99.id);assert.equal(pkg99.reviewer_id,reviewer99.id);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,1);
+ assert.equal((await one('select count(*)::int n from project_worker_contracts where package_id=$1',[pkg99.id])).n,3);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,102);
+ assert.equal((await one("select count(*)::int n from project_provider_requests where project_id=$1 and NOT mission_id=any($2::uuid[]) and operation='inference' and resolved_at is not null",[project,history99Ids])).n,3);
+ assert.equal((await one('select count(*)::int n from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 and NOT m.id=any($2::uuid[]) and j.attempts=1',[project,history99Ids])).n,3);
+ assert.deepEqual(await preserve99(),saved99);assert.deepEqual(await one('select * from project_coding_capacity_resume_receipts where project_id=$1 and historical_missions=99',[project]),receipt99);
+ assert.equal((await one('select project_org_coding_capacity_live($1) ok',[project])).ok,false);
+ await db.query('set role service_role');
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,identityRelease,identityGeneration,identityDeployment])).ok,false);
+ console.log('MISSION99_RESUME_NATIVE_PASS '+JSON.stringify({history:99,oldCeiling:101,newCeiling:102,freshMissions:3,paidFixtureReceipts:3,attemptsEach:1,workerAgentId:coder99.agent_id,reviewerAgentId:reviewer99.agent_id,packages:1,smartContracts:3,packageId:pkg99.id,realProviderCalls:0}));
+ await db.query('reset role');
+ await db.query('rollback to savepoint mission99_identity_resume');await db.query('release savepoint mission99_identity_resume');
+ receipt={authorization_id:newAuth};claimRelease=newRelease;claimGeneration=generation+2;claimDeployment=newDeployment;c=m99Claim;
+ await db.query('set role service_role');
+ await execute(c,[...legitimateAppointments,{action:'ready'}]);
  const newWorkers=(await db.query('select * from project_organization_nodes where parent_id=$1 order by id',[manager.id])).rows;
  const newCoder=newWorkers.find(x=>x.name==='Capacity Coder'),newReviewer=newWorkers.find(x=>x.name==='Capacity Reviewer');
  assert.ok(newCoder&&newReviewer);assert.notEqual(newCoder.id,newReviewer.id);
