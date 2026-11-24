@@ -747,7 +747,10 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await deny(()=>execute(c,[planned103,planned103]));
  await deny(()=>execute(c,actual100));
  await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:scopePaths}]));
- await execute(c,[planned103]);
+ const budgets104={development:[18000,6000,3600],compose:[3600,1200,900],review:[6600,2200,1500]};
+ const planned104={...planned103,maxAttempts:3,tasks:Object.fromEntries(Object.entries(planned103.tasks).map(([role,task])=>{const [tokens,estimated,seconds]=budgets104[role];return [role,{...task,tokens,maxAssignments:3,estimate:{...task.estimate,tokens:estimated,seconds},...(role==='development'?{paths:[files99[0],files99[1],scopePaths[2]+'tic-tac-toe.spec.ts']}: {})}]}))};
+ assert.equal(smartPackageCapacityFields(planned104,envelope).length,0);
+ await execute(c,[planned104]);
  await db.query('reset role');
  const final103=await one('select * from work_projects where id=$1',[project]),pkg103=await one('select * from project_work_packages where project_id=$1',[project]);
  assert.equal(final103.status,'paused');assert.equal(final103.max_missions,104);assert.equal(final103.active_mission_id,null);

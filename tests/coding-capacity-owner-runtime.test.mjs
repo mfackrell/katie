@@ -129,3 +129,31 @@ test('Mission103 SMART capacity successor reuses authenticated owner route with 
  epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};canonical=false;assert.equal((await post()).status,409);canonical=true;
  assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
 });
+
+test('Mission104 existing-package consent binds the exact owner, release, package, terms and single-use receipt',async t=>{
+ const env={VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,VERCEL_DEPLOYMENT_ID:deployment,KATIE_OWNER_AUTH_USER_ID:ownerId};
+ const old=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]])),clock=Date.now;
+ Object.assign(process.env,env);Date.now=()=>Date.parse('2026-11-24T20:00:00Z');
+ t.after(()=>{Date.now=clock;for(const k in old){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}});
+ const packageId='f88d4d10-dfe4-479e-a2cf-41b3e8209e47';
+ let owner=false,canonical=true,writes=0,epoch={active:true,generation,deploymentId:deployment},terms;
+ const offer=()=>({stage:'authorize',projectId,packageId,priorAuthorizationId:ownerId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,cutoff,stateHash,contractFingerprint:'c'.repeat(64),managerId:ownerId,coderId:authorizationId,writerId:authorizationId,reviewerId:projectId,paths:[],developmentPaths:[],terms});
+ const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>owner},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/missions/store':{rpc:async(n,a)=>{
+  if(n==='project_org_package_execution_offer'){assert.equal(a.p_owner,ownerId);if(writes)throw Error('Receipt already exists');return offer();}
+  if(n==='project_org_retest_release_epoch')return epoch;
+  assert.equal(n,'project_org_package_execution_authorize');
+  assert.deepEqual(JSON.parse(JSON.stringify(a)),{p_owner:ownerId,p_project:projectId,p_package:packageId,p_release:sha,p_generation:generation,p_deployment:deployment,p_authorization:authorizationId,p_state_hash:stateHash,p_terms:terms,p_consent:true});
+  writes++;return {...offer(),stage:'authorized',authorizationId};
+ }},'@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ terms=mock('@/lib/projects/package-execution-authorization').PACKAGE_TERMS;
+ const route=mock('@/app/api/projects/organization/route');
+ const payload={trialAction:'authorize_existing_package_execution',projectId,packageId,authorizationId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,stateHash,terms,paidInferenceConsent:true};
+ const post=(body=payload,origin='https://katie.test')=>route.POST(new Request('https://katie.test/api/projects/organization',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(body)}));
+ const get=()=>route.GET(new Request('https://katie.test/api/projects/organization?projectId='+projectId+'&packageId='+packageId));
+ assert.equal((await get()).status,403);assert.equal((await post()).status,403);owner=true;
+ assert.equal((await (await get()).json()).packageExecutionRecovery.packageId,packageId);
+ for(const change of [{packageId:ownerId},{projectId:ownerId},{stateHash:'0'.repeat(64)},{releaseSha:'0'.repeat(40)},{releaseGeneration:generation+1},{deploymentId:'dpl_Other'},{paidInferenceConsent:false},{terms:{...terms,maxMissions:113}},{terms:{...terms,paidInferenceLimit:48}},{terms:{...terms,automaticRetries:1}},{terms:{...terms,dollarCeilingMicrousd:1}},{terms:{...terms,extra:true}}])assert.notEqual((await post({...payload,...change})).status,200,JSON.stringify(change));
+ assert.notEqual((await post(payload,'https://other.test')).status,200);
+ epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};canonical=false;assert.equal((await post()).status,409);canonical=true;
+ assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
+});
