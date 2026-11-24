@@ -14,6 +14,7 @@ import {mission80WatchdogOffer,MISSION80_ID,MISSION80_ASSIGNMENT} from '@/lib/pr
 import {mission82WatchdogOffer,MISSION82_ID,MISSION82_ASSIGNMENT} from '@/lib/projects/mission82-watchdog';
 import {mission84ProviderRetryOffer,M84_PROVIDER_MISSION,M84_PROVIDER_ASSIGNMENT} from '@/lib/projects/mission84-provider-retry';
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
+import {managementFailureRetestOffer} from '@/lib/projects/management-failure-retest';
 import {originalBoundedRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-bounded-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -165,12 +166,18 @@ const contextRetestInput=z.object({
  historicalMissions:z.number().int().min(84).max(96),
  originalAttempts:z.literal(1),additionalAttempts:z.literal(1),
 }).strict();
-const input=z.union([contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
+const managementFailureRetestInput=contextRetestInput.extend({
+ trialAction:z.literal('authorize_management_failure_retest')
+}).strict();
+const input=z.union([managementFailureRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
   return NextResponse.json({error:'Original project required'},{status:400});
  try{
+  try{return NextResponse.json({managementFailureRetest:await managementFailureRetestOffer(ORIGINAL_TTT_PROJECT)},
+   {headers:{'Cache-Control':'no-store'}});}
+  catch{ /* New authenticated recovery not eligible or full current context unavailable. */ }
   try{return NextResponse.json({managementContextRetest:await managementContextRetestOffer(ORIGINAL_TTT_PROJECT)},
    {headers:{'Cache-Control':'no-store'}});}
   catch{ /* No current complete-context, signed one-attempt owner recovery. */ }
@@ -205,10 +212,11 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
- if('trialAction' in p&&p.trialAction==='authorize_management_context_one_retest'){
+ if('trialAction' in p&&(p.trialAction==='authorize_management_context_one_retest'||p.trialAction==='authorize_management_failure_retest')){
+  const later=p.trialAction==='authorize_management_failure_retest';
   if(process.env.VERCEL_ENV!=='production'||p.releaseSha!==process.env.VERCEL_GIT_COMMIT_SHA)
     return NextResponse.json({error:'Exact current production SHA required'},{status:409});
-  const offer=await managementContextRetestOffer(p.projectId);
+  const offer=await (later?managementFailureRetestOffer(p.projectId):managementContextRetestOffer(p.projectId));
   if(offer.stage!=='authorize'||offer.releaseSha!==p.releaseSha
    ||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
    ||offer.scopeHash!==p.scopeHash||offer.stateHash!==p.stateHash
@@ -227,7 +235,7 @@ export async function POST(request:NextRequest){
   if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))
     return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
-  return NextResponse.json(await rpc('project_org_context_retest_authorize',{
+  return NextResponse.json(await rpc(later?'project_org_management_failure_retest_authorize':'project_org_context_retest_authorize',{
    p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,
    p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,
    p_mission:p.missionId,p_assignment:p.assignmentId,
