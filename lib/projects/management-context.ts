@@ -1,3 +1,5 @@
+import {compactExceptionLedgerText} from './exception-ledger-text';
+
 // Read-only, decision-scoped projection of the durable management ledger.
 // The PostgreSQL source tables remain the authority: this view is never an approval.
 export type ManagementRow=Record<string,unknown>;
@@ -261,6 +263,18 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
   reporting:{immediateSuperior,
    ancestors:directLineage,directReportIds:scope.directIds,organizationNodeCount:topology.length},
   organization:immediate,
+  // An immediate reporting relationship is the worker-assignment authority.
+  // A descendant worker is NOT assignable by a grandparent or another branch.
+  delegationAuthority:{
+   directWorkerIds:immediate.filter(n=>n.kind==='worker'&&n.status==='active').map(n=>({
+    id:n.id,tools:n.tools,deadline:n.deadline
+   })),
+   directManagerIds:immediate.filter(n=>n.kind!=='worker'&&n.status==='active').map(n=>n.id),
+   rule:'assign and commission_package target only the listed active DIRECT workers. '+ 
+    'authorize_assignment requires an existing queued assignment for a direct worker. '+
+    'If directWorkerIds is empty, none of these execution commands is permitted from this manager. '+
+    'An indirect worker belongs to its immediate manager. Do not invent an appointment or authority.'
+  },
   executionTeam:input.executionTeam.map(a=>({id:a.id,
    name:(a.config as ManagementRow|null)?.name,
    research:(a.config as ManagementRow|null)?.research,
@@ -295,6 +309,11 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  if(compressed){
   const table=JSON.stringify(compressed);
   if(table.length<=limit)return table;
+  const factored=compactExceptionLedgerText(compressed);
+  if(factored){
+   const final=JSON.stringify(factored);
+   if(final.length<=limit)return final;
+  }
  }
  throw Error('Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.');
 }
