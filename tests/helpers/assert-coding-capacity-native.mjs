@@ -174,6 +174,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   assert.equal(tools,'none');assert.match(instruction,/OWNER-SIGNED COMMISSIONING-ONLY WINDOW/);
   const context=JSON.parse(input);
   assert.equal(context.principal.id,c.job.payload.organizationNodeId);
+  if(instruction.includes('SIGNED PACKAGE ROLE CONTRACT')){assert.match(instruction,/SIGNED SMART WORKLOAD CAPACITY/);assert.match(instruction,/"contextChars":16000/);}
   if(c.job.payload.organizationNodeId===manager.id&&instruction.includes('SIGNED APPOINTMENT IDENTITY CONTRACT')){
    assert.deepEqual(context.executionTeam.map(a=>a.id).sort(),[leadIdentity,developerIdentity].sort());
    assert.match(instruction,new RegExp(developerIdentity));assert.match(instruction,new RegExp(leadIdentity));
@@ -182,7 +183,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   await settle(c);
   return {text:JSON.stringify(commands)};
  });
- const appointment=(name,tools,area)=>({action:'appoint',kind:'worker',managementLevel:'worker',name,area,objective:'Produce bounded milestone output for '+name,acceptance:['Verify approved result'],tools,paths:[],tokens:1000,deadline});
+ const appointment=(name,tools,area)=>({action:'appoint',kind:'worker',managementLevel:'worker',name,area,objective:'Produce bounded milestone output for '+name,acceptance:['Verify approved result'],tools,paths:[],tokens:tools.includes('development')?32000:16000,deadline});
  let c=await schedule(game);
  const firstCommissioningMission=c.mission.id;
  await deny(()=>execute(c,[{action:'reject',nodeId:qa.id,findings:['Forbidden']}]));
@@ -563,6 +564,209 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  // independently of application preflight. No production role is changed.
  await deny(async()=>{await settle(c);await db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify(actual100)]);},
   e=>e.code==='P0001'&&e.message.includes('Final signed commissioning permits only'));
+ // M103 failure is known to be REVIEW capacity (server stack); the original
+ // numeric contract was not retained. Use the real M100/101 committed workers,
+ // exact registry capacity and four grants, and the saved approved requirement
+ // and browser evidence below. These are representative boundary cases, not
+ // a claim to have reconstructed the discarded provider response.
+ const m103Claim=c;
+ const {smartJsonbChars,commissioningSmartCapacity,smartPackageCapacityFields}=modules()('@/lib/projects/smart-diagnostics');
+ const nodes103=(await db.query('select * from project_organization_nodes where project_id=$1 order by id',[project])).rows;
+ const registry103=(await db.query('select id,config,archived from managed_agents where id=any($1::uuid[]) order by id',[actualTeam.map(a=>a.id)])).rows;
+ const savedProject103=await one('select * from work_projects where id=$1',[project]);
+ const envelope=commissioningSmartCapacity(JSON.parse(JSON.stringify(nodes103.find(n=>n.id===manager.id))),JSON.parse(JSON.stringify(savedProject103)),
+  JSON.parse(JSON.stringify(nodes103)),registry103,[],packageCommand99,true);
+ assert.equal(envelope.workers.find(w=>w.nodeId===coder99.id).remainingSizingTokens,32000);
+ assert.equal(envelope.workers.find(w=>w.nodeId===reviewer99.id).remainingSizingTokens,16000);
+ assert.equal(envelope.workers.find(w=>w.nodeId===reviewer99.id).contextChars,16000);
+ const approved103={"requirements":["Render an empty 3×3 board, display the turn, and start with X.","Alternate X and O only after legal moves. Ignore occupied-cell moves without changing the board or current turn.","Detect wins on all three rows, all three columns, and both diagonals. Display the winning mark and reject post-win moves.","Detect a full-board draw, display the draw result, and reject post-draw moves.","New Game and page reload must each clear the board and restore X as the first player.","Implement a responsive, accessible browser UI; cell buttons carry data-cell indices 0 through 8, with #board, #status, and #new-game selectors for acceptance.","No authentication, computer opponent, networking, persisted game state, added dependencies, or unrelated features.","Development must stay within approved milestone-3 paths and pass independent same-commit verification on a protected Preview."],"browser":{"path":"/milestone-3-tic-tac-toe","scenarios":[{"name":"Initial board and legal turns","steps":[{"value":"X's turn","action":"expectText","selector":"#status"},{"value":"","action":"expectText","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"0\"]"},{"value":"X","action":"expectText","selector":"[data-cell=\"0\"]"},{"value":"O's turn","action":"expectText","selector":"#status"},{"action":"click","selector":"[data-cell=\"0\"]"},{"value":"O's turn","action":"expectText","selector":"#status"},{"action":"click","selector":"[data-cell=\"1\"]"},{"value":"O","action":"expectText","selector":"[data-cell=\"1\"]"},{"value":"X's turn","action":"expectText","selector":"#status"}]},{"name":"Horizontal win and terminal freeze","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"3\"]"},{"action":"click","selector":"[data-cell=\"1\"]"},{"action":"click","selector":"[data-cell=\"4\"]"},{"action":"click","selector":"[data-cell=\"2\"]"},{"value":"X wins","action":"expectText","selector":"#status"},{"action":"click","selector":"[data-cell=\"5\"]"},{"value":"","action":"expectText","selector":"[data-cell=\"5\"]"},{"value":"X wins","action":"expectText","selector":"#status"}]},{"name":"Vertical win","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"1\"]"},{"action":"click","selector":"[data-cell=\"3\"]"},{"action":"click","selector":"[data-cell=\"2\"]"},{"action":"click","selector":"[data-cell=\"6\"]"},{"value":"X wins","action":"expectText","selector":"#status"}]},{"name":"Main diagonal win","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"1\"]"},{"action":"click","selector":"[data-cell=\"4\"]"},{"action":"click","selector":"[data-cell=\"2\"]"},{"action":"click","selector":"[data-cell=\"8\"]"},{"value":"X wins","action":"expectText","selector":"#status"}]},{"name":"Anti diagonal win","steps":[{"action":"click","selector":"[data-cell=\"2\"]"},{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"4\"]"},{"action":"click","selector":"[data-cell=\"1\"]"},{"action":"click","selector":"[data-cell=\"6\"]"},{"value":"X wins","action":"expectText","selector":"#status"}]},{"name":"O win","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"3\"]"},{"action":"click","selector":"[data-cell=\"1\"]"},{"action":"click","selector":"[data-cell=\"4\"]"},{"action":"click","selector":"[data-cell=\"8\"]"},{"action":"click","selector":"[data-cell=\"5\"]"},{"value":"O wins","action":"expectText","selector":"#status"}]},{"name":"Full board draw and terminal freeze","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"1\"]"},{"action":"click","selector":"[data-cell=\"2\"]"},{"action":"click","selector":"[data-cell=\"4\"]"},{"action":"click","selector":"[data-cell=\"3\"]"},{"action":"click","selector":"[data-cell=\"5\"]"},{"action":"click","selector":"[data-cell=\"7\"]"},{"action":"click","selector":"[data-cell=\"6\"]"},{"action":"click","selector":"[data-cell=\"8\"]"},{"value":"Draw","action":"expectText","selector":"#status"},{"action":"click","selector":"[data-cell=\"8\"]"},{"value":"Draw","action":"expectText","selector":"#status"}]},{"name":"New Game clears the board","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"action":"click","selector":"[data-cell=\"4\"]"},{"action":"click","selector":"#new-game"},{"value":"X's turn","action":"expectText","selector":"#status"},{"value":"","action":"expectText","selector":"[data-cell=\"0\"]"},{"value":"","action":"expectText","selector":"[data-cell=\"4\"]"}]},{"name":"Reload clears the board","steps":[{"action":"click","selector":"[data-cell=\"0\"]"},{"path":"/milestone-3-tic-tac-toe","action":"goto"},{"value":"X's turn","action":"expectText","selector":"#status"},{"value":"","action":"expectText","selector":"[data-cell=\"0\"]"}]},{"name":"Responsive board and reset available","steps":[{"action":"expectVisible","selector":"#board"},{"action":"expectVisible","selector":"#new-game"},{"value":"X's turn","action":"expectText","selector":"#status"}]}]}};
+ // These are measured inputs from the saved production contract; future
+ // code/results do not exist and their sizes are planning allowances.
+ assert.equal(smartJsonbChars(approved103.requirements),887);
+ assert.equal(smartJsonbChars(approved103.browser),4599);
+ const actualInventory=[
+  {item:'Eight saved owner requirements, complete JSON',contextChars:smartJsonbChars(approved103.requirements)},
+  {item:'Ten saved browser acceptance scenarios and their complete steps, one copy',contextChars:smartJsonbChars(approved103.browser)}
+ ];
+ const gameContractChars=4719;
+ const intendedFiles=[files99[0],files99[1],scopePaths[1]+'rules.ts',files99[2]];
+ const criterion=approved103.requirements.map((r,i)=>({criterion:r,evidence:'Requirement '+(i+1)+': source-bound test, browser scenario or exact changed-file evidence; do not claim success without receipts.'}));
+ // A bounded engineering estimate, not an observed execution cost.
+ // The whole small, single milestone is represented by three existing roles.
+ // 18k+7k <= 32k coder allocation; 12k <= 16k reviewer allocation.
+ // No fabricated completed evidence. If actual work/evidence cannot fit,
+ // report a resource blocker; never discard necessary checks.
+ const roleTask=(role,objective,deliverable,instruction,inventory,tokens,estTokens,seconds,paths,rationale)=>({
+  objective,deliverable,instruction,parentObjective:manager.objective,capability:'analysis',acceptance:criterion,
+  inventory,estimate:{basis:'declared_inventory',rationale,uncertainty:'Planning estimate, not actual use. New source and test artifacts are not yet generated; verify actual scope and evidence sizes before dispatch, stop and request lawful decomposition if required.',tokens:estTokens,seconds},
+  tokens,maxAssignments:1,deadline,paths
+ });
+ const planned103={...packageCommand99,maxAttempts:1,objective:'Deliver the owner-approved responsive two-player tic-tac-toe milestone and independent same-commit acceptance, without additional features',
+  deliverables:['Scoped rules and pure transition engine, accessible responsive route and deterministic test evidence','Technical composition receipt and distinct technical review'],
+  acceptance:approved103.requirements,
+  tasks:{
+   development:roleTask('development','Build the approved game engine, route and deterministic tests','Scoped source and source-bound test receipts',
+    'Implement the exact approved owner requirements, registered game contract, pure transitions, all win lines, illegal moves, draw, reset and reload. Run deterministic tests and the existing browser acceptance pathway. No extra dependencies or features; report exact changed files, immutable commit and receipts.',
+    [...actualInventory,{item:'Existing registered GAME_CONTRACT.md source; read-only, not an editable file',contextChars:gameContractChars}],
+    18000,16000,7200,intendedFiles,'Four planned new files: rules, pure engine, accessible UI and deterministic tests. Allow implementation, local test iterations and evidence packaging; one bounded assignment.'),
+   compose:roleTask('compose','Assemble the implementation and acceptance evidence','Complete source-bound technical evidence record',
+    'Use actual implementation receipts, changed-file list, commit and each owner requirement. Link every test and browser result to the same immutable commit; identify missing evidence instead of certifying. No source modification is authorized by this analysis task.',
+    [...actualInventory,{item:'Expected implementation result and test receipt evidence, bounded planning allowance; verify actual length',contextChars:3000}],
+    7000,6000,1800,[],'Eight requirements and ten browser scenarios, plus implementation evidence mapping and checked receipt references.'),
+   review:roleTask('review','Independently assess technical evidence against the approved game contract','Independent evidence-based technical review',
+    'Review the provided implementation and composition evidence against every original requirement and browser scenario. Check exact source SHA, changed-file inventory, scope, deterministic outcomes and receipt completeness. The independent QA organization remains separate. Do not claim real-browser acceptance that is not evidenced; report any material gap and require lawful decomposition if complete evidence cannot fit.',
+    [...actualInventory,{item:'Expected bounded technical evidence with changed files, exact source references, outcomes for every scenario and relevant code evidence; estimate, not completed receipt',contextChars:3500}],
+    12000,10000,3600,[],'Independently examine eight requirements, ten complete browser scenarios, scoped source/transition evidence and immutable verification receipts. No repository write or live research.')
+  }
+ };
+ const sizeEvidence=[];
+ for(const [role,task] of Object.entries(planned103.tasks)){
+  const sqlChars=(await one('select length($1::jsonb::text)::int n',[JSON.stringify(task)])).n;
+  assert.equal(smartJsonbChars(task),sqlChars,role+' native JSONB character count parity');
+  const inventory=task.inventory.reduce((sum,i)=>sum+i.contextChars,0);
+  sizeEvidence.push({role,contractChars:sqlChars,inventoryChars:inventory,totalContextChars:sqlChars+inventory,tokens:task.tokens,estimatedTokens:task.estimate.tokens,seconds:task.estimate.seconds});
+ }
+ assert.equal(smartPackageCapacityFields(planned103,envelope).length,0,JSON.stringify(sizeEvidence));
+ // Every representative failure below reaches the original native SMART
+ // reviewer admission, and the real corrected application rejects it first.
+ const review103=planned103.tasks.review;
+ const reviewBad=delta=>({...planned103,tasks:{...planned103.tasks,review:{...review103,...delta}}});
+ const sqlCapacityCases=[
+  {command:reviewBad({inventory:[{item:'Oversized review evidence',contextChars:16000}]}),field:'tasks.review.contextChars'},
+  {command:reviewBad({estimate:{...review103.estimate,tokens:12001}}),field:'tasks.review.estimate.tokens*maxAssignments'},
+  {command:reviewBad({estimate:{...review103.estimate,seconds:9999999}}),field:'tasks.review.estimate.seconds*maxAssignments'},
+  {command:reviewBad({deadline:new Date(Date.parse(deadline)+60000).toISOString()}),field:'tasks.review.deadline'}
+ ];
+ const rejection='SMART estimated workload exceeds single-worker context, resources or execution window; decompose before dispatch';
+ for(const {command,field} of sqlCapacityCases){
+  await deny(async()=>{await settle(c);await db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify([command])]);},
+   e=>e.code==='P0001'&&e.message===rejection&&String(e.where).includes("w.reviewer_id,'review'"));
+  const writes=decisionWrites;
+  await deny(()=>execute(c,[command]),e=>e.evidence?.code==='smart_contract_capacity'&&e.evidence?.capacityFields?.some(f=>f.field===field));
+  assert.equal(decisionWrites,writes);
+ }
+ // In provider mode, the old database intentionally does not reconcile
+ // cumulative node token usage. The signed app sizing envelope (not a new
+ // financial gate) also rejects declared sizing above the worker allocation.
+ for(const [bad,field] of [[reviewBad({tokens:16001}),'worker.'+reviewer99.id+'.totalContractTokens'],
+  [{...planned103,tasks:{...planned103.tasks,compose:{...planned103.tasks.compose,tokens:16001}}},'worker.'+coder99.id+'.totalContractTokens'],
+  [reviewBad({maxAssignments:2}),'tasks.review.maxAssignments']]){
+  const writes=decisionWrites;
+  await deny(()=>execute(c,[bad]),e=>e.evidence?.code==='smart_contract_capacity'&&e.evidence?.capacityFields?.some(f=>f.field===field));
+  assert.equal(decisionWrites,writes);
+ }
+ // Prove genuine admission before adding any successor authority. No
+ // provider inference; actual app/SQL package and three contracts roll back.
+ await db.query('savepoint m103_capacity_valid_predecessor');
+ await execute(c,[planned103]);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,1);
+ await db.query('rollback to savepoint m103_capacity_valid_predecessor');await db.query('release savepoint m103_capacity_valid_predecessor');
+ console.log('MISSION103_SMART_BOUNDARY_NATIVE_PASS '+JSON.stringify({sqlReviewRejections:4,applicationSizingNegatives:3,sizes:sizeEvidence,originalSQLUnchanged:true,realProviderCalls:0}));
+ await db.query('savepoint mission103_smart_resume');
+ await settle(c);
+ await deny(()=>db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify([sqlCapacityCases[0].command])]),e=>e.code==='P0001'&&e.message===rejection);
+ // Reproduce the saved rejection shape and hash, NOT the unknown M103 JSON.
+ const rejection103={detail:rejection,managementCommandRejection:{code:'smart_contract_capacity',action:'commission_package',reason:rejection,targets:[],position:1,proposalHash:'d812f07753b5a1cb40edd4bcc6762bf8f50586b739c1651fa56f157bbc4f36bf',priorAppointments:0}};
+ assert.equal((await one("select commit_mission_work($1,$2,$3,'[]','failed','blocked',null) ok",[c.job.id,c.job.lease,JSON.stringify(rejection103)])).ok,true);
+ await db.query('reset role');
+ const failLease103=randomUUID();
+ await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,failLease103]);
+ await db.query('set role service_role');
+ const failed103=(await one('select project_org_schedule($1,$2) r',[project,failLease103])).r;
+ assert.equal(failed103.blocked,'Commissioning assignment failed; automatic retries are not authorized');
+ assert.equal((await one("select finish_work_project($1,$2,'block',$3) ok",[project,failLease103,JSON.stringify({detail:failed103.blocked})])).ok,true);
+ await db.query('reset role');
+ const ids103=(await db.query('select id from agent_missions where project_id=$1 order by id',[project])).rows.map(x=>x.id);
+ assert.equal(ids103.length,103);
+ const preserve103=async()=>({
+  previous:await preserve102(),
+  failed:await one('select to_jsonb(m) m,to_jsonb(j) j from agent_missions m join mission_assignments j on j.mission_id=m.id where m.id=$1',[m103Claim.mission.id]),
+  requests:(await db.query('select to_jsonb(q) v from project_provider_requests q where mission_id=$1 order by id',[m103Claim.mission.id])).rows,
+  prior:await one('select to_jsonb(r) v from project_coding_capacity_resume_receipts r where project_id=$1 and historical_missions=102',[project])
+ });
+ const saved103=await preserve103(),blocked103=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(blocked103.status,'blocked');assert.equal(blocked103.max_missions,103);assert.equal(blocked103.active_mission_id,c.mission.id);
+ let sql103=readFileSync('supabase/migrations/20261124212500_mission103_smart_capacity_resume.sql','utf8')
+  .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+ for(const [a,b] of [['f83c4eb4-48c0-4cc8-b9b6-a1862f7b8f93',auth102],
+  ['2f14afc16f9fe39a7e5a73892eba96fab1c9a6bd',finalRelease],['dpl_XXKkFT4MdD3L3VUp25GGsPZXe2TH',finalDeployment],
+  ['f4ef8dd1-7802-409c-9787-88a3dd246861',c.mission.id],['9cfe36d9-f666-4019-8694-73db24577cac',c.job.id],
+  ['08e792df-1046-4282-89dc-83994a8a6b7e',coder99.id],['1cf12044-d9ba-4e8b-9ef4-8b7e5aa004a5',reviewer99.id],
+  ['s.release_generation<>47','s.release_generation<>'+claimGeneration]]){
+  assert.ok(sql103.includes(a),a);sql103=sql103.replaceAll(a,b);
+ }
+ for(const match of [...sql103.matchAll(/\('([^']+)'[,\s]+'([a-f0-9]{32})'\)/g)]){
+  const hash=(await one('select md5(prosrc) h from pg_proc where oid=$1::regprocedure',[match[1]])).h;
+  sql103=sql103.replace("'"+match[2]+"'","'"+hash+"'");
+ }
+ try{await db.query(sql103);}catch(e){console.error('MISSION103_MIGRATION_DIAGNOSTIC',JSON.stringify({message:e.message,code:e.code,position:e.position,internalPosition:e.internalPosition,internalQuery:e.internalQuery,where:e.where,detail:e.detail}));throw e;}
+ await db.query('DISCARD PLANS');
+ assert.deepEqual(await preserve103(),saved103);
+ assert.deepEqual(await one('select * from work_projects where id=$1',[project]),blocked103);
+ assert.equal((await one('select count(*)::int n from project_coding_capacity_resume_receipts where project_id=$1',[project])).n,3);
+ const smartRelease='a'.repeat(40),smartDeployment='dpl_Mission103Corrected',smartGeneration=claimGeneration+2;
+ await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5)',[project,finalRelease,finalDeployment,'closed',claimGeneration]);
+ await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5)',[project,smartRelease,smartDeployment,'active',claimGeneration+1]);
+ await db.query('set role service_role');
+ const offer103=(await one('select project_org_coding_capacity_offer($1,$2,$3) o',[owner,project,smartRelease])).o;
+ assert.equal(offer103.stage,'authorize');assert.equal(offer103.historicalMissions,103);assert.equal(offer103.priorMaxMissions,103);
+ assert.equal(offer103.remainingMissions,0);assert.equal(offer103.additionalMissions,1);assert.equal(offer103.maxMissions,104);
+ assert.equal(offer103.paidInferenceLimit,1);assert.equal(offer103.coderId,coder99.id);assert.equal(offer103.writerId,coder99.id);assert.equal(offer103.reviewerId,reviewer99.id);
+ assert.equal(offer103.priorAuthorizationId,auth102);assert.equal(offer103.sourceMissionId,c.mission.id);assert.equal(offer103.sourceAssignmentId,c.job.id);
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration,smartDeployment])).ok,false);
+ await deny(()=>db.query('select authorize_work_project_resources($1,$2,$3,600000,null,104,null,$4,$5)',[project,pre.actor_id,pre.chat_id,randomUUID(),'Unauthorized SMART capacity renewal test']));
+ const auth103=randomUUID(),args103=[owner,project,smartRelease,smartGeneration,smartDeployment,auth103,offer103.stateHash,offer103.scopeHash,offer103.cutoff,1,104,1,0,600000,offer103.remainingRecordedTokens,auth102,c.mission.id,c.job.id];
+ for(const [i,v] of [[0,randomUUID()],[2,finalRelease],[3,smartGeneration-2],[4,finalDeployment],[5,auth102],[6,'e'.repeat(64)],[7,'e'.repeat(64)],[8,new Date(Date.now()+1e8).toISOString()],[9,2],[10,105],[11,2],[12,1],[13,600001],[14,offer103.remainingRecordedTokens-1],[15,auth99],[16,randomUUID()],[17,randomUUID()]]){
+  await deny(()=>db.query(resumeSql,args103.map((x,j)=>j===i?v:x)));
+ }
+ const authorized103=(await one(resumeSql,args103)).r;
+ assert.equal(authorized103.stage,'authorized');assert.equal(authorized103.authorizationId,auth103);assert.equal(authorized103.remainingMissions,1);
+ await deny(()=>db.query(resumeSql,args103));
+ await db.query('reset role');
+ assert.deepEqual(await preserve103(),saved103);
+ const resumed103=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(resumed103.status,'running');assert.equal(resumed103.active_mission_id,null);assert.equal(resumed103.max_missions,104);
+ assert.equal(resumed103.token_allowance,600000);assert.deepEqual(resumed103.deadline,blocked103.deadline);
+ const receipt103=await one('select * from project_coding_capacity_resume_receipts where project_id=$1 and historical_missions=103',[project]);
+ await deny(()=>db.query('update project_coding_capacity_resume_receipts set paid_inference_limit=2 where project_id=$1 and historical_missions=103',[project]));
+ await deny(()=>db.query('update work_projects set max_missions=105 where id=$1',[project]));
+ receipt={authorization_id:auth103};claimRelease=smartRelease;claimGeneration=smartGeneration;claimDeployment=smartDeployment;
+ await db.query('DISCARD PLANS');
+ c=await schedule(manager);
+ assert.ok(!ids103.includes(c.mission.id));
+ for(const {command,field} of sqlCapacityCases){
+  const writes=decisionWrites;
+  await deny(()=>execute(c,[command]),e=>e.evidence?.code==='smart_contract_capacity'&&e.evidence?.capacityFields?.some(f=>f.field===field));
+  assert.equal(decisionWrites,writes);
+ }
+ for(const bad of [{...planned103,reviewerId:coder99.id},{...planned103,workerId:analyst.id},{...planned103,paths:['app/']},
+  {...planned103,tasks:{...planned103.tasks,review:{...review103,parentObjective:'Wrong parent objective'}}},
+  {...planned103,tasks:{...planned103.tasks,review:{...review103,paths:[files99[0]]}}}]){
+  const writes=decisionWrites;await deny(()=>execute(c,[bad]));assert.equal(decisionWrites,writes);
+ }
+ await deny(()=>execute(c,[planned103,planned103]));
+ await deny(()=>execute(c,actual100));
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:scopePaths}]));
+ await execute(c,[planned103]);
+ await db.query('reset role');
+ const final103=await one('select * from work_projects where id=$1',[project]),pkg103=await one('select * from project_work_packages where project_id=$1',[project]);
+ assert.equal(final103.status,'paused');assert.equal(final103.max_missions,104);assert.equal(final103.active_mission_id,null);
+ assert.equal(pkg103.status,'queued');assert.equal(pkg103.worker_id,coder99.id);assert.equal(pkg103.writer_id,coder99.id);assert.equal(pkg103.reviewer_id,reviewer99.id);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,1);
+ assert.equal((await one('select count(*)::int n from project_worker_contracts where package_id=$1',[pkg103.id])).n,3);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,104);
+ assert.equal((await one("select count(*)::int n from project_provider_requests where project_id=$1 and NOT mission_id=any($2::uuid[]) and operation='inference' and resolved_at is not null",[project,ids103])).n,1);
+ assert.equal((await one('select count(*)::int n from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 and NOT m.id=any($2::uuid[]) and j.attempts=1',[project,ids103])).n,1);
+ assert.deepEqual(await preserve103(),saved103);
+ assert.deepEqual(await one('select * from project_coding_capacity_resume_receipts where project_id=$1 and historical_missions=103',[project]),receipt103);
+ assert.equal((await one('select project_org_coding_capacity_live($1) ok',[project])).ok,false);
+ await db.query('set role service_role');
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration,smartDeployment])).ok,false);
+ console.log('MISSION103_SMART_RESUME_NATIVE_PASS '+JSON.stringify({history:103,ceiling:104,freshMissions:1,paidFixtureReceipts:1,attemptsEach:1,packages:1,smartContracts:3,packageId:pkg103.id,realProviderCalls:0,sizes:sizeEvidence,workersAndGrantsPreserved:true}));
+ await db.query('reset role');
+ await db.query('rollback to savepoint mission103_smart_resume');await db.query('release savepoint mission103_smart_resume');await db.query('DISCARD PLANS');
+ receipt={authorization_id:auth102};claimRelease=finalRelease;claimGeneration=finalGeneration;claimDeployment=finalDeployment;c=m103Claim;
+ await db.query('set role service_role');
  await execute(c,[packageCommand99]);
  await db.query('reset role');
  const final102=await one('select * from work_projects where id=$1',[project]),pkg102=await one('select * from project_work_packages where project_id=$1',[project]);
