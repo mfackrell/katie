@@ -1,0 +1,43 @@
+name: Coding worker commissioning qualification
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/organization.ts'
+      - 'supabase/migrations/20261124165000_coding_commissioning_continuation.sql'
+      - 'tests/management-direct-worker-authority.test.mjs'
+      - 'tests/coding-commissioning-native.test.mjs'
+      - 'tests/helpers/assert-coding-commissioning-path.mjs'
+      - 'tests/helpers/assert-project-scope-ratification.mjs'
+      - '.github/workflows/coding-commissioning-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  commissioning:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Current commissioning guidance and unchanged context, SMART and hierarchy
+        run: node --test tests/management-direct-worker-authority.test.mjs tests/project-organization-runtime.test.mjs tests/management-commissioning-diagnostics.test.mjs tests/management-context.test.mjs tests/management-context-growth.test.mjs
+      - name: Install isolated PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Native package persistence, negative authority and original continuation
+        run: node --test tests/coding-commissioning-native.test.mjs

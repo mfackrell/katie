@@ -587,6 +587,8 @@ export async function assertProjectScopeRatification(db,rival){
     assert.equal((await db.query('select count(*)::int n from project_organization_contract_changes where node_id=$1 and decision_id is not null',[game.id])).rows[0].n,1);
     assert.equal((await db.query('select count(*)::int n from project_organization_scope_grants where node_id=$1 and scope_hash=$2',[game.id,prepared.scopeHash])).rows[0].n,1);
 
+    if(process.env.KATIE_TEST_CODING_COMMISSIONING==='1')
+      await (await import('./assert-coding-commissioning-path.mjs')).assertCodingCommissioningPath(db,{project,game,rootNode,scopeHash:prepared.scopeHash,scopePaths,deadline,activate,decide,session});
     await (await import('./assert-management-loop-recovery.mjs')).assertManagementLoopRecovery(db,{rival,project,owner,actor,chat,game,rootNode,scopeHash:prepared.scopeHash,scopePaths,deadline,release,activate,decide});
     const manager=await activate(game.id);
     await decide(manager,[{action:'appoint',kind:'worker',name:'Coder',area:'game_delivery',objective:'Implement only the approved tic-tac-toe package',

@@ -120,6 +120,63 @@ export function scopedImplementationDelegationDirective(principal:ManagementNode
   '. These reports already hold approved scope, but cannot commission coding. For any report responsible for the approved implementation milestone, propose amend_delegation adding development within your own authority before ready. Do not repeat its scope grant or replace its leader to fix missing tools. Analysis-only reports remain analysis-only; QA never receives development. The database independently validates every proposal.';
 }
 
+// A missing execution role is a commissioning prerequisite, not a reason to
+// invent an assignment, repeat a leadership review, or expand authority.
+// This read-only directive never appoints a worker or creates a package.
+export function implementationCommissioningDirective(args:{
+ principal:ManagementNode;topology:ManagementNode[];focused:ManagementNode[];
+ grants:ManagementRow[];team:ManagementRow[];project:ManagementRow;
+ milestonePackages:ManagementRow[];
+}):string{
+ const {principal,topology,focused,grants,team,project,milestonePackages}=args;
+ if(project.phase!=='development'||typeof project.approved_hash!=='string'||milestonePackages.length)return '';
+ const current=focused.find(n=>n.id===principal.id);
+ if(!current||!Array.isArray(current.tools)||!current.tools.includes('development'))return '';
+ const inQa=(id:string)=>{
+  const seen=new Set<string>();let n=topology.find(x=>x.id===id);
+  while(n&&!seen.has(n.id)){
+   if(['quality_assurance','independent_qa'].includes(n.area??''))return true;
+   seen.add(n.id);n=topology.find(x=>x.id===n?.parent_id);
+  }
+  return false;
+ };
+ if(inQa(principal.id))return '';
+ const grant=(id:string)=>grants.find(g=>g.node_id===id&&g.scope_hash===project.approved_hash&&Array.isArray(g.paths)&&g.paths.length>0);
+ const parentGrant=grant(principal.id);
+ if(!parentGrant)return '';
+ const direct=focused.filter(n=>n.parent_id===principal.id&&n.status==='active');
+ const managers=direct.filter(n=>n.kind==='manager'&&!inQa(n.id)&&Array.isArray(n.tools)&&n.tools.includes('development')&&grant(n.id));
+ const workers=direct.filter(n=>n.kind==='worker');
+ const coders=workers.filter(n=>Array.isArray(n.tools)&&n.tools.includes('development'));
+ // Do not bypass an established implementation manager merely because its
+ // coding worker is not appointed yet. Use the real direct reporting line.
+ if((principal.kind==='project_director'||coders.length===0)&&managers.length){
+  return '\nIMPLEMENTATION COMMISSIONING HANDOFF: No package exists for the current approved milestone. Existing authorized direct implementation managers: '+JSON.stringify(managers.map(n=>({id:n.id,objective:n.objective,decisionNeeded:n.decision_needed})))+
+   '. Advance implementation through the responsible direct manager. If that manager is not already awaiting a decision, issue reject with concrete findings that the required development worker/package is absent; direct the manager to appoint the eligible coder and distinct technical reviewer, grant the existing approved scope, then commission_package in a separate turn. If already awaiting a decision, do not repeat the rejection or replace leadership. Never appoint competing managers or assign a descendant worker. Do not substitute independent QA review of an unbuilt candidate for implementation.';
+ }
+ if(principal.kind!=='manager')return '';
+ const used=new Set(topology.map(n=>n.agent_id));
+ const available=team.filter(a=>!used.has(String(a.id))&&(a.config as ManagementRow|null)?.development===true)
+  .map(a=>({agentId:a.id,name:(a.config as ManagementRow|null)?.name}));
+ const analysts=workers.filter(n=>Array.isArray(n.tools)&&n.tools.includes('analysis'));
+ if(!coders.length){
+  return '\nIMPLEMENTATION COMMISSIONING — APPOINT WORKERS: You already hold development authority and the approved scope '+JSON.stringify(parentGrant.paths)+
+   ', but no active direct development worker exists. Use appoint(kind:"worker",managementLevel:"worker") with development and analysis within your tools; prefer an unappointed existing development-capable execution-team agent when compatible: '+JSON.stringify(available)+
+   '. Appoint a distinct analysis-capable technical reviewer if no existing direct worker contract permits that review. A coder with analysis may also compose if its contract permits; the reviewer must differ from both coder and writer. Preserve the existing analyst/planning-only contracts and QA separation. Use the existing deadline and bounded resources; initial paths may be empty. Do not assign, grant scope to an invented ID, or commission a package against an uncommitted appointment. Commit the lawful appointments first; the same manager will receive the next commissioning decision.';
+ }
+ const scopedCoders=coders.filter(n=>grant(n.id));
+ if(!scopedCoders.length){
+  return '\nIMPLEMENTATION COMMISSIONING — GRANT CODER SCOPE: Active directly reporting development workers exist '+JSON.stringify(coders.map(n=>({id:n.id,tools:n.tools,deadline:n.deadline})))+
+   ' but lack a current approved scope grant. Select the appropriate direct coder and issue grant_scope using only the necessary paths from your exact existing grant '+JSON.stringify(parentGrant.paths)+
+   '. Do not repeat an existing grant, assign nonexistent IDs, or combine grant_scope with commission_package. Commit the scope grant first; the same manager will receive the next commissioning decision.';
+ }
+ const candidates=scopedCoders.map(n=>({id:n.id,paths:grant(n.id)?.paths,tools:n.tools,objective:n.objective}));
+ const reviewers=analysts.filter(n=>scopedCoders.some(c=>c.id!==n.id));
+ return '\nIMPLEMENTATION COMMISSIONING — PACKAGE PREREQUISITES: Approved direct coder candidates '+JSON.stringify(candidates)+
+  '; distinct analysis-capable direct technical review/composition candidates '+JSON.stringify(reviewers.map(n=>({id:n.id,objective:n.objective,tools:n.tools})))+
+  '. Use only candidates whose existing contract actually covers the role. If a distinct suitable reviewer or a composition worker is missing, appoint only the missing direct worker first; never repurpose a planning-only analyst without legitimate contract authority. Otherwise issue commission_package in this separate turn for the current approved milestone with actual committed workerId, writerId and distinct reviewerId. Package paths must fit both your grant and the coder grant; SMART development.paths must list exact files, not directories or wildcards. Copy principal.objective verbatim into all three SMART parentObjective fields. Preserve current deadlines, resources and independent QA. Do not issue ready/reject/resolve instead of a feasible package merely to close historical administrative exceptions; do not fabricate completion evidence.';
+}
+
 export function directorRecoveryRelease(claim:Claim):string|undefined {
  return (claim.mission.project_evidence as {directorRecoveryRelease?:string}|null)?.directorRecoveryRelease;
 }
@@ -171,7 +228,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const scope=managementScope(topology,principalId);
  const node=scope.principal;
  if(node.agent_id!==claim.job.agent_id)throw Error('Management principal mismatch');
- const project=projectRecord.data as {objective:string;team:string[];approved_hash?:string|null;phase?:string|null};
+ const project=projectRecord.data as {objective:string;team:string[];approved_hash?:string|null;phase?:string|null;milestone_index?:number};
  // Fetch direct-report contracts and active decision inputs; older assignments
  // remain in PostgreSQL. Complete, ordered pages avoid PostgREST row truncation.
  const [focused,bindings,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work,decisions]=await Promise.all([
@@ -213,6 +270,13 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
    });
   if(!authorized)throw Error('Trial management inference was already admitted for this mission');
  }
+ // Read the project-wide current milestone package state only for the existing
+ // provider-controlled development commissioning path. A descendant's package
+ // must prevent an ancestor from proposing competing implementation work.
+ const milestonePackages=providerControlled&&project.phase==='development'&&project.approved_hash&&typeof project.milestone_index==='number'
+  ?await completeManagementRows<ManagementRow>(()=>db.from('project_work_packages')
+   .select('id,manager_id,milestone_index').eq('project_id',claim.mission.project_id)
+   .eq('milestone_index',project.milestone_index!),'id'):[];
  const baseInstruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
@@ -220,7 +284,8 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   ?baseInstruction+'\nONE-SHOT RECOVERY: Use only plan, appoint Functional Directors, and ready. Do not create dependency commands or use IDs for appointments that have yet to be committed. Downstream management and execution are paused after this decision.'
   :baseInstruction+scopedRootDelegationDirective({
    providerControlled,principal:node,project,scopedNodes:focused,scopeGrants:grants,workPackages:packages,
-  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project);
+  })+scopedImplementationDelegationDirective(node,topology,focused,grants,project)
+  +(providerControlled?implementationCommissioningDirective({principal:node,topology,focused,grants,team,project,milestonePackages}):'');
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:team,exceptions,bindings,statuses,
