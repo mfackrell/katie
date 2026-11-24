@@ -1,0 +1,52 @@
+name: Correct bounded management context and worker delegation
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/management-context.ts'
+      - 'lib/projects/organization.ts'
+      - 'lib/projects/management-failure-retest.ts'
+      - 'app/api/projects/route.ts'
+      - 'app/api/projects/organization/route.ts'
+      - 'components/director-recovery-control.tsx'
+      - 'components/management-context-retest-control.tsx'
+      - 'supabase/migrations/20261124161000_management_failure_retest.sql'
+      - 'tests/management-context-growth.test.mjs'
+      - 'tests/management-delegation-m92.test.mjs'
+      - 'tests/management-failure-95-runtime.test.mjs'
+      - 'tests/management-failure-95-postgres.test.mjs'
+      - 'tests/helpers/assert-management-context-90-native.mjs'
+      - 'tests/helpers/assert-management-failure-95-native.mjs'
+      - '.github/workflows/management-m95-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  management95:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Strict typecheck
+        run: npm run typecheck
+      - name: Mission83, Mission85, 95 growth, delegation, and owner-consent regressions
+        run: node --test tests/management-context.test.mjs tests/management-context-growth.test.mjs tests/management-delegation-m92.test.mjs tests/management-commissioning-diagnostics.test.mjs tests/management-context-one-retest-runtime.test.mjs tests/management-failure-95-runtime.test.mjs
+      - name: Install isolated native PostgreSQL16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Owner recovery, 95 historical missions, one authentic normal scheduler claim
+        run: node --test tests/management-failure-95-postgres.test.mjs
