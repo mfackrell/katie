@@ -173,6 +173,48 @@ function compactExceptionRows(payload:Record<string,unknown>):Record<string,unkn
    ' A missing resolution element means no resolution. Preserve every distinct exception id and status.'};
 }
 
+// Final lossless encoding for accumulated exception details that quote the
+// UUIDs of other CURRENT exception rows. This dictionary is the complete
+// original exception table itself, not an external memory or dropped evidence.
+// Escape literal "~" before replacing exact case-sensitive IDs, so decoding
+// is unambiguous even when a user's original text contains marker-like words.
+function compactExceptionIdentityReferences(payload:Record<string,unknown>):Record<string,unknown>|null{
+ const rows=payload.exceptions;
+ if(!Array.isArray(rows)||!rows.every(r=>Array.isArray(r)&&typeof r[0]==='string'
+   &&typeof r[3]==='string'&&typeof r[5]==='string'
+   &&(typeof r[4]==='string'||Array.isArray(r[4]))))return null;
+ const ids=new Map<string,number>();
+ for(const [i,row] of (rows as unknown[][]).entries()){
+  const id=row[0] as string;
+  if(ids.has(id)||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))return null;
+  ids.set(id,i);
+ }
+ const reasons:string[]=[],statuses:string[]=[];
+ const result=(rows as unknown[][]).map(row=>{
+  const next=[...row];
+  const reason=next[3] as string,status=next[5] as string;
+  if(!reasons.includes(reason))reasons.push(reason);
+  if(!statuses.includes(status))statuses.push(status);
+  next[3]=reasons.indexOf(reason);
+  next[5]=statuses.indexOf(status);
+  if(typeof next[4]==='string'){
+   next[4]=(next[4] as string).replace(/~|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g,token=>{
+    if(token==='~')return '~~';
+    const index=ids.get(token);
+    return index===undefined?token:'~'+index+';';
+   });
+  }
+  return next;
+ });
+ return {...payload,exceptions:result,
+  exceptionReasonDictionary:reasons,exceptionStatusDictionary:statuses,
+  contextReferencePolicy:String(payload.contextReferencePolicy)+
+   ' In each exception row, reason and status are exact indexes into exceptionReasonDictionary and exceptionStatusDictionary. '+
+   ' In a detail string, decode ~~ as literal ~ and ~N; as the exact UUID in exceptions[N][0]. '+
+   ' Decode left-to-right. Existing detail array [i] still means the exact resolved detail of preceding exception row i. '+
+   ' No UUID, case, reason, status, exception or detail may be omitted or inferred.'};
+}
+
 export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  const {principalId,topology,scopedNodes,project}=input;
  const scope=managementScope(topology,principalId);
@@ -295,6 +337,11 @@ export function buildManagementDecisionContext(input:Inputs,limit=48000):string{
  if(compressed){
   const table=JSON.stringify(compressed);
   if(table.length<=limit)return table;
+  const referenced=compactExceptionIdentityReferences(compressed);
+  if(referenced){
+   const identityTable=JSON.stringify(referenced);
+   if(identityTable.length<=limit)return identityTable;
+  }
  }
  throw Error('Required management decision evidence exceeds bounded context; do not omit current contracts, unresolved exceptions, or necessary assignment results.');
 }
