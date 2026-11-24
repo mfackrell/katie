@@ -174,7 +174,7 @@ const codingCapacityInput=z.object({
  trialAction:z.literal('authorize_coding_capacity'),projectId:z.literal(ORIGINAL_TTT_PROJECT),authorizationId:z.string().uuid(),
  releaseSha:z.string().regex(/^[a-f0-9]{40}$/),releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),
  scopeHash:z.string().regex(/^[a-f0-9]{64}$/),stateHash:z.string().regex(/^[a-f0-9]{64}$/),cutoff:z.string().datetime({offset:true}),
- historicalMissions:z.union([z.literal(96),z.literal(98),z.literal(99),z.literal(102)]),additionalMissions:z.number().int().min(1).max(8),maxMissions:z.number().int().min(97).max(104),
+ historicalMissions:z.union([z.literal(96),z.literal(98),z.literal(99),z.literal(102),z.literal(103)]),additionalMissions:z.number().int().min(1).max(8),maxMissions:z.number().int().min(97).max(104),
  priorAuthorizationId:z.string().uuid().optional(),sourceMissionId:z.string().uuid().optional(),sourceAssignmentId:z.string().uuid().optional(),
  paidInferenceLimit:z.number().int().min(1).max(8),paidInferenceConsent:z.literal(true),retryLimit:z.literal(0),
  tokenAllowance:z.literal(600000),remainingRecordedTokens:z.number().int().min(0).max(600000),additionalTokens:z.literal(0),additionalSpendingAuthority:z.literal(0),
@@ -231,7 +231,7 @@ export async function POST(request:NextRequest){
    ||Date.parse(offer.cutoff)!==Date.parse(p.cutoff)||Date.now()>=Date.parse(offer.cutoff)-300000
    ||offer.historicalMissions!==p.historicalMissions
    ||p.maxMissions!==p.historicalMissions+p.additionalMissions||p.paidInferenceLimit!==p.additionalMissions
-   ||(p.historicalMissions!==96?(p.additionalMissions!==(p.historicalMissions===102?1:3)||p.maxMissions!==p.historicalMissions+(p.historicalMissions===102?1:3)||p.priorAuthorizationId!==offer.priorAuthorizationId
+   ||(p.historicalMissions!==96?(p.additionalMissions!==(p.historicalMissions>=102?1:3)||p.maxMissions!==p.historicalMissions+(p.historicalMissions>=102?1:3)||p.priorAuthorizationId!==offer.priorAuthorizationId
      ||p.sourceMissionId!==offer.sourceMissionId||p.sourceAssignmentId!==offer.sourceAssignmentId||!p.priorAuthorizationId||!p.sourceMissionId||!p.sourceAssignmentId)
     :p.priorAuthorizationId!==undefined||p.sourceMissionId!==undefined||p.sourceAssignmentId!==undefined)
    ||p.remainingRecordedTokens!==offer.remainingRecordedTokens)
