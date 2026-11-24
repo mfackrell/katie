@@ -1,0 +1,52 @@
+name: Mission95 management context and delegation recovery qualification
+on:
+  pull_request:
+    paths:
+      - 'lib/projects/management-context.ts'
+      - 'lib/projects/exception-ledger-text.ts'
+      - 'lib/projects/organization.ts'
+      - 'lib/projects/management-followup-retest.ts'
+      - 'components/management-followup-retest-control.tsx'
+      - 'components/director-recovery-control.tsx'
+      - 'app/api/projects/organization/route.ts'
+      - 'app/api/projects/route.ts'
+      - 'supabase/migrations/20261124160000_followup_management_one_retest.sql'
+      - 'tests/management-*.test.mjs'
+      - 'tests/helpers/assert-management-followup-native.mjs'
+      - 'tests/helpers/assert-management-context-90-native.mjs'
+      - '.github/workflows/mission95-context-delegation-qualification.yml'
+permissions:
+  contents: read
+jobs:
+  management95:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: TypeScript contract validation
+        run: npm run typecheck
+      - name: Mission83/85 retained, 94/95 context growth and direct-worker authority
+        run: node --test tests/management-context.test.mjs tests/management-context-growth.test.mjs tests/management-commissioning-diagnostics.test.mjs tests/management-direct-worker-authority.test.mjs tests/management-followup-owner-runtime.test.mjs
+      - name: Install isolated PostgreSQL 16
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: Native 95-mission owner/replay/release and unchanged worker authority
+        run: |
+          node --test tests/project-organization-postgres.test.mjs
+          node --test tests/management-followup-native-postgres.test.mjs
