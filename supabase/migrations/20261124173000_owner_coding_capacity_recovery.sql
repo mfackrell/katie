@@ -63,7 +63,7 @@ BEGIN
  SELECT * INTO a FROM project_provider_execution WHERE project_id=p_project;
  SELECT * INTO g FROM project_retest_production_release_gate WHERE project_id=p_project;
  IF p.id IS DISTINCT FROM 'fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
- OR p_owner IS NULL OR a.owner_id IS DISTINCT FROM p_owner OR NOT standalone_verify_scope(p_owner,p.actor_id,p.chat_id)
+ OR p_owner IS NULL OR a.owner_id IS DISTINCT FROM p_owner OR standalone_verify_scope(p_owner,p.actor_id,p.chat_id) IS DISTINCT FROM true
  OR g.state IS DISTINCT FROM 'active' OR g.alias_name IS DISTINCT FROM 'katie-mu.vercel.app'
  OR g.release_sha IS DISTINCT FROM p_release THEN RAISE EXCEPTION 'Authenticated original owner and active release required'; END IF;
  SELECT count(*),coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0)
@@ -198,7 +198,7 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_t
    AND (SELECT count(*) FROM agent_missions m WHERE m.project_id=p.id) BETWEEN 96 AND r.approved_max_missions
    AND (SELECT coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0) FROM agent_missions WHERE project_id=p.id)<=r.token_allowance
    AND NOT EXISTS(SELECT 1 FROM project_work_packages WHERE project_id=p.id)
-   AND NOT EXISTS(SELECT 1 FROM unnest(r.original_node_ids) id WHERE NOT EXISTS(SELECT 1 FROM project_organization_nodes n WHERE n.id=id AND n.project_id=p.id))
+   AND NOT EXISTS(SELECT 1 FROM unnest(r.original_node_ids) original(node_id) WHERE NOT EXISTS(SELECT 1 FROM project_organization_nodes n WHERE n.id=original.node_id AND n.project_id=p.id))
    AND NOT EXISTS(SELECT 1 FROM project_organization_nodes n WHERE n.project_id=p.id AND NOT n.id=ANY(r.original_node_ids)
       AND (n.parent_id IS DISTINCT FROM r.manager_id OR n.kind<>'worker'))
   )
@@ -235,7 +235,7 @@ $$;
 -- automatic same-assignment retries. Preserve the normal scheduler itself.
 CREATE FUNCTION public.project_org_coding_capacity_commands(p_job uuid,p_lease uuid,p_commands jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
-DECLARE r project_coding_capacity_receipts; n uuid; c jsonb; actions integer;
+DECLARE r project_coding_capacity_receipts; n uuid; cmd jsonb; actions integer;
 BEGIN
  SELECT receipt.* INTO r FROM project_coding_capacity_receipts receipt JOIN agent_missions m ON m.project_id=receipt.project_id
  JOIN mission_assignments j ON j.mission_id=m.id WHERE j.id=p_job;
@@ -255,20 +255,20 @@ BEGIN
   OR EXISTS(SELECT 1 FROM project_organization_nodes WHERE id=r.manager_id AND decision_needed)
   THEN RAISE EXCEPTION 'Delivery Director must hand off to its existing authorized manager'; END IF;
  ELSIF n=r.manager_id THEN
-  FOR c IN SELECT value FROM jsonb_array_elements(p_commands) LOOP
-   CASE c->>'action'
+  FOR cmd IN SELECT value FROM jsonb_array_elements(p_commands) LOOP
+   CASE cmd->>'action'
     WHEN 'ready' THEN NULL;
     WHEN 'appoint' THEN
-     IF c->>'kind' IS DISTINCT FROM 'worker' OR coalesce(c->>'managementLevel','worker')<>'worker'
-      OR jsonb_typeof(c->'tools') IS DISTINCT FROM 'array' OR NOT (c->'tools')?'analysis'
-      OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(c->'tools') t WHERE t NOT IN ('analysis','development','repository_review'))
+     IF cmd->>'kind' IS DISTINCT FROM 'worker' OR coalesce(cmd->>'managementLevel','worker')<>'worker'
+      OR jsonb_typeof(cmd->'tools') IS DISTINCT FROM 'array' OR NOT ((cmd->'tools')?'analysis')
+      OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(cmd->'tools') t WHERE t NOT IN ('analysis','development','repository_review'))
      THEN RAISE EXCEPTION 'Only bounded direct implementation workers may be appointed'; END IF;
     WHEN 'grant_scope' THEN
-     IF NOT EXISTS(SELECT 1 FROM project_organization_nodes x WHERE x.id::text=c->>'nodeId' AND x.project_id=r.project_id
+     IF NOT EXISTS(SELECT 1 FROM project_organization_nodes x WHERE x.id::text=cmd->>'nodeId' AND x.project_id=r.project_id
         AND x.parent_id=n AND x.kind='worker' AND NOT x.id=ANY(r.original_node_ids))
      THEN RAISE EXCEPTION 'Grant only newly appointed direct workers their approved scope'; END IF;
     WHEN 'commission_package' THEN
-     IF c->>'milestoneIndex' IS DISTINCT FROM '0' OR EXISTS(SELECT 1 FROM unnest(ARRAY[c->>'workerId',c->>'writerId',c->>'reviewerId']) wid
+     IF cmd->>'milestoneIndex' IS DISTINCT FROM '0' OR EXISTS(SELECT 1 FROM unnest(ARRAY[cmd->>'workerId',cmd->>'writerId',cmd->>'reviewerId']) wid
         WHERE NOT EXISTS(SELECT 1 FROM project_organization_nodes x WHERE x.id::text=wid AND x.project_id=r.project_id
          AND x.parent_id=n AND x.kind='worker' AND NOT x.id=ANY(r.original_node_ids)))
      THEN RAISE EXCEPTION 'Package must use newly authorized direct implementation workers'; END IF;

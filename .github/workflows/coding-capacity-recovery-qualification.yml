@@ -1,0 +1,36 @@
+name: Exhausted coding capacity recovery qualification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261124173000_owner_coding_capacity_recovery.sql'
+      - 'lib/projects/coding-capacity-recovery.ts'
+      - 'lib/projects/organization.ts'
+      - 'components/coding-capacity-recovery-control.tsx'
+      - 'components/director-recovery-control.tsx'
+      - 'app/api/projects/**'
+      - 'tests/coding-capacity-*.test.mjs'
+      - 'tests/helpers/assert-coding-capacity-native.mjs'
+      - 'tests/helpers/assert-management-followup-native.mjs'
+      - '.github/workflows/coding-capacity-recovery-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  coding-capacity-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs
+      - name: Install PostgreSQL 16
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-16
+      - name: Original 96-mission recovery and real commissioning, rollback only
+        run: node --test tests/coding-capacity-native-postgres.test.mjs
