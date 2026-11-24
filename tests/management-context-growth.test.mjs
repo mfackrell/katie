@@ -165,3 +165,27 @@ test('Successive management growth preserves all identity, detail, status and as
   detail:'Unique mandatory source evidence '+'E'.repeat(90000),created_at:'2026-11-24T08:00:00Z'});
  assert.throws(()=>buildManagementDecisionContext(x,48000),/exceeds bounded context/);
 });
+
+test('post-Mission85 growth: repeated open exceptions plus archived assignments remain lossless',()=>{
+ const x=fixture();
+ for(let i=0;i<5;i++){
+  const assignment_id=uuid(3900+i);
+  x.bindings.push({assignment_id,node_id:i%2?PLAN:EXEC,created_at:'2026-01-01T00:00:00Z'});
+  x.statuses.push({id:assignment_id,status:'completed'});
+  x.exceptions.push({
+   id:uuid(5100+i),origin_id:i%2?PLAN:EXEC,owner_id:QA,reason:'objective',status:'open',
+   detail:'Management session failed twice; saved decisions and charges retained.',
+   created_at:'2026-11-24T15:'+String(i+35).padStart(2,'0')+':00Z'
+  });
+ }
+ const full=JSON.parse(buildManagementDecisionContext(x,200000));
+ const compressed=buildManagementDecisionContext(x,48000),parsed=JSON.parse(compressed);
+ assert.ok(compressed.length<=48000);
+ assert.equal(parsed.exceptions.length,52);
+ assert.deepEqual(restorePacked(parsed),full);
+ assert.equal(parsed.historyReferences.omittedHistoricalAssignments,
+  x.bindings.length-parsed.historyReferences.selectedAssignmentIds.length);
+ console.log('MISSION95_LATE_GROWTH_PASS '+JSON.stringify({
+  fullChars:JSON.stringify(full).length,compressedChars:compressed.length,exceptions:52
+ }));
+});
