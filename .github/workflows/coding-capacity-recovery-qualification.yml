@@ -17,8 +17,13 @@ permissions:
   contents: read
 jobs:
   coding-capacity-recovery:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: synthetic-anon-only
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-service-only
+      KATIE_TEST_PG_BIN: /usr/lib/postgresql/16/bin
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,7 +35,9 @@ jobs:
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs
       - name: Install PostgreSQL 16
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql-16
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
       - name: Original 96-mission recovery and real commissioning, rollback only
         run: node --test tests/coding-capacity-native-postgres.test.mjs

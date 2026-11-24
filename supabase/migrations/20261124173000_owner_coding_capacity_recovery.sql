@@ -166,7 +166,7 @@ CREATE FUNCTION public.project_org_coding_capacity_resource_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
 BEGIN
  IF OLD.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
- AND ((OLD.max_missions=96 AND OLD.status='blocked' AND OLD.detail='Approved project mission limit reached')
+ AND ((OLD.max_missions=96 AND (SELECT count(*) FROM agent_missions WHERE project_id=OLD.id)>=96)
    OR EXISTS(SELECT 1 FROM project_coding_capacity_receipts WHERE project_id=OLD.id))
  AND (NEW.max_missions IS DISTINCT FROM OLD.max_missions OR NEW.token_allowance IS DISTINCT FROM OLD.token_allowance OR NEW.deadline IS DISTINCT FROM OLD.deadline)
  AND NOT (OLD.max_missions=96 AND OLD.status='blocked' AND OLD.detail='Approved project mission limit reached'
