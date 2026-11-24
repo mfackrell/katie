@@ -193,10 +193,15 @@ test('Recurring 95-mission-like exception IDs and provenance stay lossless acros
  const detail='Cross-referenced, still-open exceptions '+allIds.slice(0,18).join(', ')+
   '; each retains its original owner, creation timestamp and resolution state.';
  for(let wave=0;wave<2;wave++){
-  x.exceptions.push({id:uuid(4100+wave),origin_id:EXEC,owner_id:QA,
-   reason:'objective',status:'open',created_at:
-    '2026-11-24T15:40:45.'+(wave?'23041':'325726')+'+00:00',
-   detail:detail+(wave?' These remain unresolved.':' The original failed result is not completion.')});
+  // First wave adds two separately owned, still-open real-shaped details:
+  // enough to exceed the accepted third-stage packing limit before retry.
+  for(let k=0;k<(wave===0?2:1);k++){
+   const index=wave*2+k;
+   x.exceptions.push({id:uuid(4100+index),origin_id:EXEC,owner_id:QA,
+    reason:'objective',status:'open',created_at:
+     '2026-11-24T15:40:45.'+(index%2?'23041':'325726')+'+00:00',
+    detail:detail+(index%2?' These remain unresolved.':' The original failed result is not completion.')});
+  }
   const original=JSON.parse(buildManagementDecisionContext(x,200000));
   const serialized=buildManagementDecisionContext(x,48000);
   const actual=JSON.parse(serialized);
