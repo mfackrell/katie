@@ -104,7 +104,19 @@ BEGIN
  -- The historical M84 live-window predicate is intentionally capped at
  -- 96 missions. It is not current execution authority after the signed
  -- initial commissioning receipt. Preserve its actual immutable lineage.
- OR NOT project_provider_continued(p.id) OR NOT project_org_m84_provider_release_valid(p.id)
+ OR NOT project_provider_continued(p.id)
+ -- Authorize against this release's own exact guarded transition, not a
+ -- spent earlier release window. Every prior receipt remains unchanged.
+ OR NOT EXISTS(SELECT 1 FROM project_events closed
+  JOIN project_events opened ON opened.project_id=closed.project_id AND opened.event='mission79_release_gate_transition'
+  WHERE closed.project_id=p.id AND closed.event='mission79_release_gate_transition'
+   AND closed.data->>'action'='closed' AND closed.data->>'releaseSha'=r.release_sha AND closed.data->>'deploymentId'=r.deployment_id
+   AND closed.data->>'alias'='katie-mu.vercel.app' AND closed.data->>'priorGeneration'=r.release_generation::text
+   AND (closed.data->>'recordedAt')::timestamptz>=r.authorized_at
+   AND opened.data->>'action'='active' AND opened.data->>'releaseSha'=g.release_sha AND opened.data->>'deploymentId'=g.deployment_id
+   AND opened.data->>'alias'='katie-mu.vercel.app' AND opened.data->>'priorGeneration'=(r.release_generation+1)::text
+   AND (opened.data->>'recordedAt')::timestamptz=g.updated_at
+   AND (opened.data->>'recordedAt')::timestamptz>(closed.data->>'recordedAt')::timestamptz)
  OR NOT EXISTS(SELECT 1 FROM project_bounded_recovery_receipts b WHERE b.project_id=p.id AND b.owner_id=r.owner_id
    AND b.scope_hash=r.scope_hash AND b.cutoff=r.cutoff AND b.max_missions=96 AND b.token_allowance=600000
    AND b.historical_missions=84 AND b.additional_paid_retries=0)
