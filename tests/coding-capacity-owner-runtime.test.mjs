@@ -145,7 +145,7 @@ test('Mission104 existing-package consent binds the exact owner, release, packag
   assert.deepEqual(JSON.parse(JSON.stringify(a)),{p_owner:ownerId,p_project:projectId,p_package:packageId,p_release:sha,p_generation:generation,p_deployment:deployment,p_authorization:authorizationId,p_state_hash:stateHash,p_terms:terms,p_consent:true});
   writes++;return {...offer(),stage:'authorized',authorizationId};
  }},'@/lib/data/persistence-store':{getMessages:async()=>[]}});
- terms=mock('@/lib/projects/package-execution-authorization').PACKAGE_TERMS;
+ terms=JSON.parse(JSON.stringify(mock('@/lib/projects/package-execution-authorization').PACKAGE_TERMS));
  const route=mock('@/app/api/projects/organization/route');
  const payload={trialAction:'authorize_existing_package_execution',projectId,packageId,authorizationId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,stateHash,terms,paidInferenceConsent:true};
  const post=(body=payload,origin='https://katie.test')=>route.POST(new Request('https://katie.test/api/projects/organization',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(body)}));
@@ -155,5 +155,5 @@ test('Mission104 existing-package consent binds the exact owner, release, packag
  for(const change of [{packageId:ownerId},{projectId:ownerId},{stateHash:'0'.repeat(64)},{releaseSha:'0'.repeat(40)},{releaseGeneration:generation+1},{deploymentId:'dpl_Other'},{paidInferenceConsent:false},{terms:{...terms,maxMissions:113}},{terms:{...terms,paidInferenceLimit:48}},{terms:{...terms,automaticRetries:1}},{terms:{...terms,dollarCeilingMicrousd:1}},{terms:{...terms,extra:true}}])assert.notEqual((await post({...payload,...change})).status,200,JSON.stringify(change));
  assert.notEqual((await post(payload,'https://other.test')).status,200);
  epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};canonical=false;assert.equal((await post()).status,409);canonical=true;
- assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
+ assert.equal(writes,0);const signed=await post();assert.equal(signed.status,200,await signed.text());assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
 });

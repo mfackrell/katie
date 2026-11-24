@@ -798,7 +798,25 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.equal((await one('select count(*)::int n from project_work_package_attempts where package_id=$1',[pkg103.id])).n,0);
  assert.equal((await one('select project_org_package_execution_live($1) ok',[project])).ok,true);
  assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration,smartDeployment])).ok,false);
- console.log('MISSION104_PACKAGE_EXECUTION_NATIVE_PASS');
+ // Verify actual scheduler admission, without external execution, in this disposable transaction.
+ const lease104=randomUUID();
+ await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,lease104]);
+ await db.query('set role service_role');
+ assert.equal((await one('select project_org_schedule($1,$2) r',[project,lease104])).r,null);
+ assert.equal((await one("select finish_work_project($1,$2,'child',$3) ok",[project,lease104,JSON.stringify({kind:'development',objective:'Implement exact approved package within original scope and independently verify the result.',evidence:{}})])).ok,true);
+ await db.query('reset role');
+ const admitted104=await one('select * from work_projects where id=$1',[project]);
+ const child104=await one('select * from agent_missions where id=$1',[admitted104.active_mission_id]);
+ assert.equal(child104.project_kind,'development');assert.equal(child104.project_evidence.packageExecutionAuthorizationId,args104[6]);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,105);
+ assert.equal((await one('select count(*)::int n from project_work_package_attempts where package_id=$1',[pkg103.id])).n,1);
+ const jobs104=(await db.query("select role,agent_id from mission_assignments where mission_id=$1 and role in('development','compose','review') order by role",[child104.id])).rows;
+ assert.deepEqual(jobs104,[{role:'compose',agent_id:coder99.agent_id},{role:'development',agent_id:coder99.agent_id},{role:'review',agent_id:reviewer99.agent_id}]);
+ assert.deepEqual((await db.query('select * from project_worker_contracts where package_id=$1 order by id',[pkg103.id])).rows,contracts104);
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration,smartDeployment])).ok,true);
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration+1,smartDeployment])).ok,false);
+ assert.equal((await one('select count(*)::int n from project_provider_requests where mission_id=$1',[child104.id])).n,0);
+ console.log('MISSION104_PACKAGE_EXECUTION_NATIVE_PASS '+JSON.stringify({preservedHistory:104,authorizedMissionCeiling:112,isolatedSchedulerAdmission:1,originalWorkerRoles:3,realProviderCalls:0}));
  await db.query('rollback to savepoint mission103_smart_resume');await db.query('release savepoint mission103_smart_resume');await db.query('DISCARD PLANS');
  receipt={authorization_id:auth102};claimRelease=finalRelease;claimGeneration=finalGeneration;claimDeployment=finalDeployment;c=m103Claim;
  await db.query('set role service_role');
