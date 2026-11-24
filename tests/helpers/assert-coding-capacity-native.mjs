@@ -27,7 +27,15 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await db.query('update project_organization_nodes set agent_id=$2 where id=$1',[analyst.id,conflictIdentity]);
  await db.query('alter table project_organization_nodes enable trigger project_org_immutable');
  analyst.agent_id=conflictIdentity;
+ // Transplant the original registered specialist binding too, instead of
+ // weakening the real mission-admission check. This is fixture-only setup.
+ const pin=await db.query("update game_specialist_bindings b set agent_id=a.id,definition_version=a.version,config_hash=encode(sha256(convert_to(project_canonical(a.config),'UTF8')),'hex') from managed_agents a where b.actor_id=$1 and a.id=$2",[p0.actor_id,developerIdentity]);
+ assert.equal(pin.rowCount,1);
+ for(const [role,id] of [['lead',leadIdentity],['research',conflictIdentity],['game-development',developerIdentity]]){
+  await db.query('insert into project_agents(actor_id,role,agent_id) values($1,$2,$3) on conflict(actor_id,role) do update set agent_id=excluded.agent_id',[p0.actor_id,role,id]);
+ }
  await db.query('update work_projects set team=$2 where id=$1',[project,actualTeam.map(a=>a.id)]);
+ assert.equal((await one('select game_project_specialist_valid($1) ok',[project])).ok,true);
  assert.equal((await one('select agent_id from project_organization_nodes where id=$1',[analyst.id])).agent_id,conflictIdentity);
  // Reconstruct the final two settled historical sessions inside the disposable
  // outer rollback fixture. No historical production data is touched.
