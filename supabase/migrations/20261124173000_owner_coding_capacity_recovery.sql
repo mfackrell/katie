@@ -285,6 +285,7 @@ BEGIN
  SELECT receipt.* INTO r FROM project_coding_capacity_receipts receipt JOIN agent_missions m ON m.project_id=receipt.project_id
  JOIN mission_assignments j ON j.mission_id=m.id WHERE j.id=p_job;
  IF NOT FOUND THEN RETURN; END IF;
+ IF r.cutoff<=clock_timestamp() THEN RAISE EXCEPTION 'Commissioning owner cutoff expired before decision commit'; END IF;
  IF (SELECT count(*) FROM project_organization_nodes WHERE project_id=r.project_id AND NOT id=ANY(r.original_node_ids))>3
  OR (SELECT count(*) FROM project_organization_nodes WHERE project_id=r.project_id AND NOT id=ANY(r.original_node_ids) AND 'development'=ANY(tools))>1
  THEN RAISE EXCEPTION 'Bounded commissioning worker limit exceeded'; END IF;

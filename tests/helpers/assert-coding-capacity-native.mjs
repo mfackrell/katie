@@ -83,6 +83,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   await deny(()=>db.query(authorize,args.map((x,j)=>j===i?v:x)));
  }
  await deny(()=>db.query('delete from project_coding_capacity_receipts where project_id=$1',[project]));
+ await db.query('savepoint approved_four_capacity');
  const result=(await one(authorize,args)).r;
  assert.equal(result.stage,'authorized');assert.equal(result.maxMissions,100);assert.equal(result.paidInferenceLimit,4);
  await deny(()=>db.query(authorize,args));
@@ -91,7 +92,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  const renewed=await one('select * from work_projects where id=$1',[project]);
  assert.equal(renewed.status,'running');assert.equal(renewed.max_missions,100);assert.equal(renewed.token_allowance,pre.token_allowance);
  assert.deepEqual(renewed.deadline,pre.deadline);assert(renewed.progress_since>pre.progress_since);
- const receipt=await one('select * from project_coding_capacity_receipts where project_id=$1',[project]);
+ let receipt=await one('select * from project_coding_capacity_receipts where project_id=$1',[project]);
  await deny(()=>db.query('update project_coding_capacity_receipts set additional_missions=5 where project_id=$1',[project]));
  await deny(()=>db.query('update work_projects set max_missions=101 where id=$1',[project]));
  await deny(()=>db.query('update work_projects set token_allowance=600001 where id=$1',[project]));
@@ -121,9 +122,9 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   const s=(await one('select project_org_schedule($1,$2) r',[project,lease])).r;
   assert.equal(s.nodeId,node.id,JSON.stringify(s));assert.ok(s.missionId);
   await db.query('reset role');
-  await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes',lease_until=clock_timestamp()-interval '1 second' where mission_id not in (select id from agent_missions where project_id=$1) and status='running' and lease_until>clock_timestamp()",[project]);
+  await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes',lease_until=now()-interval '1 second' where mission_id not in (select id from agent_missions where project_id=$1) and status='running' and lease_until>clock_timestamp()",[project]);
   await db.query("update mission_assignments set available_at=clock_timestamp()+interval '15 minutes' where mission_id not in (select id from agent_missions where project_id=$1) and status in ('queued','waiting_external')",[project]);
-  await db.query("update mission_assignments set available_at=clock_timestamp()-interval '1 second' where mission_id=$1",[s.missionId]);
+  await db.query("update mission_assignments set available_at=now()-interval '1 second' where mission_id=$1",[s.missionId]);
   await db.query('set role service_role');
   assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation+1,deployment])).ok,false);
   assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).ok,true);
@@ -186,5 +187,26 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await db.query('set role service_role');
  await deny(()=>db.query('select project_org_schedule($1,$2)',[project,randomUUID()]));
  assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).ok,false);
+ // Separately prove a smaller owner-selected allowance stops before a package.
+ await db.query('reset role');
+ await db.query('rollback to savepoint approved_four_capacity');
+ await db.query('release savepoint approved_four_capacity');
+ await db.query('set role service_role');
+ const single=(await one(authorize,await auth(1))).r;
+ assert.equal(single.maxMissions,97);assert.equal(single.paidInferenceLimit,1);
+ await db.query('reset role');
+ receipt=await one('select * from project_coding_capacity_receipts where project_id=$1',[project]);
+ c=await schedule(game);
+ await execute(c,[{action:'reject',nodeId:manager.id,findings:['Commission the authorized implementation package']},{action:'ready'}]);
+ await db.query('reset role');
+ const stopped=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(stopped.status,'blocked');assert.equal(stopped.active_mission_id,null);
+ assert.equal(stopped.max_missions,97);assert.equal(stopped.token_allowance,600000);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,97);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,0);
+ assert.deepEqual(await snapshot(),history);
+ await db.query('set role service_role');
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,release,generation,deployment])).ok,false);
+ console.log('CODING_CAPACITY_CEILING_PASS: one selected mission, 97/97, zero packages, no further claim');
  console.log('CODING_CAPACITY_NATIVE_PASS '+JSON.stringify({priorMissions:96,approvedMax:100,missions:100,managementDecisions:4,packages:1,smartContracts:3,finalStatus:'paused',syntheticInferenceReceipts:4,realProviderCalls:0}));
 }
