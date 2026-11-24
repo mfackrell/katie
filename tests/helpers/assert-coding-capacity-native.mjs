@@ -133,7 +133,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
    }};return q;
  }};
  let decisionWrites=0;
- const {executeManagementClaim,assertManagementCommands}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>pgAdapter},
+ const {executeManagementClaim,assertManagementCommands,codingCapacityManagerStage,assertCodingCapacityManagerStage}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>pgAdapter},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    if(name==='project_provider_mode')return true;
    assert.equal(name,'project_org_decide');decisionWrites++;return db.query('select project_org_decide($1,$2,$3)',[args.p_job,args.p_lease,JSON.stringify(args.p_commands)]);
@@ -405,14 +405,17 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  try{c=await schedule(manager);}catch(e){console.error('MISSION99_SCHEDULER_DIAGNOSTIC',JSON.stringify({message:e.message,code:e.code,where:e.where,detail:e.detail,table:e.table,constraint:e.constraint,priorReceiptRelations}));throw e;}
  assert.ok(!history99Ids.includes(c.mission.id));
  await deny(()=>execute(c,collision),e=>e.evidence?.code==='commissioning_agent_identity');
- await execute(c,[...legitimateAppointments,{action:'ready'}]);
+ const actual100=[{"area":"tic_tac_toe_implementation","kind":"worker","name":"Game Development Specialist v1","paths":[],"tools":["development","analysis"],"action":"appoint","tokens":32000,"purpose":"Implement the approved single tic-tac-toe coding milestone within the existing milestone-3 scope and support technical composition under later package commissioning.","deadline":"2026-11-26T19:45:00+00:00","objective":"Implement the responsive, same-device two-player browser tic-tac-toe game exactly as requested by the owner within the single coding milestone under app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/, while preserving all no-extra-features constraints and using the existing execution team where appropriate.","reporting":"Delivery Manager, Tic-Tac-Toe Milestone","acceptance":["Can receive later development and analysis package tasks for the single approved tic-tac-toe milestone","Remains limited to approved milestone-3 tic-tac-toe implementation scope only","Preserves all no-extra-features constraints and separation from independent QA"],"interfaces":["Receives later direct package commissioning from Delivery Manager, Tic-Tac-Toe Milestone","Works only within approved milestone-3 tic-tac-toe paths","Provides implementation artifacts and evidence for independent review"],"deliverables":["Bounded implementation work for the approved tic-tac-toe milestone","Technical composition support for the same approved milestone"],"reuseAgentId":"8421786a-0874-4d86-992e-f0f087d8018e","managementLevel":"worker"},{"area":"tic_tac_toe_technical_review","kind":"worker","name":"Project Lead","paths":[],"tools":["analysis"],"action":"appoint","tokens":16000,"purpose":"Provide independent technical analysis review for the approved single tic-tac-toe coding milestone after implementation work is produced.","deadline":"2026-11-26T19:45:00+00:00","objective":"Review the responsive, same-device two-player browser tic-tac-toe game implementation exactly as requested by the owner within the single coding milestone under app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/, while preserving all no-extra-features constraints.","reporting":"Delivery Manager, Tic-Tac-Toe Milestone","acceptance":["Can receive later analysis review tasks for the single approved tic-tac-toe milestone","Remains distinct from the coding worker","Preserves independent technical review separation from implementation execution"],"interfaces":["Receives later direct review package commissioning from Delivery Manager, Tic-Tac-Toe Milestone","Reviews only approved milestone-3 tic-tac-toe scope artifacts","Provides analysis evidence distinct from the coding worker"],"deliverables":["Independent technical review of the approved tic-tac-toe milestone artifacts"],"reuseAgentId":"e7d25ada-a761-41bf-8f65-f87056f175fa","managementLevel":"worker"},{"action":"ready"}].map(c=>c.action==='appoint'?{...c,deadline}:c);
+ const m100Claim=c;
+ await execute(c,actual100);
  const workers99=(await db.query('select * from project_organization_nodes where parent_id=$1 order by id',[manager.id])).rows;
- const coder99=workers99.find(x=>x.name==='Capacity Coder'),reviewer99=workers99.find(x=>x.name==='Capacity Reviewer');
+ const coder99=workers99.find(x=>x.agent_id===developerIdentity),reviewer99=workers99.find(x=>x.agent_id===leadIdentity);
  assert.ok(coder99&&reviewer99);assert.equal(coder99.agent_id,developerIdentity);assert.equal(reviewer99.agent_id,leadIdentity);
  assert.equal(coder99.parent_id,manager.id);assert.equal(reviewer99.parent_id,manager.id);assert.notEqual(coder99.id,reviewer99.id);
  c=await schedule(manager);
  await deny(()=>execute(c,[{action:'grant_scope',nodeId:analyst.id,paths:scopePaths}]));
  await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:['app/']}]));
+ const m101Claim=c;
  await execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:scopePaths},{action:'ready'}]);
  c=await schedule(manager);
  const files99=['app/milestone-3-tic-tac-toe/page.tsx','lib/milestone-3-tic-tac-toe/game.ts','tests/milestone-3-tic-tac-toe/game.test.ts'];
@@ -421,6 +424,160 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await deny(()=>execute(c,[packageCommand99,packageCommand99]));
  await deny(()=>execute(c,[{...packageCommand99,reviewerId:coder99.id}]));
  await deny(()=>execute(c,[{...packageCommand99,tasks:{...packageCommand99.tasks,development:{...packageCommand99.tasks.development,parentObjective:'Wrong parent objective'}}}]));
+ // Preserve the exact post-M101 appointment/grant topology. Native replay
+ // uses the saved real M100 commands with the fixture's existing cutoff;
+ // database-generated node/mission UUIDs are mapped only for the test.
+ const m102Claim=c;
+ const post101=(await db.query('select * from project_organization_nodes where project_id=$1 order by id',[project])).rows;
+ const grants101=(await db.query('select g.* from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1 order by g.node_id',[project])).rows;
+ assert.equal(post101.length,15);assert.equal(grants101.length,4);
+ const stage101=codingCapacityManagerStage(manager,post101,grants101,scopeHash);
+ const direct=post101.filter(n=>n.parent_id===manager.id);
+ assert.equal(direct.length,4);
+ let rejectedCombinations=0;
+ const invalid102=[];
+ // The saved M102 error may be an old analyst/supervisor role or a
+ // missing/nonzero milestone. Exhaust the combinations that passed the
+ // previous application stage and immediate-reporting checks.
+ for(const writer of direct)for(const reviewer of direct){
+  if(reviewer.id===coder99.id||reviewer.id===writer.id)continue;
+  if(writer.id===coder99.id&&reviewer.id===reviewer99.id)continue;
+  invalid102.push({...packageCommand99,writerId:writer.id,reviewerId:reviewer.id});
+ }
+ for(const milestoneIndex of [1,-1,undefined])invalid102.push({...packageCommand99,milestoneIndex});
+ for(const bad of invalid102){
+  assertManagementCommands(manager,post101,[bad]);
+  assertCodingCapacityManagerStage(manager,post101,stage101,[bad]); // prior stage-only guard
+  await deny(async()=>{
+   await settle(c);
+   await db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify([bad])]);
+  },e=>e.code==='P0001'&&e.message==='Package must use newly authorized direct implementation workers');
+  const writes=decisionWrites;
+  await deny(()=>execute(c,[bad]),e=>e.evidence?.code==='commissioning_package_roles');
+  assert.equal(decisionWrites,writes,'Rejected role never reached decision RPC');
+  rejectedCombinations++;
+ }
+ assert.equal(rejectedCombinations,9);
+ // The existing SQL authority ALREADY accepts the correct role binding.
+ // Run the genuine package writer under a nested savepoint then roll it back,
+ // proving the database is not the defect.
+ await db.query('savepoint m102_valid_predecessor');
+ await execute(c,[packageCommand99]);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,1);
+ await db.query('rollback to savepoint m102_valid_predecessor');await db.query('release savepoint m102_valid_predecessor');
+ console.log('MISSION102_ROLE_REGRESSION_PASS '+JSON.stringify({rejectedCombinations,actualTeam:[coder99.agent_id,reviewer99.agent_id],correctRolesAlreadyAcceptedBySQL:true}));
+ await db.query('savepoint mission102_final_resume');
+ await settle(c);
+ const bad102=invalid102[0];
+ await deny(()=>db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify([bad102])]),
+  e=>e.code==='P0001'&&e.message==='Package must use newly authorized direct implementation workers');
+ const failure102='Mission state operation failed: {"code":"P0001","details":null,"hint":null,"message":"Package must use newly authorized direct implementation workers"}';
+ assert.equal((await one("select commit_mission_work($1,$2,$3,'[]','failed','blocked',null) ok",[c.job.id,c.job.lease,JSON.stringify({detail:failure102,diagnostic:{stage:'work',errorType:'Error',acceptedIssue:false}})])).ok,true);
+ await db.query('reset role');
+ const failureLease102=randomUUID();
+ await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '3 minutes' where id=$1",[project,failureLease102]);
+ await db.query('set role service_role');
+ const failed102=(await one('select project_org_schedule($1,$2) r',[project,failureLease102])).r;
+ assert.equal(failed102.blocked,'Commissioning assignment failed; automatic retries are not authorized');
+ assert.equal((await one("select finish_work_project($1,$2,'block',$3) ok",[project,failureLease102,JSON.stringify({detail:failed102.blocked})])).ok,true);
+ await db.query('reset role');
+ const history102Ids=(await db.query('select id from agent_missions where project_id=$1 order by id',[project])).rows.map(x=>x.id);
+ assert.equal(history102Ids.length,102);
+ const preserve102=async()=>({
+  prior:await preserve99(),
+  missions:(await db.query('select to_jsonb(m) v from agent_missions m where id=any($1::uuid[]) order by id',[history102Ids])).rows,
+  assignments:(await db.query('select to_jsonb(j) v from mission_assignments j where mission_id=any($1::uuid[]) order by id',[history102Ids])).rows,
+  decisions:(await db.query('select to_jsonb(d) v from project_organization_decisions d where assignment_id in (select id from mission_assignments where mission_id=any($1::uuid[])) order by id',[history102Ids])).rows,
+  requests:(await db.query('select to_jsonb(q) v from project_provider_requests q where mission_id=any($1::uuid[]) order by id',[history102Ids])).rows,
+  nodes:(await db.query("select to_jsonb(n)-'decision_needed'-'updated_at' v from project_organization_nodes n where project_id=$1 order by id",[project])).rows,
+  grants:(await db.query('select to_jsonb(g) v from project_organization_scope_grants g join project_organization_nodes n on n.id=g.node_id where n.project_id=$1 order by g.node_id,g.scope_hash',[project])).rows,
+  receipts:(await db.query('select to_jsonb(s) v from project_coding_capacity_resume_receipts s where project_id=$1 and historical_missions in (98,99) order by historical_missions',[project])).rows
+ });
+ const saved102=await preserve102(),blocked102=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(blocked102.status,'blocked');assert.equal(blocked102.max_missions,102);assert.equal(blocked102.active_mission_id,c.mission.id);
+ let sql102=readFileSync('supabase/migrations/20261124203500_mission102_final_package_authorization.sql','utf8')
+  .replace(/^\s*(?:--[^\n]*\n)*BEGIN;\s*/i,'').replace(/\s*COMMIT;\s*$/i,'');
+ for(const [a,b] of [['0597487f-326d-4951-a727-612be9d772f1',auth99],
+  ['ea3d02049744c56e080c25ef98182dba6f9ebb07',identityRelease],['dpl_7mXNM9TW1dSVb7gwiYmuywE2KZaF',identityDeployment],
+  ['3094d990-a16e-498b-bfb3-1a37245069c7',c.mission.id],['51274624-c601-4d66-826e-c635bb026e65',c.job.id],
+  ['32cde957-b859-414d-88f0-ab726a238808',m100Claim.mission.id],['1e6d47e0-1515-4cd7-997a-47148d6d52f4',m100Claim.job.id],
+  ['06be0829-baf2-4205-8ccd-42def3345c5a',m101Claim.mission.id],['00af04ad-d161-4e61-be80-101415028396',m101Claim.job.id],
+  ['08e792df-1046-4282-89dc-83994a8a6b7e',coder99.id],['1cf12044-d9ba-4e8b-9ef4-8b7e5aa004a5',reviewer99.id],
+  ['s.release_generation<>45','s.release_generation<>'+claimGeneration]]){
+  assert.ok(sql102.includes(a),a);sql102=sql102.replaceAll(a,b);
+ }
+ for(const match of [...sql102.matchAll(/\('([^']+)'[,\s]+'([a-f0-9]{32})'\)/g)]){
+  const hash=(await one('select md5(prosrc) h from pg_proc where oid=$1::regprocedure',[match[1]])).h;
+  sql102=sql102.replace("'"+match[2]+"'","'"+hash+"'");
+ }
+ await db.query(sql102);await db.query('DISCARD PLANS');
+ assert.deepEqual(await preserve102(),saved102);
+ assert.deepEqual(await one('select * from work_projects where id=$1',[project]),blocked102);
+ assert.equal((await one('select count(*)::int n from project_coding_capacity_resume_receipts where project_id=$1',[project])).n,2);
+ assert.equal((await one('select project_org_coding_capacity_final_roles_valid($1) ok',[project])).ok,true);
+ const finalRelease='d'.repeat(40),finalDeployment='dpl_Mission102Corrected',finalGeneration=claimGeneration+2;
+ await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5)',[project,identityRelease,identityDeployment,'closed',claimGeneration]);
+ await db.query('select project_org_retest_set_release_gate($1,$2,$3,$4,$5)',[project,finalRelease,finalDeployment,'active',claimGeneration+1]);
+ await db.query('set role service_role');
+ const offer102=(await one('select project_org_coding_capacity_offer($1,$2,$3) o',[owner,project,finalRelease])).o;
+ assert.equal(offer102.stage,'authorize');assert.equal(offer102.historicalMissions,102);assert.equal(offer102.priorMaxMissions,102);
+ assert.equal(offer102.remainingMissions,0);assert.equal(offer102.additionalMissions,1);assert.equal(offer102.maxMissions,103);
+ assert.equal(offer102.paidInferenceLimit,1);assert.equal(offer102.coderId,coder99.id);assert.equal(offer102.writerId,coder99.id);assert.equal(offer102.reviewerId,reviewer99.id);
+ assert.equal(offer102.priorAuthorizationId,auth99);assert.equal(offer102.sourceMissionId,c.mission.id);assert.equal(offer102.sourceAssignmentId,c.job.id);
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,finalRelease,finalGeneration,finalDeployment])).ok,false);
+ await deny(()=>db.query('select authorize_work_project_resources($1,$2,$3,600000,null,103,null,$4,$5)',[project,pre.actor_id,pre.chat_id,randomUUID(),'Unauthorized final capacity renewal test']));
+ const auth102=randomUUID(),args102=[owner,project,finalRelease,finalGeneration,finalDeployment,auth102,offer102.stateHash,offer102.scopeHash,offer102.cutoff,1,103,1,0,600000,offer102.remainingRecordedTokens,auth99,c.mission.id,c.job.id];
+ for(const [i,v] of [[0,randomUUID()],[2,identityRelease],[3,finalGeneration-2],[4,identityDeployment],[5,auth99],[6,'a'.repeat(64)],[7,'e'.repeat(64)],[8,new Date(Date.now()+1e8).toISOString()],[9,2],[10,104],[11,2],[12,1],[13,600001],[14,offer102.remainingRecordedTokens-1],[15,newAuth],[16,randomUUID()],[17,randomUUID()]]){
+  await deny(()=>db.query(resumeSql,args102.map((x,j)=>j===i?v:x)));
+ }
+ const authorized102=(await one(resumeSql,args102)).r;
+ assert.equal(authorized102.stage,'authorized');assert.equal(authorized102.authorizationId,auth102);assert.equal(authorized102.remainingMissions,1);
+ await deny(()=>db.query(resumeSql,args102));
+ await db.query('reset role');
+ assert.deepEqual(await preserve102(),saved102);
+ const resumed102=await one('select * from work_projects where id=$1',[project]);
+ assert.equal(resumed102.status,'running');assert.equal(resumed102.active_mission_id,null);assert.equal(resumed102.max_missions,103);
+ assert.equal(resumed102.token_allowance,600000);assert.deepEqual(resumed102.deadline,blocked102.deadline);
+ const receipt102=await one('select * from project_coding_capacity_resume_receipts where project_id=$1 and historical_missions=102',[project]);
+ await deny(()=>db.query('update project_coding_capacity_resume_receipts set paid_inference_limit=2 where project_id=$1 and historical_missions=102',[project]));
+ await deny(()=>db.query('update work_projects set max_missions=104 where id=$1',[project]));
+ receipt={authorization_id:auth102};claimRelease=finalRelease;claimGeneration=finalGeneration;claimDeployment=finalDeployment;
+ await db.query('DISCARD PLANS');
+ c=await schedule(manager);
+ assert.ok(!history102Ids.includes(c.mission.id));
+ for(const bad of [...invalid102,{...packageCommand99,workerId:analyst.id},{...packageCommand99,reviewerId:qa.id},{...packageCommand99,paths:['app/']},
+  {...packageCommand99,tasks:{...packageCommand99.tasks,development:{...packageCommand99.tasks.development,paths:[scopePaths[0]]}}},
+  {...packageCommand99,tasks:{...packageCommand99.tasks,review:{...packageCommand99.tasks.review,paths:[files99[0]]}}},
+  {...packageCommand99,tasks:{...packageCommand99.tasks,development:{...packageCommand99.tasks.development,parentObjective:'Invalid parent'}}}]){
+  const writes=decisionWrites;await deny(()=>execute(c,[bad]));assert.equal(decisionWrites,writes);
+ }
+ await deny(()=>execute(c,[packageCommand99,packageCommand99]));
+ await deny(()=>execute(c,actual100));
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder99.id,paths:scopePaths}]));
+ // SQL itself denies an attempted new appointment under the final receipt,
+ // independently of application preflight. No production role is changed.
+ await deny(async()=>{await settle(c);await db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify(actual100)]);},
+  e=>e.code==='P0001'&&e.message.includes('Final signed commissioning permits only'));
+ await execute(c,[packageCommand99]);
+ await db.query('reset role');
+ const final102=await one('select * from work_projects where id=$1',[project]),pkg102=await one('select * from project_work_packages where project_id=$1',[project]);
+ assert.equal(final102.status,'paused');assert.equal(final102.max_missions,103);assert.equal(final102.active_mission_id,null);
+ assert.equal(pkg102.status,'queued');assert.equal(pkg102.worker_id,coder99.id);assert.equal(pkg102.writer_id,coder99.id);assert.equal(pkg102.reviewer_id,reviewer99.id);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,1);
+ assert.equal((await one('select count(*)::int n from project_worker_contracts where package_id=$1',[pkg102.id])).n,3);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,103);
+ assert.equal((await one("select count(*)::int n from project_provider_requests where project_id=$1 and NOT mission_id=any($2::uuid[]) and operation='inference' and resolved_at is not null",[project,history102Ids])).n,1);
+ assert.equal((await one('select count(*)::int n from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 and NOT m.id=any($2::uuid[]) and j.attempts=1',[project,history102Ids])).n,1);
+ assert.deepEqual(await preserve102(),saved102);
+ assert.deepEqual(await one('select * from project_coding_capacity_resume_receipts where project_id=$1 and historical_missions=102',[project]),receipt102);
+ assert.equal((await one('select project_org_coding_capacity_live($1) ok',[project])).ok,false);
+ await db.query('set role service_role');
+ assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,finalRelease,finalGeneration,finalDeployment])).ok,false);
+ console.log('MISSION102_FINAL_PACKAGE_NATIVE_PASS '+JSON.stringify({history:102,ceiling:103,freshMissions:1,paidFixtureReceipts:1,attemptsEach:1,packages:1,smartContracts:3,workerAgentId:coder99.agent_id,writerAgentId:coder99.agent_id,reviewerAgentId:reviewer99.agent_id,packageId:pkg102.id,realProviderCalls:0,workersAndGrantsPreserved:true}));
+ await db.query('reset role');
+ await db.query('rollback to savepoint mission102_final_resume');await db.query('release savepoint mission102_final_resume');await db.query('DISCARD PLANS');
+ receipt={authorization_id:auth99};claimRelease=identityRelease;claimGeneration=identityGeneration;claimDeployment=identityDeployment;c=m102Claim;
+ await db.query('set role service_role');
  await execute(c,[packageCommand99]);
  await db.query('reset role');
  const final99=await one('select * from work_projects where id=$1',[project]),pkg99=await one('select * from project_work_packages where project_id=$1',[project]);

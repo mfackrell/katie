@@ -5,6 +5,7 @@ on:
       - 'supabase/migrations/20261124173000_owner_coding_capacity_recovery.sql'
       - 'supabase/migrations/20261124193000_mission98_coding_capacity_resume.sql'
       - 'supabase/migrations/20261124195000_mission99_commissioning_identity_resume.sql'
+      - 'supabase/migrations/20261124203500_mission102_final_package_authorization.sql'
       - 'lib/projects/coding-capacity-recovery.ts'
       - 'lib/projects/organization.ts'
       - 'lib/projects/management-context-preflight.ts'
