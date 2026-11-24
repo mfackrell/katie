@@ -122,6 +122,13 @@ export async function assertContext90RetestNative(db,{
   assert.ok(claim.job.lease);
   assert.notEqual((await db.query('select claim_mission_work_release_epoch($1,$2,$3) claim',[release,generation,deployment])).rows[0].claim?.job?.id,selected.assignment);
   console.log('MISSION_CONTEXT90_NATIVE_PASS: 90/96 immutable history, owner/window/release negatives, one signed receipt, watchdog refresh, global scheduler one lease at attempts2');
+  if(process.env.KATIE_TEST_MANAGEMENT95_RETEST==='1'){
+   const {assertManagementFailure95Native}=await import('./assert-management-failure-95-native.mjs');
+   await assertManagementFailure95Native(db,{
+    project,owner,release,generation,deployment,root,
+    sourceMission:selected.mission,sourceAssignment:selected.assignment
+   });
+  }
  } finally {
   await db.query('rollback to savepoint owner_context_90');
   await db.query('release savepoint owner_context_90');
