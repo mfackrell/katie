@@ -84,3 +84,38 @@ test('persisted delivery chain identifies the unused developer and sequential la
  assert.equal(implementationCommissioningDirective(input(m,next,{milestonePackages:[{id:'existing'}]})),'');
  assert.equal(implementationCommissioningDirective(input(m,scoped,{grants:[]})),'');
 });
+
+
+test('signed commissioning requires the persisted appointment then grant then package; prior direct targets cannot receive scope',()=>{
+ const {codingCapacityManagerStage,codingCapacityStageInstruction,assertCodingCapacityManagerStage}=modules()('@/lib/projects/organization');
+ const scope='a'.repeat(64),paths=['app/milestone-3-tic-tac-toe/','lib/milestone-3-tic-tac-toe/','tests/milestone-3-tic-tac-toe/'];
+ const supervisor=node('0e10e20e-e5a9-4443-a636-7c4866a66a5f',MANAGER,'manager',['manage','analysis','repository_review']);
+ const before=[...topology,supervisor],grants=[{node_id:MANAGER,scope_hash:scope,paths}];
+ const s=codingCapacityManagerStage(manager,before,grants,scope);
+ assert.equal(s.action,'appoint');assert.match(codingCapacityStageInstruction(s),/No grant_scope commands at all/);
+ const app=(name,tools)=>({action:'appoint',kind:'worker',managementLevel:'worker',name,tools,paths:[]});
+ const appointments=[app('Coder',['analysis','development']),app('Reviewer',['analysis'])];
+ const rejects=(nodes,stage,batch)=>assert.throws(()=>assertCodingCapacityManagerStage(manager,nodes,stage,batch),e=>e.evidence?.code==='commissioning_stage');
+ for(const n of [analyst,supervisor]){
+  const grant={action:'grant_scope',nodeId:n.id,paths};
+  assertManagementCommands(manager,before,[grant]);
+  rejects(before,s,[grant]);rejects(before,s,[...appointments,grant]);
+ }
+ rejects(before,s,[appointments[0]]);rejects(before,s,[appointments[0],appointments[0]]);
+ rejects(before,s,[...appointments,{action:'commission_package'}]);
+ assert.doesNotThrow(()=>assertCodingCapacityManagerStage(manager,before,s,appointments));
+ const coder=node('8d4f1ba7-1fa9-498c-a8ee-09b7b3750975',MANAGER,'worker',['analysis','development']);
+ const reviewer=node('8d4f1ba7-1fa9-498c-a8ee-09b7b3750976',MANAGER,'worker',['analysis']);
+ const after=[...before,coder,reviewer];
+ const g=codingCapacityManagerStage(manager,after,grants,scope);assert.equal(g.action,'grant_scope');assert.equal(g.coderId,coder.id);
+ for(const n of [analyst,supervisor,qa,reviewer])rejects(after,g,[{action:'grant_scope',nodeId:n.id,paths}]);
+ rejects(after,g,[{action:'grant_scope',nodeId:coder.id,paths:['app/']}]);
+ rejects(after,g,[{action:'grant_scope',nodeId:coder.id,paths:['app/milestone-3-tic-tac-toe/../forbidden']}]);
+ assert.doesNotThrow(()=>assertCodingCapacityManagerStage(manager,after,g,[{action:'grant_scope',nodeId:coder.id,paths}]));
+ const ready=codingCapacityManagerStage(manager,after,[...grants,{node_id:coder.id,scope_hash:scope,paths}],scope);
+ assert.equal(ready.action,'commission_package');
+ const command={action:'commission_package',workerId:coder.id,writerId:coder.id,reviewerId:reviewer.id};
+ rejects(after,ready,[{action:'grant_scope',nodeId:coder.id,paths}]);
+ rejects(after,ready,[command,command]);rejects(after,ready,[{...command,reviewerId:coder.id}]);
+ assert.doesNotThrow(()=>assertCodingCapacityManagerStage(manager,after,ready,[command]));
+});

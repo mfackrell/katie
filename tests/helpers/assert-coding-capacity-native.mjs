@@ -108,10 +108,11 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
     return db.query(sql,values).then(r=>({data:JSON.parse(JSON.stringify(single?r.rows[0]:r.rows)),error:null})).then(ok,bad);
    }};return q;
  }};
- const {executeManagementClaim}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>pgAdapter},
+ let decisionWrites=0;
+ const {executeManagementClaim,assertManagementCommands}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>pgAdapter},
   '@/lib/missions/store':{rpc:async(name,args)=>{
    if(name==='project_provider_mode')return true;
-   assert.equal(name,'project_org_decide');return db.query('select project_org_decide($1,$2,$3)',[args.p_job,args.p_lease,JSON.stringify(args.p_commands)]);
+   assert.equal(name,'project_org_decide');decisionWrites++;return db.query('select project_org_decide($1,$2,$3)',[args.p_job,args.p_lease,JSON.stringify(args.p_commands)]);
   }}})('@/lib/projects/organization');
 
  const schedule=async(node)=>{
@@ -155,19 +156,54 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await deny(()=>execute(c,[{action:'reject',nodeId:qa.id,findings:['Forbidden']}]));
  await execute(c,[{action:'reject',nodeId:manager.id,findings:['Commission the approved implementation workers and package']},{action:'ready'}]);
  c=await schedule(manager);
+ // The exact historical response is unavailable. Exhaust the two direct
+ // report identities that could pass the deployed application guard and
+ // trigger the observed SQL error in the frozen 13-node production topology.
+ // Test variants, never claim these were the actual historical JSON batch.
+ const supervisor=nodes.find(n=>n.parent_id===manager.id&&n.area==='delivery_planning');
+ assert.ok(supervisor&&analyst);
+ const targets=[analyst,supervisor];
+ const legitimateAppointments=[appointment('Capacity Coder',['analysis','development'],'delivery_implementation'),appointment('Capacity Reviewer',['analysis'],'delivery_package_review')];
+ for(const target of targets){
+  const grant={action:'grant_scope',nodeId:target.id,paths:scopePaths};
+  for(const batch of [[grant],[...legitimateAppointments,grant,{action:'ready'}]]){
+   assertManagementCommands(manager,nodes,batch); // old general validator accepts every possible direct target.
+   await deny(async()=>{
+    await settle(c);
+    await db.query('select project_org_decide($1,$2,$3)',[c.job.id,c.job.lease,JSON.stringify(batch)]);
+   },e=>e.code==='P0001'&&e.message==='Grant only newly appointed direct workers their approved scope');
+   const before=decisionWrites;
+   await deny(()=>execute(c,batch),e=>e.name==='ManagementCommandRejection'&&e.evidence?.code==='commissioning_stage'
+    &&e.evidence?.action==='grant_scope'&&e.evidence?.targets?.[0]?.id===target.id
+    &&typeof e.evidence?.proposalHash==='string');
+   assert.equal(decisionWrites,before,'Corrected application rejects before decision RPC');
+  }
+ }
+ assert.equal((await one('select count(*)::int n from project_organization_nodes where project_id=$1',[project])).n,13);
+ assert.equal((await one('select count(*)::int n from project_work_packages where project_id=$1',[project])).n,0);
+ console.log('MISSION98_EXHAUSTIVE_TARGET_REPRODUCTION_PASS: two possible prior direct targets; grant alone and mixed appointments; same P0001, unchanged SQL; corrected application rejects before RPC');
  await deny(()=>execute(c,[{...appointment('Forbidden',['analysis'],'delivery_planning'),kind:'manager',managementLevel:'manager'}]));
  await deny(()=>execute(c,[appointment('Unauthorized',['analysis','production_deploy'],'delivery_implementation')]));
- await execute(c,[appointment('Capacity Coder',['analysis','development'],'delivery_implementation'),appointment('Capacity Reviewer',['analysis'],'delivery_package_review'),{action:'ready'}]);
+ await deny(()=>execute(c,[legitimateAppointments[0],legitimateAppointments[0],{action:'ready'}]));
+ await execute(c,[...legitimateAppointments,{action:'ready'}]);
  const children=(await db.query('select * from project_organization_nodes where parent_id=$1 order by id',[manager.id])).rows;
  const coder=children.find(x=>x.name==='Capacity Coder'),reviewer=children.find(x=>x.name==='Capacity Reviewer');assert.ok(coder&&reviewer);
  assert.equal(coder.kind,'worker');assert.equal(coder.tools.includes('development'),true);
  c=await schedule(manager);
+ const beforeGrantDecision=decisionWrites;
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:analyst.id,paths:scopePaths}]),e=>e.evidence?.code==='commissioning_stage');
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:qa.id,paths:scopePaths}]));
  await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder.id,paths:['app/']}]));
+ assert.equal(decisionWrites,beforeGrantDecision);
+
  await execute(c,[{action:'grant_scope',nodeId:coder.id,paths:scopePaths},{action:'ready'}]);
  c=await schedule(manager);
  const files=['app/milestone-3-tic-tac-toe/page.tsx','lib/milestone-3-tic-tac-toe/game.ts','tests/milestone-3-tic-tac-toe/game.test.ts'];
  const smart=(role,paths)=>({objective:role+' bounded milestone output',deliverable:role+' evidence',instruction:'Complete the exact approved milestone contract for '+role,parentObjective:manager.objective,capability:'analysis',acceptance:[{criterion:'Approved browser contract passes',evidence:'Same source verification'}],inventory:[{item:'Approved tic-tac-toe milestone',contextChars:1000}],estimate:{basis:'declared_inventory',rationale:'One bounded deliverable',uncertainty:'Verify actual output',tokens:1000,seconds:30},tokens:2000,maxAssignments:2,deadline,paths});
  const command={action:'commission_package',workerId:coder.id,writerId:coder.id,reviewerId:reviewer.id,milestoneIndex:0,objective:'Implement approved tic-tac-toe game',deliverables:['Playable game and scoped tests'],interfaces:[],acceptance:['Approved browser contract passes'],dependencies:[],paths:scopePaths,deadline,maxAttempts:2,tasks:{development:smart('development',files),compose:smart('compose',[]),review:smart('review',[])}};
+ await deny(()=>execute(c,[{action:'grant_scope',nodeId:coder.id,paths:scopePaths}]),e=>e.evidence?.code==='commissioning_stage');
+ await deny(()=>execute(c,[command,command]),e=>e.evidence?.code==='commissioning_stage');
+ await deny(()=>execute(c,[{...command,tasks:{...command.tasks,development:{...command.tasks.development,parentObjective:'Wrong manager'}}}]));
  await deny(()=>execute(c,[{...command,workerId:analyst.id}]));
  await deny(()=>execute(c,[{...command,reviewerId:coder.id}]));
  await deny(()=>execute(c,[{...command,paths:['app/']}]));

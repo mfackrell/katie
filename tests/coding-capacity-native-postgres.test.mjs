@@ -29,5 +29,7 @@ test('native PostgreSQL16: exhausted original project, one bounded owner authori
  assert.match(result.stdout,/MISSION_CONTEXT90_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION95_ONE_FOLLOWUP_NATIVE_PASS/);
  assert.match(result.stdout,/CODING_CAPACITY_NATIVE_PASS/);
+ assert.match(result.stdout,/MISSION98_EXHAUSTIVE_TARGET_REPRODUCTION_PASS/);
+ console.log(result.stdout.split('\n').filter(l=>l.includes('MISSION98_EXHAUSTIVE_TARGET_REPRODUCTION_PASS')).join('\n'));
  console.log(result.stdout.split('\n').filter(l=>l.includes('CODING_CAPACITY_NATIVE_PASS')).join('\n'));
 });
