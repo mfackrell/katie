@@ -99,7 +99,7 @@ function restorePacked(c){
  }
  assert.deepEqual(fields,['id','origin_id','owner_id','reason','detail','status','created_at','resolution','extraFields']);
  assert(Array.isArray(ids)&&ids.length>0);
- result.exceptions=c.exceptions.map((row,i)=>{
+ result.exceptions=result.exceptions.map((row,i)=>{
   const e={};
   for(let j=0;j<row.length;j++){
    if(j===8){Object.assign(e,row[j]);continue}
