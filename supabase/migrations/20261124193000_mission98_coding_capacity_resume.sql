@@ -258,6 +258,8 @@ BEGIN
   ELSE
    b:=replace(b,'FROM project_coding_capacity_receipts','FROM project_coding_capacity_authority');
    b:=replace(b,'JOIN project_coding_capacity_receipts','JOIN project_coding_capacity_authority');
+   b:=replace(b,'from project_coding_capacity_receipts','from project_coding_capacity_authority');
+   b:=replace(b,'join project_coding_capacity_receipts','join project_coding_capacity_authority');
    IF k.sig='public.project_org_coding_capacity_live(uuid)' THEN
     b:=replace(b,'BETWEEN 96 AND r.approved_max_missions','BETWEEN r.historical_missions AND r.approved_max_missions');
    ELSIF k.sig='public.project_org_coding_capacity_assignment(uuid,boolean)' THEN
