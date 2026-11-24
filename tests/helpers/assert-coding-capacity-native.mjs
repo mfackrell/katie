@@ -367,7 +367,11 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
   const hash=(await one('select md5(prosrc) h from pg_proc where oid=$1::regprocedure',[match[1]])).h;
   sql99=sql99.replace("'"+match[2]+"'","'"+hash+"'");
  }
+ const priorReceiptRelations=(await db.query("select oid::text,relname,relkind from pg_class where relname like 'project_coding_capacity%' order by oid")).rows;
  await db.query(sql99);
+ // The isolated test installs DDL inside an existing, already-used transaction.
+ // Replan cached statements as the production migration's next transaction would.
+ await db.query('DISCARD PLANS');
  assert.deepEqual(await preserve99(),saved99);
  assert.deepEqual(await one('select * from work_projects where id=$1',[project]),blocked99);
  assert.equal((await one('select count(*)::int n from project_coding_capacity_resume_receipts where project_id=$1',[project])).n,1);
@@ -397,7 +401,8 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  await deny(()=>db.query('update project_coding_capacity_resume_receipts set paid_inference_limit=4 where project_id=$1 and historical_missions=99',[project]));
  await deny(()=>db.query('update work_projects set max_missions=103 where id=$1',[project]));
  receipt={authorization_id:auth99};claimRelease=identityRelease;claimGeneration=identityGeneration;claimDeployment=identityDeployment;
- c=await schedule(manager);
+ await db.query('DISCARD PLANS');
+ try{c=await schedule(manager);}catch(e){console.error('MISSION99_SCHEDULER_DIAGNOSTIC',JSON.stringify({message:e.message,code:e.code,where:e.where,detail:e.detail,table:e.table,constraint:e.constraint,priorReceiptRelations}));throw e;}
  assert.ok(!history99Ids.includes(c.mission.id));
  await deny(()=>execute(c,collision),e=>e.evidence?.code==='commissioning_agent_identity');
  await execute(c,[...legitimateAppointments,{action:'ready'}]);
@@ -433,6 +438,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  console.log('MISSION99_RESUME_NATIVE_PASS '+JSON.stringify({history:99,oldCeiling:101,newCeiling:102,freshMissions:3,paidFixtureReceipts:3,attemptsEach:1,workerAgentId:coder99.agent_id,reviewerAgentId:reviewer99.agent_id,packages:1,smartContracts:3,packageId:pkg99.id,realProviderCalls:0}));
  await db.query('reset role');
  await db.query('rollback to savepoint mission99_identity_resume');await db.query('release savepoint mission99_identity_resume');
+ await db.query('DISCARD PLANS');
  receipt={authorization_id:newAuth};claimRelease=newRelease;claimGeneration=generation+2;claimDeployment=newDeployment;c=m99Claim;
  await db.query('set role service_role');
  await execute(c,[...legitimateAppointments,{action:'ready'}]);
