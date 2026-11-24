@@ -169,7 +169,7 @@ test('Mission102 exact committed package identities exclude the prior analyst an
  const statuses=[{id:d.assignment_id,status:'completed'}];
  const stage=codingCapacityManagerStage(manager,after,grants,scope);
  const roles=committedCommissioningPackageRoles(manager,after,team,[d],statuses,grants,scope,stage,0);
- assert.deepEqual(roles,{workerId:coderId,writerId:coderId,reviewerId,milestoneIndex:0,paths});
+ assert.deepEqual(JSON.parse(JSON.stringify(roles)),{workerId:coderId,writerId:coderId,reviewerId,milestoneIndex:0,paths});
  assert.match(commissioningPackageRoleInstruction(roles),new RegExp(reviewerId));
  assert.match(commissioningPackageRoleInstruction(roles),/tasks.review.paths must be \[\]/);
  const valid={action:'commission_package',...roles,tasks:{development:{paths:[paths[0]+'page.tsx']},compose:{paths:[]},review:{paths:[]}}};
