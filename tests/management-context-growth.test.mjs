@@ -148,3 +148,71 @@ test('Successive management growth preserves all identity, detail, status and as
   detail:'Unique mandatory source evidence '+'E'.repeat(90000),created_at:'2026-11-24T08:00:00Z'});
  assert.throws(()=>buildManagementDecisionContext(x,48000),/exceeds bounded context/);
 });
+
+
+function restoreDeepExceptionDictionary(source){
+ const packed=structuredClone(source);
+ assert.ok(Array.isArray(packed.exceptionReasonDictionary));
+ assert.ok(Array.isArray(packed.exceptionStatusDictionary));
+ const before=packed.exceptions;
+ packed.exceptions=before.map(row=>{
+  const next=[...row];
+  assert.equal(typeof next[3],'number');
+  assert.equal(typeof next[5],'number');
+  next[3]=packed.exceptionReasonDictionary[next[3]];
+  next[5]=packed.exceptionStatusDictionary[next[5]];
+  assert.equal(typeof next[3],'string');
+  assert.equal(typeof next[5],'string');
+  if(typeof next[4]==='string')
+   next[4]=next[4].replace(/~~|~(\d+);/g,(token,index)=>{
+    if(token==='~~')return '~';
+    assert(Number.isSafeInteger(Number(index))&&Number(index)<before.length);
+    return before[Number(index)][0];
+   });
+  if(typeof next[6]==='number'||Array.isArray(next[6])){
+   const micros=Array.isArray(next[6])?next[6][0]:next[6];
+   const precision=Array.isArray(next[6])?next[6][1]:6;
+   assert(Number.isSafeInteger(micros)&&micros>=0);
+   assert(Number.isSafeInteger(precision)&&precision>=1&&precision<=6);
+   const prefix=new Date(Math.floor(micros/1000)).toISOString().slice(0,19);
+   const fraction=String(micros%1000000).padStart(6,'0').slice(0,precision);
+   next[6]=prefix+'.'+fraction+'+00:00';
+  }
+  return next;
+ });
+ delete packed.exceptionReasonDictionary;
+ delete packed.exceptionStatusDictionary;
+ return restorePacked(packed);
+}
+
+test('Recurring 95-mission-like exception IDs and provenance stay lossless across successive growth',()=>{
+ const x=fixture();
+ // These are distinct, preserved diagnostic details quoting actual sibling
+ // exception IDs; no duplicated exception row is deleted or summarized.
+ const allIds=x.exceptions.map(e=>e.id);
+ const detail='Cross-referenced, still-open exceptions '+allIds.slice(0,18).join(', ')+
+  '; each retains its original owner, creation timestamp and resolution state.';
+ for(let wave=0;wave<2;wave++){
+  x.exceptions.push({id:uuid(4100+wave),origin_id:EXEC,owner_id:QA,
+   reason:'objective',status:'open',created_at:
+    '2026-11-24T15:40:45.'+(wave?'23041':'325726')+'+00:00',
+   detail:detail+(wave?' These remain unresolved.':' The original failed result is not completion.')});
+  const original=JSON.parse(buildManagementDecisionContext(x,200000));
+  const serialized=buildManagementDecisionContext(x,48000);
+  const actual=JSON.parse(serialized);
+  assert.ok(serialized.length<=48000,'Realistic additional growth must remain under the original limit');
+  assert.ok(Array.isArray(actual.exceptionReasonDictionary),
+   'The new final compression must be exercised, not an old under-limit fixture');
+  assert.deepEqual(restoreDeepExceptionDictionary(actual),original);
+  assert.equal(actual.exceptions.length,x.exceptions.length);
+  assert.equal(original.evidence.length,actual.evidence.length);
+  console.log('M95_LOSSLESS_GROWTH_PASS '+JSON.stringify({
+   wave:wave+1,exceptions:actual.exceptions.length,chars:serialized.length,
+   evidence:actual.evidence.length
+  }));
+ }
+ x.exceptions.push({id:uuid(4200),origin_id:EXEC,owner_id:QA,reason:'objective',
+  status:'open',created_at:'2026-11-24T15:43:00.343217+00:00',
+  detail:'Genuinely unique required legal or technical evidence '+'X'.repeat(90000)});
+ assert.throws(()=>buildManagementDecisionContext(x,48000),/exceeds bounded context/);
+});
