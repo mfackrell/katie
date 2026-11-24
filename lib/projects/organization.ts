@@ -5,7 +5,7 @@ import type {Claim} from '@/lib/missions/types';
 import type {ModelResult} from '@/lib/missions/model';
 import type {OrchestrationChoice} from '@/lib/orchestration/routing';
 import {missionInputLimit} from '@/lib/missions/request-budget';
-import {smartContractFields,smartSqlRejection} from './smart-diagnostics';
+import {smartContractFields,smartSqlRejection,commissioningSmartCapacity,commissioningSmartCapacityInstruction,smartPackageCapacityFields,type SmartCapacityDiagnostic} from './smart-diagnostics';
 import {managementScope,selectManagementEvidenceIds,buildManagementDecisionContext,type ManagementNode,type ManagementRow,type AssignmentBinding,type AssignmentStatus} from './management-context';
 
 export type ExecutiveModel = {
@@ -221,7 +221,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  // not every node's large contract, completed evidence and archived assignments.
  const [topology,projectRecord]=await Promise.all([
   completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes').select('id,agent_id,kind,management_level,parent_id,area,depth,status,decision_needed').eq('project_id',claim.mission.project_id),'id'),
-  db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline,spec,milestone_index').eq('id',claim.mission.project_id).single(),
+  db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline,spec,milestone_index,max_cycles').eq('id',claim.mission.project_id).single(),
  ]);
  if(projectRecord.error||!projectRecord.data)throw Error('Durable organization topology or owner objective unavailable');
  const principalId=String(claim.job.payload.organizationNodeId??'');
@@ -289,6 +289,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const packageRoles=commissioningStage?.action==='commission_package'
   ?committedCommissioningPackageRoles(node,focused,team,decisions,statuses,grants,project.approved_hash,commissioningStage,project.milestone_index):null;
  if(packageRoles&&milestonePackages.length)throw Error('A package already exists for the approved commissioning milestone');
+ const packageCapacity=packageRoles?commissioningSmartCapacity(focused.find(n=>n.id===principalId)!,project,focused,team,workerContracts,packageRoles,providerControlled):null;
  const baseInstruction=providerControlled
   ?MANAGEMENT_INSTRUCTION+'\nThis owner-started trial uses provider-account controls. Omit package tokens and ceilingMicrousd. Node and SMART tokens describe task sizing only. All deadlines must fit project.deadline. Use one coding milestone within app/milestone-3-tic-tac-toe/, lib/milestone-3-tic-tac-toe/, and tests/milestone-3-tic-tac-toe/. Keep management decisions, dependency checks, independent QA and final evidence-based closure. Internal financial reconciliation is not required.'
   :MANAGEMENT_INSTRUCTION;
@@ -302,7 +303,8 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
    ?'\nOWNER-SIGNED COMMISSIONING-ONLY WINDOW: use the existing authorized implementation line, no new management hierarchy, no rejection cycles, no historical exception closure without evidence, and no unrelated work. The Game Delivery Functional Director hands off with one reject directed to its existing Delivery Manager, plus optional ready. The Delivery Manager may appoint only missing direct execution workers (at most one coder plus distinct analysis reviewer and optional writer), grant them only existing scope, then commission_package in a distinct turn. No other actions except ready accompanying substantive work. Use newly appointed workers for the package roles. The window stops at the first real package; no automatic retry.': '')
   +(commissioningStage?codingCapacityStageInstruction(commissioningStage):'')
   +(appointmentAgents?commissioningAgentInstruction(appointmentAgents):'')
-  +(packageRoles?commissioningPackageRoleInstruction(packageRoles):'');
+  +(packageRoles?commissioningPackageRoleInstruction(packageRoles):'')
+  +(packageCapacity?commissioningSmartCapacityInstruction(packageCapacity):'');
  const input=buildManagementDecisionContext({
   principalId,topology,scopedNodes:focused,project,
   executionTeam:appointmentAgents??team,exceptions,bindings,statuses,
@@ -345,6 +347,15 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  }
  // A valid resolution may cite an older/deeper completed assignment omitted
  // from the bounded prompt. Read the proposed IDs; never infer their existence.
+ if(packageCapacity){
+  const i=batch.findIndex(c=>c.action==='commission_package');
+  const capacityFields=smartPackageCapacityFields(batch[i],packageCapacity);
+  if(capacityFields.length){
+   const rejected=new ManagementCommandRejection('SMART estimated workload exceeds single-worker context, resources or execution window; decompose before dispatch','smart_contract_capacity',i+1,'commission_package');
+   rejected.evidence.smartFields=capacityFields.map(f=>f.field);rejected.evidence.capacityFields=capacityFields;rejected.evidence.proposalHash=proposalHash;
+   throw rejected;
+  }
+ }
  const resolutionIds=(commands as ManagementRow[]).filter(c=>c.action==='resolve').map(c=>c.assignmentId)
   .filter((id):id is string=>typeof id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
  const [resolutionBindings,resolutionEvidence]=await Promise.all([
@@ -367,7 +378,7 @@ type ReportingNode={id:string;parent_id?:string|null};
 type ReportingTarget={field:string;status:'missing'|'malformed'|'unknown'|'direct_report'|'not_direct_report';id?:string;idHash?:string};
 
 export class ManagementCommandRejection extends Error {
- readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number;smartFields?:string[];proposalHash?:string;agentIdentity?:{requestedAgentId:string|null;existingNodeId:string|null}};
+ readonly evidence:{code:string;reason:string;position:number|null;action:string|null;targets:ReportingTarget[];priorAppointments:number;smartFields?:string[];capacityFields?:SmartCapacityDiagnostic[];proposalHash?:string;agentIdentity?:{requestedAgentId:string|null;existingNodeId:string|null}};
  constructor(message:string,code:string,position:number|null=null,action:unknown=null,targets:ReportingTarget[]=[],priorAppointments=0){
   super(message);
   this.name='ManagementCommandRejection';

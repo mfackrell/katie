@@ -189,3 +189,40 @@ test('Mission102 exact committed package identities exclude the prior analyst an
  assert.throws(()=>committedCommissioningPackageRoles(manager,after,team.map(a=>({...a,archived:true})),[d],statuses,grants,scope,stage,0));
  assert.throws(()=>committedCommissioningPackageRoles(manager,after.map(n=>n.id===coderId?{...n,tools:['analysis']}:n),team,[d],statuses,grants,scope,stage,0));
 });
+
+
+test('Mission103 role-specific SMART capacity uses persisted context, shared worker sizing, deadline and precise diagnostics',()=>{
+ const {smartJsonbChars,commissioningSmartCapacity,commissioningSmartCapacityInstruction,smartPackageCapacityFields}=modules()('@/lib/projects/smart-diagnostics');
+ const now=Date.parse('2026-11-24T21:20:00Z'),deadline='2026-11-26T19:45:00Z',coder='08e792df-1046-4282-89dc-83994a8a6b7e',reviewer='1cf12044-d9ba-4e8b-9ef4-8b7e5aa004a5';
+ const workers=[{id:coder,agent_id:'coder',parent_id:MANAGER,kind:'worker',status:'active',token_limit:32000,deadline},
+  {id:reviewer,agent_id:'reviewer',parent_id:MANAGER,kind:'worker',status:'active',token_limit:16000,deadline}];
+ const team=workers.map(n=>({id:n.agent_id,archived:false,config:{maxInputChars:16000}}));
+ const roles={workerId:coder,writerId:coder,reviewerId:reviewer};
+ const project={deadline,max_cycles:3,spec:{requirements:['3×3 board'],milestones:[{contract:{scenarios:[]}}],finalContract:{scenarios:[]}}};
+ const c=commissioningSmartCapacity({id:MANAGER,deadline},project,workers,team,[],roles,true,now);
+ assert.equal(c.workers[0].remainingSizingTokens,32000);assert.equal(c.workers[1].contextChars,16000);
+ assert.match(commissioningSmartCapacityInstruction(c,now),/length\(contract::jsonb::text\)/);
+ assert.equal(smartJsonbChars({a:'a😀',b:[1,true,null],c:1e-7}),Array.from('{"a": "a😀", "b": [1, true, null], "c": 0.0000001}').length);
+ const task=(tokens,est,chars)=>({objective:'Verified scoped role',inventory:[{item:'Approved requirement evidence',contextChars:chars}],estimate:{tokens:est,seconds:600},tokens,maxAssignments:1,deadline});
+ const valid={deadline,maxAttempts:1,tasks:{development:task(16000,15000,6000),compose:task(6000,5000,8000),review:task(12000,10000,10000)}};
+ assert.equal(smartPackageCapacityFields(valid,c,now).length,0);
+ const review=valid.tasks.review;
+ const cases=[
+  [{inventory:[{item:'Evidence',contextChars:16000}]},'tasks.review.contextChars'],
+  [{estimate:{...review.estimate,tokens:12001}},'tasks.review.estimate.tokens*maxAssignments'],
+  [{estimate:{...review.estimate,seconds:999999}},'tasks.review.estimate.seconds*maxAssignments'],
+  [{deadline:'2026-11-27T19:45:00Z'},'tasks.review.deadline'],
+  [{tokens:16001},'worker.'+reviewer+'.totalContractTokens'],
+  [{maxAssignments:2},'tasks.review.maxAssignments']
+ ];
+ for(const [delta,field] of cases){
+  const bad={...valid,tasks:{...valid.tasks,review:{...review,...delta}}};
+  const original=JSON.stringify(bad);
+  assert.ok(smartPackageCapacityFields(bad,c,now).some(f=>f.field===field),field);
+  assert.equal(JSON.stringify(bad),original,'No estimate rewriting');
+ }
+ const aggregate={...valid,tasks:{...valid.tasks,compose:{...valid.tasks.compose,tokens:17000}}};
+ assert.ok(smartPackageCapacityFields(aggregate,c,now).some(f=>f.field==='worker.'+coder+'.totalContractTokens'));
+ const previous=commissioningSmartCapacity({id:MANAGER,deadline},project,workers,team,[{worker_id:reviewer,token_limit:5000}],roles,true,now);
+ assert.ok(smartPackageCapacityFields(valid,previous,now).some(f=>f.field==='worker.'+reviewer+'.totalContractTokens'));
+});
