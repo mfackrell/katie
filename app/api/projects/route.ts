@@ -12,6 +12,7 @@ import {mission84ProviderRetryOffer} from '@/lib/projects/mission84-provider-ret
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
 import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
 import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
+import {packageExecutionOffer} from '@/lib/projects/package-execution-authorization';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -63,6 +64,12 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
+        if(p.status==='paused'&&p.max_missions===104){
+            try{
+                const offer=await packageExecutionOffer(p.id);
+                return {projectId:p.id,releaseSha:releaseSha!,cutoff:offer.cutoff,priorCutoff:offer.cutoff,receipt:null,packageExecutionRecovery:offer};
+            }catch{return null;}
+        }
         try{
             const coding=await codingCapacityOffer(p.id);
             return {projectId:p.id,releaseSha:releaseSha!,cutoff:coding.cutoff,priorCutoff:coding.cutoff,receipt:null,codingCapacityRecovery:coding};

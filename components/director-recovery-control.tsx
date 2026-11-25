@@ -18,6 +18,8 @@ import type {FollowupManagementRetestOffer} from "@/lib/projects/management-foll
 import {FollowupManagementRetestControl} from "./management-followup-retest-control";
 import type {CodingCapacityOffer} from "@/lib/projects/coding-capacity-recovery";
 import {CodingCapacityRecoveryControl} from "./coding-capacity-recovery-control";
+import type {PackageExecutionOffer} from "@/lib/projects/package-execution-authorization";
+import {PackageExecutionControl} from "./package-execution-control";
 import {Mission80WatchdogRecoveryControl} from "./mission80-watchdog-recovery-control";
 import {Mission82WatchdogRecoveryControl} from "./mission82-watchdog-recovery-control";
 import type {OriginalBoundedRecoveryOffer} from "@/lib/projects/original-bounded-recovery";
@@ -50,6 +52,7 @@ export type DirectorRecoveryOffer = {
   managementContextRetest?:ManagementContextRetestOffer;
   followupManagementRetest?:FollowupManagementRetestOffer;
   codingCapacityRecovery?:CodingCapacityOffer;
+  packageExecutionRecovery?:PackageExecutionOffer;
   mission84ProviderRetry?:Mission84ProviderRetryOffer;
   originalBoundedRecovery?:OriginalBoundedRecoveryOffer;
   managementActivationError?:string;
@@ -206,6 +209,8 @@ function LegacyDirectorRecoveryControl({
 
 
 export function DirectorRecoveryControl(props:{recovery:DirectorRecoveryOffer;onRefresh:()=>void}){
+ if(props.recovery.packageExecutionRecovery)
+  return <PackageExecutionControl key={props.recovery.projectId+':'+props.recovery.releaseSha} initial={props.recovery.packageExecutionRecovery} onRefresh={props.onRefresh}/>;
  if(props.recovery.codingCapacityRecovery)
   return <CodingCapacityRecoveryControl key={props.recovery.projectId+':'+props.recovery.releaseSha}
    initial={props.recovery.codingCapacityRecovery} onRefresh={props.onRefresh}/>;

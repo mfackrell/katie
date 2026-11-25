@@ -311,7 +311,9 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   evidence,plans,dependencies,scopeGrants:grants,workerContracts,
   workPackages:packages,workPackageAttempts:attempts,work,decisions,
  },missionInputLimit(claim));
- const response=await model(claim,instruction,input,'none');
+ const signedPackage=typeof (claim.mission.project_evidence as ManagementRow|null)?.packageExecutionAuthorizationId==='string';
+ const packageDirective=signedPackage?'\nOWNER-SIGNED PACKAGE EXECUTION ONLY: Evaluate the exact existing package using its completed technical work, composition and independent review evidence. If rejected, give the actual unmet acceptance criteria; in the subsequent repair decision use only repair_package for the same rejected package within its saved attempt limit. Do not appoint, grant scope, commission, change contracts, or undertake any unrelated management action. Use only the applicable evaluate_package or repair_package, plus optional ready.':'';
+ const response=await model(claim,instruction+packageDirective,input,'none');
  let commands:unknown;
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
