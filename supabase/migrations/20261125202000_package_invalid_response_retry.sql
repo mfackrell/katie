@@ -267,7 +267,7 @@ begin
  values(p_project,p_authorization,(cp->>'completionAuthorizationId')::uuid,r.package_id,p_owner,qid,r.cutoff,p_retry_terms,cp);
  insert into project_package_invalid_retry_attempts(source_request_id,authorization_id,project_id,mission_id,assignment_id,next_attempt,reason,response_hash,rejection)
  values(qid,p_authorization,p_project,mid,jid,(cp->>'priorAttempts')::int+1,cp->>'invalidReason',cp->>'responseHash',cp->'assignmentResult');
- update mission_assignments set status='queued',available_at=clock_timestamp(),updated_at=stamp
+ update mission_assignments set status='queued',available_at=now(),updated_at=stamp
  where id=jid and mission_id=mid and status='failed' and attempts=(cp->>'priorAttempts')::int and lease is null and lease_until is null;
  if not found then raise exception 'Saved invalid manager assignment changed';end if;
  update agent_missions set status='running',updated_at=stamp where id=mid and project_id=p_project and status='blocked' and calls=2;
