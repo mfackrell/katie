@@ -226,3 +226,26 @@ test('Mission103 role-specific SMART capacity uses persisted context, shared wor
  const previous=commissioningSmartCapacity({id:MANAGER,deadline},project,workers,team,[{worker_id:reviewer,token_limit:5000}],roles,true,now);
  assert.ok(smartPackageCapacityFields(valid,previous,now).some(f=>f.field==='worker.'+reviewer+'.totalContractTokens'));
 });
+
+test('Mission109 signed package retry and durable replay use native authorization; unrelated paid missions still fail closed',async()=>{
+ const prior={VERCEL_ENV:process.env.VERCEL_ENV,VERCEL_GIT_COMMIT_SHA:process.env.VERCEL_GIT_COMMIT_SHA,VERCEL_DEPLOYMENT_ID:process.env.VERCEL_DEPLOYMENT_ID};
+ const release='a'.repeat(40),deployment='dpl_Qualified',lease='lease-109';
+ let allowed=false;const calls=[];
+ const {assertManagementInferenceAdmission}=modules({'@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args:JSON.parse(JSON.stringify(args))});return allowed;}}})('@/lib/projects/organization');
+ const claim={mission:{id:'d7e48722-01a0-47ed-81ef-d045a5b09c89',calls:1,project_evidence:{packageExecutionAuthorizationId:'receipt'}},job:{id:'ed9182b7-7e95-4678-afb2-b75832c5aeea',attempts:3,lease}};
+ try{
+  process.env.VERCEL_ENV='production';process.env.VERCEL_GIT_COMMIT_SHA=release;process.env.VERCEL_DEPLOYMENT_ID=deployment;
+  await assert.rejects(assertManagementInferenceAdmission(claim,true),/already admitted/);
+  assert.deepEqual(calls.at(-1),{name:'project_org_package_management_resume_allowed',args:{p_job:claim.job.id,p_lease:lease,p_release:release,p_deployment:deployment}});
+  allowed=true;
+  await assert.doesNotReject(assertManagementInferenceAdmission(claim,true));
+  await assert.doesNotReject(assertManagementInferenceAdmission({...claim,mission:{...claim.mission,calls:2},job:{...claim.job,attempts:4}},true));
+  const before=calls.length;
+  await assert.rejects(assertManagementInferenceAdmission({...claim,mission:{...claim.mission,project_evidence:{}}},true),/already admitted/);
+  process.env.VERCEL_ENV='preview';
+  await assert.rejects(assertManagementInferenceAdmission(claim,true),/already admitted/);
+  assert.equal(calls.length,before);
+  await assert.doesNotReject(assertManagementInferenceAdmission({...claim,mission:{...claim.mission,calls:0}},true));
+  assert.equal(calls.length,before);
+ }finally{for(const [key,value] of Object.entries(prior)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+});
