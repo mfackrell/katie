@@ -816,6 +816,22 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration,smartDeployment])).ok,true);
  assert.equal((await one('select project_org_retest_claim_release_authorized_epoch($1,$2,$3,$4) ok',[project,smartRelease,smartGeneration+1,smartDeployment])).ok,false);
  assert.equal((await one('select count(*)::int n from project_provider_requests where mission_id=$1',[child104.id])).n,0);
+ // Exercise the actual claim RPC, not just its eligibility predicate.
+ const implement104=await one("select id from mission_assignments where mission_id=$1 and role='development'",[child104.id]);
+ await db.query('savepoint native_claim_42702');
+ await db.query('set role service_role');
+ await assert.rejects(()=>db.query('select claim_mission_work_release_epoch($1,$2,$3)',[smartRelease,smartGeneration,smartDeployment]),e=>e.code==='42702'&&e.message.includes('m.id'));
+ await db.query('rollback to savepoint native_claim_42702');
+ await db.query('release savepoint native_claim_42702');
+ await db.query('reset role');
+ await db.query(readFileSync('supabase/migrations/20261125143500_package_claim_alias.sql','utf8'));
+ await db.query('set role service_role');
+ const claimed104=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[smartRelease,smartGeneration,smartDeployment])).r;
+ assert.equal(claimed104.job.id,implement104.id);
+ assert.equal(claimed104.job.status,'running');assert.equal(claimed104.job.attempts,1);assert.ok(claimed104.job.lease);
+ await db.query('reset role');
+ assert.equal((await one('select count(*)::int n from project_provider_requests where mission_id=$1',[child104.id])).n,0);
+ console.log('MISSION105_NATIVE_CLAIM_ALIAS_PASS');
  console.log('MISSION104_PACKAGE_EXECUTION_NATIVE_PASS '+JSON.stringify({preservedHistory:104,authorizedMissionCeiling:112,isolatedSchedulerAdmission:1,originalWorkerRoles:3,realProviderCalls:0}));
  await db.query('rollback to savepoint mission103_smart_resume');await db.query('release savepoint mission103_smart_resume');await db.query('DISCARD PLANS');
  receipt={authorization_id:auth102};claimRelease=finalRelease;claimGeneration=finalGeneration;claimDeployment=finalDeployment;c=m103Claim;
