@@ -312,11 +312,12 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   workPackages:packages,workPackageAttempts:attempts,work,decisions,
  },missionInputLimit(claim));
  const signedPackage=typeof (claim.mission.project_evidence as ManagementRow|null)?.packageExecutionAuthorizationId==='string';
- const packageDirective=signedPackage?'\nOWNER-SIGNED PACKAGE EXECUTION ONLY: Evaluate the exact existing package using its completed technical work, composition and independent review evidence. If rejected, give the actual unmet acceptance criteria; in the subsequent repair decision use only repair_package for the same rejected package within its saved attempt limit. Do not appoint, grant scope, commission, change contracts, or undertake any unrelated management action. Use only the applicable evaluate_package or repair_package, plus optional ready.':'';
+ const packageDirective=signedPackage?'\nOWNER-SIGNED PACKAGE EXECUTION ONLY: Evaluate the exact existing package using its completed technical work, composition and independent review evidence. If rejected, give the actual unmet acceptance criteria; in the subsequent repair decision use only repair_package for the same rejected package within its saved attempt limit. Do not appoint, grant scope, commission, change contracts, or undertake any unrelated management action. Return exactly one JSON command for the applicable evaluate_package or repair_package, optionally followed by exactly one ready command. The entire JSON array must contain one or two elements. Never combine evaluation and repair in a single decision.':'';
  const response=await model(claim,instruction+packageDirective,input,'none');
  let commands:unknown;
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}
+ if(signedPackage&&(!Array.isArray(commands)||commands.length<1||commands.length>2))throw new ManagementCommandRejection('Saved package decision must contain one applicable action and at most one ready','package_decision_shape');
  assertManagementCommands(node,topology,commands,Boolean(recovery));
  const batch=commands as ManagementRow[];
  const proposalHash=createHash('sha256').update(JSON.stringify(commands)).digest('hex');

@@ -62,6 +62,7 @@ export function isCreditExhaustion(error:unknown):boolean{
 // still validates its source provenance, and independently reviews the candidate.
 async function trialProviderRequest<T>(
  claim:Claim,operation:'model-list'|'inference',requestHash:string,send:()=>Promise<T>,confirmedReceipt:(result:T)=>string|null,executionDeadline:number,
+ capture?: (result:T)=>{text:string;status:string;model:string;output:unknown;usage:unknown},
 ):Promise<T>{
  const boundary={p_job:claim.job.id,p_lease:claim.job.lease};
  const request={p_job:claim.job.id,p_attempt:claim.job.lease,p_request:randomUUID(),p_operation:operation,p_hash:requestHash};
@@ -78,7 +79,13 @@ async function trialProviderRequest<T>(
   const result=await send();
   const receipt=confirmedReceipt(result);
   if(!receipt)throw Error('Trial provider refused execution or returned an uncertain response');
-  if(!await rpc<boolean>('project_provider_request',{...request,p_receipt:receipt}))
+  if(capture){
+   // Preserve the exact response and its provider receipt before decision validation.
+   const args={p_job:request.p_job,p_attempt:request.p_attempt,p_request:request.p_request,p_hash:request.p_hash,p_receipt:receipt,p_response:capture(result)};
+   const persist=()=>rpc<boolean>('project_org_package_capture_response',args);
+   const stored=await persist().catch(()=>persist()).catch(()=>false);
+   if(!stored)throw Error('Paid package response checkpoint could not be confirmed');
+  }else if(!await rpc<boolean>('project_provider_request',{...request,p_receipt:receipt}))
    throw Error('Trial provider result could not be confirmed');
   return result;
  }catch(error){
@@ -104,6 +111,11 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   const boundary={p_job:claim.job.id,p_lease:claim.job.lease};
   if(claim.mission.project_kind==='management'&&tools!=='none')throw Error('Management tools must remain disabled');
   if(!await rpc<boolean>('project_provider_mission_live',boundary))throw Error('Trial assignment authority is unavailable');
+  if(claim.mission.project_kind==='management'&&typeof (claim.mission.project_evidence as {packageExecutionAuthorizationId?:unknown}|null)?.packageExecutionAuthorizationId==='string'){
+   const saved=await rpc<{text:string;status:string;model:string}|null>('project_org_package_saved_response',boundary);
+   if(saved){if(saved.status!=='completed'||typeof saved.text!=='string'||!saved.text.trim())throw Error('Durable paid management response is incomplete; no paid replay permitted');
+    return {text:saved.text,sources:[],calculations:[],model:saved.model,provider:'openai',routingReason:'Recovered exact durable paid management response'};}
+  }
   if(savedReview)return savedReview;
   const executionDeadline=missionExecutionDeadline(claim);
   const provider=getAvailableProviders().find(candidate=>candidate.name==='openai');
@@ -287,7 +299,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
     const refused=(result.output??[]).some(item=>item&&typeof item==='object'&&'content' in item&&Array.isArray(item.content)&&item.content.some(block=>block?.type==='refusal'));
     const definitive=result.status==='completed'||result.status==='incomplete'&&result.incomplete_details?.reason==='max_output_tokens';
     return definitive&&!refused&&!result.error&&typeof result.id==='string'&&result.id.length>0?result.id:null;
-   },executionDeadline):await send();
+   },executionDeadline,typeof (claim.mission.project_evidence as {packageExecutionAuthorizationId?:unknown}|null)?.packageExecutionAuthorizationId==='string'?(result=>({text:result.output_text??'',status:result.status??'unknown',model:selectedModel,output:result.output??[],usage:result.usage??null})):undefined):await send();
    if(providerControlled)console.info('[Trial model usage]',{jobId:claim.job.id,model:selectedModel,requestId:response.id,usage:response.usage});
    if((fullBenchmark||fenced)&&(response as {service_tier?:string}).service_tier!=='default')throw Error('Full provider service tier uncertain; reservation retained');
    let draftCheckpointFailed=false;

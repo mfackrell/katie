@@ -16,7 +16,7 @@ import {mission84ProviderRetryOffer,M84_PROVIDER_MISSION,M84_PROVIDER_ASSIGNMENT
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
 import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
 import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
-import {packageExecutionOffer,ORIGINAL_PACKAGE,matchesPackageTerms,matchesCorrectiveTerms} from '@/lib/projects/package-execution-authorization';
+import {packageExecutionOffer,ORIGINAL_PACKAGE,matchesPackageTerms,matchesCorrectiveTerms,matchesCompletionTerms} from '@/lib/projects/package-execution-authorization';
 import {originalBoundedRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-bounded-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -182,7 +182,8 @@ const codingCapacityInput=z.object({
 }).strict();
 const packageExecutionInput=z.object({trialAction:z.literal('authorize_existing_package_execution'),projectId:z.literal(ORIGINAL_TTT_PROJECT),packageId:z.literal(ORIGINAL_PACKAGE),authorizationId:z.string().uuid(),releaseSha:z.string().regex(/^[a-f0-9]{40}$/),releaseGeneration:z.number().int().positive(),deploymentId:z.string().regex(/^dpl_[A-Za-z0-9]+$/),stateHash:z.string().regex(/^[a-f0-9]{64}$/),terms:z.unknown().refine(matchesPackageTerms),paidInferenceConsent:z.literal(true)}).strict();
 const correctivePackageInput=packageExecutionInput.extend({trialAction:z.literal('authorize_package_corrective_continuation'),correctiveTerms:z.unknown().refine(matchesCorrectiveTerms),contextHash:z.string().regex(/^[a-f0-9]{64}$/),contextChars:z.number().int().min(1).max(96000)}).strict();
-const input=z.union([correctivePackageInput,packageExecutionInput,codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
+const completionPackageInput=correctivePackageInput.extend({trialAction:z.literal('authorize_package_completion'),completionTerms:z.unknown().refine(matchesCompletionTerms)}).strict();
+const input=z.union([completionPackageInput,correctivePackageInput,packageExecutionInput,codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
@@ -229,16 +230,18 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
- if('trialAction' in p&&(p.trialAction==='authorize_existing_package_execution'||p.trialAction==='authorize_package_corrective_continuation')){
+ if('trialAction' in p&&(p.trialAction==='authorize_existing_package_execution'||p.trialAction==='authorize_package_corrective_continuation'||p.trialAction==='authorize_package_completion')){
   const offer=await packageExecutionOffer(p.projectId);
-  const corrective=p.trialAction==='authorize_package_corrective_continuation';
-  if(corrective!==Boolean(offer.correctiveTerms)||(p.trialAction==='authorize_package_corrective_continuation'&&(!matchesCorrectiveTerms(p.correctiveTerms)||p.contextHash!==offer.contextHash||p.contextChars!==offer.contextChars)))return NextResponse.json({error:'Exact consolidated corrective terms and complete context required'},{status:409});
+  const completion=p.trialAction==='authorize_package_completion';
+  const corrective=p.trialAction==='authorize_package_corrective_continuation'||completion;
+  if(completion!==Boolean(offer.completionTerms)||(p.trialAction==='authorize_package_completion'&&!matchesCompletionTerms(p.completionTerms)))return NextResponse.json({error:'Exact displayed completion terms required'},{status:409});
+  if(corrective!==Boolean(offer.correctiveTerms)||((p.trialAction==='authorize_package_corrective_continuation'||p.trialAction==='authorize_package_completion')&&(!matchesCorrectiveTerms(p.correctiveTerms)||p.contextHash!==offer.contextHash||p.contextChars!==offer.contextChars)))return NextResponse.json({error:'Exact consolidated corrective terms and complete context required'},{status:409});
   if(offer.packageId!==p.packageId||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId||offer.stateHash!==p.stateHash||!matchesPackageTerms(p.terms))return NextResponse.json({error:'Stale or changed package authority'},{status:409});
   const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
   const failure=mission79ReleaseIdentityFailure(epoch,{releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId},process.env.VERCEL_DEPLOYMENT_ID);
   if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
-  return NextResponse.json(await rpc(corrective?'project_org_package_corrective_authorize':offer.continuation?'project_org_package_release_authorize':'project_org_package_execution_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_package:p.packageId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_terms:p.terms,p_consent:p.paidInferenceConsent,...(p.trialAction==='authorize_package_corrective_continuation'?{p_corrective_terms:p.correctiveTerms,p_context_hash:p.contextHash,p_context_chars:p.contextChars}:{})}),{headers:{'Cache-Control':'no-store'}});
+  return NextResponse.json(await rpc(completion?'project_org_package_completion_authorize':corrective?'project_org_package_corrective_authorize':offer.continuation?'project_org_package_release_authorize':'project_org_package_execution_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_package:p.packageId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_terms:p.terms,p_consent:p.paidInferenceConsent,...((p.trialAction==='authorize_package_corrective_continuation'||p.trialAction==='authorize_package_completion')?{p_corrective_terms:p.correctiveTerms,p_context_hash:p.contextHash,p_context_chars:p.contextChars}:{}),...(p.trialAction==='authorize_package_completion'?{p_completion_terms:p.completionTerms}:{})}),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='authorize_coding_capacity'){
   const offer=await codingCapacityOffer(p.projectId);
