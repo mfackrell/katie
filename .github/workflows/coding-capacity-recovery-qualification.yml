@@ -56,6 +56,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Mission109 authenticated conversation control in Chromium
+        run: node --test tests/coding-capacity-owner-control-browser.test.mjs
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
       - run: node --test --test-name-pattern='Registered development contract outranks|Mission108 signed package' tests/missions-runtime.test.mjs
       - run: node --test tests/management-context.test.mjs tests/project-context.test.mjs tests/package-completion-parser.test.mjs
