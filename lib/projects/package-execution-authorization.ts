@@ -18,7 +18,14 @@ export function matchesCompletionTerms(value:unknown):boolean{
  const v=value as Record<string,unknown>,entries=Object.entries(COMPLETION_TERMS);
  return Object.keys(v).length===entries.length&&entries.every(([k,x])=>v[k]===x);
 }
-export type PackageExecutionOffer={stage:'authorize';projectId:string;packageId:string;priorAuthorizationId:string;releaseSha:string;releaseGeneration:number;deploymentId:string;scopeHash:string;cutoff:string;stateHash:string;contractFingerprint:string;managerId:string;coderId:string;writerId:string;reviewerId:string;paths:string[];developmentPaths:string[];terms:PackageExecutionTerms;continuation?:{failedMissionId:string;failedAssignmentId:string;usedMissions:105|106;remainingMissions:7|6;usedAttempts:1;remainingAttempts:2;recordedProviderRequests:0};correctiveTerms?:CorrectiveTerms;contextHash?:string;contextChars?:number;completionTerms?:CompletionTerms;completionCheckpoint?:{missionId:string;assignmentId:string;usedMissions:109;usedAttempts:2;paidInferences:3;priorRequestId:string;priorProviderReceipt:string;correctiveReleasesUsed:number}};
+export const INVALID_RETRY_TERMS={maxMissions:118,developmentAttempts:5,paidInferenceLimit:80,maxRetriesPerAssignment:2,maxAdditionalRetries:6,tokenAllowance:600000,retryOnly:'invalid-settled-management-response',unresolvedProviderRetries:0,automaticDevelopmentRepairs:0,additionalTokens:0,dollarCeilingMicrousd:null,stopAt:'package-acceptance'} as const;
+export type InvalidRetryTerms=typeof INVALID_RETRY_TERMS;
+export function matchesInvalidRetryTerms(value:unknown):boolean{
+ if(!value||typeof value!=='object'||Array.isArray(value))return false;
+ const v=value as Record<string,unknown>,entries=Object.entries(INVALID_RETRY_TERMS);
+ return Object.keys(v).length===entries.length&&entries.every(([k,x])=>v[k]===x);
+}
+export type PackageExecutionOffer={stage:'authorize';projectId:string;packageId:string;priorAuthorizationId:string;releaseSha:string;releaseGeneration:number;deploymentId:string;scopeHash:string;cutoff:string;stateHash:string;contractFingerprint:string;managerId:string;coderId:string;writerId:string;reviewerId:string;paths:string[];developmentPaths:string[];terms:PackageExecutionTerms;continuation?:{failedMissionId:string;failedAssignmentId:string;usedMissions:105|106;remainingMissions:7|6;usedAttempts:1;remainingAttempts:2;recordedProviderRequests:0};correctiveTerms?:CorrectiveTerms;contextHash?:string;contextChars?:number;completionTerms?:CompletionTerms;completionCheckpoint?:{missionId:string;assignmentId:string;usedMissions:109;usedAttempts:2;paidInferences:3;priorRequestId:string;priorProviderReceipt:string;correctiveReleasesUsed:number};invalidRetryTerms?:InvalidRetryTerms;invalidRetryCheckpoint?:{missionId:string;assignmentId:string;sourceRequestId:string;responseHash:string;invalidReason:string;usedMissions:109;usedAttempts:2;paidInferences:4;correctiveReleasesUsed:number}};
 export function matchesPackageTerms(value:unknown):boolean{
  if(!value||typeof value!=='object'||Array.isArray(value))return false;
  const v=value as Record<string,unknown>,expected=Object.entries(PACKAGE_TERMS);
@@ -30,11 +37,17 @@ export async function packageExecutionOffer(projectId:string):Promise<PackageExe
  const args={p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:projectId,p_release:sha};
  let o:PackageExecutionOffer;
  try{o=await rpc<PackageExecutionOffer>('project_org_package_execution_offer',args);}
- catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_release_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_corrective_offer',args);}catch{o=await rpc<PackageExecutionOffer>('project_org_package_completion_offer',args);}}}
+ catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_release_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_corrective_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_completion_offer',args);}catch{o=await rpc<PackageExecutionOffer>('project_org_package_invalid_retry_offer',args);}}}}
  if(!o||o.stage!=='authorize'||o.projectId!==projectId||o.packageId!==ORIGINAL_PACKAGE||o.releaseSha!==sha||o.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID||o.scopeHash!==ORIGINAL_TTT_SCOPE
  ||!Number.isSafeInteger(o.releaseGeneration)||o.releaseGeneration<1||!Number.isFinite(Date.parse(o.cutoff))||Date.now()>=Date.parse(o.cutoff)-300000
  ||!/^[a-f0-9]{64}$/.test(o.stateHash)||!/^[a-f0-9]{64}$/.test(o.contractFingerprint)||o.coderId!==o.writerId||o.coderId===o.reviewerId||!matchesPackageTerms(o.terms))throw Error('Exact Mission 104 package offer required');
- if(o.completionTerms){
+ if(o.invalidRetryTerms){
+  const c=o.invalidRetryCheckpoint;
+  if(!matchesInvalidRetryTerms(o.invalidRetryTerms)||!c||c.missionId!=='d7e48722-01a0-47ed-81ef-d045a5b09c89'||c.assignmentId!=='ed9182b7-7e95-4678-afb2-b75832c5aeea'||c.usedMissions!==109||c.usedAttempts!==2||c.paidInferences!==4||c.invalidReason!=='invalid_lifecycle_action'||!/^[a-f0-9]{64}$/.test(c.responseHash)||!matchesCorrectiveTerms(o.correctiveTerms))throw Error('Exact Mission109 invalid-response offer required');
+  const context=await preflightManagementContext(projectId,o.managerId,false,false,96000);
+  if(context.principalId!==o.managerId||context.inputLimit!==96000||context.chars<1||context.chars>96000||!/^[a-f0-9]{64}$/.test(context.sha256))throw Error('Complete current management context required');
+  o={...o,contextHash:context.sha256,contextChars:context.chars};
+ }else if(o.completionTerms){
   const c=o.completionCheckpoint;
   if(!matchesCompletionTerms(o.completionTerms)||!c||c.missionId!=='d7e48722-01a0-47ed-81ef-d045a5b09c89'||c.assignmentId!=='ed9182b7-7e95-4678-afb2-b75832c5aeea'||c.usedMissions!==109||c.usedAttempts!==2||c.paidInferences!==3||!matchesCorrectiveTerms(o.correctiveTerms))throw Error('Exact Mission109 completion offer required');
   const context=await preflightManagementContext(projectId,o.managerId,false,false,96000);

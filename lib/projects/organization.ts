@@ -240,6 +240,29 @@ async function managementRowsByIds<T>(ids:string[],factory:(batch:string[])=>unk
  return all;
 }
 
+// The signed package path must not advertise general management commands or
+// a future lifecycle transition as an available action in this decision.
+export function signedPackageDecisionStage(principalId:string,previousMissionId:unknown,packages:ManagementRow[],attempts:ManagementRow[]){
+ if(typeof previousMissionId!=='string'||!previousMissionId)throw Error('Exact signed package attempt identity required');
+ const owned=packages.filter(p=>p.manager_id===principalId&&attempts.some(a=>a.package_id===p.id&&a.mission_id===previousMissionId));
+ if(owned.length!==1||typeof owned[0].id!=='string')throw Error('Exact owned signed package required');
+ const p=owned[0],history=attempts.filter(a=>a.package_id===p.id);
+ if(history.some(a=>!Number.isSafeInteger(a.attempt)||Number(a.attempt)<1))throw Error('Invalid saved package attempt ordinal');
+ const latest=[...history].sort((a,b)=>Number(b.attempt)-Number(a.attempt))[0];
+ if(!latest||latest.mission_id!==previousMissionId||history.filter(a=>a.attempt===latest.attempt).length!==1)throw Error('Latest signed package attempt required');
+ if(p.status!=='review'&&p.status!=='rejected')throw Error('No signed package management action permitted in this state');
+ return {packageId:p.id as string,status:p.status as 'review'|'rejected',attemptCount:history.length,deadline:p.deadline};
+}
+export function signedPackageDecisionInstruction(stage:ReturnType<typeof signedPackageDecisionStage>,development:{id:string;status:string}|null,limits?:{attemptLimit:number;projectCycles:number;projectCycleLimit:number;now:number}){
+ const prefix='You are the responsible management-only agent for the existing owner-signed software package. Do not write code or perform worker tasks. Preserve the original scope, contracts, historical evidence, ownership and acceptance criteria. Return ONLY a JSON array containing exactly one permitted substantive command, optionally followed by {"action":"ready"}. No other commands, no invented evidence, no combined transitions. Current package ID: '+stage.packageId+'. Current package status: '+stage.status+'. ';
+ if(stage.status==='review'){
+  if(!development?.id)throw Error('Current development assignment evidence required');
+  return prefix+'The only substantive command available now is evaluate_package: {action:"evaluate_package",packageId:'+JSON.stringify(stage.packageId)+',assignmentId:'+JSON.stringify(development.id)+',accepted:boolean,checks:[{criterion:"exact package criterion",passed:boolean,assignmentId:'+JSON.stringify(development.id)+',evaluation:"evidence-based assessment"}],findings:["actual actionable unmet criterion"]}. Assess the latest development assignment (status '+development.status+') against the original package and independently verified work, composition and review. If the development assignment failed or required evidence is missing, accepted must be false and findings must explain the actual failure. Acceptance requires the complete independently verified evidence and all original criteria. No later lifecycle action is permitted in this decision.';
+ }
+ if(!limits||!Number.isSafeInteger(limits.attemptLimit)||limits.attemptLimit<1||!Number.isSafeInteger(limits.projectCycles)||limits.projectCycles<0||!Number.isSafeInteger(limits.projectCycleLimit)||stage.attemptCount>=limits.attemptLimit||limits.projectCycles>=limits.projectCycleLimit||typeof stage.deadline!=='string'||!Number.isFinite(Date.parse(stage.deadline))||Date.parse(stage.deadline)<=limits.now)throw Error('Bounded signed package correction unavailable');
+ return prefix+'The only substantive command available now is repair_package: {action:"repair_package",packageId:'+JSON.stringify(stage.packageId)+'}. The prior rejection is already recorded. Commission only the bounded correction of this same package, with the original SMART scope, workers, findings and attempt history intact. Do not change the saved findings or assert acceptance.';
+}
+
 export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruction:string,input:string,tools:'none')=>Promise<ModelResult>) {
  const recovery=directorRecoveryRelease(claim);
  if(recovery&&(process.env.VERCEL_ENV!=='production'||recovery!==process.env.VERCEL_GIT_COMMIT_SHA))
@@ -249,14 +272,14 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  // not every node's large contract, completed evidence and archived assignments.
  const [topology,projectRecord]=await Promise.all([
   completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes').select('id,agent_id,kind,management_level,parent_id,area,depth,status,decision_needed').eq('project_id',claim.mission.project_id),'id'),
-  db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline,spec,milestone_index,max_cycles').eq('id',claim.mission.project_id).single(),
+  db.from('work_projects').select('objective,team,approved_hash,verified_sha,phase,deadline,spec,milestone_index,cycles,max_cycles').eq('id',claim.mission.project_id).single(),
  ]);
  if(projectRecord.error||!projectRecord.data)throw Error('Durable organization topology or owner objective unavailable');
  const principalId=String(claim.job.payload.organizationNodeId??'');
  const scope=managementScope(topology,principalId);
  const node=scope.principal;
  if(node.agent_id!==claim.job.agent_id)throw Error('Management principal mismatch');
- const project=projectRecord.data as {objective:string;team:string[];approved_hash?:string|null;phase?:string|null;milestone_index?:number};
+ const project=projectRecord.data as {objective:string;team:string[];approved_hash?:string|null;phase?:string|null;milestone_index?:number;cycles?:number;max_cycles?:number};
  // Fetch direct-report contracts and active decision inputs; older assignments
  // remain in PostgreSQL. Complete, ordered pages avoid PostgREST row truncation.
  const [focused,bindings,team,grants,plans,dependencies,ownedExceptions,originExceptions,packages,workerContracts,work,decisions]=await Promise.all([
@@ -326,8 +349,20 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
   workPackages:packages,workPackageAttempts:attempts,work,decisions,
  },missionInputLimit(claim));
  const signedPackage=typeof (claim.mission.project_evidence as ManagementRow|null)?.packageExecutionAuthorizationId==='string';
- const packageDirective=signedPackage?'\nOWNER-SIGNED PACKAGE EXECUTION ONLY: Evaluate the exact existing package using its completed technical work, composition and independent review evidence. If rejected, give the actual unmet acceptance criteria; in the subsequent repair decision use only repair_package for the same rejected package within its saved attempt limit. Do not appoint, grant scope, commission, change contracts, or undertake any unrelated management action. Return exactly one JSON command for the applicable evaluate_package or repair_package, optionally followed by exactly one ready command. The entire JSON array must contain one or two elements. Never combine evaluation and repair in a single decision.':'';
- const response=await model(claim,instruction+packageDirective,input,'none');
+ let decisionInstruction=instruction;
+ if(signedPackage){
+  if(!providerControlled||!await rpc<boolean>('project_org_package_execution_assignment',{p_job:claim.job.id}))throw Error('Native signed package management authority unavailable');
+  const stage=signedPackageDecisionStage(principalId,(claim.mission.project_evidence as ManagementRow).previousMissionId,packages,attempts);
+  if(stage.status==='review'){
+   const current=await db.from('mission_assignments').select('id,status').eq('mission_id',(claim.mission.project_evidence as ManagementRow).previousMissionId as string).eq('role','development').single();
+   if(current.error||!current.data)throw Error('Current development assignment evidence unavailable');
+   decisionInstruction=signedPackageDecisionInstruction(stage,current.data as {id:string;status:string});
+  }else{
+   const limit=await rpc<number>('project_org_package_completion_limit',{p_project:claim.mission.project_id,p_key:'developmentAttempts',p_original:3});
+   decisionInstruction=signedPackageDecisionInstruction(stage,null,{attemptLimit:limit,projectCycles:project.cycles??NaN,projectCycleLimit:project.max_cycles??NaN,now:Date.now()});
+  }
+ }
+ const response=await model(claim,decisionInstruction,input,'none');
  let commands:unknown;
  try{commands=JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
  catch{throw new ManagementCommandRejection('Management response is not a JSON command batch','invalid_json');}

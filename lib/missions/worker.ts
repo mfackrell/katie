@@ -437,6 +437,13 @@ export async function runMissionBatch(model=missionModel){
  const outcomes=await Promise.all(claims.map(async claim=>{
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
   catch(error){
+   // A paid response may be retried only after native code independently proves
+   // its immutable captured command invalid and consumes an authenticated slot.
+   if(release&&claim.mission.project_kind==='management'&&typeof (claim.mission.project_evidence as {packageExecutionAuthorizationId?:unknown}|null)?.packageExecutionAuthorizationId==='string'){
+    const retryArgs={p_job:claim.job.id,p_lease:claim.job.lease,p_release:release,p_generation:observedReleaseGeneration,p_deployment:process.env.VERCEL_DEPLOYMENT_ID??'',p_detail:(error instanceof Error?error.message:String(error)).slice(0,600)};
+    const queue=()=>rpc<boolean>('project_org_package_retry_invalid_response',retryArgs);
+    if(await queue().catch(()=>queue()).catch(()=>false))return {jobId:claim.job.id,status:'retrying_invalid_response'};
+   }
    if(error instanceof ManagementCommandRejection){
     const result={detail:error.message,managementCommandRejection:error.evidence};
     const terminal={p_id:claim.job.id,p_lease:claim.job.lease,p_result:result,p_children:[],p_status:'failed',p_mission_status:'blocked',p_final:null};
