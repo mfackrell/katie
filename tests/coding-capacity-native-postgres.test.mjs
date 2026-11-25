@@ -44,6 +44,8 @@ test('native PostgreSQL16: exhausted original project, one bounded owner authori
  assert.match(result.stdout,/MISSION108_SIGNED_CODING_ADMISSION_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION109_UNSPENT_RETRY_NATIVE_PASS/);
  console.log('MISSION109_UNSPENT_RETRY_NATIVE_PASS');
+ assert.match(result.stdout,/MISSION109_UNSIGNED_OWNER_CONTROL_HANDOFF_PASS/);
+ console.log('MISSION109_UNSIGNED_OWNER_CONTROL_HANDOFF_PASS');
  assert.match(result.stdout,/MISSION109_INVALID_RESPONSE_RETRY_NATIVE_PASS/);
  console.log('MISSION109_INVALID_RESPONSE_RETRY_NATIVE_PASS');
  assert.match(result.stdout,/MISSION109_DURABLE_COMPLETION_NATIVE_PASS/);
