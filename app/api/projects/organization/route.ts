@@ -235,7 +235,7 @@ export async function POST(request:NextRequest){
   const failure=mission79ReleaseIdentityFailure(epoch,{releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId},process.env.VERCEL_DEPLOYMENT_ID);
   if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
   if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
-  return NextResponse.json(await rpc('project_org_package_execution_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_package:p.packageId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_terms:p.terms,p_consent:p.paidInferenceConsent}),{headers:{'Cache-Control':'no-store'}});
+  return NextResponse.json(await rpc(offer.continuation?'project_org_package_release_authorize':'project_org_package_execution_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_package:p.packageId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_terms:p.terms,p_consent:p.paidInferenceConsent}),{headers:{'Cache-Control':'no-store'}});
  }
  if('trialAction' in p&&p.trialAction==='authorize_coding_capacity'){
   const offer=await codingCapacityOffer(p.projectId);

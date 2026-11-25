@@ -157,3 +157,31 @@ test('Mission104 existing-package consent binds the exact owner, release, packag
  epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};canonical=false;assert.equal((await post()).status,409);canonical=true;
  assert.equal(writes,0);const signed=await post();assert.equal(signed.status,200,await signed.text());assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
 });
+
+
+test('Corrected package release reuses the owner route and unchanged original terms, never a new package approval',async t=>{
+ const env={VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,VERCEL_DEPLOYMENT_ID:deployment,KATIE_OWNER_AUTH_USER_ID:ownerId};
+ const old=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]])),clock=Date.now;
+ Object.assign(process.env,env);Date.now=()=>Date.parse('2026-11-25T14:40:00Z');
+ t.after(()=>{Date.now=clock;for(const k in old){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}});
+ const packageId='f88d4d10-dfe4-479e-a2cf-41b3e8209e47';
+ let owner=false,canonical=true,writes=0,epoch={active:true,generation,deploymentId:deployment},terms;
+ const offer=()=>({stage:'authorize',projectId,packageId,priorAuthorizationId:ownerId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,cutoff,stateHash,contractFingerprint:'c'.repeat(64),managerId:ownerId,coderId:authorizationId,writerId:authorizationId,reviewerId:projectId,paths:[],developmentPaths:[],terms,continuation:{failedMissionId:'a6cf216a-6ef6-46fb-968c-1bac950c916b',failedAssignmentId:'4c15dddd-5a3f-481e-87cb-7607902bbd06',usedMissions:105,remainingMissions:7,usedAttempts:1,remainingAttempts:2,recordedProviderRequests:0}});
+ const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async request=>owner&&(request.method==='GET'||request.headers.get('origin')===new URL(request.url).origin)},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/missions/store':{rpc:async(n,a)=>{
+  if(n==='project_org_package_execution_offer')throw Error('Original receipt already exists');
+  if(n==='project_org_package_release_offer'){if(writes)throw Error('Already resumed');return offer();}
+  if(n==='project_org_retest_release_epoch')return epoch;
+  assert.equal(n,'project_org_package_release_authorize');assert.deepEqual(JSON.parse(JSON.stringify(a)),{p_owner:ownerId,p_project:projectId,p_package:packageId,p_release:sha,p_generation:generation,p_deployment:deployment,p_authorization:authorizationId,p_state_hash:stateHash,p_terms:terms,p_consent:true});
+  writes++;return {...offer(),stage:'authorized',authorizationId};
+ }},'@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ terms=JSON.parse(JSON.stringify(mock('@/lib/projects/package-execution-authorization').PACKAGE_TERMS));
+ const route=mock('@/app/api/projects/organization/route');
+ const payload={trialAction:'authorize_existing_package_execution',projectId,packageId,authorizationId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,stateHash,terms,paidInferenceConsent:true};
+ const post=(body=payload,origin='https://katie.test')=>route.POST(new Request('https://katie.test/api/projects/organization',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(body)}));
+ assert.equal((await post()).status,403);owner=true;
+ assert.equal((await (await route.GET(new Request('https://katie.test/api/projects/organization?projectId='+projectId+'&packageId='+packageId))).json()).packageExecutionRecovery.continuation.remainingAttempts,2);
+ for(const change of [{releaseGeneration:generation+1},{stateHash:'0'.repeat(64)},{terms:{...terms,maxMissions:113}},{terms:{...terms,developmentAttempts:4}},{paidInferenceConsent:false}])assert.notEqual((await post({...payload,...change})).status,200);
+ assert.equal((await post(payload,'https://other.test')).status,403);canonical=false;assert.equal((await post()).status,409);canonical=true;
+ epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};
+ assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
+});
