@@ -14,6 +14,8 @@ on:
       - 'supabase/migrations/20261125182700_package_coding_admission.sql'
       - 'supabase/migrations/20261125190000_package_completion_recovery.sql'
       - 'supabase/migrations/20261125202000_package_invalid_response_retry.sql'
+      - 'supabase/migrations/20261125210000_pending_invalid_retry_offer_handoff.sql'
+      - 'components/chat-panel.tsx'
       - 'scripts/project-context.mjs'
       - 'lib/missions/model.ts'
       - 'tests/package-completion-parser.test.mjs'
@@ -54,6 +56,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Mission109 authenticated conversation control in Chromium
+        run: node --test tests/coding-capacity-owner-control-browser.test.mjs
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
       - run: node --test --test-name-pattern='Registered development contract outranks|Mission108 signed package' tests/missions-runtime.test.mjs
       - run: node --test tests/management-context.test.mjs tests/project-context.test.mjs tests/package-completion-parser.test.mjs
