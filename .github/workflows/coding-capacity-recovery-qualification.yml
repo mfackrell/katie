@@ -11,6 +11,8 @@ on:
       - 'supabase/migrations/20261125143500_package_claim_alias.sql'
       - 'supabase/migrations/20261125144000_package_execution_corrected_release.sql'
       - 'supabase/migrations/20261125151600_package_corrective_continuation.sql'
+      - 'supabase/migrations/20261125182700_package_coding_admission.sql'
+      - 'lib/projects/worker.ts'
       - 'lib/projects/package-execution-authorization.ts'
       - 'components/package-execution-control.tsx'
       - 'lib/missions/worker.ts'
@@ -48,7 +50,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
-      - run: node --test --test-name-pattern='Registered development contract outranks' tests/missions-runtime.test.mjs
+      - run: node --test --test-name-pattern='Registered development contract outranks|Mission108 signed package' tests/missions-runtime.test.mjs
       - run: node --test tests/management-context.test.mjs
       - name: Install PostgreSQL 16
         run: |
