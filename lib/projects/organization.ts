@@ -258,7 +258,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  if(providerControlled&&claim.mission.calls>0){
   // Only a *second*, lease-held original Mission79 attempt can pass here,
   // following a separate immutable owner authorization on this exact release.
-  // All other management missions retain the existing single-call behavior.
+  // Signed package resumes have a separate native authorization below.
   const authorized=claim.mission.id==='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'
    &&claim.job.id==='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'
    &&claim.mission.calls===1&&claim.job.attempts===2
@@ -268,7 +268,17 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
     p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
     p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
    });
-  if(!authorized)throw Error('Trial management inference was already admitted for this mission');
+  // Signed package resumes are governed by the native lease, exact release,
+  // immutable paid-response receipt and remaining one-time retry authority.
+  // Do not treat the historical inference count as a new purchase.
+  const packageAuthorized=typeof (claim.mission.project_evidence as ManagementRow|null)?.packageExecutionAuthorizationId==='string'
+   &&process.env.VERCEL_ENV==='production'
+   &&await rpc<boolean>('project_org_package_management_resume_allowed',{
+    p_job:claim.job.id,p_lease:claim.job.lease,
+    p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
+    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
+   });
+  if(!authorized&&!packageAuthorized)throw Error('Trial management inference was already admitted for this mission');
  }
  // Read the project-wide current milestone package state only for the existing
  // provider-controlled development commissioning path. A descendant's package
