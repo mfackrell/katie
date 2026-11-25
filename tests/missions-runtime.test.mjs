@@ -709,3 +709,17 @@ test('specification reviewers receive a review output contract rather than compo
   assert.equal(f.ledger[0].text.format.type,'json_schema');assert.equal(f.ledger[0].text.format.name,'mission_review_comparison');assert.ok(f.ledger[0].text.format.schema);
  }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
+
+
+test('Registered development contract outranks the read-only phrase in Mission105 game requirements',async()=>{
+ const m=mission();m.project_id=randomUUID();m.project_kind='development';m.repository_id=randomUUID();m.team[0].config.development=true;
+ m.objective='Build a responsive same-device tic-tac-toe game. Ignore occupied squares without changing the turn. Implement the approved milestone within its exact scope.';
+ const j=job(m,'development','implement');j.payload={capability:'development'};
+ const commits=[],inspections=[];const types=modules()('@/lib/missions/types');
+ assert.equal(types.readOnlyRepositoryObjective(m.objective),true,'Reproduce the actual misleading phrase');
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{assert.equal(name,'commit_mission_work');commits.push(args);return true;}},'@/lib/missions/inspection':{readOnlyRepositoryObjective:types.readOnlyRepositoryObjective,workflowInspection:async()=>null,repositoryInspection:async()=>{inspections.push(j.id);throw Error('Wrong read-only branch');}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:j},async()=>{throw Error('No paid planning inference should be invoked');});
+ assert.equal(inspections.length,0);assert.equal(commits.length,1);assert.equal(commits[0].p_status,'awaiting_approval');
+ // The existing server-side exact-scope approval remains mandatory.
+ assert.equal(j.payload.approved,undefined);
+});

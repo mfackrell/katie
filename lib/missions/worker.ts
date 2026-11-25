@@ -209,7 +209,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
   children.push({key:'review',role:'review',agent_id:reviewer,instruction:'Independently verify the requested outcome and supporting work. Challenge unsupported conclusions, incorrect calculations, missing material requirements and false action claims.',dependencies:['compose']});
   await commit({output:plan,...response},children);return;
  }
- if(job.payload.capability==='repository_review'||(job.role==='development'&&readOnlyRepositoryObjective(mission.objective))){
+ // Registered coding milestones carry a server-owned development contract. A gameplay phrase such as 'without changing the turn' is not a read-only repository assignment.
+ if(job.payload.capability==='repository_review'||(job.role==='development'&&!(mission.project_id&&mission.project_kind==='development'&&job.payload.capability==='development')&&readOnlyRepositoryObjective(mission.objective))){
   const count=saved.jobs.filter(j=>j.payload.capability==='repository_review'||j.role==='development').length;
   const inspection=await repositoryInspection(mission,job.instruction,async input=>{
    const selection=await model(claim,frame+'\nSelect source paths for a READ-ONLY inspection. Return only the requested paths JSON; never a mission plan, code change or commands.',input);

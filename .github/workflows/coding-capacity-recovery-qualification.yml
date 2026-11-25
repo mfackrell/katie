@@ -8,6 +8,8 @@ on:
       - 'supabase/migrations/20261124203500_mission102_final_package_authorization.sql'
       - 'supabase/migrations/20261124212500_mission103_smart_capacity_resume.sql'
       - 'supabase/migrations/20261124233000_mission104_package_execution_authority.sql'
+      - 'supabase/migrations/20261125143500_package_claim_alias.sql'
+      - 'supabase/migrations/20261125144000_package_execution_corrected_release.sql'
       - 'lib/projects/package-execution-authorization.ts'
       - 'components/package-execution-control.tsx'
       - 'lib/missions/worker.ts'
@@ -43,6 +45,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
+      - run: node --test --test-name-pattern='Registered development contract outranks' tests/missions-runtime.test.mjs
       - name: Install PostgreSQL 16
         run: |
           if ! test -x /usr/lib/postgresql/16/bin/initdb; then
