@@ -1225,7 +1225,7 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.equal((await one(queueInvalid,queueArgs109)).ok,true,'Lost retry acknowledgement is idempotent');
  await db.query('reset role');
  // In an isolated fixture, advance the one-minute scheduler delay only.
- await db.query('update mission_assignments set available_at=clock_timestamp()-interval \'1 second\' where id=$1',[retry109c.job.id]);
+ await db.query('update mission_assignments set available_at=now()-interval \'1 second\' where id=$1',[retry109c.job.id]);
  await db.query('savepoint invalid_retry_cap109');
  const finalInvalid109=await nextInvalid109(JSON.stringify(wrong109));
  assert.equal(finalInvalid109.cl.job.attempts,5);
