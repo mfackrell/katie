@@ -64,11 +64,14 @@ async function directorRecoveryFor(p: Project | null, request: NextRequest, prov
     const releaseSha = process.env.VERCEL_GIT_COMMIT_SHA;
     if (!/^[a-f0-9]{40}$/.test(releaseSha ?? '')) return null;
     if(p.id===ORIGINAL_TTT_PROJECT&&p.phase==='development'&&process.env.VERCEL_ENV==='production'){
-        if((p.status==='paused'&&p.max_missions===104)||((p.status==='failed'||p.status==='blocked')&&p.max_missions===112)){
+        if((p.status==='paused'&&p.max_missions===104)||((p.status==='failed'||p.status==='blocked')&&(p.max_missions===112||p.max_missions===118))){
             try{
                 const offer=await packageExecutionOffer(p.id);
                 return {projectId:p.id,releaseSha:releaseSha!,cutoff:offer.cutoff,priorCutoff:offer.cutoff,receipt:null,packageExecutionRecovery:offer};
-            }catch{return null;}
+            }catch{
+                return {projectId:p.id,releaseSha:releaseSha!,cutoff:p.deadline,priorCutoff:p.deadline,receipt:null,
+                    managementActivationError:'Package authorization is unavailable for the current release or saved state. No owner approval was recorded.'};
+            }
         }
         try{
             const coding=await codingCapacityOffer(p.id);
