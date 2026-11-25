@@ -453,7 +453,7 @@ begin
  ('public.finish_work_project_lifecycle(uuid,uuid,text,jsonb)',$a$where project_id=p.id)>=112$a$,$b$where project_id=p.id)>=p.max_missions$b$,1),
  ('public.finish_work_project_lifecycle(uuid,uuid,text,jsonb)',$a$where package_id=ww.id)<3)$a$,$b$where package_id=ww.id)<project_org_package_completion_limit(p.id,'developmentAttempts',3))$b$,1),
  ('public.project_package_command(uuid,uuid,jsonb)',$a$where package_id=w.id)>=w.max_attempts$a$,$b$where package_id=w.id)>=project_org_package_completion_limit(p.id,'developmentAttempts',w.max_attempts)$b$,1),
- ('public.project_smart_admit(uuid,bigint)',$a$where contract_id=c.id)>=c.max_assignments$a$,$b$where contract_id=c.id)>=case when c.package_id=(select s.package_id from project_package_completion_receipts s where s.project_id=p.id) then project_org_package_completion_limit(p.id,'developmentAttempts',c.max_assignments) else c.max_assignments end$b$,1),
+ ('public.project_smart_admit(uuid,bigint)',$a$where contract_id=c.id)>=c.max_assignments$a$,$b$where contract_id=c.id)>=(case when c.package_id=(select s.package_id from project_package_completion_receipts s where s.project_id=p.id) then project_org_package_completion_limit(p.id,'developmentAttempts',c.max_assignments) else c.max_assignments end)$b$,1),
  ('public.project_provider_request(uuid,text,uuid,text,text,text,text)',$a$ IF p_receipt IS NULL AND EXISTS(SELECT 1 FROM project_package_execution_receipts$a$,$b$ IF p_receipt IS NOT NULL AND p_operation='inference' AND p_scope IS NULL
  AND EXISTS(SELECT 1 FROM project_package_execution_receipts x JOIN agent_missions m ON m.project_id=x.project_id JOIN mission_assignments j ON j.mission_id=m.id WHERE j.id=p_job)
  AND NOT EXISTS(SELECT 1 FROM project_package_paid_responses d WHERE d.request_id=p_request AND d.assignment_id=p_job AND d.execution_attempt=p_attempt AND d.request_hash=p_hash AND d.provider_receipt=p_receipt)
@@ -464,7 +464,7 @@ begin
   if (length(d)-length(replace(d,a,'')))/length(a)<>edit.expected then raise exception 'Unexpected package completion predecessor: % / %',target,a;end if;
   d:=replace(d,a,b);
  end loop;
- execute d;
+ begin execute d;exception when others then raise exception 'Completion migration %: [%] %',target,sqlstate,sqlerrm;end;
  end loop;
 end $patch$;
 
