@@ -16,7 +16,7 @@ language sql stable security definer set search_path=public,pg_temp as $$
    and j.role='work' and m.project_kind='management' and j.status='failed' and m.status='blocked'
    and j.attempts=2 and m.calls=1 and m.routing_calls=0 and j.lease is null and j.lease_until is null
    and j.detail='Trial management inference was already admitted for this mission'
-   and m.detail=j.detail and j.result->>'detail'=j.detail and j.updated_at>=s.authorized_at
+   and m.detail=j.detail and j.result->>'detail'=j.detail
    and q.operation='inference' and q.resolved_at is not null and q.provider_receipt is not null
    and (select count(*) from project_provider_requests x where x.assignment_id=j.id)=2
    and exists(select 1 from project_provider_requests x where x.assignment_id=j.id and x.operation='model-list'
