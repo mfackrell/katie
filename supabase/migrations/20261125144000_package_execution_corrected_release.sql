@@ -124,7 +124,7 @@ end $$;
 -- Keep the original resource, deadline, package and assignment predicates.
 -- Only the exact observed result ambiguity and the release identity seam change.
 DO $package_patch$
-DECLARE d text; a text; b text; s regprocedure; patch record;
+DECLARE d text; a text; b text; s regprocedure; patch record; definitions jsonb:='{}'::jsonb;
 BEGIN
  FOR patch IN SELECT * FROM (VALUES
  ('public.project_org_package_execution_schedule(uuid,uuid)','result jsonb;','schedule_result jsonb;'),
@@ -136,10 +136,11 @@ BEGIN
  ('public.project_org_package_execution_live(uuid)',$old$g.release_sha=r.release_sha and g.generation=r.release_generation and g.deployment_id=r.deployment_id$old$,$new$project_org_package_release_matches(p.id,g.release_sha,g.generation,g.deployment_id)$new$),
  ('public.project_org_package_execution_claim(uuid,text,bigint,text)',$old$r.release_sha=p_release and r.release_generation=p_generation and r.deployment_id=p_deployment$old$,$new$project_org_package_release_matches(p.id,p_release,p_generation,p_deployment)$new$)
  ) AS edits(signature,anchor,replacement) LOOP
-  s:=patch.signature::regprocedure;d:=pg_get_functiondef(s);a:=patch.anchor;b:=patch.replacement;
+  s:=patch.signature::regprocedure;d:=coalesce(definitions->>patch.signature,pg_get_functiondef(s));a:=patch.anchor;b:=patch.replacement;
   IF (length(d)-length(replace(d,a,'')))/length(a)<>1 THEN RAISE EXCEPTION 'Unexpected package correction predecessor: %',s;END IF;
-  EXECUTE replace(d,a,b);
+  definitions:=jsonb_set(definitions,array[patch.signature],to_jsonb(replace(d,a,b)));
  END LOOP;
+ FOR patch IN SELECT * FROM jsonb_each_text(definitions) LOOP EXECUTE patch.value; END LOOP;
 END $package_patch$;
 revoke all on function public.project_org_package_release_drained(uuid) from public,anon,authenticated,service_role;
 revoke all on function public.project_org_package_release_matches(uuid,text,bigint,text) from public,anon,authenticated,service_role;
