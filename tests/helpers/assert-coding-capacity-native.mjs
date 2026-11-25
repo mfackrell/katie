@@ -1180,7 +1180,8 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.equal((await one('select project_org_package_invalid_response_reason($1,$2) r',[retry109c.job.id,paid109b])).r,'invalid_lifecycle_action');
  const invalidCheckpoint109=(await one('select project_org_package_invalid_retry_checkpoint($1) cp',[project])).cp;
  assert.equal(invalidCheckpoint109.sourceRequestId,paid109b);assert.equal(invalidCheckpoint109.paidInferences,4);
- const retryRelease109='c'.repeat(40),retryDeploy109='dpl_InvalidResponseCorrected',retryGeneration109=generation109c+2;
+ const retryRelease109='1091'.repeat(10),retryDeploy109='dpl_InvalidResponseCorrected',retryGeneration109=generation109c+2;
+ assert.equal((await one('select count(*)::int n from project_package_corrective_receipts where project_id=$1 and release_sha=$2',[project,retryRelease109])).n,0,'New fixture release must not reuse an immutable historical SHA');
  await db.query("select project_org_retest_set_release_gate($1,$2,$3,'closed',$4)",[project,release109c,deployment109c,generation109c]);
  await db.query("select project_org_retest_set_release_gate($1,$2,$3,'active',$4)",[project,retryRelease109,retryDeploy109,generation109c+1]);
  await deny(()=>db.query(continue107,[project,retryRelease109,retryGeneration109,retryDeploy109,invalidCheckpoint109.stateHash,JSON.stringify({releaseSha:retryRelease109,deploymentId:retryDeploy109,canonicalAlias:'katie-mu.vercel.app',conclusion:'success',testedTree:'d'.repeat(40),pullRequest:1186,ciRunId:12349})]),/Invalid saved decision requires authenticated/);
