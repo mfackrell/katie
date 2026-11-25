@@ -71,6 +71,8 @@ async function advance(p: Project) {
         const current = await readMission(p.active_mission_id);
         const m = current.mission;
         if (m.status === 'awaiting_approval') {
+            // Never try to modify an admitted signed package assignment.
+            if(typeof (m.project_evidence as {packageExecutionAuthorizationId?:unknown}|null)?.packageExecutionAuthorizationId==='string')throw Error('Signed package development is stranded in obsolete approval state');
             const r = runs.find(r => r.mission_id === m.id);
             if (!r?.binding || p.approved_hash !== p.approval_hash)
                 throw Error('Coding requires the exact approved project scope');

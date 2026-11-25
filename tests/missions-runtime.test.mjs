@@ -723,3 +723,20 @@ test('Registered development contract outranks the read-only phrase in Mission10
  // The existing server-side exact-scope approval remains mandatory.
  assert.equal(j.payload.approved,undefined);
 });
+
+
+test('Mission108 signed package uses native task authorization without mutating legacy approval',async()=>{
+ const m=mission();m.project_id=randomUUID();m.project_kind='development';m.repository_id=randomUUID();m.project_evidence={packageExecutionAuthorizationId:randomUUID()};m.team[0].config.development=true;
+ m.objective='Build the original tic-tac-toe game without changing the turn on occupied cells.';
+ const j=job(m,'development','implement');j.payload={capability:'development',development_input:'Frozen original implementation package'};
+ const original=structuredClone(j.payload),calls=[],commits=[];let admitted=true;
+ const task={id:j.id,status:'dispatching',external:{attempted:true},details:'Saved native task'};
+ const binding={projectId:m.project_id,allowedPaths:['app/milestone-3-tic-tac-toe/page.tsx']};
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{
+  calls.push(name);if(name==='mission_development_task'){assert.equal(args.p_job,j.id);assert.equal(args.p_lease,j.lease);if(!admitted)throw Error('Development approval unavailable');return task;}
+  if(name==='commit_mission_work'){commits.push(args);return true;}assert.fail('Unexpected RPC '+name);
+ }},'@/lib/projects/store':{getDevelopmentProjectContext:async(id,dispatch)=>{assert.equal(id,j.id);assert.equal(dispatch,true);return binding;},acceptanceBinding:b=>b},'@/lib/agents/development':{reconcileDevelopment:async(t,b,lease)=>{assert.equal(t.id,j.id);assert.equal(b,binding);assert.equal(lease,j.lease);return {...t,status:'submitted'};},dispatchDevelopment:async()=>assert.fail('Existing dispatch marker must not submit twice')}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:j},async()=>assert.fail('No planning or routing inference'));
+ assert.deepEqual(calls,['mission_development_task','commit_mission_work']);assert.equal(commits[0].p_status,'waiting_external');assert.deepEqual(j.payload,original);
+ admitted=false;await assert.rejects(()=>executeClaim({mission:m,job:j},async()=>assert.fail('No inference when native admission denies')),/Development approval unavailable/);assert.deepEqual(j.payload,original);assert.ok(!commits.some(c=>c.p_status==='awaiting_approval'));
+});
