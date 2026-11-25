@@ -316,3 +316,22 @@ test('a uniquely oversized unresolved exception still fails closed without trunc
  x.exceptions.push({id:'unique-unrepresentable',origin_id:'game',owner_id:'root',status:'open',detail:'Mandatory exact evidence: '+'E'.repeat(95000)});
  assert.throws(()=>buildManagementDecisionContext(x,48000),/Required management decision evidence exceeds bounded context/);
 });
+
+
+test('Mission106 signed package management preserves the complete oversized decision context',()=>{
+ const {missionInputLimit,fitsMissionEnvelope,missionOutputLimit}=modules({'@/lib/missions/store':{}})('@/lib/missions/request-budget');
+ const x=fixture();
+ x.workPackages=[{id:'existing-package',manager_id:'root',status:'review',contract_hash:'unchanged',contract:{acceptance:['Original owner acceptance'],objective:'Deliver the original game'}}];
+ x.workPackageAttempts=[{package_id:'existing-package',attempt:1,mission_id:'failed-development',base_sha:'saved-base'}];
+ x.workerContracts=[{id:'worker-contract',worker_id:'game',manager_id:'root',role:'development',package_id:'existing-package',contract:{required:'Exact SMART contract',evidence:'E'.repeat(52000)}}];
+ const claim={mission:{project_id:'saved-project',project_kind:'management',objective:'Evaluate the existing package',project_evidence:{packageExecutionAuthorizationId:'saved-owner-receipt'}},job:{role:'work',payload:{organizationNodeId:'root'}}};
+ assert.throws(()=>buildManagementDecisionContext(x,48000),/exceeds bounded context/);
+ const limit=missionInputLimit(claim);assert.equal(limit,96000);
+ const input=buildManagementDecisionContext(x,limit);
+ assert.equal(input,buildManagementDecisionContext(x,1000000),'No evidence is dropped or compressed when the complete context fits');
+ assert.ok(input.length>48000&&input.length<96000);
+ const decision=JSON.parse(input);assert.deepEqual(decision.workerContracts,x.workerContracts);assert.deepEqual(decision.workPackages,x.workPackages);assert.deepEqual(decision.workPackageAttempts,x.workPackageAttempts);assert.equal(decision.exceptions.length,2);assert.equal(decision.evidence[0].id,'latest');
+ assert.equal(fitsMissionEnvelope('Evaluate the original package only',input,limit),true);
+ assert.equal(missionOutputLimit(claim,input),3000);
+ for(const invalid of [{...claim,mission:{...claim.mission,project_evidence:{}}},{...claim,mission:{...claim.mission,project_id:null}},{...claim,job:{...claim.job,role:'plan'}},{...claim,mission:{...claim.mission,project_kind:'development'}}])assert.equal(missionInputLimit(invalid),48000);
+});

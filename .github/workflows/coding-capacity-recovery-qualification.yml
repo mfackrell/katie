@@ -13,6 +13,8 @@ on:
       - 'lib/projects/package-execution-authorization.ts'
       - 'components/package-execution-control.tsx'
       - 'lib/missions/worker.ts'
+      - 'lib/missions/request-budget.ts'
+      - 'tests/management-context.test.mjs'
       - 'lib/projects/smart-diagnostics.ts'
       - 'lib/projects/coding-capacity-recovery.ts'
       - 'lib/projects/organization.ts'
@@ -46,6 +48,7 @@ jobs:
       - run: npm run typecheck
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
       - run: node --test --test-name-pattern='Registered development contract outranks' tests/missions-runtime.test.mjs
+      - run: node --test tests/management-context.test.mjs
       - name: Install PostgreSQL 16
         run: |
           if ! test -x /usr/lib/postgresql/16/bin/initdb; then
