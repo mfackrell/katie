@@ -335,3 +335,42 @@ test('Mission106 signed package management preserves the complete oversized deci
  assert.equal(missionOutputLimit(claim,input),3000);
  for(const invalid of [{...claim,mission:{...claim.mission,project_evidence:{}}},{...claim,mission:{...claim.mission,project_id:null}},{...claim,job:{...claim.job,role:'plan'}},{...claim,mission:{...claim.mission,project_kind:'development'}}])assert.equal(missionInputLimit(invalid),48000);
 });
+
+
+test('Mission109: a review-state manager is offered only evaluation of the current failed attempt',()=>{
+ const {signedPackageDecisionStage,signedPackageDecisionInstruction,MANAGEMENT_INSTRUCTION}=modules()('@/lib/projects/organization');
+ const id='f88d4d10-dfe4-479e-a2cf-41b3e8209e47',manager='a00de7ce-4159-49ac-9628-a070d5dbaffd',previous='a1ceb6af-6588-40e4-95c7-ca422f4701f0';
+ const packages=[{id,manager_id:manager,status:'review',deadline:'2026-11-26T19:45:00Z'}],attempts=[{package_id:id,attempt:1,mission_id:'historical-attempt'},{package_id:id,attempt:2,mission_id:previous}];
+ const originalResponse=[{action:'repair_package',packageId:id},{action:'ready'}];
+ // Reproduce the observed failure: the old general management catalog offered
+ // repair even when the native package state permitted evaluation only.
+ assert.match(MANAGEMENT_INSTRUCTION,/repair_package:/);
+ const stage=signedPackageDecisionStage(manager,previous,packages,attempts);
+ const failedAssignment='316179b0-5dcf-4a05-aad1-9a040b270d58';
+ const prompt=signedPackageDecisionInstruction(stage,{id:failedAssignment,status:'failed'});
+ assert.match(prompt,/only substantive command available now is evaluate_package/);
+ assert.match(prompt,new RegExp(failedAssignment));
+ assert.match(prompt,/accepted must be false/);
+ assert.ok(!prompt.includes(originalResponse[0].action),'The rejected repair command must not be offered');
+ for(const forbidden of ['commission_package','appoint:','grant_scope:','authorize_assignment:'])assert.ok(!prompt.includes(forbidden));
+ assert.throws(()=>signedPackageDecisionInstruction(stage,null),/assignment evidence required/);
+ assert.throws(()=>signedPackageDecisionStage('other-manager',previous,packages,attempts),/owned signed package/);
+ assert.throws(()=>signedPackageDecisionStage(manager,'historical-attempt',packages,attempts),/Latest signed package attempt/);
+ for(const status of ['accepted','running','repair','pending'])assert.throws(()=>signedPackageDecisionStage(manager,previous,[{...packages[0],status}],attempts),/No signed package management action/);
+ assert.throws(()=>signedPackageDecisionStage(manager,previous,[...packages,...packages],attempts),/owned signed package/);
+ assert.throws(()=>signedPackageDecisionStage(manager,previous,packages,[...attempts,attempts[1]]),/Latest signed package attempt/);
+});
+test('Mission109: rejected state offers only bounded correction, never evaluation or new commissioning',()=>{
+ const {signedPackageDecisionStage,signedPackageDecisionInstruction}=modules()('@/lib/projects/organization');
+ const packageId='existing-package',previous='latest-failed-mission',now=Date.parse('2026-11-25T20:00:00Z');
+ const packages=[{id:packageId,manager_id:'manager',status:'rejected',deadline:'2026-11-26T19:45:00Z'}];
+ const attempts=[{package_id:packageId,attempt:1,mission_id:'first'},{package_id:packageId,attempt:2,mission_id:previous}];
+ const stage=signedPackageDecisionStage('manager',previous,packages,attempts);
+ const limits={attemptLimit:5,projectCycles:2,projectCycleLimit:5,now};
+ const prompt=signedPackageDecisionInstruction(stage,null,limits);
+ assert.match(prompt,/only substantive command available now is repair_package/);
+ assert.ok(!prompt.includes('evaluate_package'));assert.ok(!prompt.includes('commission_package'));assert.ok(prompt.includes(packageId));
+ for(const override of [{attemptLimit:2},{projectCycles:5},{now:Date.parse(packages[0].deadline)},{attemptLimit:NaN},{projectCycles:-1}])
+  assert.throws(()=>signedPackageDecisionInstruction(stage,null,{...limits,...override}),/Bounded signed package correction unavailable/);
+ assert.throws(()=>signedPackageDecisionInstruction(stage,null),/Bounded signed package correction unavailable/);
+});
