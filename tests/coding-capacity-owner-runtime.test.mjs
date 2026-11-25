@@ -217,3 +217,34 @@ test('Mission106 standing corrective authorization requires explicit unchanged t
  epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};
  assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
 });
+
+
+test('Mission109 supplemental completion consent requires exact current release, owner and displayed ceilings',async t=>{
+ const env={VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,VERCEL_DEPLOYMENT_ID:deployment,KATIE_OWNER_AUTH_USER_ID:ownerId};
+ const old=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]])),clock=Date.now;
+ Object.assign(process.env,env);Date.now=()=>Date.parse('2026-11-25T19:00:00Z');
+ t.after(()=>{Date.now=clock;for(const k in old){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}});
+ const packageId='f88d4d10-dfe4-479e-a2cf-41b3e8209e47',contextHash='d'.repeat(64),contextChars=59021;
+ let owner=false,canonical=true,writes=0,epoch={active:true,generation,deploymentId:deployment},terms,correctiveTerms,completionTerms;
+ const offer=()=>({stage:'authorize',projectId,packageId,priorAuthorizationId:ownerId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,cutoff,stateHash,contractFingerprint:'c'.repeat(64),managerId:ownerId,coderId:authorizationId,writerId:authorizationId,reviewerId:projectId,paths:[],developmentPaths:[],terms,correctiveTerms,completionTerms,completionCheckpoint:{missionId:'d7e48722-01a0-47ed-81ef-d045a5b09c89',assignmentId:'ed9182b7-7e95-4678-afb2-b75832c5aeea',usedMissions:109,usedAttempts:2,paidInferences:3,priorRequestId:'ec7fd1e1-ecd9-4849-84f1-b403e163d632',priorProviderReceipt:'fixture',correctiveReleasesUsed:2}});
+ const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async request=>owner&&(request.method==='GET'||request.headers.get('origin')===new URL(request.url).origin)},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/projects/management-context-preflight':{preflightManagementContext:async(p,n,a,b,l)=>({principalId:n,inputLimit:l,chars:contextChars,sha256:contextHash})},'@/lib/missions/store':{rpc:async(n,a)=>{
+  if(['project_org_package_execution_offer','project_org_package_release_offer','project_org_package_corrective_offer'].includes(n))throw Error('Historical authorization already used');
+  if(n==='project_org_package_completion_offer'){if(writes)throw Error('Already authorized');return offer();}
+  if(n==='project_org_retest_release_epoch')return epoch;
+  assert.equal(n,'project_org_package_completion_authorize');assert.equal(a.p_owner,ownerId);assert.equal(a.p_authorization,authorizationId);
+  assert.deepEqual(JSON.parse(JSON.stringify(a.p_completion_terms)),completionTerms);assert.deepEqual(JSON.parse(JSON.stringify(a.p_terms)),terms);
+  assert.equal(a.p_context_hash,contextHash);assert.equal(a.p_context_chars,contextChars);writes++;return {...offer(),stage:'authorized',authorizationId};
+ }},'@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ const lib=mock('@/lib/projects/package-execution-authorization');terms=JSON.parse(JSON.stringify(lib.PACKAGE_TERMS));correctiveTerms=JSON.parse(JSON.stringify(lib.CORRECTIVE_TERMS));completionTerms=JSON.parse(JSON.stringify(lib.COMPLETION_TERMS));
+ const route=mock('@/app/api/projects/organization/route');
+ const payload={trialAction:'authorize_package_completion',projectId,packageId,authorizationId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,stateHash,terms,correctiveTerms,completionTerms,contextHash,contextChars,paidInferenceConsent:true};
+ const post=(body=payload,origin='https://katie.test')=>route.POST(new Request('https://katie.test/api/projects/organization',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(body)}));
+ assert.equal((await post()).status,403);owner=true;
+ const shown=(await (await route.GET(new Request('https://katie.test/api/projects/organization?projectId='+projectId+'&packageId='+packageId))).json()).packageExecutionRecovery;
+ assert.deepEqual(shown.completionTerms,completionTerms);assert.equal(shown.completionCheckpoint.usedMissions,109);
+ for(const change of [{releaseGeneration:generation+1},{stateHash:'0'.repeat(64)},{completionTerms:{...completionTerms,maxMissions:119}},{completionTerms:{...completionTerms,developmentAttempts:6}},{completionTerms:{...completionTerms,additionalPaidRetries:2}},{completionTerms:{...completionTerms,paidInferenceLimit:81}},{paidInferenceConsent:false},{contextHash:'0'.repeat(64)}])assert.notEqual((await post({...payload,...change})).status,200);
+ const {completionTerms:omit,...legacy}=payload;assert.equal((await post({...legacy,trialAction:'authorize_package_corrective_continuation'})).status,409);
+ assert.equal((await post(payload,'https://other.test')).status,403);canonical=false;assert.equal((await post()).status,409);canonical=true;
+ epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};
+ assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
+});

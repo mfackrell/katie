@@ -239,7 +239,7 @@ begin
  or p_receipt is null or length(p_receipt) not between 1 and 256
  or jsonb_typeof(p_response) is distinct from 'object' or octet_length(p_response::text)>1000000
  or jsonb_typeof(p_response->'text') is distinct from 'string' or jsonb_typeof(p_response->'model') is distinct from 'string'
- or p_response->>'status' not in('completed','incomplete') or jsonb_typeof(p_response->'output') is distinct from 'array'
+ or coalesce(p_response->>'status','') not in('completed','incomplete') or jsonb_typeof(p_response->'output') is distinct from 'array'
  then return false;end if;
  h:=encode(sha256(convert_to(project_canonical(p_response),'UTF8')),'hex');
  select * into existing from project_package_paid_responses where request_id=q.id;
@@ -282,9 +282,9 @@ begin
  select * into d from project_package_paid_responses where request_id=qid;
  select * into latest from project_package_corrective_receipts where project_id=m.project_id order by ordinal desc limit 1;
  if d.execution_attempt is distinct from p_lease::text
- and not (latest.checkpoint->>'mode'='saved-response-replay' and latest.checkpoint->>'assignmentId'=j.id::text
+ and (latest.checkpoint->>'mode'='saved-response-replay' and latest.checkpoint->>'assignmentId'=j.id::text
   and latest.checkpoint->>'missionId'=m.id::text and latest.checkpoint->>'savedRequestId'=qid::text
-  and j.attempts=(latest.checkpoint->>'priorAttempts')::int+1)
+  and j.attempts=(latest.checkpoint->>'priorAttempts')::int+1) is not true
  then raise exception 'Paid response belongs to a different unapproved attempt';end if;
  return d.response;
 end $$;
