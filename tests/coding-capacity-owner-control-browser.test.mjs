@@ -85,7 +85,7 @@ test('Mission109 actual conversation GET delivers authenticated 118-mission offe
     const res=await orgRoute.POST(new Request('http://localhost/api/projects/organization',{method:'POST',headers:{Origin:'http://localhost',Authorization:req.headers().authorization,'Content-Type':'application/json'},body:JSON.stringify(payload)}));
     return route.fulfill({status:res.status,json:await res.json()});
    });
-   await page.goto('http://localhost/control');await page.getByTestId('recovery-harness').waitFor();
+   await page.goto('http://localhost/control');await page.getByTestId('recovery-harness').waitFor({state:'attached'});
    const button=page.getByRole('button',{name:'Authorize bounded invalid-response retries',exact:true});
    if(scenario!=='owner'){assert.equal(await button.count(),0);await page.close();continue;}
    await button.waitFor();assert.equal(await button.isDisabled(),true);
