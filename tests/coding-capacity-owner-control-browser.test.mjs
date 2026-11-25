@@ -60,7 +60,7 @@ test('Mission109 actual conversation GET delivers authenticated 118-mission offe
  const end=panel.indexOf('{gameTrial?.chatId===chatId',start);
  assert.ok(start>=0&&end>start);
  assert.match(panel,/setDirectorRecovery\(p\.directorRecovery\?\{chatId,offer:p\.directorRecovery\}:null\)/);
- const harness=transpile('function RecoveryHarness({directorRecovery,chatId,managedAgentId,actorId}){const setGameTrialRefresh=update=>{window.refreshes=update(window.refreshes)};return <>'+panel.slice(start,end)+'</>}');
+ const harness=transpile('function RecoveryHarness({directorRecovery,chatId,managedAgentId,actorId}){const setGameTrialRefresh=update=>{window.refreshes=update(window.refreshes)};return <div data-testid="recovery-harness">'+panel.slice(start,end)+'</div>}');
  const director=transpile(readFileSync('components/director-recovery-control.tsx','utf8'));
  const control=transpile(readFileSync('components/package-execution-control.tsx','utf8'));
  const react=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js'].map(f=>readFileSync('node_modules/'+f,'utf8')).join('\n');
@@ -72,7 +72,7 @@ test('Mission109 actual conversation GET delivers authenticated 118-mission offe
    const bearer=scenario==='no-owner'?null:'synthetic-owner';
    const htmlCode='const jsxRuntime={Fragment:React.Fragment,jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})};const load=(code,extra={})=>{const exports={};const require=n=>n==="react"?React:n==="react/jsx-runtime"?jsxRuntime:n==="@/lib/tools/browser-owner-session"?{ownerSessionBearer:async()=>'+JSON.stringify(bearer)+'}:extra[n]||{};new Function("exports","require",code)(exports,require);return exports;};'
     +'Date.now=()=>'+clock+';window.refreshes=0;const pkg=load('+JSON.stringify(control)+');const {DirectorRecoveryControl}=load('+JSON.stringify(director)+',{"./package-execution-control":pkg});'
-    +'const RecoveryHarness=(()=>{'+harness+';return RecoveryHarness;})();'
+    +'const RecoveryHarness=(()=>{const exports={};const require=n=>n==="react/jsx-runtime"?jsxRuntime:React;'+harness+';return RecoveryHarness;})();'
     +'const render=async()=>{const r=await fetch("/api/projects?actorId='+actorId+'&chatId='+chatId+'",{headers:'+JSON.stringify(bearer?{Authorization:'Bearer '+bearer}:{})+'});const p=await r.json();ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(RecoveryHarness,{directorRecovery:p.directorRecovery?{chatId:'+JSON.stringify(chatId)+',offer:p.directorRecovery}:null,chatId:'+JSON.stringify(scenario==='wrong-chat'?'other-chat':chatId)+',actorId:'+JSON.stringify(actorId)+',managedAgentId:'+JSON.stringify(scenario==='managed-agent'?'worker':null)+'}));window.rendered=true;};render();';
    await page.route('http://localhost/**',async route=>{
     const req=route.request(),url=new URL(req.url());
@@ -85,7 +85,7 @@ test('Mission109 actual conversation GET delivers authenticated 118-mission offe
     const res=await orgRoute.POST(new Request('http://localhost/api/projects/organization',{method:'POST',headers:{Origin:'http://localhost',Authorization:req.headers().authorization,'Content-Type':'application/json'},body:JSON.stringify(payload)}));
     return route.fulfill({status:res.status,json:await res.json()});
    });
-   await page.goto('http://localhost/control');await page.waitForFunction(()=>window.rendered===true);
+   await page.goto('http://localhost/control');await page.getByTestId('recovery-harness').waitFor();
    const button=page.getByRole('button',{name:'Authorize bounded invalid-response retries',exact:true});
    if(scenario!=='owner'){assert.equal(await button.count(),0);await page.close();continue;}
    await button.waitFor();assert.equal(await button.isDisabled(),true);
