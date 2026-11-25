@@ -40,6 +40,8 @@ test('native PostgreSQL16: exhausted original project, one bounded owner authori
  assert.match(result.stdout,/MISSION104_PACKAGE_EXECUTION_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION105_NATIVE_CLAIM_ALIAS_PASS/);
  assert.match(result.stdout,/MISSION105_CORRECTED_RELEASE_NATIVE_PASS/);
+ assert.match(result.stdout,/MISSION106_STANDING_CORRECTIVE_NATIVE_PASS/);
+ console.log('MISSION106_STANDING_CORRECTIVE_NATIVE_PASS');
  console.log('MISSION105_CORRECTED_RELEASE_NATIVE_PASS');
  console.log('MISSION105_NATIVE_CLAIM_ALIAS_PASS');
  console.log(result.stdout.split('\n').filter(l=>l.includes('MISSION104_PACKAGE_EXECUTION_NATIVE_PASS')).join('\n'));

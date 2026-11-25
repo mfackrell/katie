@@ -23,7 +23,7 @@ export type ManagementContextPreflight={
 
 // The exact production assembler, fed from its ordinary durable data sources.
 // This never calls a model, reserves tokens or mutates database state.
-export async function preflightManagementContext(projectId:string,principalId:string,commissioningAppointment=false,commissioningPackage=false):Promise<ManagementContextPreflight>{
+export async function preflightManagementContext(projectId:string,principalId:string,commissioningAppointment=false,commissioningPackage=false,inputLimit=48000):Promise<ManagementContextPreflight>{
   const db=getSupabaseAdminClient();
   const [topology,projectRecord]=await Promise.all([
     completeManagementRows<ManagementNode>(()=>db.from('project_organization_nodes')
@@ -83,11 +83,11 @@ export async function preflightManagementContext(projectId:string,principalId:st
     principalId,topology,scopedNodes:focused,project,executionTeam:eligible??team,
     exceptions,bindings,statuses,evidence,plans,dependencies,scopeGrants:grants,
     workerContracts:contracts,workPackages:packages,workPackageAttempts:attempts,work,decisions,
-  },48000);
+  },inputLimit);
   return {
     principalId,chars:serialized.length,
     sha256:createHash('sha256').update(serialized).digest('hex'),
-    inputLimit:48000,selectedAssignments:chosen.length,
+    inputLimit,selectedAssignments:chosen.length,
     unresolvedExceptions:exceptions.filter(e=>e.status==='open').length,
     organizationNodes:topology.length,packageRoles,packageCapacity,
   };

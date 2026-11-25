@@ -10,6 +10,7 @@ on:
       - 'supabase/migrations/20261124233000_mission104_package_execution_authority.sql'
       - 'supabase/migrations/20261125143500_package_claim_alias.sql'
       - 'supabase/migrations/20261125144000_package_execution_corrected_release.sql'
+      - 'supabase/migrations/20261125151600_package_corrective_continuation.sql'
       - 'lib/projects/package-execution-authorization.ts'
       - 'components/package-execution-control.tsx'
       - 'lib/missions/worker.ts'
