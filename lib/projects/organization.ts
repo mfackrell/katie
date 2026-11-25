@@ -8,6 +8,34 @@ import {missionInputLimit} from '@/lib/missions/request-budget';
 import {smartContractFields,smartSqlRejection,commissioningSmartCapacity,commissioningSmartCapacityInstruction,smartPackageCapacityFields,type SmartCapacityDiagnostic} from './smart-diagnostics';
 import {managementScope,selectManagementEvidenceIds,buildManagementDecisionContext,type ManagementNode,type ManagementRow,type AssignmentBinding,type AssignmentStatus} from './management-context';
 
+export async function assertManagementInferenceAdmission(claim:Claim,providerControlled:boolean):Promise<void>{
+ if(providerControlled&&claim.mission.calls>0){
+  // Only a *second*, lease-held original Mission79 attempt can pass here,
+  // following a separate immutable owner authorization on this exact release.
+  // Signed package resumes have a separate native authorization below.
+  const authorized=claim.mission.id==='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'
+   &&claim.job.id==='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'
+   &&claim.mission.calls===1&&claim.job.attempts===2
+   &&process.env.VERCEL_ENV==='production'
+   &&await rpc<boolean>('project_org_mission79_retry_execution_authorized',{
+    p_job:claim.job.id,p_lease:claim.job.lease,
+    p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
+    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
+   });
+  // Signed package resumes are governed by the native lease, exact release,
+  // immutable paid-response receipt and remaining one-time retry authority.
+  // Do not treat the historical inference count as a new purchase.
+  const packageAuthorized=typeof (claim.mission.project_evidence as ManagementRow|null)?.packageExecutionAuthorizationId==='string'
+   &&process.env.VERCEL_ENV==='production'
+   &&await rpc<boolean>('project_org_package_management_resume_allowed',{
+    p_job:claim.job.id,p_lease:claim.job.lease,
+    p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
+    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
+   });
+  if(!authorized&&!packageAuthorized)throw Error('Trial management inference was already admitted for this mission');
+ }
+}
+
 export type ExecutiveModel = {
  provider_name:string;model_id:string;is_active:boolean;reasoning_tier:string|null;
  capability_status:string;pricing_status:string;routing_eligibility:string;
@@ -255,31 +283,7 @@ export async function executeManagementClaim(claim:Claim,model:(c:Claim,instruct
  const exceptions=[...ownedExceptions,...originExceptions]
   .filter((e,i,a)=>a.findIndex(v=>v.id===e.id)===i);
  const providerControlled=await rpc<boolean>('project_provider_mode',{p_project:claim.mission.project_id});
- if(providerControlled&&claim.mission.calls>0){
-  // Only a *second*, lease-held original Mission79 attempt can pass here,
-  // following a separate immutable owner authorization on this exact release.
-  // Signed package resumes have a separate native authorization below.
-  const authorized=claim.mission.id==='b7c2e557-83e1-41cb-b174-bdb0d77d12e5'
-   &&claim.job.id==='85e229aa-e571-43ef-9d4a-5cb64f4efcd1'
-   &&claim.mission.calls===1&&claim.job.attempts===2
-   &&process.env.VERCEL_ENV==='production'
-   &&await rpc<boolean>('project_org_mission79_retry_execution_authorized',{
-    p_job:claim.job.id,p_lease:claim.job.lease,
-    p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
-    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
-   });
-  // Signed package resumes are governed by the native lease, exact release,
-  // immutable paid-response receipt and remaining one-time retry authority.
-  // Do not treat the historical inference count as a new purchase.
-  const packageAuthorized=typeof (claim.mission.project_evidence as ManagementRow|null)?.packageExecutionAuthorizationId==='string'
-   &&process.env.VERCEL_ENV==='production'
-   &&await rpc<boolean>('project_org_package_management_resume_allowed',{
-    p_job:claim.job.id,p_lease:claim.job.lease,
-    p_release:process.env.VERCEL_GIT_COMMIT_SHA??'',
-    p_deployment:process.env.VERCEL_DEPLOYMENT_ID??''
-   });
-  if(!authorized&&!packageAuthorized)throw Error('Trial management inference was already admitted for this mission');
- }
+ await assertManagementInferenceAdmission(claim,providerControlled);
  // Read the project-wide current milestone package state only for the existing
  // provider-controlled development commissioning path. A descendant's package
  // must prevent an ancestor from proposing competing implementation work.
