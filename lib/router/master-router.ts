@@ -1,4 +1,5 @@
 import { resolveRoutingEvidence } from "@/lib/router/observed-evidence";
+import { rankBestValueFallbackCandidates } from "@/lib/router/best-value-fallback";
 import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 import type { ProjectTransition } from "@/lib/chat/task-progress";
 import {
@@ -737,6 +738,7 @@ export async function chooseProvider(
   let deterministicFallbackUsed = false;
   let fallbackReason: string | null = null;
   let llmSelectionJustification: string | null = null;
+  let bestValueFallbackRationale: string | null = null;
   let llmSelectionComparisons: NonNullable<SelectionExplainer["top_candidates"]> = [];
   let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
@@ -1165,17 +1167,31 @@ export async function chooseProvider(
   const fallbackToDeterministic = (reason: string): Selection => {
     deterministicFallbackUsed = true;
     fallbackReason = reason;
-    // Primary Best Value judges see neutral inventory scores. Only once their
-    // result is unusable do we rank the already-filtered candidates by the
-    // classified request intent. Never allow inventory order to pick fallback.
-    // Best Answer and successful LLM selection retain their existing behavior.
+    // Best Value must not reintroduce the legacy social-emotional/provider
+    // bonuses when the independent quality judges fail. Best Answer retains
+    // its original scorer. Fallback quality is a conservative, explicitly
+    // uncertain capability check; price is consulted only AFTER qualification.
     if (neutral && (options?.routing_mode ?? "best_value") === "best_value") {
-      rankedCandidates = scoreModelsForIntent(availableByProvider, intent, {
-        registryLookup, preferredProvider, actorRoutingProfile
-      });
-      if (!rankedCandidates.length) {
-        throw new Error(`No compatible Best Value fallback for intent ${intent}.`);
+      const qualified = rankBestValueFallbackCandidates(
+        availableByProvider.flatMap(({provider, models}) => models.map(modelId => ({
+          provider, providerName: provider.name, modelId,
+          metadata: buildCandidateMetadata(provider.name, modelId, intent, {registryLookup})
+        }))),
+        {intent, complexity: resolvedIntent.complexity, prompt, context}
+      );
+      if (!qualified.length) {
+        throw new Error(`No capability-qualified Best Value fallback for intent ${intent}; cannot assume a cheaper model is adequate.`);
       }
+      rankedCandidates = qualified.map(({provider, modelId}) => ({provider, modelId, score: 0}));
+      const first = qualified[0];
+      bestValueFallbackRationale =
+        `Best Value fallback: ${reason}. Capability proxy requires ${first.requiredDepth} reasoning depth; ` +
+        `selected ${first.providerName}:${first.modelId} from models meeting that proxy. ` +
+        (first.modeledCostMicrousd === null
+          ? "Reviewed pricing or request-fit quote is unavailable; no comparative cost claim is made. "
+          : `Reviewed-price scenario: ${first.modeledCostMicrousd} microUSD for a fixed input/output estimate, not measured usage. `) +
+        "Provider reputation and historical selection frequency were not used. " +
+        "Actual response quality and serialized generation cost are unverified because the selection judges failed.";
     }
     const topCandidate = rankedCandidates[0];
     const provider = topCandidate?.provider ?? availableByProvider[0]?.provider ?? providers[0];
@@ -1188,9 +1204,9 @@ export async function chooseProvider(
     return {
       provider: validated.provider,
       modelId: validated.modelId,
-      reasoning: `Deterministic fallback selected ${validated.provider.name}:${validated.modelId}. ${validated.reasoning}`,
+      reasoning: `Deterministic fallback selected ${validated.provider.name}:${validated.modelId}. ${validated.reasoning} ${bestValueFallbackRationale ?? ""}`,
       routerModel: validated.modelId,
-      summary: "Deterministic fallback path.",
+      summary: bestValueFallbackRationale ?? "Deterministic fallback path.",
       overrideReason: validated.changed ? `validation_adjustment:${validated.reasoning}` : null
     };
   };
@@ -1382,6 +1398,9 @@ export async function chooseProvider(
   if (currentTurnFeedback) finalDecision.currentTurnFeedback = currentTurnFeedback;
   if (llmSelectionJustification && finalDecision.explainer) {
     finalDecision.explainer.selection_justification = llmSelectionJustification;
+  }
+  if (bestValueFallbackRationale && finalDecision.explainer) {
+    finalDecision.explainer.selection_justification = bestValueFallbackRationale;
   }
   if (llmPrimaryUsed && getAccountingScope()?.kind === "standalone" &&
       finalDecision.explainer?.selected_source === "llm-primary") {

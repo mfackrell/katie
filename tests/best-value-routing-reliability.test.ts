@@ -133,13 +133,18 @@ test("Nov 20: one source-honest Sonnet recommendation survives the other three u
   assertOneShotJudges(transmissions);
 });
 
-test("Nov 20: all unusable judges trigger intent-ranked fallback rather than first-inventory Codex", async () => {
+test("Nov 21: all unusable judges trigger capability-qualified cost fallback, not premium biased scores or first-inventory Codex", async () => {
   const { result, transmissions, actualScoring } = await routeIncident("best_value", "all-failed");
   assert.equal(inventory[0].models[0], "gpt-5.3-codex", "reproduce Codex at inventory position zero");
   assert.equal(actualScoring[0]?.modelId, "claude-sonnet-4-6",
     "the existing production intent scorer must favor conversational suitability in this fixture");
-  assert.equal(result.modelId, actualScoring[0]?.modelId, "fallback must use the scorer, not inventory order");
-  assert.equal(result.provider.name, "anthropic");
+  assert.notEqual(result.modelId, actualScoring[0]?.modelId,
+    "Best Value fallback must no longer apply the premium-biased intent scorer");
+  assert.equal(result.modelId, "gpt-5.4",
+    "high-complexity fallback excludes low-tier models, then compares reviewed-price scenarios");
+  assert.equal(result.provider.name, "openai");
+  assert.match(result.explainer?.selection_justification ?? "", /Capability proxy requires high reasoning depth/);
+  assert.match(result.explainer?.selection_justification ?? "", /not measured usage/);
   assert.notEqual(result.modelId, "gpt-5.3-codex");
   assert.equal(result.explainer?.selected_source, "deterministic-fallback");
   assert.equal(result.explainer?.fallback_used, true);

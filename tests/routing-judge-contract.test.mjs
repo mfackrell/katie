@@ -45,7 +45,10 @@ function parse(payload, options = {}) {
   const context = vm.createContext({
     neutral: true,
     bestValueRequiresQualification: optionsCandidates.length > 1,
-    args: { candidates: optionsCandidates, routing_mode: "best_value", requestEvidence: options.requestEvidence },
+    args: { candidates: optionsCandidates, routing_mode: "best_value", requestEvidence: options.requestEvidence,
+      complexity: options.complexity },
+    bestValueEvidenceCost: economics => economics?.serialized_request?.status === "estimated"
+      ? economics.serialized_request.estimatedCostMicrousd : null,
     candidateKeySet: new Set(optionsCandidates.map(c => c.providerName + ":" + c.modelId)),
     isProviderName: name => ["openai", "anthropic", "google", "grok"].includes(name),
     extractJsonObject: raw => raw,
@@ -104,6 +107,29 @@ test("ineligible selections and empty or nonexistent comparisons are rejected", 
     { provider: "openai", model: "fabricated-pro", why_not_selected: "Made up model." },
   ], quality_qualification: qualification }), null);
   assert.equal(parse({ ...selection, selection_justification: "", quality_qualification: qualification }), null);
+});
+
+test("routine premium selection must explain the least expensive native-quoted alternative", () => {
+  const costs = {
+    "openai:gpt-5.5-pro": "10000",
+    "openai:gpt-5.4": "5000",
+    "anthropic:claude-sonnet-5": "4000",
+    "google:gemini-2.5-pro": "500",
+  };
+  const requestEvidence = { candidates: Object.fromEntries(
+    Object.entries(costs).map(([key, amount]) => [key, {
+      economics: { serialized_request: { status: "estimated", estimatedCostMicrousd: amount } },
+      quality: { status: "unknown", observations: [] },
+    }])
+  ) };
+  const options = { complexity: "low", requestEvidence };
+  const omittedCheapest = { ...selection, quality_qualification: qualification,
+    alternatives: selection.alternatives.slice(0, 2) };
+  assert.equal(parse(omittedCheapest, options), null,
+    "a premium routine recommendation cannot silently skip the lowest quoted eligible option");
+  const consideredCheapest = { ...selection, quality_qualification: qualification };
+  assert.equal(parse(consideredCheapest, options)?.selectedModel, "gpt-5.5-pro",
+    "premium remains allowed when the lowest quoted alternative was explicitly assessed");
 });
 
 test("required qualification appears in PRIMARY prompt schema and parser agrees", () => {
