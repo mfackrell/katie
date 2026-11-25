@@ -191,7 +191,7 @@ language plpgsql security definer set search_path=public,pg_temp as $$
 declare mid uuid:=(p_checkpoint->>'missionId')::uuid; jid uuid:=(p_checkpoint->>'assignmentId')::uuid; stamp timestamptz:=clock_timestamp();
 begin
  if p_checkpoint->>'mode'='pre-provider-retest' then
-  update mission_assignments set status='queued',available_at=stamp,updated_at=stamp
+  update mission_assignments set status='queued',available_at=now(),updated_at=stamp
    where id=jid and mission_id=mid and status='failed' and attempts=(p_checkpoint->>'priorAttempts')::int and lease is null and lease_until is null;
   if not found then raise exception 'Saved failed assignment changed';end if;
   update agent_missions set status='running',updated_at=stamp where id=mid and project_id=p_project and status in('blocked','failed');
