@@ -13,6 +13,7 @@ on:
       - 'supabase/migrations/20261125151600_package_corrective_continuation.sql'
       - 'supabase/migrations/20261125182700_package_coding_admission.sql'
       - 'supabase/migrations/20261125190000_package_completion_recovery.sql'
+      - 'supabase/migrations/20261125202000_package_invalid_response_retry.sql'
       - 'scripts/project-context.mjs'
       - 'lib/missions/model.ts'
       - 'tests/package-completion-parser.test.mjs'
