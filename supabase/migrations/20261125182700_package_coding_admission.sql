@@ -78,6 +78,7 @@ declare d text; target text; a text; b text; edit record;
 begin
  for target in select distinct signature from (values
   ('public.mission_development_task(uuid,uuid)'),
+  ('public.prepare_mission_development(uuid,uuid)'),
   ('public.save_project_development_dispatch(uuid,uuid,text,text,jsonb)'),
   ('public.project_org_package_corrective_checkpoint(uuid)'),
   ('public.project_org_package_corrective_resume(uuid,jsonb)'),
@@ -87,9 +88,13 @@ begin
  for edit in select * from (values
  ('public.mission_development_task(uuid,uuid)',$a$or j.payload->>'approved' is distinct from 'true' then raise exception 'Development approval unavailable'$a$,$b$or (case when project_org_package_execution_required(m.project_id) then not project_org_package_coding_authorized(j.id,p_lease) else j.payload->>'approved' is distinct from 'true' end) then raise exception 'Development approval unavailable'$b$,1),
  ('public.mission_development_task(uuid,uuid)',$a$frozen_input:=j.payload->>'development_input';$a$,$b$if project_org_package_execution_required(m.project_id) then
-  perform project_smart_admit(j.id);
   frozen_input:=prepare_mission_development(j.id,p_lease);
  else frozen_input:=j.payload->>'development_input';end if;$b$,1),
+ ('public.prepare_mission_development(uuid,uuid)',$a$if jsonb_typeof(j.payload->'development_input')='string' then return j.payload->>'development_input'; end if;$a$,$b$if project_org_package_execution_required(m.project_id) then
+  if not project_org_package_coding_authorized(j.id,p_lease) then raise exception 'Signed package development preparation unavailable';end if;
+  perform project_smart_admit(j.id);
+ end if;
+ if jsonb_typeof(j.payload->'development_input')='string' then return j.payload->>'development_input'; end if;$b$,1),
  ('public.save_project_development_dispatch(uuid,uuid,text,text,jsonb)',$a$OR j.payload->>'approved' IS DISTINCT FROM 'true' OR t.kind<>$a$,$b$OR (case when project_org_package_execution_required(p.id) then not project_org_package_coding_authorized(j.id,p_lease) else j.payload->>'approved' is distinct from 'true' end) OR t.kind<>$b$,1),
  ('public.project_org_package_corrective_checkpoint(uuid)',$a$failed_count int; mode text; snapshot jsonb;$a$,$b$failed_count int; mode text; snapshot jsonb; legacy_approval boolean;$b$,1),
  ('public.project_org_package_corrective_checkpoint(uuid)',$a$select * into m from agent_missions where id=p.active_mission_id and project_id=p_project;
