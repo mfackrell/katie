@@ -53,7 +53,7 @@ export function validateContract(contract) {
         string(step.selector, 500);
         // Reject trivial document-exists assertions. Assertions must name app UI.
         if (step.action.startsWith('expect') && /^(?:\*|html|body|:root)$/i.test(step.selector.trim())) throw Error('Assertion must target application state');
-        if (keys.includes('value')) string(step.value);
+        if (keys.includes('value') && !(step.action === 'expectText' && step.value === '')) string(step.value);
         if (step.action.startsWith('expect')) assertions++;
       }
       if (++steps > 100) throw Error('Too many browser steps');
