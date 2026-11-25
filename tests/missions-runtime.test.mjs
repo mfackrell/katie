@@ -723,3 +723,17 @@ test('Registered development contract outranks the read-only phrase in Mission10
  // The existing server-side exact-scope approval remains mandatory.
  assert.equal(j.payload.approved,undefined);
 });
+
+
+test('Mission108 signed package coding uses the lease-bound native authority without mutating SMART metadata',async()=>{
+ const m=mission();m.project_id=randomUUID();m.project_kind='development';m.repository_id=randomUUID();m.team[0].config.development=true;m.project_evidence={packageExecutionAuthorizationId:randomUUID()};
+ m.objective='Implement the original approved milestone without changing the turn.';
+ const j=job(m,'development','implement');j.payload={capability:'development'};
+ for(const allowed of [false,true]){
+  const calls=[],commits=[];const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{calls.push(n);if(n==='project_org_package_coding_authorized'){assert.equal(a.p_job,j.id);assert.equal(a.p_lease,j.lease);return allowed;}if(n==='mission_development_task'){assert.equal(a.p_job,j.id);assert.equal(a.p_lease,j.lease);return {id:j.id,status:'blocked',details:'Fixture native task only',external:{}};}assert.equal(n,'commit_mission_work');commits.push(a);return true;}},'@/lib/projects/store':{getDevelopmentProjectContext:async()=>({projectId:m.project_id}),acceptanceBinding:()=>({})}})('@/lib/missions/worker');
+  await executeClaim({mission:m,job:j},async()=>{throw Error('No planning inference or manual code is permitted');});
+  assert.equal(calls.includes('mission_development_task'),allowed);
+  assert.equal(commits[0].p_status,allowed?'failed':'awaiting_approval');
+  assert.deepEqual(j.payload,{capability:'development'});
+ }
+});

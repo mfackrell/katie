@@ -965,6 +965,73 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.equal((await one('select count(*)::int n from project_work_package_attempts where package_id=$1',[pkg103.id])).n,1);
  console.log('MISSION106_STANDING_CORRECTIVE_NATIVE_PASS');
 
+ // Reproduce the actual signed package manager's rejection and repair,
+ // using only fixture-settled requests and the native decision RPC.
+ await db.query('set role service_role');
+ await one('select project_org_decide($1,$2,$3::jsonb) r',[retake107.job.id,retake107.job.lease,JSON.stringify([{action:'evaluate_package',packageId:pkg103.id,assignmentId:implement104.id,accepted:false,findings:['Fixture development failed before provider admission']},{action:'ready'}])]);
+ await db.query('reset role');
+ const schedule108=async()=>{const l=randomUUID();await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '2 minutes' where id=$1",[project,l]);const r=(await one('select project_org_schedule($1,$2) r',[project,l])).r;await db.query("update work_projects set lease=null,lease_until=null where id=$1",[project]);return r;};
+ const repair107=await schedule108();assert.ok(repair107.missionId);
+ await db.query('set role service_role');
+ const repairClaim107=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[release107,generation107,deployment107])).r;
+ assert.equal(repairClaim107.mission.id,repair107.missionId);
+ const repairList=randomUUID(),repairPaid=randomUUID(),repairHash='a'.repeat(64);
+ assert.equal((await one("select project_provider_request($1,$2,$3,'model-list',$4) ok",[repairClaim107.job.id,repairClaim107.job.lease,repairList,repairHash])).ok,true);
+ assert.equal((await one("select project_provider_request($1,$2,$3,'model-list',$4,null,'model-catalog') ok",[repairClaim107.job.id,repairClaim107.job.lease,repairList,repairHash])).ok,true);
+ assert.equal((await one("select project_provider_request($1,$2,$3,'inference',$4) ok",[repairClaim107.job.id,repairClaim107.job.lease,repairPaid,repairHash])).ok,true);
+ assert.equal((await one("select project_provider_request($1,$2,$3,'inference',$4,null,'fixture-settlement') ok",[repairClaim107.job.id,repairClaim107.job.lease,repairPaid,repairHash])).ok,true);
+ await one('select project_org_decide($1,$2,$3::jsonb) r',[repairClaim107.job.id,repairClaim107.job.lease,JSON.stringify([{action:'repair_package',packageId:pkg103.id},{action:'ready'}])]);
+ await db.query('reset role');
+ // The native scheduler releases the repair into the saved package queue.
+ await schedule108();
+ assert.equal((await one('select status from project_work_packages where id=$1',[pkg103.id])).status,'queued');
+ // Same existing controller entrypoint as production's development phase.
+ const work108=await one('select * from work_projects where id=$1',[project]);
+ const baseRun104=await one('select * from project_runs where mission_id=$1',[child104.id]);
+ const nextLease108=randomUUID();await db.query("update work_projects set lease=$2,lease_until=clock_timestamp()+interval '2 minutes' where id=$1",[project,nextLease108]);
+ await db.query('set role service_role');
+ assert.equal((await one("select finish_work_project($1,$2,'child',$3::jsonb) ok",[project,nextLease108,JSON.stringify({kind:'development',objective:child104.objective,evidence:child104.project_evidence})])).ok,true);
+ const claim108=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[release107,generation107,deployment107])).r;
+ assert.ok(claim108);assert.equal(claim108.job.role,'development');assert.equal(claim108.job.attempts,1);
+ const pause108='Executive delegation approval required. Project coding still requires separate Developer Orchestrator scope approval.';
+ assert.equal((await one('select commit_mission_work($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7) ok',[claim108.job.id,claim108.job.lease,JSON.stringify({detail:pause108}),'[]','awaiting_approval',null,null])).ok,true);
+ await deny(()=>db.query("select control_mission($1,'approve',$2)",[claim108.mission.id,claim108.job.id]),/Admitted SMART assignment is immutable/);
+ await db.query('reset role');
+ await db.query("update work_projects set status='failed',detail='Project coordination error: Admitted SMART assignment is immutable',lease=null,lease_until=null where id=$1",[project]);
+ const old108=await one('select * from mission_assignments where id=$1',[claim108.job.id]);
+ const smart108=await one('select * from project_worker_admissions where assignment_id=$1',[claim108.job.id]);
+ const count108=(await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n;
+ assert.equal(count108,108);
+ const migration108=readFileSync('supabase/migrations/20261125182500_package_coding_admission.sql','utf8').replaceAll('fe9d2658-41e3-44c1-ae8e-a0cba98371fe',project).replaceAll('f88d4d10-dfe4-479e-a2cf-41b3e8209e47',pkg103.id).replaceAll('a1ceb6af-6588-40e4-95c7-ca422f4701f0',claim108.mission.id).replaceAll('316179b0-5dcf-4a05-aad1-9a040b270d58',claim108.job.id);
+ await db.query(migration108);await db.query('DISCARD PLANS');
+ const checkpoint108=(await one('select project_org_package_corrective_checkpoint($1) cp',[project])).cp;
+ assert.equal(checkpoint108.mode,'pre-provider-retest');assert.equal(checkpoint108.assignmentId,claim108.job.id);assert.equal(checkpoint108.missionStatus,'awaiting_approval');
+ const release108='f'.repeat(40),deployment108='dpl_Mission108Corrected',generation108=generation107+2;
+ await db.query("select project_org_retest_set_release_gate($1,$2,$3,'closed',$4)",[project,release107,deployment107,generation107]);
+ await db.query("select project_org_retest_set_release_gate($1,$2,$3,'active',$4)",[project,release108,deployment108,generation107+1]);
+ assert.equal((await one('select project_org_package_execution_live($1) ok',[project])).ok,false);
+ const cp108=(await one('select project_org_package_corrective_checkpoint($1) cp',[project])).cp;
+ const qual108={releaseSha:release108,deploymentId:deployment108,canonicalAlias:'katie-mu.vercel.app',conclusion:'success',testedTree:'a'.repeat(40),pullRequest:1180,ciRunId:12346};
+ const next108=(await one(continue107,[project,release108,generation108,deployment108,cp108.stateHash,JSON.stringify(qual108)])).o;
+ assert.equal(next108.rootAuthorizationId,root106);assert.equal(next108.ordinal,2);
+ await db.query('set role service_role');
+ const retake108=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[release108,generation108,deployment108])).r;
+ assert.equal(retake108.job.id,claim108.job.id);assert.equal(retake108.job.attempts,2);
+ assert.equal((await one('select project_org_package_coding_authorized($1,$2) ok',[retake108.job.id,randomUUID()])).ok,false);
+ assert.equal((await one('select project_org_package_coding_authorized($1,$2) ok',[retake108.job.id,retake108.job.lease])).ok,true);
+ const coding108=(await one('select mission_development_task($1,$2) t',[retake108.job.id,retake108.job.lease])).t;
+ assert.equal(coding108.id,retake108.job.id);assert.equal(coding108.status,'draft');assert.equal(coding108.initial_input,old108.payload.development_input);
+ assert.equal((await one('select mission_development_task($1,$2) t',[retake108.job.id,retake108.job.lease])).t.id,coding108.id);
+ await db.query('reset role');
+ assert.deepEqual(await one('select * from project_worker_admissions where assignment_id=$1',[claim108.job.id]),smart108);
+ const after108=await one('select * from mission_assignments where id=$1',[claim108.job.id]);assert.deepEqual(after108.payload,old108.payload);
+ const admission108=await one('select * from project_package_coding_admission_receipts where assignment_id=$1',[claim108.job.id]);assert.equal(admission108.evidence.standingAuthorizationId,root106);
+ await deny(()=>db.query("update project_package_coding_admission_receipts set evidence='{}' where assignment_id=$1",[claim108.job.id]),/append-only/);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,108);
+ assert.equal((await one('select count(*)::int n from project_work_package_attempts where package_id=$1',[pkg103.id])).n,2);
+ console.log('MISSION108_SIGNED_CODING_NATIVE_PASS');
+
+
 
  console.log('MISSION104_PACKAGE_EXECUTION_NATIVE_PASS '+JSON.stringify({preservedHistory:104,authorizedMissionCeiling:112,isolatedSchedulerAdmission:1,originalWorkerRoles:3,realProviderCalls:0}));
  await db.query('rollback to savepoint mission103_smart_resume');await db.query('release savepoint mission103_smart_resume');await db.query('DISCARD PLANS');

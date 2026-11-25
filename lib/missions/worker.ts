@@ -221,7 +221,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  if(job.role==='development'){
   if(!agent.config.development||!mission.repository_id)throw Error('Development not permitted');
-  if(job.payload.approved!==true){await commit({detail:'Executive delegation approval required. Project coding still requires separate Developer Orchestrator scope approval.'},[],'awaiting_approval');return;}
+  // A signed package's immutable receipt and SMART binding can authorize its
+  // native coding task without mutating the admitted payload's approval flag.
+  const signedPackageCoding=Boolean(mission.project_id&&mission.project_kind==='development'&&job.payload.capability==='development'&&typeof (mission.project_evidence as {packageExecutionAuthorizationId?:unknown}|null)?.packageExecutionAuthorizationId==='string')&&await rpc<boolean>('project_org_package_coding_authorized',{p_job:job.id,p_lease:job.lease});
+  if(job.payload.approved!==true&&!signedPackageCoding){await commit({detail:'Executive delegation approval required. Project coding still requires separate Developer Orchestrator scope approval.'},[],'awaiting_approval');return;}
   // Executive delegation is supervision, not authorization to bypass the
   // Developer Orchestrator's research, immutable scope contract, coding approval,
   // private preview and independent acceptance lifecycle. In particular, an
@@ -243,7 +246,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
    }
    await commit({detail:'Delegated to Developer Orchestrator project. Scope authorization, implementation, real-browser acceptance and independent review belong to the project; this Executive assignment is incomplete.',delegatedProjectId:project.id,projectStatus:project.status,sourceIssue:task.external?.issueUrl??null,sourcePr:task.external?.prUrl??null},[],'waiting_external');return;
   }
-  if(job.payload.approved!==true){await commit({detail:'Approve this exact saved coding assignment to submit an owner-authored GitHub issue. No merge or deployment is authorized.'},[],'awaiting_approval');return;}
+  if(job.payload.approved!==true&&!signedPackageCoding){await commit({detail:'Approve this exact saved coding assignment to submit an owner-authored GitHub issue. No merge or deployment is authorized.'},[],'awaiting_approval');return;}
   // Existing task IDs and durable dispatch markers protect the external write,
   // including recovery after a worker dies following possible acceptance.
   const project=await getDevelopmentProjectContext(job.id,true);
