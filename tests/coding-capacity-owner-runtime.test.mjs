@@ -185,3 +185,35 @@ test('Corrected package release reuses the owner route and unchanged original te
  epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};
  assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
 });
+
+
+test('Mission106 standing corrective authorization requires explicit unchanged terms, current complete context and original owner',async t=>{
+ const env={VERCEL_ENV:'production',VERCEL_GIT_COMMIT_SHA:sha,VERCEL_DEPLOYMENT_ID:deployment,KATIE_OWNER_AUTH_USER_ID:ownerId};
+ const old=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]])),clock=Date.now;
+ Object.assign(process.env,env);Date.now=()=>Date.parse('2026-11-25T15:16:00Z');
+ t.after(()=>{Date.now=clock;for(const k in old){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}});
+ const packageId='f88d4d10-dfe4-479e-a2cf-41b3e8209e47',contextHash='d'.repeat(64),contextChars=59021;
+ let owner=false,canonical=true,writes=0,epoch={active:true,generation,deploymentId:deployment},terms,correctiveTerms;
+ const offer=()=>({stage:'authorize',projectId,packageId,priorAuthorizationId:ownerId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,scopeHash,cutoff,stateHash,contractFingerprint:'c'.repeat(64),managerId:ownerId,coderId:authorizationId,writerId:authorizationId,reviewerId:projectId,paths:[],developmentPaths:[],terms,correctiveTerms,continuation:{failedMissionId:'06908731-09d0-4832-a53c-3f1065214c80',failedAssignmentId:'9afc323a-07cc-4ebf-9562-be1c208675cf',usedMissions:106,remainingMissions:6,usedAttempts:1,remainingAttempts:2,recordedProviderRequests:0}});
+ const mock=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async request=>owner&&(request.method==='GET'||request.headers.get('origin')===new URL(request.url).origin)},'@/lib/projects/mission79-active-release':{verifyMission79ActiveProductionSha:async()=>canonical},'@/lib/projects/management-context-preflight':{preflightManagementContext:async(p,n,a,b,l)=>{assert.equal(p,projectId);assert.equal(n,ownerId);assert.equal(l,96000);return {principalId:n,inputLimit:l,chars:contextChars,sha256:contextHash};}},'@/lib/missions/store':{rpc:async(n,a)=>{
+  if(n==='project_org_package_execution_offer'||n==='project_org_package_release_offer')throw Error('Historical authorization already used');
+  if(n==='project_org_package_corrective_offer'){if(writes)throw Error('Already authorized');return offer();}
+  if(n==='project_org_retest_release_epoch')return epoch;
+  assert.equal(n,'project_org_package_corrective_authorize');
+  assert.deepEqual(JSON.parse(JSON.stringify(a)),{p_owner:ownerId,p_project:projectId,p_package:packageId,p_release:sha,p_generation:generation,p_deployment:deployment,p_authorization:authorizationId,p_state_hash:stateHash,p_terms:terms,p_consent:true,p_corrective_terms:correctiveTerms,p_context_hash:contextHash,p_context_chars:contextChars});
+  writes++;return {...offer(),stage:'authorized',authorizationId};
+ }},'@/lib/data/persistence-store':{getMessages:async()=>[]}});
+ const lib=mock('@/lib/projects/package-execution-authorization');terms=JSON.parse(JSON.stringify(lib.PACKAGE_TERMS));correctiveTerms=JSON.parse(JSON.stringify(lib.CORRECTIVE_TERMS));
+ const route=mock('@/app/api/projects/organization/route');
+ const payload={trialAction:'authorize_package_corrective_continuation',projectId,packageId,authorizationId,releaseSha:sha,releaseGeneration:generation,deploymentId:deployment,stateHash,terms,correctiveTerms,contextHash,contextChars,paidInferenceConsent:true};
+ const post=(body=payload,origin='https://katie.test')=>route.POST(new Request('https://katie.test/api/projects/organization',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(body)}));
+ assert.equal((await post()).status,403);owner=true;
+ const shown=(await (await route.GET(new Request('https://katie.test/api/projects/organization?projectId='+projectId+'&packageId='+packageId))).json()).packageExecutionRecovery;
+ assert.deepEqual(shown.correctiveTerms,correctiveTerms);assert.equal(shown.contextChars,contextChars);
+ for(const change of [{releaseGeneration:generation+1},{stateHash:'0'.repeat(64)},{terms:{...terms,maxMissions:113}},{terms:{...terms,paidInferenceLimit:48}},{correctiveTerms:{...correctiveTerms,maxCorrectiveReleases:7}},{correctiveTerms:{...correctiveTerms,additionalPaidRetries:1}},{correctiveTerms:{...correctiveTerms,qualifiedReleasesOnly:false}},{contextChars:contextChars-1},{contextHash:'0'.repeat(64)},{paidInferenceConsent:false}])assert.notEqual((await post({...payload,...change})).status,200);
+ const {correctiveTerms:omitTerms,contextChars:omitChars,contextHash:omitHash,...legacy}=payload;
+ assert.equal((await post({...legacy,trialAction:'authorize_existing_package_execution'})).status,409);
+ assert.equal((await post(payload,'https://other.test')).status,403);canonical=false;assert.equal((await post()).status,409);canonical=true;
+ epoch={...epoch,active:false};assert.equal((await post()).status,409);epoch={...epoch,active:true};
+ assert.equal(writes,0);assert.equal((await post()).status,200);assert.equal(writes,1);assert.equal((await post()).status,409);assert.equal(writes,1);
+});

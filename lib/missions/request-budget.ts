@@ -18,7 +18,10 @@ export function missionInputLimit(claim:Claim):number {
  // A complete generated game completion report must fit its independent review.
  // Keep compose output bounds unchanged; native token/$ admission is authoritative.
  const gameCompletionReview=claim.job.role==='review'&&Boolean(evidence?.gameContract||evidence?.gameRules)&&['development','assessment'].includes(claim.mission.project_kind??'');
- return gameCompletionReview||finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||recoveredSpecificationStage||repositoryAudit||operationalAudit)?96000:48000;
+ // Signed package evaluation must retain the complete current contract and evidence.
+ // Use the existing large-input envelope only for this delegated management work.
+ const packageManagement=Boolean(claim.mission.project_id)&&claim.mission.project_kind==='management'&&claim.job.role==='work'&&typeof (claim.mission.project_evidence as {packageExecutionAuthorizationId?:unknown}|null)?.packageExecutionAuthorizationId==='string';
+ return packageManagement||gameCompletionReview||finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||recoveredSpecificationStage||repositoryAudit||operationalAudit)?96000:48000;
 }
 /** Size the first audited deliverable for its full evidence-backed scope. A
  * known short word cap stays small; an unbounded audit must not buy a predictably
