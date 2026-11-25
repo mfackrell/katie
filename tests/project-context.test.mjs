@@ -34,7 +34,7 @@ test('malformed, duplicate, oversized, forged and expanded project metadata fail
 });
 test('contracts reject external navigation, code, empty/trivial assertions and excessive steps', () => {
   for (const path of ['https://evil.test', '//evil.test', '/\\evil', '/%2fevil', '/%252fevil', '/a/../secret', '/%2e%2e/secret', '/%00', '/%2500', '/a\n', '/a#fragment', '/%ZZ']) assert.throws(() => validateContract({ ...contract(), path }), path);
-  for (const steps of [[], [{ action: 'click', selector: '#move' }], [{ action: 'expectVisible', selector: 'body' }], [{ action: 'expectText', selector: '#state', value: '' }], [{ action: 'eval', value: 'true' }], [{ action: 'goto', path: '//evil' }], [{ action: 'expectText', selector: '#state', value: 'Moved', code: 'true' }], Array.from({ length: 101 }, () => ({ action: 'expectVisible', selector: '#state' }))]) assert.throws(() => validateContract({ path: '/', scenarios: [{ name: 'Bad', steps }] }));
+  for (const steps of [[], [{ action: 'click', selector: '#move' }], [{ action: 'expectVisible', selector: 'body' }], [{ action: 'expectText', selector: '#state', value: ' ' }], [{ action: 'expectText', selector: 'body', value: '' }], [{ action: 'eval', value: 'true' }], [{ action: 'goto', path: '//evil' }], [{ action: 'expectText', selector: '#state', value: 'Moved', code: 'true' }], Array.from({ length: 101 }, () => ({ action: 'expectVisible', selector: '#state' }))]) assert.throws(() => validateContract({ path: '/', scenarios: [{ name: 'Bad', steps }] }));
 });
 test('prepare CLI returns JSON null for ordinary tasks and nonzero for malformed project tasks', () => {
   const dir = mkdtempSync(join(tmpdir(), 'katie-project-context-'));
@@ -45,4 +45,10 @@ test('prepare CLI returns JSON null for ordinary tasks and nonzero for malformed
     writeFileSync(path, '<!-- katie-project: invalid -->');
     result = spawnSync(process.execPath, ['scripts/project-context.mjs', 'prepare', path], { encoding: 'utf8', env: { ...process.env, NODE_TEST_CONTEXT: undefined } }); assert.ifError(result.error); assert.equal(result.status, 1); assert.equal(result.stdout, '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('approved empty exact text is a meaningful assertion on application state',()=>{
+ const saved={path:'/',scenarios:[{name:'Clear state',steps:[{action:'expectText',selector:'#state',value:''}]}]};
+ assert.deepEqual(validateContract(saved),saved);
 });
