@@ -1270,6 +1270,104 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.deepEqual(await one('select * from project_package_completion_receipts where project_id=$1',[project]),savedGrant109);
  assert.deepEqual((await db.query('select * from project_worker_contracts where package_id=$1 order by id',[pkg103.id])).rows,priorContracts109);
  console.log('MISSION109_INVALID_RESPONSE_RETRY_NATIVE_PASS: exact owner grant, two bounded paid fixture retries, invalid output retained, valid decision committed, no real calls');
+
+ // Reproduce the later native management-repair / third failed development /
+ // watchdog sequence using the genuine scheduler and settled fixture decisions.
+ // The externally observed failed GitHub run is simulated ONLY in this
+ // disposable rollback-only PostgreSQL fixture. No paid provider is contacted.
+ const repairCommand111=[{action:'repair_package',packageId:pkg103.id}];
+ const fixtureDecision111=async commands=>{
+  const next=await schedule109();assert.ok(next.missionId);
+  await db.query('set role service_role');
+  const cl=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[retryRelease109,retryGeneration109,retryDeploy109])).r;
+  assert.equal(cl.mission.id,next.missionId);assert.equal(cl.job.role,'work');
+  const list=randomUUID(),paid=randomUUID(),receipt='fixture-preflight-'+paid;
+  assert.equal((await one("select project_provider_request($1,$2,$3,'model-list',$4) ok",[cl.job.id,cl.job.lease,list,hash109])).ok,true);
+  assert.equal((await one("select project_provider_request($1,$2,$3,'model-list',$4,null,'model-catalog') ok",[cl.job.id,cl.job.lease,list,hash109])).ok,true);
+  assert.equal((await one("select project_provider_request($1,$2,$3,'inference',$4) ok",[cl.job.id,cl.job.lease,paid,hash109])).ok,true);
+  assert.equal((await one(captureSql109,[cl.job.id,cl.job.lease,paid,hash109,receipt,JSON.stringify({...capture109,text:JSON.stringify(commands)})])).ok,true);
+  assert.equal((await nativeDecide108(cl.job,commands)).r,true);
+  await db.query('reset role');
+  return cl;
+ };
+ await fixtureDecision111(repairCommand111);assert.equal((await schedule109()).handled,true);
+ assert.equal(await schedule109(),null);
+ assert.equal((await one("select finish_work_project($1,$2,'child',$3) ok",[project,lease109,JSON.stringify({kind:'development',objective:'Implement exact approved package within original scope and independently verify the result.',evidence:{}})])).ok,true);
+ await db.query('set role service_role');
+ const preflightDev111=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[retryRelease109,retryGeneration109,retryDeploy109])).r;
+ assert.equal(preflightDev111.job.role,'development');
+ const dev111Id=preflightDev111.job.id,dev111Mission=preflightDev111.mission.id;
+ assert.equal((await one('select mission_development_task($1,$2) task',[dev111Id,preflightDev111.job.lease])).task.id,dev111Id);
+ assert.equal((await one("select transition_agent_task($1,'start') task",[dev111Id])).task.status,'dispatching');
+ assert.equal((await one('select claim_project_dispatch($1,$2,$3) ok',[dev111Id,preflightDev111.job.lease,scope108])).ok,true);
+ const observed111=await one('select * from agent_tasks where id=$1',[dev111Id]);
+ const failureDetail111='Independent workflow tests or review blocked completion.';
+ const external111={...observed111.external,repository:'mfackrell/katie',providerExecutionRelease:retryRelease109,issueNumber:1188,issueUrl:'https://github.com/mfackrell/katie/issues/1188',runUrl:'https://github.com/mfackrell/katie/actions/runs/45853736930',prUrl:null,receipt:{version:1,outcome:'BLOCKED',checks:{build:'failure',repair:'skipped'},repository:'mfackrell/katie',run_id:45853736930,issue_number:1188,pr_url:null,tested_head_sha:null,reviewed_head_sha:null}};
+ assert.equal((await one("select save_project_development_dispatch($1,$2,'blocked',$3,$4::jsonb) task",[dev111Id,preflightDev111.job.lease,failureDetail111,JSON.stringify(external111)])).task.status,'blocked');
+ assert.equal((await one('select commit_mission_work($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7) ok',[dev111Id,preflightDev111.job.lease,JSON.stringify({detail:failureDetail111,external:external111}),'[]','failed','blocked',null])).ok,true);
+ await db.query('reset role');
+ const evaluated111=await fixtureDecision111([{action:'evaluate_package',packageId:pkg103.id,assignmentId:dev111Id,accepted:false,findings:['Native preflight failed before the development host started.']}]);
+ const repaired111=await fixtureDecision111(repairCommand111);
+ assert.equal((await schedule109()).handled,true);assert.equal(await schedule109(),null);
+ const watchdog111='Progress watchdog: three consecutive failed development attempts at the same milestone. Completed evidence and consumed budgets are preserved; an explicit diagnosis or revised scope is required before any further work.';
+ assert.equal((await one("select finish_work_project($1,$2,'block',$3) ok",[project,lease109,JSON.stringify({detail:watchdog111})])).ok,true);
+ assert.equal((await one('select status from work_projects where id=$1',[project])).status,'blocked');
+ assert.equal((await one('select project_org_package_corrective_checkpoint($1) cp',[project])).cp,null);
+ await db.query(readFileSync('supabase/migrations/20261126160500_package_diagnosed_native_preflight.sql','utf8')
+  .replaceAll('fe9d2658-41e3-44c1-ae8e-a0cba98371fe',project).replaceAll('f88d4d10-dfe4-479e-a2cf-41b3e8209e47',pkg103.id));
+ await db.query('DISCARD PLANS');
+ const watchdogCp111=(await one('select project_org_package_corrective_checkpoint($1) cp',[project])).cp;
+ assert.ok(watchdogCp111,'Exact failed workflow and settled repair must be recoverable');
+ assert.equal(watchdogCp111.mode,'diagnosed-preflight-scheduler');
+ assert.equal(watchdogCp111.usedMissions,113);assert.equal(watchdogCp111.usedAttempts,3);
+ assert.equal(watchdogCp111.failedAssignmentId,dev111Id);
+ const retainedMissions111=(await db.query('select * from agent_missions where project_id=$1 order by id',[project])).rows;
+ const retainedJobs111=(await db.query('select j.* from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 order by j.id',[project])).rows;
+ const retainedRequests111=(await db.query('select * from project_provider_requests where project_id=$1 order by id',[project])).rows;
+ const retainedDecisions111=(await db.query('select * from project_organization_decisions where project_id=$1 order by id',[project])).rows;
+ const retainedAttempts111=(await db.query('select * from project_work_package_attempts where package_id=$1 order by attempt',[pkg103.id])).rows;
+ const retainedTask111=await one('select * from agent_tasks where id=$1',[dev111Id]);
+ const retainedRetryAuthority111=await one('select * from project_package_invalid_retry_authorizations where project_id=$1',[project]);
+ assert.equal((await one("select has_function_privilege('service_role','project_org_package_preflight_watchdog_pending(uuid,uuid)','execute') ok")).ok,true);
+ assert.equal((await one("select has_function_privilege('authenticated','project_org_package_preflight_watchdog_pending(uuid,uuid)','execute') ok")).ok,false);
+ assert.equal((await one('select project_org_package_preflight_watchdog_pending($1,$2) ok',[project,lease109])).ok,false);
+ await db.query('savepoint wrong_preflight111');
+ await db.query("update agent_tasks set external=external||jsonb_build_object('issueNumber',999) where id=$1",[dev111Id]);
+ assert.equal((await one('select project_org_package_corrective_checkpoint($1) cp',[project])).cp,null);
+ await db.query('rollback to savepoint wrong_preflight111');await db.query('release savepoint wrong_preflight111');await db.query('DISCARD PLANS');
+ const preflightRelease111='1111'.repeat(10),preflightDeployment111='dpl_QualifiedNativePreflight',preflightGeneration111=retryGeneration109+2;
+ await db.query("select project_org_retest_set_release_gate($1,$2,$3,'closed',$4)",[project,retryRelease109,retryDeploy109,retryGeneration109]);
+ await db.query("select project_org_retest_set_release_gate($1,$2,$3,'active',$4)",[project,preflightRelease111,preflightDeployment111,retryGeneration109+1]);
+ const preflightCp111=(await one('select project_org_package_corrective_checkpoint($1) cp',[project])).cp;
+ const qualification111={releaseSha:preflightRelease111,deploymentId:preflightDeployment111,canonicalAlias:'katie-mu.vercel.app',conclusion:'success',testedTree:'1112'.repeat(10),pullRequest:1189,ciRunId:12350,diagnosis:{failedRunId:45853736930,buildJobId:140026547838,failedStep:'Install pinned native SDK for benchmark-bound engineering',setupError:'E: Unable to locate package postgresql-16',nativeHostOutcome:'skipped',diagnosticsOutcome:'failure',runner:'ubuntu-24.04',preflightQualification:'success',diagnosticQualification:'success'}};
+ await deny(()=>db.query(continue107,[project,preflightRelease111,preflightGeneration111,preflightDeployment111,preflightCp111.stateHash,JSON.stringify({...qualification111,diagnosis:{...qualification111.diagnosis,nativeHostOutcome:'success'}})]),/Exact diagnosed native preflight qualification required/);
+ await deny(()=>db.query(continue107,[project,preflightRelease111,preflightGeneration111,preflightDeployment111,'0'.repeat(64),JSON.stringify(qualification111)]),/Exact drained checkpoint/);
+ const corrected111=(await one(continue107,[project,preflightRelease111,preflightGeneration111,preflightDeployment111,preflightCp111.stateHash,JSON.stringify(qualification111)])).o;
+ assert.equal(corrected111.mode,'diagnosed-preflight-scheduler');assert.equal(corrected111.ordinal,5);
+ assert.deepEqual((await db.query('select * from agent_missions where project_id=$1 order by id',[project])).rows,retainedMissions111);
+ assert.deepEqual((await db.query('select j.* from mission_assignments j join agent_missions m on m.id=j.mission_id where m.project_id=$1 order by j.id',[project])).rows,retainedJobs111);
+ assert.deepEqual((await db.query('select * from project_provider_requests where project_id=$1 order by id',[project])).rows,retainedRequests111);
+ assert.deepEqual((await db.query('select * from project_organization_decisions where project_id=$1 order by id',[project])).rows,retainedDecisions111);
+ assert.deepEqual((await db.query('select * from project_work_package_attempts where package_id=$1 order by attempt',[pkg103.id])).rows,retainedAttempts111);
+ assert.deepEqual(await one('select * from agent_tasks where id=$1',[dev111Id]),retainedTask111);
+ assert.deepEqual(await one('select * from project_package_invalid_retry_authorizations where project_id=$1',[project]),retainedRetryAuthority111);
+ await deny(()=>db.query(continue107,[project,preflightRelease111,preflightGeneration111,preflightDeployment111,preflightCp111.stateHash,JSON.stringify(qualification111)]),/Exact drained checkpoint/);
+ assert.equal(await schedule109(),null);
+ await db.query('set role service_role');
+ assert.equal((await one('select project_org_package_preflight_watchdog_pending($1,$2) ok',[project,randomUUID()])).ok,false);
+ assert.equal((await one('select project_org_package_preflight_watchdog_pending($1,$2) ok',[project,lease109])).ok,true);
+ await db.query('reset role');
+ assert.equal((await one("select finish_work_project($1,$2,'child',$3) ok",[project,lease109,JSON.stringify({kind:'development',objective:'Implement exact approved package within original scope and independently verify the result.',evidence:{}})])).ok,true);
+ assert.equal((await one('select count(*)::int n from project_work_package_attempts where package_id=$1',[pkg103.id])).n,4);
+ assert.equal((await one('select count(*)::int n from agent_missions where project_id=$1',[project])).n,114);
+ assert.equal((await one('select project_org_package_preflight_watchdog_pending($1,$2) ok',[project,lease109])).ok,false);
+ await db.query('set role service_role');
+ const fourth111=(await one('select claim_mission_work_release_epoch($1,$2,$3) r',[preflightRelease111,preflightGeneration111,preflightDeployment111])).r;
+ assert.equal(fourth111.job.role,'development');
+ assert.equal((await one('select project_org_package_coding_authorized($1,$2) ok',[fourth111.job.id,fourth111.job.lease])).ok,true);
+ await db.query('reset role');
+ console.log('MISSION111_DIAGNOSED_NATIVE_PREFLIGHT_PASS: drained 113-mission checkpoint, qualified one-time resume, no attempt or paid-call reset, preserved manager decisions');
+
  await db.query('rollback to savepoint invalid_response109');await db.query('release savepoint invalid_response109');await db.query('DISCARD PLANS');
  await db.query('set role service_role');
 
