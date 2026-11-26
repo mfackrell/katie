@@ -312,6 +312,11 @@ async function advance(p: Project) {
         // exception to the historical failures watchdog. It authorizes ONE
         // new specification child, not infinite repeats of a failing phase.
         let checkpointPending=false;
+        // The native receipt binds one diagnosed pre-host failure to the exact
+        // already-commissioned correction. It cannot reset attempts or budgets.
+        if(providerControlled&&p.phase==='development'){
+            checkpointPending=await projectRpc<boolean>('project_org_package_preflight_watchdog_pending',{p_project:p.id,p_lease:p.lease});
+        }
         if(game&&p.phase==='specification'){
             const {data:checkpoints,error:checkpointError}=await getSupabaseAdminClient()
                 .from('project_events').select('created_at')
