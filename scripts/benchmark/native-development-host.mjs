@@ -207,25 +207,6 @@ if(task4aHistory.pregrant){
 
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
-if(providerExecution&&proof.recovery){
- const authority=await readOne('project_package_checkpoint_continuations','authorization_id',proof.recovery.authorizationId);
- const live=await db.rpc('project_org_package_checkpoint_dispatch_live',{p_task:task.id,p_authorization:proof.recovery.authorizationId,p_release:proof.releaseSha});
- if(live.error||live.data!==true||authority.project_id!==project.id||authority.assignment_id!==task.id||authority.release_sha!==proof.releaseSha||
-    !authority.proof||Object.keys(authority.proof).length!==Object.keys(proof.recovery).length||Object.keys(proof.recovery).some(k=>authority.proof[k]!==proof.recovery[k]))
-  denied('authenticated final-review continuation unavailable');
- if(!priorRefs.length)denied('retained native provider checkpoint missing');
- const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});
- if(!record)denied('retained final-review checkpoint missing');
- const assigned=await readOne('mission_assignments','id',task.id);
- const run=await readOne('project_runs','mission_id',assigned.mission_id);
- const dispatch=await readOne('project_provider_dispatches','task_id',task.id);
- const {data:requests,error}=await db.from('project_provider_requests').select('*').eq('assignment_id',task.id).order('started_at');
- if(error||!requests)denied('settled historical requests unavailable');
- const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
- validateProviderFinalReviewHistory({record,diagnostics:priorDiagnostics,completedEvidence,task,project,context:wipContext,assignment:assigned,run,dispatch,requests,proof:proof.recovery});
- recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
- priorLifecycleEvidence=priorDiagnostics.lifecycleEvidence;
-}else if(providerExecution&&(priorRefs.length||task.external?.receipt))denied('provider execution does not replay a previous run');
 if(!providerExecution&&(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant))){
  let linkedEvidence=null;
  if(task.external?.task4aCapacityConsentDigest){
@@ -259,6 +240,25 @@ if(!providerExecution&&(priorRefs.length||(task.external?.receipt?.outcome==='BL
  recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
  }
 }
+if(providerExecution&&proof.recovery){
+ const authority=await readOne('project_package_checkpoint_continuations','authorization_id',proof.recovery.authorizationId);
+ const live=await db.rpc('project_org_package_checkpoint_dispatch_live',{p_task:task.id,p_authorization:proof.recovery.authorizationId,p_release:proof.releaseSha});
+ if(live.error||live.data!==true||authority.project_id!==project.id||authority.assignment_id!==task.id||authority.release_sha!==proof.releaseSha||
+    !authority.proof||Object.keys(authority.proof).length!==Object.keys(proof.recovery).length||Object.keys(proof.recovery).some(k=>authority.proof[k]!==proof.recovery[k]))
+  denied('authenticated final-review continuation unavailable');
+ if(!priorRefs.length)denied('retained native provider checkpoint missing');
+ const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});
+ if(!record)denied('retained final-review checkpoint missing');
+ const assigned=await readOne('mission_assignments','id',task.id);
+ const run=await readOne('project_runs','mission_id',assigned.mission_id);
+ const dispatch=await readOne('project_provider_dispatches','task_id',task.id);
+ const {data:requests,error}=await db.from('project_provider_requests').select('*').eq('assignment_id',task.id).order('started_at');
+ if(error||!requests)denied('settled historical requests unavailable');
+ const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
+ validateProviderFinalReviewHistory({record,diagnostics:priorDiagnostics,completedEvidence,task,project,context:wipContext,assignment:assigned,run,dispatch,requests,proof:proof.recovery});
+ recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
+ priorLifecycleEvidence=priorDiagnostics.lifecycleEvidence;
+}else if(providerExecution&&(priorRefs.length||task.external?.receipt))denied('provider execution does not replay a previous run');
 // Source restoration is nonbillable and must succeed before consuming consent.
 const recovery=recoveryPlan?.restore()??null;
 const verificationFirstCapability=approval?.developer_authority?.task4aVerifierRecovery?createTask4aFailedVerifierCapability(recoveryPlan?.record,recovery):createTask4aVerificationFirstCapability(recoveryPlan?.record,recovery);
