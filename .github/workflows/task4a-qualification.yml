@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'scripts/project-ci.mjs'
+      - 'scripts/project-postgres-fixture.mjs'
+      - 'tests/project-postgres-fixture.test.mjs'
+      - 'tests/standalone-uncertain-continuation-postgres.test.mjs'
       - 'scripts/project-sandbox.mjs'
       - 'tests/project-verifier-environment.test.mjs'
       - 'lib/agents/development.ts'

@@ -86,7 +86,7 @@ jobs:
           # These tools are captured from the trusted workflow/main checkout,
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
-          cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
+          cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-postgres-fixture.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
           # Ordinary owner-authored projects must not depend on benchmark files.
           if grep -Eq -e '<!--[[:space:]]*katie-native-(benchmark|developer|task4a)[:[:space:]]' -e '<!--[[:space:]]*katie-native-provider[:[:space:]]' "$RUNNER_TEMP/original-agent-request.md"; then

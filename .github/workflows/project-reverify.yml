@@ -78,7 +78,7 @@ jobs:
           stage='retrieve immutable issue brief'
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           stage='stage trusted verification scripts'
-          cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
+          cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-postgres-fixture.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
           stage='validate saved project metadata in issue'
           node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" > "$RUNNER_TEMP/project-context.json"
