@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync,rmSync,existsSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,existsSync,appendFileSync,realpathSync} from 'node:fs';
+import {createServer} from 'node:net';
+import {once} from 'node:events';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -12,13 +14,25 @@ test('owner may retain exact uncertain exposure and continue without redispatch 
  assert.ok(bin,'PostgreSQL initdb/pg_ctl required (set KATIE_TEST_PG_BIN)');
  const dir=mkdtempSync(join(tmpdir(),'standalone-uncertain-pg-')),data=join(dir,'data');
  const run=(name,args)=>{const r=spawnSync(join(bin,name),args,{encoding:'utf8',timeout:30000});assert.equal(r.status,0,(r.stderr||r.error?.message||'')+(existsSync(join(dir,'log'))?readFileSync(join(dir,'log'),'utf8'):''));};
- const connections=[];let started=false;
- const connect=async(role)=>{const c=new pg.Client({host:'127.0.0.1',port:55502,user:'postgres',database:'postgres'});await c.connect();connections.push(c);if(role)await c.query('set role '+role);return c;};
+ const connections=[];let started=false,port;
+ const connect=async(role)=>{const c=new pg.Client({host:dir,port,user:'postgres',database:'postgres',connectionTimeoutMillis:5000});await c.connect();connections.push(c);if(role)await c.query('set role '+role);return c;};
  const rpc=async(c,name,args)=>{const keys=Object.keys(args),vals=Object.values(args).map(v=>v&&typeof v==='object'?JSON.stringify(v):v);return (await c.query(`select standalone_${name}(${keys.map((k,i)=>`${k} => $${i+1}`).join(',')}) value`,vals)).rows[0].value;};
  try{
   run('initdb',['-D',data,'-U','postgres','-A','trust','--no-locale','-E','UTF8']);
-  run('pg_ctl',['-D',data,'-l',join(dir,'log'),'-o',"-h 127.0.0.1 -k '' -p 55502",'-w','start']);started=true;
+  // Ask the OS for a dynamic port number. PostgreSQL uses only a private
+  // Unix socket under this cluster's mkdtemp directory, never a TCP listener.
+  // The unique directory makes reuse of the numeric port collision-proof.
+  const probe=createServer();
+  try{
+   probe.listen(0,'127.0.0.1');await once(probe,'listening');port=probe.address().port;
+  }finally{if(probe.listening)await new Promise((resolve,reject)=>probe.close(error=>error?reject(error):resolve()));}
+  const socketDir=dir.replaceAll('\\','\\\\').replaceAll("'","''");
+  appendFileSync(join(data,'postgresql.conf'),"\nlisten_addresses = ''\nport = "+port+"\nunix_socket_directories = '"+socketDir+"'\n");
+  run('pg_ctl',['-D',data,'-l',join(dir,'log'),'-w','start']);started=true;
   const admin=await connect();
+  const identity=(await admin.query("select current_setting('data_directory') as directory,current_setting('port')::int as port,inet_server_addr() is null as private_socket")).rows[0];
+  assert.deepEqual(identity,{directory:realpathSync(data),port,private_socket:true},'Client must connect to this exact isolated fixture');
+  console.log('ISOLATED_POSTGRES_ENDPOINT '+JSON.stringify({directory:identity.directory,port}));
   await admin.query(readFileSync(new URL('./sql/standalone-accounting-schema.sql',import.meta.url),'utf8'));
   for(const file of ['20261028193000_standalone_provider_attempt_ledger.sql','20261029153000_standalone_deleted_scope_history.sql','20261029170000_standalone_pricing_and_enrollment.sql','20261029190000_standalone_actor_authority.sql','20261029200000_standalone_uncertain_exposure_continuation.sql'])await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const one=await connect('service_role'),two=await connect('service_role');
@@ -118,7 +132,7 @@ test('owner may retain exact uncertain exposure and continue without redispatch 
   console.log('STANDALONE_OWNER_UNCERTAIN_EXPOSURE_CONTINUATION_AND_LATE_RECEIPT_PASS');
  }finally{
   await Promise.allSettled(connections.map(c=>c.end()));
-  if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);
+  if(started||existsSync(join(data,'postmaster.pid')))run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);
   rmSync(dir,{recursive:true,force:true});
  }
 });

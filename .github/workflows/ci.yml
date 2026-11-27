@@ -197,6 +197,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat postgresql-16
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Reproduce fixed-port collision and qualify isolated PostgreSQL fixtures
+        env:
+          KATIE_VERIFY_NATIVE_ENV: '1'
+        run: node --test tests/project-postgres-fixture.test.mjs
       - name: Actual isolated PostgreSQL concurrency and passing/failing WIP preservation
         env:
           KATIE_VERIFY_NATIVE_ENV: '1'
