@@ -4,6 +4,7 @@ import {loadTask4aLinkedDiagnostics} from './task4a-failed-run-link.mjs';
 import {readDeveloperHandoff} from './developer-dispatch-contract.mjs';
 import {readProviderExecutionHandoff} from './provider-execution-handoff.mjs';
 import {PROVIDER_EXECUTION_MODEL,providerExecutionForwarder} from './provider-execution-native.mjs';
+import {validateProviderFinalReviewHistory} from './provider-execution-recovery.mjs';
 import {readOrdinaryNativeAuthority,readOrdinaryLifecycleCapacity,classifyTask4aRecoveryHistory} from './ordinary-native-authority.mjs';
 import {readNativeLifecycleCapacity} from './native-capacity-forecast.mjs';
 import {executeNativeDevelopmentLifecycle} from './native-development-lifecycle.mjs';
@@ -43,7 +44,7 @@ const proof=(providerExecution?readProviderExecutionHandoff:ordinary?readDevelop
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
 for(const key of ['authorityKind','accountId','scopeHash','releaseSha','requestHash','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','task4aContinuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId','resourceAmendmentId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
-if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
+if(manifest.productionRuntime!==proof.productionRuntime||JSON.stringify(manifest.recovery)!==JSON.stringify(proof.recovery))denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
 const productionRuntime=proof.productionRuntime?openNativeProductionRuntime(proof.productionRuntime,proof,signingKey):null;
 // Production capsules are emitted only by the enabled server dispatcher after
@@ -206,7 +207,25 @@ if(task4aHistory.pregrant){
 
 // The existing signed startup recovery proves zero historical mission calls.
 // Other failed tasks require positive evidence even when their Git refs vanished.
-if(providerExecution&&(priorRefs.length||task.external?.receipt))denied('provider execution does not replay a previous run');
+if(providerExecution&&proof.recovery){
+ const authority=await readOne('project_package_checkpoint_continuations','authorization_id',proof.recovery.authorizationId);
+ const live=await db.rpc('project_org_package_checkpoint_dispatch_live',{p_task:task.id,p_authorization:proof.recovery.authorizationId,p_release:proof.releaseSha});
+ if(live.error||live.data!==true||authority.project_id!==project.id||authority.assignment_id!==task.id||authority.release_sha!==proof.releaseSha||
+    JSON.stringify(authority.proof)!==JSON.stringify(proof.recovery)&&Object.keys(proof.recovery).some(k=>authority.proof?.[k]!==proof.recovery[k]))
+  denied('authenticated final-review continuation unavailable');
+ if(!priorRefs.length)denied('retained native provider checkpoint missing');
+ const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});
+ if(!record)denied('retained final-review checkpoint missing');
+ const assigned=await readOne('mission_assignments','id',task.id);
+ const run=await readOne('project_runs','mission_id',assigned.mission_id);
+ const dispatch=await readOne('project_provider_dispatches','task_id',task.id);
+ const {data:requests,error}=await db.from('project_provider_requests').select('*').eq('assignment_id',task.id).order('started_at');
+ if(error||!requests)denied('settled historical requests unavailable');
+ const completedEvidence=recoveryCompletedEvidence(record,priorDiagnostics);
+ validateProviderFinalReviewHistory({record,diagnostics:priorDiagnostics,completedEvidence,task,project,context:wipContext,assignment:assigned,run,dispatch,requests,proof:proof.recovery});
+ recoveryPlan=prepareRecovery({completedEvidence,workspace:boundary.root,tempRoot:process.env.RUNNER_TEMP,toolsRoot:join(process.env.RUNNER_TEMP,'project-tools'),requestFile,context:wipContext,record,refs:priorRefs});
+ priorLifecycleEvidence=priorDiagnostics.lifecycleEvidence;
+}else if(providerExecution&&(priorRefs.length||task.external?.receipt))denied('provider execution does not replay a previous run');
 if(!providerExecution&&(priorRefs.length||(task.external?.receipt?.outcome==='BLOCKED'&&!proof.startupRecoveryId&&!task4aPregrant))){
  let linkedEvidence=null;
  if(task.external?.task4aCapacityConsentDigest){
@@ -450,7 +469,7 @@ try{
   return {...decision,reviewedHeadSha};
  };
  const safelyRunPhase=async(phase,findings='')=>{
-  if(providerExecution){await assertProviderLive();return runPhase(phase,findings);}
+  if(providerExecution){if(proof.recovery&&phase!=='final-review')denied('checkpoint continuation is final-review only');await assertProviderLive();return runPhase(phase,findings);}
   if(phase==='repair'){for(const stage of ['repair','verification','final_review'])capacityCompletedStages.delete(stage);capacityNotRequiredStages.delete('repair');}
   const {data:phaseLive,error:phaseLiveError}=await db.rpc(task4a?'task4a_native_live':ordinary?'developer_gateway_execution_live':'benchmark_gateway_execution_live',{p_digest:tokenDigest(grantToken),...(ordinary?{p_project:project.id}:{p_trial:proof.trialId}),p_epoch:executionEpoch});
   if(phaseLiveError||phaseLive!==true){activeWipPhase={phase,reviewFindings:findings,boundary:true};preserveWip();denied('native phase authority stopped or expired');}

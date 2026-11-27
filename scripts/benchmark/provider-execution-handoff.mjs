@@ -10,13 +10,19 @@ const sign=(content,key)=>{
 };
 export const providerExecutionRequestHash=body=>createHash('sha256').update(body.trim()).digest('hex');
 function validate(p,now){
- const keys=['version','authorityKind','taskId','projectId','scopeHash','contractHash','baselineSha','releaseSha','requestHash','expiresAt','productionRuntime'];
+ const keys=['version','authorityKind','taskId','projectId','scopeHash','contractHash','baselineSha','releaseSha','requestHash','expiresAt','productionRuntime',...(p?.recovery?['recovery']:[])];
  if(!p||Object.keys(p).sort().join()!==keys.sort().join()||p.version!==1||p.authorityKind!=='provider-execution'||
     !['taskId','projectId'].every(k=>uuid.test(p[k]??''))||
     !['scopeHash','contractHash','requestHash'].every(k=>/^[a-f0-9]{64}$/.test(p[k]??''))||
     !['baselineSha','releaseSha'].every(k=>/^[a-f0-9]{40}$/.test(p[k]??''))||
     !Number.isSafeInteger(p.expiresAt)||p.expiresAt<=now||p.expiresAt>now+1800000||
     typeof p.productionRuntime!=='string'||p.productionRuntime.length>8192||!/^[A-Za-z0-9_-]+$/.test(p.productionRuntime))deny();
+ if(p.recovery){
+  const r=p.recovery;
+  if(Object.keys(r).sort().join()!==['authorizationId','candidateSha','checkpointSha','priorRunId','sourceTreeSha'].sort().join()||
+     !uuid.test(r.authorizationId??'')||typeof r.priorRunId!=='string'||!/^[1-9][0-9]*$/.test(r.priorRunId)||
+     !['candidateSha','checkpointSha','sourceTreeSha'].every(k=>typeof r[k]==='string'&&/^[a-f0-9]{40}$/.test(r[k])))deny();
+ }
 }
 export function encodeProviderExecutionHandoff(proof,key,now=Date.now()){
  const p={version:1,...proof};validate(p,now);

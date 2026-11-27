@@ -4,7 +4,7 @@ import {authenticateTask4aFailedRun,loadTask4aLinkedDiagnostics} from '../../scr
 import {encodeDeveloperHandoff,readDeveloperHandoff,classifyDeveloperDispatchAuthority,type DeveloperDispatchPayload} from '../../scripts/benchmark/developer-dispatch-contract.mjs';
 import type {LifecycleSnapshot,LifecycleOffer} from '@/lib/projects/lifecycle-owner-types';
 import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
-import {encodeProviderExecutionHandoff,providerExecutionRequestHash} from '../../scripts/benchmark/provider-execution-handoff.mjs';
+import {encodeProviderExecutionHandoff,readProviderExecutionHandoff,providerExecutionRequestHash,type ProviderCheckpointRecovery} from '../../scripts/benchmark/provider-execution-handoff.mjs';
 import {loadRecoveryDiagnostics,recoveryCompletedEvidence,validateRecoveryRecords} from '../../scripts/benchmark/native-wip-recovery.mjs';
 import {lifecycleProposalFromSnapshot} from '../../scripts/benchmark/lifecycle-owner-proposal.mjs';
 import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
@@ -234,6 +234,40 @@ function dispatchFailure(error:unknown){
  return {kind:transient?'transient':'permanent',phase:'preflight',reason:typeof e?.message==='string'?e.message.slice(0,600):'GitHub preflight failed'};
 }
 const marker = (task: AgentTask) => `<!-- katie-managed-task:${task.id} -->`;
+// The original issue, task and implementation are reused. A durable single
+// dispatch claim precedes the external write; uncertain acceptance never retries.
+export async function dispatchProviderCheckpointRecovery(task:AgentTask,project:Context,lease:string){
+ if(task.status!=='dispatching'||!task.external.checkpointRecoveryAuthorizationId||task.external.checkpointRecoveryDispatchClaimedAt)return task;
+ const release=process.env.VERCEL_GIT_COMMIT_SHA,key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+ if(process.env.VERCEL_ENV!=='production'||!release||!key||process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled')throw Error('Live signed checkpoint dispatcher unavailable');
+ const offer=await agentRpc<{proof:ProviderCheckpointRecovery;cutoff:string;priorRelease:string;issueNumber:number}>('project_org_package_checkpoint_dispatch_offer',{p_task:task.id,p_lease:lease,p_release:release});
+ if(offer.proof.authorizationId!==task.external.checkpointRecoveryAuthorizationId||offer.issueNumber!==Number(task.external.issueNumber)||offer.proof.priorRunId!==String((task.external.receipt as {run_id?:number}|undefined)?.run_id))throw Error('Exact original dispatch checkpoint required');
+ const client=github(),binding=await repository(task);
+ const [user,repo,issue,run]=await Promise.all([client.users.getAuthenticated(),client.repos.get(binding),client.issues.get({...binding,issue_number:offer.issueNumber}),client.actions.getWorkflowRun({...binding,run_id:Number(offer.proof.priorRunId)})]);
+ if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||issue.data.user?.login!==repo.data.owner.login||
+  run.data.status!=='completed'||run.data.conclusion!=='failure'||run.data.head_sha!==offer.priorRelease||run.data.path!=='.github/workflows/autonomous-development.yml'||run.data.head_branch!=='main'||run.data.repository.full_name!==binding.fullName||run.data.head_repository?.full_name!==binding.fullName)throw Error('Original owner-authored failed workflow identity changed');
+ const oldBody=unpackDevelopmentRequest(issue.data.body??'');
+ const prior=readProviderExecutionHandoff(oldBody,key,Date.parse(String(task.external.dispatchStartedAt)));
+ const header=oldBody.match(/<!-- katie-native-provider:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/);
+ if(!header||prior.recovery||prior.taskId!==task.id||prior.projectId!==project.projectId||prior.scopeHash!==project.scopeHash||prior.contractHash!==project.contractHash||prior.baselineSha!==project.baselineSha||prior.releaseSha!==offer.priorRelease)throw Error('Original authenticated request changed');
+ const request=oldBody.slice(oldBody.indexOf(header[0])+header[0].length).trim();
+ if(providerExecutionRequestHash(request)!==prior.requestHash)throw Error('Original request digest changed');
+ const proof={authorityKind:'provider-execution' as const,taskId:task.id,projectId:project.projectId,scopeHash:project.scopeHash,contractHash:project.contractHash,baselineSha:project.baselineSha,releaseSha:release,requestHash:prior.requestHash,expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(offer.cutoff)),recovery:offer.proof};
+ const capsule=sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',proof,key);
+ const body=packDevelopmentRequest(marker(task)+'\n\n'+encodeProviderExecutionHandoff({...proof,productionRuntime:capsule},key)+'\n\n'+request,marker(task));
+ const claimed=await agentRpc<AgentTask|false>('project_org_package_checkpoint_claim_dispatch',{p_task:task.id,p_lease:lease,p_authorization:offer.proof.authorizationId,p_release:release});
+ if(!claimed)return readTask(task.id);
+ try{
+  await client.issues.update({...binding,issue_number:offer.issueNumber,body});
+  await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(offer.issueNumber)}});
+  return await save(claimed,'submitted','Owner-authorized final-review-only continuation dispatched.',claimed.external,lease);
+ }catch{
+  // A dispatch may have been accepted. The single claim remains consumed;
+  // reconciliation, not another dispatch, is the only permitted next action.
+  return readTask(task.id);
+ }
+}
+
 export async function dispatchDevelopment(task: AgentTask, project?: Context, assignmentLease?:string) {
   if (task.status !== "dispatching") return task;
   if(task.external.attempted)return readTask(task.id);
@@ -1206,6 +1240,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
     if(typeof task.external.developerDispatchSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.developerDispatchSince)||run.head_sha!==task.external.developerReleaseSha||(task.external.lifecycleProposalId&&(run.event!=='workflow_dispatch'||run.id===(task.external.receipt as {run_id?:number}|undefined)?.run_id))))continue;
     if(typeof task.external.providerExecutionRelease==='string'&&run.head_sha!==task.external.providerExecutionRelease)continue;
+    if(task.external.checkpointRecoveryAuthorizationId&&(!task.external.checkpointRecoveryDispatchClaimedAt||run.event!=='workflow_dispatch'||Date.parse(run.created_at)<Date.parse(String(task.external.checkpointRecoveryDispatchClaimedAt))))continue;
     if(!task.external.ownerSuccessorConsentId&&typeof task.external.resourceAmendmentSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.resourceAmendmentSince)||run.head_sha!==task.external.resourceAmendmentRelease||run.event!=='workflow_dispatch'))continue;
     if((!task.external.resourceAmendmentId||task.external.ownerSuccessorConsentId)&&typeof task.external.paidSuccessorSince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.paidSuccessorSince)||run.head_sha!==task.external.paidSuccessorRelease||run.event!=='workflow_dispatch'))continue;
     if(!task.external.resourceAmendmentId&&!task.external.paidSuccessorId&&typeof task.external.pregrantRecoverySince==='string'&&(new Date(run.created_at).getTime()<Date.parse(task.external.pregrantRecoverySince)||run.head_sha!==task.external.pregrantRecoveryRelease||run.event!=='workflow_dispatch'))continue;
@@ -1221,6 +1256,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     const parsed = receiptSchema.safeParse(raw);
     if (!parsed.success || parsed.data.issue_number !== issueNumber) continue;
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
+    if(task.external.checkpointRecoveryAuthorizationId&&receipt.outcome==='READY'&&(receipt.tested_head_sha!==task.external.checkpointRecoveryCandidate||receipt.reviewed_head_sha!==task.external.checkpointRecoveryCandidate))throw Error('Recovered review did not retain the authorized original implementation');
     const updated=await persist(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
     if(receipt.outcome!=='READY'&&project&&!task.external.providerExecutionRelease&&!receipt.providerExecutionEvidence){
       // Nonbillable only: emit a recoverable owner proposal before any new execution.

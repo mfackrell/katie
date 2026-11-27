@@ -127,3 +127,15 @@ test('trusted host preflight consumes only the authorized provider run claim and
  assert.equal(calls[0].params.p_run,'456');
  await assert.rejects(run({allow:false}),/execution claim rejected/);
 });
+
+
+test('provider continuation handoff binds exact owner receipt, prior run, candidate and tree in the signed runtime',()=>{
+ const key='test-only-key'.repeat(3),now=1000000,taskId='11111111-1111-4111-8111-111111111111',projectId='22222222-2222-4222-8222-222222222222',request='same immutable request';
+ const recovery={authorizationId:'33333333-3333-4333-8333-333333333333',priorRunId:'123',checkpointSha:'a'.repeat(40),candidateSha:'b'.repeat(40),sourceTreeSha:'c'.repeat(40)};
+ const proof={authorityKind:'provider-execution',taskId,projectId,scopeHash:'a'.repeat(64),contractHash:'b'.repeat(64),baselineSha:'c'.repeat(40),releaseSha:'d'.repeat(40),requestHash:providerExecutionRequestHash(request),expiresAt:now+60000,recovery};
+ const capsule=sealNativeProductionRuntime('dummy-service-role',proof,key,now);
+ const body='<!-- katie-managed-task:'+taskId+' -->\n\n'+encodeProviderExecutionHandoff({...proof,productionRuntime:capsule},key,now)+'\n\n'+request;
+ assert.deepEqual(readProviderExecutionHandoff(body,key,now).recovery,recovery);
+ for(const k of ['priorRunId','checkpointSha','candidateSha','sourceTreeSha','authorizationId'])assert.throws(()=>openNativeProductionRuntime(capsule,{...proof,recovery:{...recovery,[k]:'changed'}},key,now));
+ assert.throws(()=>encodeProviderExecutionHandoff({...proof,recovery:{...recovery,extra:true},productionRuntime:capsule},key,now));
+});
