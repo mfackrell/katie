@@ -247,7 +247,8 @@ export async function dispatchProviderCheckpointRecovery(task:AgentTask,project:
  if(user.data.type!=='User'||repo.data.owner.type!=='User'||user.data.login.toLowerCase()!==repo.data.owner.login.toLowerCase()||issue.data.user?.login!==repo.data.owner.login||
   run.data.status!=='completed'||run.data.conclusion!=='failure'||run.data.head_sha!==offer.priorRelease||run.data.path!=='.github/workflows/autonomous-development.yml'||run.data.head_branch!=='main'||run.data.repository.full_name!==binding.fullName||run.data.head_repository?.full_name!==binding.fullName)throw Error('Original owner-authored failed workflow identity changed');
  const oldBody=unpackDevelopmentRequest(issue.data.body??'');
- const prior=readProviderExecutionHandoff(oldBody,key,Date.parse(String(task.external.dispatchStartedAt)));
+ const originalDispatchTime=Date.parse(String(task.external.dispatchStartedAt));if(!Number.isFinite(originalDispatchTime))throw Error('Original dispatch time unavailable');
+ const prior=readProviderExecutionHandoff(oldBody,key,originalDispatchTime);
  const header=oldBody.match(/<!-- katie-native-provider:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/);
  if(!header||prior.recovery||prior.taskId!==task.id||prior.projectId!==project.projectId||prior.scopeHash!==project.scopeHash||prior.contractHash!==project.contractHash||prior.baselineSha!==project.baselineSha||prior.releaseSha!==offer.priorRelease)throw Error('Original authenticated request changed');
  const request=oldBody.slice(oldBody.indexOf(header[0])+header[0].length).trim();
