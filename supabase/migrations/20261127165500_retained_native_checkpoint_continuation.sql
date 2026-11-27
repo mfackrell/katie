@@ -10,12 +10,25 @@ CREATE TABLE public.project_package_checkpoint_continuations (
  prior_cutoff timestamptz NOT NULL, cutoff timestamptz NOT NULL,
  proof jsonb NOT NULL, terms jsonb NOT NULL, state_hash text NOT NULL,
  prior_state jsonb NOT NULL, renewed_fingerprint text NOT NULL,
+ authorization_txid bigint NOT NULL DEFAULT txid_current(),
  authorized_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 ALTER TABLE public.project_package_checkpoint_continuations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.project_package_checkpoint_continuations FROM PUBLIC,anon,authenticated,service_role;
 GRANT SELECT ON public.project_package_checkpoint_continuations TO service_role;
 CREATE TRIGGER checkpoint_continuation_immutable BEFORE UPDATE OR DELETE ON public.project_package_checkpoint_continuations FOR EACH ROW EXECUTE FUNCTION public.project_org_change_immutable();
+
+-- The original dispatch table is keyed by assignment, not run. Do not
+-- overwrite its immutable first-run binding or permit generic redispatch.
+CREATE TABLE public.project_package_checkpoint_dispatches (
+ authorization_id uuid PRIMARY KEY REFERENCES public.project_package_checkpoint_continuations(authorization_id),
+ task_id uuid NOT NULL UNIQUE REFERENCES public.agent_tasks(id),
+ run_id text NOT NULL UNIQUE CHECK(run_id~'^[1-9][0-9]{0,19}$'),
+ started_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ALTER TABLE public.project_package_checkpoint_dispatches ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.project_package_checkpoint_dispatches FROM PUBLIC,anon,authenticated,service_role;
+CREATE TRIGGER checkpoint_dispatch_immutable BEFORE UPDATE OR DELETE ON public.project_package_checkpoint_dispatches FOR EACH ROW EXECUTE FUNCTION public.project_org_change_immutable();
 
 CREATE FUNCTION public.project_org_package_checkpoint_terms() RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path TO public,pg_temp AS $$
  SELECT '{"maxMissions":124,"developmentAttempts":5,"codingDispatches":5,"managerMissions":10,"nativeInferencePerDispatch":12,"nativeInferenceLimit":60,"compositionLimit":5,"reviewLimit":5,"paidInferenceLimit":80,"finalReviewDispatches":1,"finalReviewInferenceLimit":12,"additionalPaidRetries":0,"automaticRetries":0,"nativeAutomaticRepairs":0,"tokenAllowance":600000,"additionalTokens":0,"spendMode":"provider-account","dollarCeilingMicrousd":null,"stopAt":"verified-protected-preview"}'::jsonb
@@ -134,13 +147,13 @@ BEGIN
  UPDATE project_worker_contracts SET deadline=p_cutoff WHERE package_id=p_package;
  UPDATE project_work_packages SET deadline=p_cutoff,status='running' WHERE id=p_package;
  UPDATE project_provider_execution SET deadline=p_cutoff,window_id=p_authorization WHERE project_id=p_project;
+ INSERT INTO project_package_checkpoint_continuations(project_id,package_id,authorization_id,owner_id,mission_id,assignment_id,release_sha,release_generation,deployment_id,prior_cutoff,cutoff,proof,terms,state_hash,prior_state,renewed_fingerprint,authorized_at)
+ VALUES(p_project,p_package,p_authorization,p_owner,'aeffa160-d240-46d1-b240-dc0ac7f488d5','1c940466-c034-4e21-8dc5-d2ecf1212098',p_release,p_generation,p_deployment,r.cutoff,p_cutoff,proof,p_terms,p_state_hash,s,project_org_package_execution_fingerprint(p_package),stamp);
  UPDATE work_projects SET deadline=p_cutoff,max_missions=(p_terms->>'maxMissions')::int,status='running',active_mission_id='aeffa160-d240-46d1-b240-dc0ac7f488d5',
  detail='Authenticated retained checkpoint continuation: final review only, then existing acceptance and delivery.',progress_since=stamp,progress_signature=NULL,error_signature=NULL,repeated_errors=0,impediment=NULL,updated_at=stamp WHERE id=p_project;
  UPDATE agent_missions SET status='running',deadline=p_cutoff,project_evidence=project_evidence||jsonb_build_object('providerContinuationWindow',p_authorization,'checkpointRecoveryAuthorizationId',p_authorization),updated_at=stamp WHERE id='aeffa160-d240-46d1-b240-dc0ac7f488d5';
  UPDATE mission_assignments SET status='waiting_external' WHERE id='1c940466-c034-4e21-8dc5-d2ecf1212098';
  UPDATE agent_tasks SET status='dispatching',external=external||jsonb_build_object('checkpointRecoveryAuthorizationId',p_authorization,'checkpointRecoveryCandidate','7b0a415189ffd849bbaa645ce1bea499693bee94') WHERE id='1c940466-c034-4e21-8dc5-d2ecf1212098';
- INSERT INTO project_package_checkpoint_continuations(project_id,package_id,authorization_id,owner_id,mission_id,assignment_id,release_sha,release_generation,deployment_id,prior_cutoff,cutoff,proof,terms,state_hash,prior_state,renewed_fingerprint,authorized_at)
- VALUES(p_project,p_package,p_authorization,p_owner,'aeffa160-d240-46d1-b240-dc0ac7f488d5','1c940466-c034-4e21-8dc5-d2ecf1212098',p_release,p_generation,p_deployment,r.cutoff,p_cutoff,proof,p_terms,p_state_hash,s,project_org_package_execution_fingerprint(p_package),stamp);
  IF NOT project_org_package_execution_live(p_project) OR NOT project_org_package_execution_assignment('1c940466-c034-4e21-8dc5-d2ecf1212098') THEN RAISE EXCEPTION 'Renewed checkpoint authority does not satisfy existing execution fences'; END IF;
  INSERT INTO project_events(project_id,event,data) VALUES(p_project,'package_checkpoint_authorized',o||jsonb_build_object('authorizationId',p_authorization,'authorizedAt',stamp));
  RETURN o||jsonb_build_object('stage','authorized','authorizationId',p_authorization,'authorizedAt',stamp);
@@ -301,11 +314,12 @@ begin
   return true;
  end if;
  if j.role<>'development' or p_scope is distinct from r.scope_hash or p_operation not in('input-count','inference')
- or not exists(select 1 from project_provider_dispatches where task_id=j.id and run_id=p_attempt) then return false;end if;
+ or not (exists(select 1 from project_provider_dispatches where task_id=j.id and run_id=p_attempt)
+ or exists(select 1 from project_package_checkpoint_dispatches where task_id=j.id and run_id=p_attempt)) then return false;end if;
  if exists(select 1 from project_package_checkpoint_continuations c where c.project_id=r.project_id) then
   if not exists(select 1 from project_package_checkpoint_continuations c where c.assignment_id=j.id
     and p_attempt<>c.proof->>'priorRunId' and project_org_package_checkpoint_dispatch_live(j.id,c.authorization_id,c.release_sha))
-   or (select count(*) from project_provider_dispatches where task_id=j.id)<>2
+   or not exists(select 1 from project_package_checkpoint_dispatches d join project_package_checkpoint_continuations c on c.authorization_id=d.authorization_id where d.task_id=j.id and d.run_id=p_attempt and c.assignment_id=j.id)
    or (select count(*) from project_provider_requests q join mission_assignments x on x.id=q.assignment_id where q.project_id=r.project_id and q.operation='inference' and x.role='development')>=project_org_package_completion_limit(r.project_id,'nativeInferenceLimit',36)
   then return false;end if;
   select count(*) into n from project_provider_requests q where q.assignment_id=j.id and q.execution_attempt=p_attempt and q.operation=p_operation;
@@ -332,6 +346,9 @@ begin
  if exists(select 1 from project_package_checkpoint_continuations c where c.assignment_id=p_task) then
  if not exists(select 1 from project_package_checkpoint_continuations c where c.assignment_id=p_task and p_run~'^[0-9]+$' and p_run<>c.proof->>'priorRunId' and project_org_package_checkpoint_dispatch_live(p_task,c.authorization_id,c.release_sha))
  or (select count(*) from project_provider_dispatches where task_id=p_task)<>1 then return false;end if;
+ insert into project_package_checkpoint_dispatches(authorization_id,task_id,run_id)
+ select authorization_id,p_task,p_run from project_package_checkpoint_continuations where assignment_id=p_task on conflict do nothing;
+ return found;
  end if;
  insert into project_provider_dispatches(task_id,run_id) values(p_task,p_run) on conflict do nothing;
  return found;
@@ -645,3 +662,112 @@ GRANT EXECUTE ON FUNCTION public.project_org_package_checkpoint_dispatch_offer(u
 
 REVOKE ALL ON FUNCTION public.project_org_package_checkpoint_claim_dispatch(uuid,uuid,uuid,text) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.project_org_package_checkpoint_claim_dispatch(uuid,uuid,uuid,text) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.project_org_coding_capacity_resource_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+ IF OLD.id='fe9d2658-41e3-44c1-ae8e-a0cba98371fe'::uuid
+ AND ((OLD.max_missions=96 AND (SELECT count(*) FROM agent_missions WHERE project_id=OLD.id)>=96)
+   OR EXISTS(SELECT 1 FROM project_coding_capacity_receipts WHERE project_id=OLD.id))
+ AND (NEW.max_missions IS DISTINCT FROM OLD.max_missions OR NEW.token_allowance IS DISTINCT FROM OLD.token_allowance OR NEW.deadline IS DISTINCT FROM OLD.deadline)
+ AND NOT (OLD.max_missions=96 AND OLD.status='blocked' AND OLD.detail='Approved project mission limit reached'
+  AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+  AND EXISTS(SELECT 1 FROM project_coding_capacity_receipts r WHERE r.project_id=OLD.id AND NEW.max_missions=r.approved_max_missions))
+ AND NOT (OLD.max_missions=100 AND NEW.max_missions=101 AND OLD.status='blocked'
+  AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+  AND EXISTS(SELECT 1 FROM project_coding_capacity_resume_receipts s WHERE s.project_id=OLD.id
+   AND s.authorization_txid=txid_current() AND s.source_mission_id=OLD.active_mission_id
+   AND s.prior_max_missions=OLD.max_missions AND s.approved_max_missions=NEW.max_missions))
+ AND NOT (OLD.max_missions=101 AND NEW.max_missions=102 AND OLD.status='blocked'
+  AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+  AND EXISTS(SELECT 1 FROM project_coding_capacity_resume_receipts s WHERE s.project_id=OLD.id
+   AND s.historical_missions=99 AND s.authorization_txid=txid_current() AND s.source_mission_id=OLD.active_mission_id
+   AND s.prior_max_missions=OLD.max_missions AND s.approved_max_missions=NEW.max_missions))
+ AND NOT (OLD.max_missions=102 AND NEW.max_missions=103 AND OLD.status='blocked'
+  AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+  AND EXISTS(SELECT 1 FROM project_coding_capacity_resume_receipts s WHERE s.project_id=OLD.id
+   AND s.historical_missions=102 AND s.authorization_txid=txid_current() AND s.source_mission_id=OLD.active_mission_id
+   AND s.prior_max_missions=OLD.max_missions AND s.approved_max_missions=NEW.max_missions))
+ AND NOT (OLD.max_missions=103 AND NEW.max_missions=104 AND OLD.status='blocked'
+  AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+  AND EXISTS(SELECT 1 FROM project_coding_capacity_resume_receipts s WHERE s.project_id=OLD.id
+   AND s.historical_missions=103 AND s.authorization_txid=txid_current() AND s.source_mission_id=OLD.active_mission_id
+   AND s.prior_max_missions=OLD.max_missions AND s.approved_max_missions=NEW.max_missions))
+ AND NOT (OLD.status='paused' AND OLD.max_missions=104 AND NEW.max_missions=112 AND OLD.active_mission_id is null
+ AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+ AND EXISTS(SELECT 1 FROM project_package_execution_receipts x WHERE x.project_id=OLD.id AND x.authorization_txid=txid_current()))
+ AND NOT (OLD.status='blocked' AND OLD.max_missions=112 AND NEW.max_missions=118 AND OLD.max_cycles=3 AND NEW.max_cycles=5
+ AND NEW.token_allowance=OLD.token_allowance AND NEW.deadline=OLD.deadline
+ AND EXISTS(select 1 from project_package_completion_receipts s where s.project_id=OLD.id and s.authorization_txid=txid_current()
+  and s.failed_mission_id=OLD.active_mission_id and s.terms=project_org_package_completion_terms()))
+ AND NOT (OLD.status='blocked' AND OLD.max_missions=118 AND NEW.max_missions=124 AND OLD.active_mission_id IS NULL
+  AND NEW.token_allowance=OLD.token_allowance AND NEW.max_cycles=OLD.max_cycles AND NEW.cycles=OLD.cycles
+  AND EXISTS(select 1 from project_package_checkpoint_continuations c where c.project_id=OLD.id and c.authorization_txid=txid_current() and c.prior_cutoff=OLD.deadline and c.cutoff=NEW.deadline and c.mission_id=NEW.active_mission_id and c.terms=project_org_package_checkpoint_terms()))
+ THEN RAISE EXCEPTION 'Original commissioning resources require the exact one-time owner receipt'; END IF;
+ RETURN NEW;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION public.project_smart_mission_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+ if exists(select 1 from mission_assignments j join project_worker_admissions a on a.assignment_id=j.id where j.mission_id=old.id)
+ and (new.project_id is distinct from old.project_id or new.project_kind is distinct from old.project_kind or new.objective is distinct from old.objective or new.project_evidence is distinct from old.project_evidence or new.repository_id is distinct from old.repository_id or new.team is distinct from old.team)
+ and not (new.project_id is not distinct from old.project_id and new.project_kind is not distinct from old.project_kind and new.objective is not distinct from old.objective and new.repository_id is not distinct from old.repository_id and new.team is not distinct from old.team and old.status='blocked' and new.status='running'
+  and exists(select 1 from project_package_checkpoint_continuations c where c.mission_id=old.id and c.project_id=old.project_id and c.authorization_txid=txid_current() and new.deadline=c.cutoff and old.deadline=c.prior_cutoff
+   and new.project_evidence=old.project_evidence||jsonb_build_object('providerContinuationWindow',c.authorization_id,'checkpointRecoveryAuthorizationId',c.authorization_id)))
+ then raise exception 'Admitted SMART mission context is immutable';end if;
+ if new.project_id is not null and new.project_kind<>'management' and (new.project_id is distinct from old.project_id or new.project_kind is distinct from old.project_kind) then
+ perform project_smart_admit(j.id) from mission_assignments j where j.mission_id=new.id and j.status in ('running','waiting_external');end if;
+ return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.project_provider_request_before_director_recovery(p_job uuid, p_attempt text, p_request uuid, p_operation text, p_hash text, p_scope text DEFAULT NULL::text, p_receipt text DEFAULT NULL::text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare j mission_assignments; m agent_missions; checked_at timestamptz;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into j from mission_assignments where id=p_job;
+ select * into m from agent_missions where id=j.mission_id;
+ checked_at:=clock_timestamp();
+ if j.id is null or m.project_id is null or p_request is null or p_attempt is null
+ or p_operation is null or p_hash is null or p_hash !~ '^[0-9a-f]{64}$'
+ or m.status<>'running' or m.deadline is null or m.deadline<=checked_at
+ or not exists(select 1 from work_projects p join project_provider_execution a on a.project_id=p.id
+  where p.id=m.project_id and p.active_mission_id=m.id and p.status='running'
+  and p.deadline>checked_at and a.deadline>checked_at) then return false;end if;
+ if p_scope is null then
+  if p_operation not in ('model-list','inference') or j.lease::text is distinct from p_attempt
+  or j.status<>'running' or j.lease_until is null or j.lease_until<=checked_at then return false;end if;
+ else
+  if p_operation not in ('input-count','inference') or not project_provider_dispatch_live(j.id,p_scope)
+  or not (exists(select 1 from project_provider_dispatches where task_id=j.id and run_id=p_attempt)
+  or exists(select 1 from project_package_checkpoint_dispatches d join project_package_checkpoint_continuations c on c.authorization_id=d.authorization_id where d.task_id=j.id and d.run_id=p_attempt and project_org_package_checkpoint_dispatch_live(j.id,c.authorization_id,c.release_sha))) then return false;end if;
+ end if;
+ if p_receipt is not null then
+  if length(p_receipt) not between 1 and 256 then return false;end if;
+  update project_provider_requests set provider_receipt=p_receipt,resolved_at=clock_timestamp()
+   where id=p_request and project_id=m.project_id and mission_id=m.id and assignment_id=j.id and worker_id=j.agent_id
+   and execution_attempt=p_attempt and operation=p_operation and request_hash=p_hash and resolved_at is null;
+  return found;
+ end if;
+ if p_scope is null and (not project_provider_mission_live(j.id,j.lease)
+  or (p_operation='inference' and m.calls>=m.max_calls)) then return false;end if;
+ insert into project_provider_requests(id,project_id,mission_id,assignment_id,worker_id,execution_attempt,operation,request_hash)
+  values(p_request,m.project_id,m.id,j.id,j.agent_id,p_attempt,p_operation,p_hash) on conflict do nothing;
+ if not found then return false;end if;
+ if p_scope is null and p_operation='inference' then update agent_missions set calls=calls+1 where id=m.id;end if;
+ return true;
+end $function$;

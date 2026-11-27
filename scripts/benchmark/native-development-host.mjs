@@ -211,7 +211,7 @@ if(providerExecution&&proof.recovery){
  const authority=await readOne('project_package_checkpoint_continuations','authorization_id',proof.recovery.authorizationId);
  const live=await db.rpc('project_org_package_checkpoint_dispatch_live',{p_task:task.id,p_authorization:proof.recovery.authorizationId,p_release:proof.releaseSha});
  if(live.error||live.data!==true||authority.project_id!==project.id||authority.assignment_id!==task.id||authority.release_sha!==proof.releaseSha||
-    JSON.stringify(authority.proof)!==JSON.stringify(proof.recovery)&&Object.keys(proof.recovery).some(k=>authority.proof?.[k]!==proof.recovery[k]))
+    !authority.proof||Object.keys(authority.proof).length!==Object.keys(proof.recovery).length||Object.keys(proof.recovery).some(k=>authority.proof[k]!==proof.recovery[k]))
   denied('authenticated final-review continuation unavailable');
  if(!priorRefs.length)denied('retained native provider checkpoint missing');
  const {record,diagnostics:priorDiagnostics}=await loadRecoveryDiagnostics({task,repository:process.env.GITHUB_REPOSITORY,github:githubRecoveryReader(process.env.GITHUB_REPOSITORY)});

@@ -31,7 +31,7 @@ export function PackageExecutionControl({initial,onRefresh}:{initial:PackageExec
    <li>One final-review-only continuation with up to {recovery.terms.finalReviewInferenceLimit} new native inference calls; {recovery.nativeInferences} of {recovery.terms.nativeInferenceLimit} native and {recovery.paidInferences} of {recovery.terms.paidInferenceLimit} cumulative paid inference calls already consumed.</li>
    <li>Existing 600,000 recorded-token ceiling unchanged. Provider-account charges apply; no verified dollar ceiling exists.</li>
    <li>Renewed deadline: {initial.cutoff} (UTC). Previous deadline: {new Date(recovery.priorCutoff).toISOString()}.</li>
-   <li>Stop at independently verified protected Preview delivery, expiry, failed acceptance, or an exhausted limit. No game production merge or expanded scope.</li>
+   <li>Stop at independently verified protected Preview delivery, expiry, failed acceptance, or an exhausted limit. Existing director closure and security checks remain mandatory; no game production merge or expanded scope.</li>
    <li>Release: {initial.releaseSha} · generation {initial.releaseGeneration} · {initial.deploymentId}</li>
   </ul>
   {!receipt?<div className="mt-3 space-y-3"><label className="block text-sm"><input type="checkbox" checked={consent} disabled={pending} onChange={e=>setConsent(e.target.checked)}/> I explicitly authorize this one checkpoint-bound continuation, renewed deadline, paid inference and mission ceilings, and existing acceptance and protected Preview delivery. I understand there is no verified dollar cap.</label>
