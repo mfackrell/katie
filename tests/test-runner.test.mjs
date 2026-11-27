@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertComplete, runNodeFile } from "../scripts/run-tests.mjs";
+import { assertComplete, nodeFileTimeout, runNodeFile } from "../scripts/run-tests.mjs";
 
 function fixture(source, options) {
   const dir = mkdtempSync(join(tmpdir(), "katie-runner-fixture-"));
@@ -54,4 +54,15 @@ test("completion validation rejects absent, partial and cancelled reports", () =
   assert.throws(() => assertComplete(null), /Incomplete or failed/);
   assert.throws(() => assertComplete({ ...complete, completed: 1 }), /Incomplete or failed/);
   assert.throws(() => assertComplete({ ...complete, counts: { ...complete.counts, cancelled: 1 } }), /Incomplete or failed/);
+});
+
+test("native commissioning gets its declared five-minute test allowance plus cleanup", () => {
+  assert.equal(nodeFileTimeout("tests/coding-capacity-native-postgres.test.mjs"), 330_000);
+  assert.equal(nodeFileTimeout("tests/google-routing.test.ts"), 180_000);
+});
+
+test("outer deadline rejects a process that ignores SIGTERM", () => {
+  assert.throws(() => fixture("process.on('SIGTERM', () => {}); test('hang', () => new Promise(() => {})); setInterval(() => {}, 1000);", {
+    timeout: 1000,
+  }), /Test process failed.*SIGKILL/);
 });

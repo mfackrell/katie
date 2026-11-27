@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,12 +40,23 @@ function execute(args, options = {}) {
   });
 }
 
+export function nodeFileTimeout(file) {
+  // The native PostgreSQL commissioning test declares a 300-second deadline.
+  // Do not terminate it at the generic 180-second outer process deadline.
+  return basename(file) === "coding-capacity-native-postgres.test.mjs" ? 330_000 : 180_000;
+}
+
 export function runNodeFile(file, reportPath, options = {}) {
   rmSync(reportPath, { force: true });
   // Each test file already runs in a separate Node process. Disable the test
   // runner's additional child-process isolation so timeout fixtures cannot
   // leave orphan test workers holding stdout/stderr pipes open indefinitely.
   const result = execute(["--experimental-test-isolation=none", "--test-reporter=./scripts/test-reporter.mjs", file], {
+    // Stream diagnostics directly: buffered writes from a synchronous loop can
+    // hide the actual running file until the entire suite finishes.
+    stdio: ["ignore", "inherit", "inherit"],
+    timeout: nodeFileTimeout(file),
+    killSignal: "SIGKILL",
     ...options,
     env: { ...process.env, NODE_TEST_CONTEXT: undefined, KATIE_TEST_REPORT_PATH: reportPath },
   });
