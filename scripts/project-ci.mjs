@@ -11,12 +11,16 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
  const context=parseProjectContext(readFileSync(request,'utf8'));if(!context)throw Error('Project verifier requires owner-approved project context');
  const root=resolve(workspace),tools=dirname(fileURLToPath(import.meta.url)),deps=resolve(dirname(tools),'project-dependencies');
  if(tools.startsWith(root+'/')||deps.startsWith(root+'/'))throw Error('Trusted verifier/dependencies must be outside candidate checkout');
+ const infrastructureFailure=(stage,message)=>{
+  writeFileSync(resolve(dirname(output),'project-verification-failure.json'),JSON.stringify({version:1,kind:'infrastructure',stage,projectId:context.projectId,baseSha:context.baseSha}));
+  throw Error(message);
+ };
  execFileSync('git',['-c','core.fsmonitor=false','diff','--no-ext-diff','--quiet',context.baseSha,'HEAD','--',':(glob)**/package.json',':(glob)**/package-lock.json',':(glob)**/.npmrc','package.json','package-lock.json','.npmrc'],{cwd:root,timeout:10000});
  if(existsSync(deps))rmSync(deps,{recursive:true,force:true});mkdirSync(deps,{recursive:true});
  // Dependency data comes from the previous verified commit. Ignore all install
  // scripts, hide host files, and allow network only for this npm download stage.
- const archive=spawnSync('git',['archive',context.baseSha],{cwd:root,maxBuffer:128*1024*1024,timeout:30000});if(archive.status)throw Error('Unable to read verified baseline dependencies');
- const extracted=spawnSync('tar',['-xf','-','--no-same-owner','-C',deps],{input:archive.stdout,timeout:30000});if(extracted.status)throw Error('Baseline extraction failed');
+ const archive=spawnSync('git',['archive',context.baseSha],{cwd:root,maxBuffer:128*1024*1024,timeout:30000});if(archive.error||archive.signal||archive.status!==0)infrastructureFailure('baseline-archive','Unable to read verified baseline dependencies');
+ const extracted=spawnSync('tar',['-xf','-','--no-same-owner','-C',deps],{input:archive.stdout,timeout:30000});if(extracted.error||extracted.signal||extracted.status!==0)infrastructureFailure('baseline-extract','Baseline extraction failed');
  // The package tree is extracted from the immutable, verified base commit,
  // and the candidate's dependency manifests were compared byte-for-byte above.
  // Fetch dependency tarballs in this trusted preparation stage, with scripts
@@ -62,12 +66,24 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
  const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(dependencies,'.vite'),{recursive:true});mkdirSync(resolve(root,'node_modules'),{recursive:true});
  const model=checkGameModel(context,root,dependencies);
  if(model)writeFileSync(resolve(dirname(output),'project-game-model.json'),JSON.stringify({version:1,projectId:context.projectId,headSha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),checkedAt:new Date().toISOString(),...model},null,2));
- const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
+ // The immutable baseline's full Katie gate already performs typechecking.
+ // Retain the explicit check for any other gate definition.
+ const gate=JSON.parse(readFileSync(resolve(deps,'package.json'),'utf8')).scripts?.['ci:gate'];
+ const tasks=gate==='npm run typecheck && npm test && npm run check:url && npm run build && npm run smoke'?['ci:gate']:['typecheck','ci:gate'];
+ const script="const {spawnSync}=require('node:child_process');for(const task of "+JSON.stringify(tasks)+"){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
  // Per-attempt diagnostics survive failed verification outside the candidate.
  const artifacts=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-artifacts-'));
  const diagnostics=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-diagnostics-'));
  const checkArgs=[...sandboxArgs(root,{dependencies,writable:true,artifacts}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
- const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));if(checked.status!==0)throw Error('Isolated project CI failed');
+ const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000,killSignal:'SIGKILL'});
+ // A process launch error, signal or timeout is not a test verdict.
+ // Use the existing trusted infrastructure receipt so the native host
+ // stops before asking a paid reviewer to diagnose nonexistent findings.
+ if(checked.error||checked.signal||checked.status===null){
+  try{collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));}catch{}
+  infrastructureFailure('isolated-ci-process','Isolated project CI interrupted before a reliable test verdict');
+ }
+ collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));if(checked.status!==0)throw Error('Isolated project CI failed');
  execFileSync('git',['-c','core.fsmonitor=false','diff','--no-ext-diff','--exit-code','HEAD','--'],{cwd:root,timeout:10000});
  // Tools resolve only immutable baseline dependencies, inaccessible to tests.
  const modulePath=resolve(tools,'node_modules');if(existsSync(modulePath))rmSync(modulePath,{recursive:true,force:true});symlinkSync(dependencies,modulePath,'dir');
