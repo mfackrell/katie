@@ -46,6 +46,9 @@ export function runNodeFile(file, reportPath, options = {}) {
   // runner's additional child-process isolation so timeout fixtures cannot
   // leave orphan test workers holding stdout/stderr pipes open indefinitely.
   const result = execute(["--experimental-test-isolation=none", "--test-reporter=./scripts/test-reporter.mjs", file], {
+    // The native PostgreSQL commissioning fixture has its own 300s test
+    // deadline. Allow bounded cleanup/reporting instead of killing it at 180s.
+    ...(file === "tests/coding-capacity-native-postgres.test.mjs" ? { timeout: 330_000 } : {}),
     ...options,
     env: { ...process.env, NODE_TEST_CONTEXT: undefined, KATIE_TEST_REPORT_PATH: reportPath },
   });

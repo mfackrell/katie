@@ -12,7 +12,8 @@ jobs:
     # Full offline suite and LibreOffice acceptance share this job; Ubuntu
     # package mirror latency previously exhausted the 20-minute limit after
     # all 2,451 offline tests and the build had already passed.
-    timeout-minutes: 35
+    # Attempts 1 and 2 exhausted 35 minutes before the full gate completed.
+    timeout-minutes: 60
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
