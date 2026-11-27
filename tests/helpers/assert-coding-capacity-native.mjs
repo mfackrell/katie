@@ -1377,6 +1377,21 @@ export async function assertCodingCapacityNative(db,{project,owner,release,gener
  assert.equal((await one('select project_org_package_coding_authorized($1,$2) ok',[fourth111.job.id,fourth111.job.lease])).ok,true);
  await db.query('reset role');
  console.log('MISSION111_DIAGNOSED_NATIVE_PREFLIGHT_PASS: drained 113-mission checkpoint, qualified one-time resume, no attempt or paid-call reset, preserved manager decisions');
+ // Install the next migration in this disposable PG16 savepoint, proving
+ // its DDL and rejection of a nonmatching live checkpoint. The full positive
+ // checkpoint replay needs its separate exact settled-receipt fixture.
+ await db.query('savepoint retained_checkpoint_migration');
+ await db.query(readFileSync('supabase/migrations/20261127165500_retained_native_checkpoint_continuation.sql','utf8'));
+ await db.query('DISCARD PLANS');
+ assert.equal((await one("select has_function_privilege('authenticated','project_org_package_checkpoint_authorize(uuid,uuid,uuid,text,bigint,text,uuid,text,jsonb,timestamptz,boolean)','execute') ok")).ok,false);
+ assert.equal((await one('select project_org_package_checkpoint_live($1) ok',[project])).ok,false);
+ assert.equal((await one('select project_org_package_checkpoint_snapshot($1) cp',[project])).cp,null);
+ await deny(()=>db.query('select project_org_package_checkpoint_offer($1,$2,$3)',[owner,project,preflightRelease111]),/Exact drained checkpoint/);
+ assert.equal((await one('select count(*)::int n from project_package_checkpoint_continuations')).n,0);
+ assert.equal((await one('select count(*)::int n from project_package_checkpoint_dispatches')).n,0);
+ await db.query('rollback to savepoint retained_checkpoint_migration');await db.query('release savepoint retained_checkpoint_migration');await db.query('DISCARD PLANS');
+ console.log('RETAINED_CHECKPOINT_MIGRATION_NEGATIVE_PASS: native DDL, role fence, wrong checkpoint denial, no new receipts');
+
 
  await db.query('rollback to savepoint invalid_response109');await db.query('release savepoint invalid_response109');await db.query('DISCARD PLANS');
  await db.query('set role service_role');
