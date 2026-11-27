@@ -43,10 +43,19 @@ childProcess.spawn=function(command,args,options){
   if(d.wipCheckpoint?.lastCompleted?.adaptiveRepair?.iteration===3)child.kill('SIGTERM');
  }
  if(args?.[0]===join(process.env.RUNNER_TEMP,'project-tools','project-ci.mjs')){
-  let tail='';
-  for(const stream of [child.stdout,child.stderr])stream?.on('data',chunk=>{tail=(tail+chunk).slice(-8000);});
+  // The adequate lifecycle failed in one of 173 historical test files,
+  // but a tail-only receipt omitted its name and assertion. Preserve the
+  // bounded full transcript on failures in this synthetic-only fixture.
+  let tail='',transcript='',truncated=false;
+  const limit=2*1024*1024;
+  for(const stream of [child.stdout,child.stderr])stream?.on('data',chunk=>{
+   const value=chunk.toString();
+   tail=(tail+value).slice(-8000);
+   if(transcript.length+value.length>limit)truncated=true;
+   transcript+=(value.slice(0,Math.max(0,limit-transcript.length)));
+  });
   child.once('close',(code,signal)=>{
-   fs.writeFileSync(join(process.env.RUNNER_TEMP,'qualification-verifier-tail.json'),JSON.stringify({code,signal,tail}));
+   fs.writeFileSync(join(process.env.RUNNER_TEMP,'qualification-verifier-tail.json'),JSON.stringify({code,signal,tail,...(code!==0||signal?{transcript,truncated}:{})}));
   });
  }
  return child;
