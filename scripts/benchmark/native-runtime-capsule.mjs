@@ -3,7 +3,7 @@ const domain='katie:benchmark715:native-production-runtime:v1';
 const deny=()=>{throw Error('NATIVE_PRODUCTION_RUNTIME_INVALID')};
 const keyFor=key=>{if(typeof key!=='string'||key.length<32)deny();return createHash('sha256').update(domain+'\0'+key).digest()};
 const aad=p=>Buffer.from(JSON.stringify(p.authorityKind==='provider-execution'
- ?['katie:provider-execution:native-production-runtime:v1',p.authorityKind,p.taskId,p.projectId,p.scopeHash,p.contractHash,p.baselineSha,p.releaseSha,p.requestHash,p.expiresAt]
+ ?['katie:provider-execution:native-production-runtime:v1',p.authorityKind,p.taskId,p.projectId,p.scopeHash,p.contractHash,p.baselineSha,p.releaseSha,p.requestHash,p.expiresAt,...(p.recovery?[p.recovery.authorizationId,p.recovery.priorRunId,p.recovery.checkpointSha,p.recovery.candidateSha,p.recovery.sourceTreeSha]:[])]
  :p.authorityKind==='ordinary-developer'
  ?['katie:ordinary-developer:native-production-runtime:v1',p.authorityKind,p.taskId,p.projectId,p.approvalId,p.accountId,p.scopeHash,p.contractHash,p.baselineSha,p.releaseSha,p.expiresAt]
  :[domain,p.taskId,p.trialId,p.approvalId,p.projectId,p.contractHash,p.benchmarkContractHash,p.baselineSha,p.expiresAt,...(p.continuationId?[p.continuationId]:[]),...(p.startupRecoveryId?[p.startupRecoveryId]:[]),...(p.developmentRenewalId?[p.developmentRenewalId]:[]),...(p.pregrantRecoveryId?[p.pregrantRecoveryId]:[]),...(p.paidSuccessorId?[p.paidSuccessorId]:[]),...(p.resourceAmendmentId?[p.resourceAmendmentId]:[])]));

@@ -16,7 +16,7 @@ import {mission84ProviderRetryOffer,M84_PROVIDER_MISSION,M84_PROVIDER_ASSIGNMENT
 import {managementContextRetestOffer} from '@/lib/projects/management-context-retest';
 import {followupManagementRetestOffer} from '@/lib/projects/management-followup-retest';
 import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
-import {packageExecutionOffer,ORIGINAL_PACKAGE,matchesPackageTerms,matchesCorrectiveTerms,matchesCompletionTerms,matchesInvalidRetryTerms} from '@/lib/projects/package-execution-authorization';
+import {packageExecutionOffer,ORIGINAL_PACKAGE,matchesPackageTerms,matchesCorrectiveTerms,matchesCompletionTerms,matchesInvalidRetryTerms,matchesCheckpointTerms} from '@/lib/projects/package-execution-authorization';
 import {originalBoundedRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-bounded-recovery';
 const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
@@ -184,7 +184,8 @@ const packageExecutionInput=z.object({trialAction:z.literal('authorize_existing_
 const correctivePackageInput=packageExecutionInput.extend({trialAction:z.literal('authorize_package_corrective_continuation'),correctiveTerms:z.unknown().refine(matchesCorrectiveTerms),contextHash:z.string().regex(/^[a-f0-9]{64}$/),contextChars:z.number().int().min(1).max(96000)}).strict();
 const completionPackageInput=correctivePackageInput.extend({trialAction:z.literal('authorize_package_completion'),completionTerms:z.unknown().refine(matchesCompletionTerms)}).strict();
 const invalidRetryPackageInput=correctivePackageInput.extend({trialAction:z.literal('authorize_package_invalid_response_retries'),invalidRetryTerms:z.unknown().refine(matchesInvalidRetryTerms)}).strict();
-const input=z.union([invalidRetryPackageInput,completionPackageInput,correctivePackageInput,packageExecutionInput,codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
+const checkpointPackageInput=packageExecutionInput.extend({trialAction:z.literal('authorize_package_checkpoint_recovery'),checkpointTerms:z.unknown().refine(matchesCheckpointTerms),cutoff:z.string().datetime(),candidateSha:z.string().regex(/^[a-f0-9]{40}$/),checkpointSha:z.string().regex(/^[a-f0-9]{40}$/),priorRunId:z.string().regex(/^[0-9]+$/)}).strict();
+const input=z.union([checkpointPackageInput,invalidRetryPackageInput,completionPackageInput,correctivePackageInput,packageExecutionInput,codingCapacityInput,followupRetestInput,contextRetestInput,mission84ProviderRetryInput,financialInput,providerTrialInput,directorRecoveryInput,continuationInput,renewalInput,hierarchyRecoveryInput,pausedRenewalInput,managementResumeInput,blockedWindowInput,blockedResumeInput,managementRetestInput,futureMission79WindowInput,bindMission79ReleaseInput,mission79RetryApprovalInput,mission79WatchdogRecoveryInput,mission80WatchdogRecoveryInput,mission82WatchdogRecoveryInput,originalBoundedRecoveryInput]);
 export async function GET(request:NextRequest){
  if(!await verifiedProjectOwnerSession(request))return NextResponse.json({error:'Authenticated owner session required'},{status:403});
  if(new URL(request.url).searchParams.get('projectId')!==ORIGINAL_TTT_PROJECT)
@@ -231,8 +232,19 @@ export async function POST(request:NextRequest){
  if(!parsed.success)return NextResponse.json({error:'Invalid project authority request'},{status:400});
  const p=parsed.data;
  try{
+ if('trialAction' in p&&p.trialAction==='authorize_package_checkpoint_recovery'){
+  const offer=await packageExecutionOffer(p.projectId),c=offer.checkpointRecovery;
+  if(!c||!matchesCheckpointTerms(p.checkpointTerms)||offer.stateHash!==p.stateHash||offer.releaseSha!==p.releaseSha||offer.releaseGeneration!==p.releaseGeneration||offer.deploymentId!==p.deploymentId
+   ||offer.cutoff!==p.cutoff||c.candidateSha!==p.candidateSha||c.checkpointSha!==p.checkpointSha||c.priorRunId!==p.priorRunId)return NextResponse.json({error:'Exact displayed retained checkpoint and renewed limits required'},{status:409});
+  const epoch=await rpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{p_project:p.projectId,p_release:p.releaseSha});
+  const failure=mission79ReleaseIdentityFailure(epoch,{releaseGeneration:p.releaseGeneration,deploymentId:p.deploymentId},process.env.VERCEL_DEPLOYMENT_ID);
+  if(failure)return NextResponse.json({error:mission79ReleaseIdentityMessage(failure),code:failure},{status:409});
+  if(!await verifyMission79ActiveProductionSha(p.releaseSha,fetch,request.headers.get('cookie')))return NextResponse.json({error:'Exact canonical Katie production identity required'},{status:409});
+  return NextResponse.json(await rpc('project_org_package_checkpoint_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_package:p.packageId,p_release:p.releaseSha,p_generation:p.releaseGeneration,p_deployment:p.deploymentId,p_authorization:p.authorizationId,p_state_hash:p.stateHash,p_terms:p.checkpointTerms,p_cutoff:p.cutoff,p_consent:p.paidInferenceConsent}),{headers:{'Cache-Control':'no-store'}});
+ }
  if('trialAction' in p&&(p.trialAction==='authorize_existing_package_execution'||p.trialAction==='authorize_package_corrective_continuation'||p.trialAction==='authorize_package_completion'||p.trialAction==='authorize_package_invalid_response_retries')){
   const offer=await packageExecutionOffer(p.projectId);
+  if(offer.checkpointRecovery)return NextResponse.json({error:'Retained checkpoint requires its explicit consolidated authorization'},{status:409});
   const completion=p.trialAction==='authorize_package_completion';
   const invalidRetry=p.trialAction==='authorize_package_invalid_response_retries';
    const corrective=p.trialAction==='authorize_package_corrective_continuation'||completion||invalidRetry;

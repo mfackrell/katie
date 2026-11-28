@@ -9,10 +9,11 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-24.04
-    # Full offline suite and LibreOffice acceptance share this job; Ubuntu
-    # package mirror latency previously exhausted the 20-minute limit after
-    # all 2,451 offline tests and the build had already passed.
-    timeout-minutes: 35
+    # The complete 474-file offline inventory, native PostgreSQL fixtures,
+    # build, smoke and office/browser acceptance exceeded 35 minutes twice.
+    # Keep the full gate mandatory and give its unchanged checks a bounded
+    # execution window; individual test processes retain strict deadlines.
+    timeout-minutes: 90
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
@@ -196,6 +197,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat postgresql-16
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Reproduce fixed-port collision and qualify isolated PostgreSQL fixtures
+        env:
+          KATIE_VERIFY_NATIVE_ENV: '1'
+        run: node --test tests/project-postgres-fixture.test.mjs
       - name: Actual isolated PostgreSQL concurrency and passing/failing WIP preservation
         env:
           KATIE_VERIFY_NATIVE_ENV: '1'

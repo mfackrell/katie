@@ -14,7 +14,7 @@ import {getDevelopmentProjectContext,acceptanceBinding,projectRpc} from '@/lib/p
 import {projectId} from '@/lib/projects/contract';
 import {gameProjectIntent} from '@/lib/projects/chat';
 import { agentRpc } from '@/lib/agents/store';
-import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
+import { dispatchDevelopment,dispatchProviderCheckpointRecovery,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel,MissionModelFailure } from './model';
 import {fitsMissionEnvelope,missionInputLimit} from './request-budget';
@@ -257,7 +257,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!prior)throw Error('Saved development binding unavailable');
   task=prior;
   if(task.status==='draft')task=await agentRpc<AgentTask>('transition_agent_task',{p_id:task.id,p_action:'start',p_message:null});
-  if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task,project??undefined,job.lease);
+  if(task.status==='dispatching'&&task.external.checkpointRecoveryAuthorizationId&&!task.external.checkpointRecoveryDispatchClaimedAt)task=await dispatchProviderCheckpointRecovery(task,project,job.lease);
+  else if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task,project??undefined,job.lease);
   if(['submitted','dispatching'].includes(task.status))task=await reconcileDevelopment(task,binding,job.lease);
   if(task.status==='ready'){await commit({output:task.details,external:task.external,verification:await developmentEvidence(task,binding)});return;}
   if(['blocked','failed'].includes(task.status)){await commit({detail:task.details,external:task.external},[],'failed');return;}

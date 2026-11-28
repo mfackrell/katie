@@ -25,7 +25,15 @@ export function matchesInvalidRetryTerms(value:unknown):boolean{
  const v=value as Record<string,unknown>,entries=Object.entries(INVALID_RETRY_TERMS);
  return Object.keys(v).length===entries.length&&entries.every(([k,x])=>v[k]===x);
 }
-export type PackageExecutionOffer={stage:'authorize';projectId:string;packageId:string;priorAuthorizationId:string;releaseSha:string;releaseGeneration:number;deploymentId:string;scopeHash:string;cutoff:string;stateHash:string;contractFingerprint:string;managerId:string;coderId:string;writerId:string;reviewerId:string;paths:string[];developmentPaths:string[];terms:PackageExecutionTerms;continuation?:{failedMissionId:string;failedAssignmentId:string;usedMissions:105|106;remainingMissions:7|6;usedAttempts:1;remainingAttempts:2;recordedProviderRequests:0};correctiveTerms?:CorrectiveTerms;contextHash?:string;contextChars?:number;completionTerms?:CompletionTerms;completionCheckpoint?:{missionId:string;assignmentId:string;usedMissions:109;usedAttempts:2;paidInferences:3;priorRequestId:string;priorProviderReceipt:string;correctiveReleasesUsed:number};invalidRetryTerms?:InvalidRetryTerms;invalidRetryCheckpoint?:{missionId:string;assignmentId:string;sourceRequestId:string;responseHash:string;invalidReason:string;usedMissions:109;usedAttempts:2;paidInferences:4;correctiveReleasesUsed:number}};
+export const CHECKPOINT_TERMS={maxMissions:124,developmentAttempts:5,codingDispatches:5,managerMissions:10,nativeInferencePerDispatch:12,nativeInferenceLimit:60,compositionLimit:5,reviewLimit:5,paidInferenceLimit:80,finalReviewDispatches:1,finalReviewInferenceLimit:12,additionalPaidRetries:0,automaticRetries:0,nativeAutomaticRepairs:0,tokenAllowance:600000,additionalTokens:0,spendMode:'provider-account',dollarCeilingMicrousd:null,stopAt:'verified-protected-preview'} as const;
+export type CheckpointTerms=typeof CHECKPOINT_TERMS;
+export function matchesCheckpointTerms(value:unknown):boolean{
+ if(!value||typeof value!=='object'||Array.isArray(value))return false;
+ const v=value as Record<string,unknown>,entries=Object.entries(CHECKPOINT_TERMS);
+ return Object.keys(v).length===entries.length&&entries.every(([k,x])=>v[k]===x);
+}
+export type CheckpointRecovery={priorCutoff:string;missionId:string;assignmentId:string;priorRunId:string;candidateSha:string;checkpointSha:string;sourceTreeSha:string;usedMissions:116;usedAttempts:4;paidInferences:22;nativeInferences:12;terms:CheckpointTerms};
+export type PackageExecutionOffer={stage:'authorize';projectId:string;packageId:string;priorAuthorizationId:string;releaseSha:string;releaseGeneration:number;deploymentId:string;scopeHash:string;cutoff:string;stateHash:string;contractFingerprint:string;managerId:string;coderId:string;writerId:string;reviewerId:string;paths:string[];developmentPaths:string[];terms:PackageExecutionTerms;checkpointRecovery?:CheckpointRecovery;continuation?:{failedMissionId:string;failedAssignmentId:string;usedMissions:105|106;remainingMissions:7|6;usedAttempts:1;remainingAttempts:2;recordedProviderRequests:0};correctiveTerms?:CorrectiveTerms;contextHash?:string;contextChars?:number;completionTerms?:CompletionTerms;completionCheckpoint?:{missionId:string;assignmentId:string;usedMissions:109;usedAttempts:2;paidInferences:3;priorRequestId:string;priorProviderReceipt:string;correctiveReleasesUsed:number};invalidRetryTerms?:InvalidRetryTerms;invalidRetryCheckpoint?:{missionId:string;assignmentId:string;sourceRequestId:string;responseHash:string;invalidReason:string;usedMissions:109;usedAttempts:2;paidInferences:4;correctiveReleasesUsed:number}};
 export function matchesPackageTerms(value:unknown):boolean{
  if(!value||typeof value!=='object'||Array.isArray(value))return false;
  const v=value as Record<string,unknown>,expected=Object.entries(PACKAGE_TERMS);
@@ -36,12 +44,19 @@ export async function packageExecutionOffer(projectId:string):Promise<PackageExe
  if(projectId!==ORIGINAL_TTT_PROJECT||process.env.VERCEL_ENV!=='production'||!sha||!/^[a-f0-9]{40}$/.test(sha))throw Error('Current original production release required');
  const args={p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:projectId,p_release:sha};
  let o:PackageExecutionOffer;
- try{o=await rpc<PackageExecutionOffer>('project_org_package_execution_offer',args);}
- catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_release_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_corrective_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_completion_offer',args);}catch{o=await rpc<PackageExecutionOffer>('project_org_package_invalid_retry_offer',args);}}}}
+ try{o=await rpc<PackageExecutionOffer>('project_org_package_checkpoint_offer',args);}
+ catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_execution_offer',args);}
+ catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_release_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_corrective_offer',args);}catch{try{o=await rpc<PackageExecutionOffer>('project_org_package_completion_offer',args);}catch{o=await rpc<PackageExecutionOffer>('project_org_package_invalid_retry_offer',args);}}}}}
  if(!o||o.stage!=='authorize'||o.projectId!==projectId||o.packageId!==ORIGINAL_PACKAGE||o.releaseSha!==sha||o.deploymentId!==process.env.VERCEL_DEPLOYMENT_ID||o.scopeHash!==ORIGINAL_TTT_SCOPE
  ||!Number.isSafeInteger(o.releaseGeneration)||o.releaseGeneration<1||!Number.isFinite(Date.parse(o.cutoff))||Date.now()>=Date.parse(o.cutoff)-300000
  ||!/^[a-f0-9]{64}$/.test(o.stateHash)||!/^[a-f0-9]{64}$/.test(o.contractFingerprint)||o.coderId!==o.writerId||o.coderId===o.reviewerId||!matchesPackageTerms(o.terms))throw Error('Exact Mission 104 package offer required');
- if(o.invalidRetryTerms){
+ if(o.checkpointRecovery){
+  const c=o.checkpointRecovery;
+  if(!matchesCheckpointTerms(c.terms)||c.priorCutoff===o.cutoff||Date.parse(c.priorCutoff)>=Date.now()||!Number.isFinite(Date.parse(c.priorCutoff))
+   ||c.missionId!=='aeffa160-d240-46d1-b240-dc0ac7f488d5'||c.assignmentId!=='1c940466-c034-4e21-8dc5-d2ecf1212098'||c.priorRunId!=='45863524946'
+   ||c.candidateSha!=='7b0a415189ffd849bbaa645ce1bea499693bee94'||c.checkpointSha!=='a3a853e00278d719a14f843c4abdbae04b7ab141'||c.sourceTreeSha!=='ae1fb9b658acb4bf3445464d3a37e62aeb457123'
+   ||c.usedMissions!==116||c.usedAttempts!==4||c.paidInferences!==22||c.nativeInferences!==12||o.releaseGeneration!==71||o.correctiveTerms||o.completionTerms||o.invalidRetryTerms||o.continuation)throw Error('Exact retained final-review checkpoint required');
+ }else if(o.invalidRetryTerms){
   const c=o.invalidRetryCheckpoint;
   if(!matchesInvalidRetryTerms(o.invalidRetryTerms)||!c||c.missionId!=='d7e48722-01a0-47ed-81ef-d045a5b09c89'||c.assignmentId!=='ed9182b7-7e95-4678-afb2-b75832c5aeea'||c.usedMissions!==109||c.usedAttempts!==2||c.paidInferences!==4||c.invalidReason!=='invalid_lifecycle_action'||!/^[a-f0-9]{64}$/.test(c.responseHash)||!matchesCorrectiveTerms(o.correctiveTerms))throw Error('Exact Mission109 invalid-response offer required');
   const context=await preflightManagementContext(projectId,o.managerId,false,false,96000);

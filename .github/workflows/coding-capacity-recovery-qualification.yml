@@ -16,6 +16,7 @@ on:
       - 'supabase/migrations/20261125202000_package_invalid_response_retry.sql'
       - 'supabase/migrations/20261125210000_pending_invalid_retry_offer_handoff.sql'
       - 'supabase/migrations/20261126160500_package_diagnosed_native_preflight.sql'
+      - 'supabase/migrations/20261127165500_retained_native_checkpoint_continuation.sql'
       - '.github/workflows/autonomous-development.yml'
       - 'tests/native-preflight.test.mjs'
       - 'components/chat-panel.tsx'
@@ -61,6 +62,8 @@ jobs:
       - run: npm run typecheck
       - name: Mission109 authenticated conversation control in Chromium
         run: node --test tests/coding-capacity-owner-control-browser.test.mjs
+      - name: Retained checkpoint authenticated conversation control
+        run: node --test tests/coding-capacity-checkpoint-owner-browser.test.mjs
       - run: node --test tests/coding-capacity-owner-runtime.test.mjs tests/management-followup-owner-runtime.test.mjs tests/management-direct-worker-authority.test.mjs
       - run: node --test --test-name-pattern='Registered development contract outranks|Mission108 signed package' tests/missions-runtime.test.mjs
       - run: node --test tests/management-context.test.mjs tests/project-context.test.mjs tests/package-completion-parser.test.mjs

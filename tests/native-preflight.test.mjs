@@ -51,7 +51,22 @@ test('exact preflight diagnostic shell preserves bounded failure evidence withou
   console.log('MISSION111_NATIVE_DIAGNOSTICS_PASS');
  }finally{rmSync(temp,{recursive:true,force:true});}
 });
-test('execute the production dependency preflight on the pinned LTS image without a provider call',{timeout:300000,skip:process.env.KATIE_QUALIFY_NATIVE_PREFLIGHT!=='1'},()=>{
+// Installing runner dependencies is a hosted qualification, not an offline
+// test. The dedicated workflow executes it explicitly with the opt-in flag.
+// Register only offline tests in the strict offline inventory; do not create
+// a skipped test or classify an unexecuted host test as a pass.
+test('dedicated hosted qualification explicitly runs the real dependency preflight',()=>{
+ const qualification=readFileSync('.github/workflows/coding-capacity-recovery-qualification.yml','utf8');
+ assert.match(qualification,/      - 'tests\/native-preflight\.test\.mjs'/);
+ const start=qualification.indexOf('      - name: Mission111 exact pinned runner setup and failure artifact qualification\n');
+ assert.ok(start>=0,'Missing dedicated hosted preflight qualification');
+ const next=qualification.indexOf('\n      - ',start+1);
+ const block=qualification.slice(start,next<0?qualification.length:next);
+ assert.match(block,/KATIE_QUALIFY_NATIVE_PREFLIGHT: '1'/);
+ assert.match(block,/run: node --test tests\/native-preflight\.test\.mjs/);
+ assert.doesNotMatch(block,/^\s*(if|continue-on-error):/m);
+});
+if(process.env.KATIE_QUALIFY_NATIVE_PREFLIGHT==='1')test('execute the production dependency preflight on the pinned LTS image without a provider call',{timeout:300000},()=>{
  const os=readFileSync('/etc/os-release','utf8');
  assert.match(os,/VERSION_ID="24\.04"/);
  run(shell('Install pinned native SDK for benchmark-bound engineering'));

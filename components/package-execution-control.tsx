@@ -4,7 +4,7 @@ import {ownerSessionBearer} from "@/lib/tools/browser-owner-session";
 import type {PackageExecutionOffer} from "@/lib/projects/package-execution-authorization";
 export function PackageExecutionControl({initial,onRefresh}:{initial:PackageExecutionOffer;onRefresh:()=>void}){
  const [consent,setConsent]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState<string|null>(null),[receipt,setReceipt]=useState<string|null>(null);
- const submitting=useRef(false),t=initial.terms,c=initial.continuation,correction=initial.correctiveTerms,completion=initial.completionTerms,cp=initial.completionCheckpoint,retry=initial.invalidRetryTerms,retryCp=initial.invalidRetryCheckpoint;
+ const submitting=useRef(false),t=initial.terms,c=initial.continuation,correction=initial.correctiveTerms,completion=initial.completionTerms,cp=initial.completionCheckpoint,retry=initial.invalidRetryTerms,retryCp=initial.invalidRetryCheckpoint,recovery=initial.checkpointRecovery;
  async function authorize(){
   if(!consent||pending||receipt||submitting.current||Date.now()>=Date.parse(initial.cutoff)-300000)return;
   submitting.current=true;setPending(true);setError(null);
@@ -12,8 +12,8 @@ export function PackageExecutionControl({initial,onRefresh}:{initial:PackageExec
    const bearer=await ownerSessionBearer();if(!bearer)throw Error('Sign in as verified Katie owner.');
    const authorizationId=crypto.randomUUID();
    const response=await fetch('/api/projects/organization',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+bearer},body:JSON.stringify({
-    trialAction:retry?'authorize_package_invalid_response_retries':completion?'authorize_package_completion':correction?'authorize_package_corrective_continuation':'authorize_existing_package_execution',projectId:initial.projectId,packageId:initial.packageId,authorizationId,releaseSha:initial.releaseSha,
-    releaseGeneration:initial.releaseGeneration,deploymentId:initial.deploymentId,stateHash:initial.stateHash,terms:t,paidInferenceConsent:true,...(correction?{correctiveTerms:correction,contextHash:initial.contextHash,contextChars:initial.contextChars}:{}),...(completion?{completionTerms:completion}:{}),...(retry?{invalidRetryTerms:retry}:{})
+    trialAction:recovery?'authorize_package_checkpoint_recovery':retry?'authorize_package_invalid_response_retries':completion?'authorize_package_completion':correction?'authorize_package_corrective_continuation':'authorize_existing_package_execution',projectId:initial.projectId,packageId:initial.packageId,authorizationId,releaseSha:initial.releaseSha,
+    releaseGeneration:initial.releaseGeneration,deploymentId:initial.deploymentId,stateHash:initial.stateHash,terms:t,paidInferenceConsent:true,...(recovery?{checkpointTerms:recovery.terms,cutoff:initial.cutoff,candidateSha:recovery.candidateSha,checkpointSha:recovery.checkpointSha,priorRunId:recovery.priorRunId}:{}),...(correction?{correctiveTerms:correction,contextHash:initial.contextHash,contextChars:initial.contextChars}:{}),...(completion?{completionTerms:completion}:{}),...(retry?{invalidRetryTerms:retry}:{})
    })});
    const result=await response.json();
    if(!response.ok)throw Error(typeof result.error==='string'?result.error:'Package authorization rejected');
@@ -22,6 +22,22 @@ export function PackageExecutionControl({initial,onRefresh}:{initial:PackageExec
   }catch(e){setError(e instanceof Error?e.message:'Approval failed closed');}
   finally{setPending(false);submitting.current=false;}
  }
+ if(recovery)return <aside aria-label="Retained native checkpoint continuation" className="mx-3 my-3 rounded-xl border border-white/20 p-4">
+  <h3 className="font-semibold">Authorize retained native checkpoint completion</h3>
+  <p className="mt-2 text-sm">Resume the exact original autonomous implementation at final review. No regeneration, repeat implementation, automatic repair, or replay of settled paid requests. Continue the existing independent acceptance, same-head protected Preview deployment, deployed browser checks and final assessment.</p>
+  <ul className="mt-2 list-disc pl-5 text-sm">
+   <li>Candidate: {recovery.candidateSha}</li><li>Retained checkpoint: {recovery.checkpointSha}; prior run: {recovery.priorRunId}.</li>
+   <li>Mission ceiling: {recovery.usedMissions} consumed of {recovery.terms.maxMissions}; {recovery.terms.maxMissions-recovery.usedMissions} remaining. Preserve all {recovery.usedAttempts} development attempts; no new coding attempt.</li>
+   <li>One final-review-only continuation with up to {recovery.terms.finalReviewInferenceLimit} new native inference calls; {recovery.nativeInferences} of {recovery.terms.nativeInferenceLimit} native and {recovery.paidInferences} of {recovery.terms.paidInferenceLimit} cumulative paid inference calls already consumed.</li>
+   <li>Existing 600,000 recorded-token ceiling unchanged. Provider-account charges apply; no verified dollar ceiling exists.</li>
+   <li>Renewed deadline: {initial.cutoff} (UTC). Previous deadline: {new Date(recovery.priorCutoff).toISOString()}.</li>
+   <li>Stop at independently verified protected Preview delivery, expiry, failed acceptance, or an exhausted limit. Existing director closure and security checks remain mandatory; no game production merge or expanded scope.</li>
+   <li>Release: {initial.releaseSha} · generation {initial.releaseGeneration} · {initial.deploymentId}</li>
+  </ul>
+  {!receipt?<div className="mt-3 space-y-3"><label className="block text-sm"><input type="checkbox" checked={consent} disabled={pending} onChange={e=>setConsent(e.target.checked)}/> I explicitly authorize this one checkpoint-bound continuation, renewed deadline, paid inference and mission ceilings, and existing acceptance and protected Preview delivery. I understand there is no verified dollar cap.</label>
+   <button type="button" className="min-h-11 rounded border px-3 py-2 font-semibold disabled:opacity-50" disabled={!consent||pending||Date.now()>=Date.parse(initial.cutoff)-300000} onClick={()=>void authorize()}>{pending?'Recording signed approval…':'Authorize checkpoint completion'}</button></div>:<div className="mt-3 text-sm" role="status">Signed checkpoint authorization: {receipt}</div>}
+  {error&&<p className="mt-2 text-sm" role="alert">{error}</p>}
+ </aside>;
  return <aside aria-label="Mission 104 existing package execution" className="mx-3 my-3 rounded-xl border border-white/20 p-4">
   <h3 className="font-semibold">{retry?'Authorize bounded invalid-response retries':completion?'Authorize bounded completion of the original package':correction?'Authorize bounded corrective releases and continuation':c?'Continue existing package on corrected release':'Authorize existing development package'}</h3>
   <p className="mt-2 text-sm">{retry?'Preserve every existing mission, SMART contract, response and charge. Mission 109 returned an invalid lifecycle command; the corrected runtime offers only the current permitted command. A retry may be purchased only for a definitive, durably retained management response that fails native invalid-response classification. Valid saved responses are replayed without repurchase.':completion?'Preserve all 109 missions, the original SMART package, and all provider receipts. Mission 109 lost its previously purchased management response; one explicitly bounded replacement inference is required. Future captured management responses will be recovered without repurchase.':correction?'Preserve all 106 missions and failed attempts. Resume the saved Mission 106 on this corrected release. Subsequent tested corrective releases may continue this exact package under the same authority without another owner approval.':c?'Preserve all 105 missions and the first failed, zero-provider-request development attempt. Continue only the existing package on the corrected release, with the original limits and no new authority.':'Preserve 104 historical missions, existing workers and the exact SMART package. Execution starts only after this owner approval.'} Stop at package acceptance, expiry, or the authorized limits. No new commissioning, scope expansion, or autonomous game production deployment is authorized.</p>

@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseProjectContext} from './project-context.mjs';
 import {sandboxArgs,collectTestArtifacts} from './project-sandbox.mjs';
 import {checkGameModel} from './project-game-check.mjs';
+import {prepareLegacyPostgresFixture} from './project-postgres-fixture.mjs';
 // This entry point and its sibling tools come from the preserved main artifact,
 // never from the writable candidate. Candidate commands run only in bwrap.
 export async function verifyProject({request,output,workspace=process.cwd()}){
@@ -67,7 +68,20 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
  const artifacts=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-artifacts-'));
  const diagnostics=mkdtempSync(resolve(process.env.RUNNER_TEMP??dirname(output),'project-test-diagnostics-'));
  const checkArgs=[...sandboxArgs(root,{dependencies,writable:true,artifacts}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
- const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));if(checked.status!==0)throw Error('Isolated project CI failed');
+ // A frozen historical tree may still contain the exact known fixed-port
+ // fixture. Mount only its hash-verified transport correction; do not alter
+ // source, assertions, migrations, or the candidate's Git identity.
+ const legacyFixture=prepareLegacyPostgresFixture({root,baseSha:context.baseSha,tempRoot:dirname(tools)});
+ if(legacyFixture){
+  const remount=checkArgs.indexOf('--remount-ro');
+  if(remount<0){legacyFixture.cleanup();throw Error('Required verifier isolation boundary unavailable');}
+  checkArgs.splice(remount,0,...legacyFixture.args);
+  console.log('Using the exact isolated-port correction for the retained PostgreSQL fixture');
+ }
+ let checked;
+ try{checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});}
+ finally{legacyFixture?.cleanup();}
+ collectTestArtifacts(artifacts,resolve(diagnostics,'standalone-rail'));if(checked.status!==0)throw Error('Isolated project CI failed');
  execFileSync('git',['-c','core.fsmonitor=false','diff','--no-ext-diff','--exit-code','HEAD','--'],{cwd:root,timeout:10000});
  // Tools resolve only immutable baseline dependencies, inaccessible to tests.
  const modulePath=resolve(tools,'node_modules');if(existsSync(modulePath))rmSync(modulePath,{recursive:true,force:true});symlinkSync(dependencies,modulePath,'dir');
