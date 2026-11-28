@@ -294,5 +294,14 @@ test('retained preview permits exact empty expected text without weakening valid
  const {browserContract,digest}=modules()('@/lib/projects/contract');
  const contract={path:'/milestone-3-tic-tac-toe',scenarios:[{name:'empty cell',steps:[{action:'expectText',selector:'[data-cell="0"]',value:''}]}]};
  assert.equal(digest(browserContract.parse(contract)),digest(contract));
- for(const step of [{action:'expectText',selector:'[data-cell="0"]'},{action:'expectText',selector:'',value:''},{action:'expectText',selector:'[data-cell="0"]',value:'x'.repeat(2001)},{action:'fill',selector:'#input',value:''}])assert.throws(()=>browserContract.parse({...contract,scenarios:[{name:'invalid',steps:[step]}]}));
+ record('exact empty expected text retains the approved digest','positive');
+ for(const [name,step] of [
+  ['missing expected text',{action:'expectText',selector:'[data-cell="0"]'}],
+  ['empty selector',{action:'expectText',selector:'',value:''}],
+  ['oversized expected text',{action:'expectText',selector:'[data-cell="0"]',value:'x'.repeat(2001)}],
+  ['empty fill input',{action:'fill',selector:'#input',value:''}]
+ ]){
+  assert.throws(()=>browserContract.parse({...contract,scenarios:[{name:'invalid',steps:[step]}]}),undefined,name);
+  record('reject retained contract: '+name);
+ }
 });
