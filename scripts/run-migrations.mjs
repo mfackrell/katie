@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import {auditMigrationPlan} from './audit-migration-authority.mjs';
 
 const migrationsDir = join(process.cwd(), 'supabase', 'migrations');
 const databaseUrl = process.env.DATABASE_URL;
@@ -55,38 +56,14 @@ for (let attempt = 0; attempt < 3; attempt++) {
 }
 if (!initialized) throw Error('Migration initialization was not confirmed');
 
-// Read the complete ledger once. The prior runner created a fresh Supavisor
-// authentication session for EVERY applied migration (even no-op releases).
-// This reduces a no-op release from hundreds of connections to two.
-const ledgerQuery = "SELECT coalesce(json_object_agg(filename,checksum)::text,'{}') FROM schema_migrations;";
-let ledger;
-for (let attempt = 0; attempt < 3; attempt++) {
-  const read = spawnSync('psql', [databaseUrl, '-t', '-A', '-v', 'ON_ERROR_STOP=1', '-c', ledgerQuery],
-    { encoding: 'utf8', timeout: 30000 });
-  if (read.status === 0) { ledger = JSON.parse(read.stdout.trim()); break; }
-  const transient = /authentication did not complete|authentication timeout|connection timed out|could not connect|connection terminated/i.test(read.stderr ?? '');
-  if (!transient || attempt === 2) {
-    process.stderr.write(read.stderr ?? 'Migration ledger read failed');
-    process.exit(read.status ?? 1);
-  }
-  console.warn('Transient database authentication failure reading migration ledger; retrying read-only connection.');
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400 * (attempt + 1));
-}
-if (!ledger || typeof ledger !== 'object') throw Error('Migration ledger unavailable');
-for (const file of files) {
-  const absolutePath = join(migrationsDir, file);
-  const contents = readFileSync(absolutePath, 'utf8');
-  const checksum = createHash('sha256').update(contents).digest('hex');
-  const existingChecksum = ledger[file];
-  if (existingChecksum) {
-    if (existingChecksum !== checksum) {
-      console.error(`Checksum mismatch for already-applied migration: ${file}`);
-      process.exit(1);
-    }
-    console.log(`Skipping already-applied migration: ${file}`);
-    continue;
-  }
-
+// Verify the entire historical ledger before the first migration write.
+const plan = auditMigrationPlan(databaseUrl,migrationsDir);
+if(plan.errors.length){console.error(plan.errors.join('\n'));process.exit(1);}
+for(const receipt of plan.applied)console.log('Skipping already-applied migration: '+receipt.filename+' ('+receipt.source+')');
+for(const file of plan.pending){
+  const absolutePath=join(migrationsDir,file);
+  const contents=readFileSync(absolutePath,'utf8');
+  const checksum=createHash('sha256').update(contents).digest('hex');
   console.log(`Applying migration: ${file}`);
   const apply = spawnSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-f', absolutePath], {
     stdio: 'inherit'

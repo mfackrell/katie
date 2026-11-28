@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "source": "Verified exact Git blob identity and native SQL SHA256 from production. Historical rows retained; never replay.",
+  "native": [
+    {
+      "filename": "20261117162000_one_time_blocked_management_retest.sql",
+      "version": "20261117224613",
+      "name": "one_time_blocked_management_retest_20261117162000",
+      "sha256": "52d2d83654bd496d6100780856da47da7573caef212df10681e24effd9bc3d7b",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261118002000_original_retest_mission_release_claim.sql",
+      "version": "20261119200553",
+      "name": "original_retest_mission_release_claim_20261118",
+      "sha256": "aa3018aaa627888952249226a1d19fea5bfb230e9296f91b44395c2c8cb01383",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261118002500_actor_operating_instruction_modules.sql",
+      "version": "20261118003854",
+      "name": "actor_operating_instruction_modules",
+      "sha256": "0f716851941ff00d513b6a9cab756c6dd205a92600b5c6ea03557f4a04a3587b",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261118163000_routing_quality_evidence.sql",
+      "version": "20261118172029",
+      "name": "routing_quality_evidence_20261118",
+      "sha256": "b279e9f72f053f557ccae5a3b86e82ea0b7baff7cca5c672506e14b60e0feb4e",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261118191500_best_value_quality_feedback.sql",
+      "version": "20261118213745",
+      "name": "best_value_quality_feedback_20261118",
+      "sha256": "864db59d16467680b8aae0361fea46c9d3507c47f8f3eefa397f803c14489f7f",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261120140000_durable_owner_conversation_authority.sql",
+      "version": "20261120153824",
+      "name": "emergency_durable_owner_conversation_authority_20261120",
+      "sha256": "b703ec6b464c059d3568d71f20f16f5085e039e43b953fbbc70bb3e8259127db",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261123180500_original_project_bounded_recovery.sql",
+      "version": "20261123194337",
+      "name": "original_project_bounded_recovery",
+      "sha256": "473843d527bf8619dbde32a2aac7d8592e7720f307e1ebdc595722f5ebe1bea3",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261123200400_mission84_provider_catalog_settlement.sql",
+      "version": "20261123203634",
+      "name": "mission84_provider_catalog_settlement",
+      "sha256": "4125c1d29fc1f1c38cdec619b7494c4e18701f30065a27cb766c6d822da6a0ac",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261123204000_mission84_reconciled_open_gate.sql",
+      "version": "20261123204257",
+      "name": "mission84_reconciled_open_gate",
+      "sha256": "70269ee2e85ae11d5d8ef7cbc5c63fa7e4e579bf64ea37c5d31a944e2a6d4673",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261123222303_management_context_release_continuity.sql",
+      "version": "20261123222951",
+      "name": "management_context_release_continuity",
+      "sha256": "a1deb7f17c80f730b93bf43b51b6ce26c30327f89bc5c9ea1e6321b480851bec",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261123230000_management_context_one_retest.sql",
+      "version": "20261123232319",
+      "name": "management_context_one_retest",
+      "sha256": "295dca592361f48fea9896d44253074975d09b40110dbc994678fedcb522ea6f",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124160000_followup_management_one_retest.sql",
+      "version": "20261124160806",
+      "name": "followup_management_one_retest",
+      "sha256": "de8e80e5dc73baf426e4bceae92376e0f1e8d68493a512e04c92d6a372bdbcf7",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124165000_coding_commissioning_continuation.sql",
+      "version": "20261124170148",
+      "name": "coding_commissioning_continuation",
+      "sha256": "4ce303de21d512cbf1444950abb4c539657a7fab6fa8d3c44edfc5f49cc0afa0",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124173000_owner_coding_capacity_recovery.sql",
+      "version": "20261124172904",
+      "name": "owner_coding_capacity_recovery",
+      "sha256": "8c88058700182919850d6e9f28d27a50ea662b0971cf5faf7bb40bc60d935ab0",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124193000_mission98_coding_capacity_resume.sql",
+      "version": "20261124193418",
+      "name": "mission98_coding_capacity_resume",
+      "sha256": "95b9720e8faca34e4f33ad2f0f1904a211b3d51dde94a56107c381d8c91538b4",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124195000_mission99_commissioning_identity_resume.sql",
+      "version": "20261124200826",
+      "name": "mission99_commissioning_identity_resume",
+      "sha256": "07fdf35f8e066c5dd2689903ab25dc30ed9565cb50a3880de99942dabe2fc7c3",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124203500_mission102_final_package_authorization.sql",
+      "version": "20261124204159",
+      "name": "mission102_final_package_authorization",
+      "sha256": "866b094b796b62aa47af86e93186dacc3fc0a340e2b0e083abd44b4fcbb194bb",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124212500_mission103_smart_capacity_resume.sql",
+      "version": "20261124213404",
+      "name": "mission103_smart_capacity_resume",
+      "sha256": "e36ec2672165e93db9f4586a566454194c6c5ae706eef1eced3db770161d17d7",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261124233000_mission104_package_execution_authority.sql",
+      "version": "20261125135635",
+      "name": "mission104_package_execution_authority",
+      "sha256": "7779dacdeaff6a6b9a1c26deb780a290e03d091fd0da2fdd6dd90e578b4b2e38",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125143500_package_claim_alias.sql",
+      "version": "20261125143643",
+      "name": "package_claim_alias",
+      "sha256": "50e838a8c9edd604ce6e8792ea81621c0178310d48b58ede4a65df43a861c313",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125144000_package_execution_corrected_release.sql",
+      "version": "20261125144840",
+      "name": "package_execution_corrected_release",
+      "sha256": "81e454e038ecb4d1b8e4fa24f4ee4f6980d420837608e6ac67eb600dc5c28b25",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125151600_package_corrective_continuation.sql",
+      "version": "20261125161659",
+      "name": "package_corrective_continuation",
+      "sha256": "e279fdd750a698f5f741fe2dd767a22b3b4b7a749d3ef42cf8f39fe301bd15ee",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125182700_package_coding_admission.sql",
+      "version": "20261125183301",
+      "name": "package_coding_admission",
+      "sha256": "aecb364aa4836fcd2bf908aec2179676c5378d5c24cc44baa72f6b6a6605a779",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125190000_package_completion_recovery.sql",
+      "version": "20261125190932",
+      "name": "package_completion_recovery",
+      "sha256": "a2408b7bd2608320f9b44335a35ca760dbed87d59fd2dc2cb19b99663db9146e",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125192500_package_unspent_retry_recovery.sql",
+      "version": "20261125192848",
+      "name": "package_unspent_retry_recovery",
+      "sha256": "ea88e54da70bd2a32a4de3e20e1f15fb1ab3ed8a643e855370ac21c952023791",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125202000_package_invalid_response_retry.sql",
+      "version": "20261125204711",
+      "name": "package_invalid_response_retry",
+      "sha256": "d38355a35a8a0a77753a348ba8a68c83bf1d107d39f229fa6f9377a5609f59e2",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261125210000_pending_invalid_retry_offer_handoff.sql",
+      "version": "20261125225411",
+      "name": "pending_invalid_retry_offer_handoff",
+      "sha256": "46e9aca0faaedf9680dd468000559d99ea8b70ee5a42feb29a1ce933d2102217",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261126160500_package_diagnosed_native_preflight.sql",
+      "version": "20261126165223",
+      "name": "package_diagnosed_native_preflight",
+      "sha256": "33e41e059c715efaedaab16664f869a159014085007c46e9a3269b6737219fc9",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261127165500_retained_native_checkpoint_continuation.sql",
+      "version": "20261128003840",
+      "name": "retained_native_checkpoint_continuation",
+      "sha256": "98220efcb217d5e72a1ebaeb41ad758e841dcb9b7260392d7e589ebcdb1119f5",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261128145706_native_checkpoint_evidence_reader.sql",
+      "version": "20261128145706",
+      "name": "native_checkpoint_evidence_reader",
+      "sha256": "166f39b4eabf6d8ba47fb9c95fa5a7bf00566e9c337bbd299b0f77fe6528a4c5",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261128150235_native_checkpoint_pre_admission_retest.sql",
+      "version": "20261128150235",
+      "name": "native_checkpoint_pre_admission_retest",
+      "sha256": "933052ce16564c367e255473d30b4141a81a7f756bf5d798dfcc8d41e2cb798b",
+      "statementCount": 1
+    },
+    {
+      "filename": "20261128165639_settle_retained_native_final_review.sql",
+      "version": "20261128165639",
+      "name": "settle_retained_native_final_review",
+      "sha256": "ac58e72bc4cb31e796df6f9959543c36d2307881df30b41cda3a4488017beeaa",
+      "statementCount": 1
+    }
+  ],
+  "accounting": {
+    "filename": "20261119160000_accounting_reporting_only.sql",
+    "recordedSha256": "78f0b433418979cf6002485e434addb541ebf0420c99df979622b4db232b9ea6",
+    "repositorySha256": "6d7d530d8b76abbb48a5452a79c12e0b22db96f794e71b8cf17296ec09ea0530",
+    "appliedAt": "2026-11-19T18:17:29.065763+00:00",
+    "historicalBytesRecovered": false,
+    "catalog": [
+      {
+        "proname": "standalone_admit",
+        "args": "p_owner uuid, p_actor uuid, p_chat uuid, p_request text, p_key text, p_hash text, p_payload jsonb, p_pricing text, p_provider text, p_model text, p_reserved numeric, p_category text, p_estimate jsonb, p_estimator text, p_reason text",
+        "result": "jsonb",
+        "body_sha": "608cba689024db51c0f4f21dc2fcd0b0b2bf5ef0247c35821836d81611a58f36",
+        "definer": true,
+        "config": [
+          "search_path=public, pg_temp"
+        ],
+        "acl": "{postgres=X/postgres,service_role=X/postgres}",
+        "language": "plpgsql",
+        "owner": "postgres",
+        "volatility": "v",
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "defaults": 0,
+        "default_expr": null
+      },
+      {
+        "proname": "standalone_claim_dispatch",
+        "args": "p_owner uuid, p_attempt uuid",
+        "result": "jsonb",
+        "body_sha": "ad3e2ecd748df804ea2fdb94ba672a39bf2a242ac9e92a5c327ad54a7c1647fb",
+        "definer": true,
+        "config": [
+          "search_path=public, pg_temp"
+        ],
+        "acl": "{postgres=X/postgres,service_role=X/postgres}",
+        "language": "plpgsql",
+        "owner": "postgres",
+        "volatility": "v",
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "defaults": 0,
+        "default_expr": null
+      },
+      {
+        "proname": "standalone_claim_workflow",
+        "args": "p_owner uuid, p_actor uuid, p_chat uuid, p_request text, p_hash text, p_body jsonb, p_resume boolean",
+        "result": "jsonb",
+        "body_sha": "c88328bc12fc214cff6fd27b46af5f1043374bddb9c968b5e755f9f59cb9baee",
+        "definer": true,
+        "config": [
+          "search_path=public, pg_temp"
+        ],
+        "acl": "{postgres=X/postgres,service_role=X/postgres}",
+        "language": "plpgsql",
+        "owner": "postgres",
+        "volatility": "v",
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "defaults": 1,
+        "default_expr": "false"
+      },
+      {
+        "proname": "standalone_finish_workflow",
+        "args": "p_owner uuid, p_request text, p_lease uuid, p_status text, p_result jsonb, p_error text",
+        "result": "jsonb",
+        "body_sha": "f675e2519d1884f522744292a3c18e4eaf49f299ecef8c5cb9b6262847aa7dc8",
+        "definer": true,
+        "config": [
+          "search_path=public, pg_temp"
+        ],
+        "acl": "{postgres=X/postgres,service_role=X/postgres}",
+        "language": "plpgsql",
+        "owner": "postgres",
+        "volatility": "v",
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "defaults": 2,
+        "default_expr": "NULL::jsonb, NULL::text"
+      },
+      {
+        "proname": "standalone_mark_uncertain",
+        "args": "p_owner uuid, p_attempt uuid, p_reason text",
+        "result": "jsonb",
+        "body_sha": "e44913043ea92f08702360cb179449e4a8cf058e5ddcc854f93aa049ecfe662d",
+        "definer": true,
+        "config": [
+          "search_path=public, pg_temp"
+        ],
+        "acl": "{postgres=X/postgres,service_role=X/postgres}",
+        "language": "plpgsql",
+        "owner": "postgres",
+        "volatility": "v",
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "defaults": 0,
+        "default_expr": null
+      }
+    ],
+    "invariants": {
+      "uncertainty_trigger_absent": true,
+      "legacy_finance_pause_absent": true
+    }
+  }
+}
