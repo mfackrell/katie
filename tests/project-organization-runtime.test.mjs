@@ -42,7 +42,8 @@ test('original envelope requires authenticated explicit autonomous-execution con
  let authenticated=false;const calls=[];
  const load=modules({'@/lib/projects/owner-authorization':{verifiedProjectOwnerSession:async()=>authenticated},'@/lib/missions/store':{rpc:async(name,args)=>{calls.push({name,args});return true;}}});
  const route=load('@/app/api/projects/organization/route');
- const body={projectId:randomUUID(),objectiveHash:'a'.repeat(64),ceilingMicrousd:2000000,perCallMicrousd:500000,autonomousExecution:true};
+ const body={projectId:randomUUID(),objectiveHash:'a'.repeat(64),ceilingMicrousd:2000000,perCallMicrousd:500000,autonomousExecution:true,
+  terms:{objective:'Owner objective',clarifications:'',repositoryId:null,repository:null,deadline:'2099-01-01T00:00:00Z',limits:{codingJobs:2,missions:12,modelTokens:200000}}};
  const request=value=>new Request('https://synthetic.test/api/projects/organization',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(value)});
  assert.equal((await route.POST(request(body))).status,403);assert.equal(calls.length,0);
  authenticated=true;assert.equal((await route.POST(request({...body,autonomousExecution:false}))).status,400);assert.equal(calls.length,0);

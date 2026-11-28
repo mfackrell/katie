@@ -15,7 +15,8 @@ import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
 import {packageExecutionOffer} from '@/lib/projects/package-execution-authorization';
 import type { DirectorRecoveryOffer } from '@/components/director-recovery-control';
 import { z } from 'zod';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { OrganizationApproval } from '@/lib/projects/organization-approval';
 import { recoveryResourceProposal } from '@/lib/projects/recovery-budget';
 import { verifiedProjectOwnerSession } from '@/lib/projects/owner-authorization';
 import { getChatById, getMessages } from '@/lib/data/persistence-store';
@@ -56,6 +57,20 @@ function approvalFor(p: Project | null,providerControlled: boolean) {
         limits: { codingJobs: p.max_cycles, modelTokens: p.token_allowance, missions: p.max_missions },
         specification: p.spec,
     };
+}
+
+async function organizationApprovalFor(p: Project | null, request: NextRequest, providerControlled: boolean): Promise<OrganizationApproval | null> {
+    if (!p || p.organization_version !== 1 || providerControlled
+        || ['completed', 'stopped', 'failed'].includes(p.status) || !(Date.parse(p.deadline) > Date.now())
+        || !await verifiedProjectOwnerSession(request)) return null;
+    const {data, error} = await getSupabaseAdminClient().from('project_organization_authority')
+        .select('project_id').eq('project_id', p.id).maybeSingle<{project_id: string}>();
+    if (error) throw Error('Project authority unavailable');
+    // An existing envelope cannot be amended by this initial approval control.
+    if (data) return null;
+    return {projectId: p.id, objectiveHash: createHash('sha256').update(p.objective + p.clarifications).digest('hex'),
+        objective: p.objective, clarifications: p.clarifications, repositoryId: p.repository_id, repository: p.repository_full_name,
+        deadline: p.deadline, limits: {codingJobs: p.max_cycles, missions: p.max_missions, modelTokens: p.token_allowance}};
 }
 
 async function directorRecoveryFor(p: Project | null, request: NextRequest, providerControlled: boolean): Promise<DirectorRecoveryOffer | null> {
@@ -231,6 +246,7 @@ export async function GET(request: NextRequest) {
             active: p?.status === 'running',
             status: p?.status ?? null,
             approval: approvalFor(p,providerControlled),
+            organizationApproval: await organizationApprovalFor(p, request, providerControlled),
             trialState: providerControlled ? 'active' : !p&&!messages.length&&await verifiedProjectOwnerSession(request) ? 'available' : null,
             resourceBudget: p&&!providerControlled ? {
                 estimatedTokens: p.estimated_tokens ?? null,

@@ -53,6 +53,8 @@ import { Task4aBlockedDispatchOwnerApproval } from "@/components/task4a-blocked-
 import { Task4aSuccessorOwnerApproval } from "@/components/task4a-successor-owner-approval";
 import { DirectorRecoveryControl, type DirectorRecoveryOffer } from "@/components/director-recovery-control";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
+import { ProjectOrganizationApproval } from "@/components/project-organization-approval";
+import type { OrganizationApproval } from "@/lib/projects/organization-approval";
 import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 import { SelfToolsOwnerSession } from "@/components/self-tools-owner-session";
@@ -937,6 +939,7 @@ export function ChatPanel({
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   useEffect(() => { setDeleteCandidate(null); setDeleteFailure(null); }, [chatId]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
+  const [organizationApproval, setOrganizationApproval] = useState<{chatId:string;offer:OrganizationApproval}|null>(null);
   const [gameTrialRefresh, setGameTrialRefresh] = useState(0);
   const [directorRecovery, setDirectorRecovery] = useState<{chatId:string;offer:DirectorRecoveryOffer}|null>(null);
   const [gameTrial, setGameTrial] = useState<{chatId:string;mode:'start'|'stop'}|null>(null);
@@ -1438,6 +1441,7 @@ export function ChatPanel({
     if(!chatId||!actorId||loading)return;
     let cancelled=false,inFlight=false,done=false;
     setProjectApproval(null);
+    setOrganizationApproval(null);
     setGameTrial(null);
     setResourceRecovery(null);
     setProjectApprovalError(null);
@@ -1446,12 +1450,13 @@ export function ChatPanel({
       inFlight=true;
       try {
         const bearer=await ownerSessionBearer();
-        if(!bearer&&!cancelled)setDirectorRecovery(null);
+        if(!bearer&&!cancelled){setDirectorRecovery(null);setOrganizationApproval(null);}
         const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store',...(bearer?{headers:{Authorization:`Bearer ${bearer}`}}:{})});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;trialState?:'active'|'available'|null;directorRecovery?:DirectorRecoveryOffer|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;organizationApproval?:OrganizationApproval|null;trialState?:'active'|'available'|null;directorRecovery?:DirectorRecoveryOffer|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
+        setOrganizationApproval(p.organizationApproval?{chatId,offer:p.organizationApproval}:null);
         setGameTrial(p.trialState==='available'?{chatId,mode:'start'}:p.trialState==='active'&&p.status!=='completed'&&p.status!=='stopped'?{chatId,mode:'stop'}:null);
         setDirectorRecovery(p.directorRecovery?{chatId,offer:p.directorRecovery}:null);
         setResourceRecovery(p.resourceRecovery?{chatId,proposal:p.resourceRecovery}:null);
@@ -3453,6 +3458,10 @@ export function ChatPanel({
         {chatId && !managedAgentId ? <Task4aBlockedDispatchOwnerApproval key={'task4a-blocked-dispatch:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aFailedDispatchRecoveryApproval key={'task4a-failed-dispatch:'+chatId} chatId={chatId} /> : null}
         {chatId && !managedAgentId ? <Task4aPostpaidContinuationApproval key={'task4a-postpaid:'+chatId} chatId={chatId} /> : null}
+        {organizationApproval?.chatId===chatId && !managedAgentId ? (
+          <ProjectOrganizationApproval offer={organizationApproval.offer} disabled={loading}
+            onRefresh={()=>setGameTrialRefresh(value=>value+1)} />
+        ):null}
         {resourceRecovery?.chatId===chatId && !managedAgentId ? (
           <DeveloperResourceCard proposal={resourceRecovery.proposal}
            pending={projectApprovalPending||loading} error={projectApprovalError}

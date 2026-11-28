@@ -5,7 +5,7 @@ import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
-import { developmentPreview, dispatchOwnerRenewedNativeDevelopment, recoverUnusedNativeStartup, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
+import { developmentPreview, dispatchOwnerRenewedNativeDevelopment, recoverUnusedNativeStartup, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification, loadRetainedReviewSettlement, retainedDevelopmentEvidence } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
@@ -497,18 +497,59 @@ async function reconcileBlockedInfrastructureProjects(){
       .eq('status','blocked').eq('phase','development').order('updated_at',{ascending:false}).limit(2);
     if(error)throw Error('Blocked project recovery index unavailable');
     for(const p of (data??[]) as Project[]){
-        if(await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))continue;
         if(!p.active_mission_id||!p.approved_hash||p.approved_hash!==p.approval_hash||new Date(p.deadline).getTime()<=Date.now())continue;
         const saved=await readMission(p.active_mission_id);
         if(saved.mission.status!=='blocked')continue;
-        const failed=saved.jobs.find(j=>j.role==='development'&&j.status==='failed');
+        const failed=saved.jobs.find(j=>j.role==='development'&&(j.status==='failed'||
+            j.status==='completed'&&p.spec?.milestones.length===1&&Boolean((j.result?.verification as Record<string,unknown>|undefined)?.reviewSettlement)));
         if(!failed)continue;
+        const task=await readTask(failed.id);
+        const context=await getDevelopmentProjectContext(task.id);
+        if(context){
+            const binding=acceptanceBinding(context);
+            const settlement=await loadRetainedReviewSettlement(task,binding);
+            if(settlement){
+                // This nonbillable path consumes completed technical evidence.
+                // It never wakes the manager, dispatches another coding agent,
+                // replaces the failed workflow receipt or grants acceptance.
+                const release=process.env.VERCEL_GIT_COMMIT_SHA,deployment=process.env.VERCEL_DEPLOYMENT_ID;
+                if(process.env.VERCEL_ENV!=='production'||!release||!/^[a-f0-9]{40}$/.test(release)||!deployment)continue;
+                const epoch=await projectRpc<{generation:number;active:boolean;deploymentId:string|null}>('project_org_retest_release_epoch',{p_project:p.id,p_release:release});
+                if(!epoch?.active||!Number.isSafeInteger(epoch.generation)||epoch.generation<1||epoch.deploymentId!==deployment)continue;
+                const preview=await developmentPreview(task,binding);
+                if(!preview)continue;
+                const deployed={...preview,url:new URL(context.contract.path,preview.url).href};
+                let browser:Record<string,unknown>,verification:Record<string,unknown>;
+                if(failed.status==='completed'){
+                    // Reuse the immutable consumption event after an interrupted
+                    // downstream transition. Never rerun accepted browser checks.
+                    const consumed=settlement.consumed;
+                    if(!consumed||digest(consumed.verification)!==digest(failed.result?.verification))throw Error('Saved technical acceptance does not match its immutable consumption event');
+                    verification={...await retainedDevelopmentEvidence(task,binding,consumed.verification.projectAcceptance),preview:deployed};
+                    if(digest(verification)!==digest(consumed.verification))throw Error('Consumed source or deployment changed before continuation');
+                    browser=consumed.browserAcceptance;
+                }else{
+                    const checked=await verifyDeployedPreview(deployed,context.contract,p.id);
+                    if(!checked.passed)throw Error('Retained implementation failed actual deployed browser acceptance');
+                    const acceptance={version:1 as const,projectId:checked.projectId,contractHash:checked.contractHash,
+                        headSha:checked.headSha,passed:checked.passed,checks:checked.checks};
+                    verification={...await retainedDevelopmentEvidence(task,binding,acceptance),preview:deployed};
+                    browser=checked;
+                }
+                await projectRpc('project_consume_development_review_settlement',{
+                    p_task:task.id,p_receipt:settlement.receiptId,p_evidence:verification,p_browser:browser,
+                    p_release:release,p_generation:epoch.generation,p_deployment:deployment,
+                });
+                return true;
+            }
+        }
+        if(failed.status==='completed')continue;
+        if(await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))continue;
         const receipt=(failed.result?.external as Record<string,unknown>|undefined)?.receipt as Record<string,unknown>|undefined;
         const checks=receipt?.checks as Record<string,unknown>|undefined;
         const setupFailure=checks?.review==='pass'&&checks?.repair==='failure';
         const browserBootstrapFailure=checks?.review==='changes_requested'&&checks?.repair==='skipped';
         if(receipt?.outcome!=='BLOCKED'||checks?.test!=='false'||(!setupFailure&&!browserBootstrapFailure))continue;
-        const task=await readTask(failed.id);
         if(!browserBootstrapFailure&&typeof task.external.verificationSince==='string')continue;
         try {
             if(await retryImmutableProjectVerification(task,p)){

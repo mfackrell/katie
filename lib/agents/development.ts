@@ -20,6 +20,8 @@ import { z } from "zod";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask } from "./store";
 import type { AgentTask } from "./policy";
+import {loadRetainedReviewSettlement,retainedReviewSource} from './retained-review';
+export {loadRetainedReviewSettlement} from './retained-review';
 
 export const projectAcceptanceSchema = z.object({
   version: z.literal(1), projectId: z.string().uuid(), contractHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -1327,6 +1329,21 @@ export async function developmentEvidence(task: AgentTask, project?: ProjectAcce
     validation:{buildJob:build.html_url,conclusion:build.conclusion,excerpts,note:"Selected build-log excerpts, not the full log. Patches exceeding the 12 KB evidence allowance are explicitly omitted; the complete changed-file list is retained."}};
 }
 
+// The same accepted implementation can survive an unsuccessful outer workflow.
+// Persist this as settlement evidence, never as a fabricated READY receipt.
+export async function retainedDevelopmentEvidence(task: AgentTask, project: ProjectAcceptanceBinding, browserAcceptance: unknown) {
+  const settlement = await loadRetainedReviewSettlement(task, project);
+  if (!settlement) throw Error('Authenticated retained review settlement required');
+  const acceptance = projectAcceptanceSchema.parse(browserAcceptance);
+  if (!acceptance.passed || acceptance.projectId !== project.projectId || acceptance.contractHash !== project.contractHash
+    || acceptance.headSha !== settlement.candidateSha || acceptance.checks.length !== project.scenarioNames.length
+    || acceptance.checks.some((check,i) => !check.passed || check.name !== project.scenarioNames[i])) {
+    throw Error('Actual candidate-bound browser acceptance required for retained development');
+  }
+  const source = await retainedReviewSource(github(), await repository(task), settlement);
+  return {...source,projectAcceptance:acceptance};
+}
+
 // Delivery is evidence from GitHub's deployment/status APIs, never a URL
 // invented by a model or a successful local browser check.
 export function verifiedPreviewUrl(raw: unknown, approvedOrigins: readonly string[] = []): string | null {
@@ -1350,6 +1367,30 @@ export function immutablePreviewUrl(raw:unknown,approvedOrigins:readonly string[
  try{const u=new URL(safe),nonce=new RegExp(rule).exec(u.hostname)?.[1];return u.href===u.origin+'/'&&u.hostname.endsWith('.vercel.app')&&!u.hostname.includes('-git-')&&typeof nonce==='string'&&/^[a-z0-9]{9}$/.test(nonce)?safe:null;}catch{return null;}
 }
 export async function developmentPreview(task: AgentTask, project: ProjectAcceptanceBinding, approvedOrigins: readonly string[] = []) {
+  if (task.status === 'blocked' && (task.external.receipt as {outcome?:unknown}|undefined)?.outcome === 'BLOCKED') {
+    const settlement = await loadRetainedReviewSettlement(task, project);
+    if (!settlement) throw Error('Head-bound project acceptance required before preview delivery');
+    const client = github(), binding = await repository(task);
+    await retainedReviewSource(client, binding, settlement);
+    const deployments = await client.repos.listDeployments({owner:binding.owner,repo:binding.repo,sha:settlement.candidateSha,per_page:20});
+    const deadline = Date.now()+45000;
+    for (const deployment of deployments.data) {
+      if (Date.now() >= deadline) break;
+      if (deployment.creator?.login?.toLowerCase() !== 'vercel[bot]' || deployment.sha !== settlement.candidateSha
+        || deployment.production_environment !== false || !/^preview(?:\s|$|[-_/])/i.test(deployment.environment)) continue;
+      const {data:statuses} = await client.repos.listDeploymentStatuses({owner:binding.owner,repo:binding.repo,deployment_id:deployment.id,per_page:1});
+      const status = statuses[0];
+      const url = status?.state === 'success' && status.creator?.login?.toLowerCase() === 'vercel[bot]'
+        ? immutablePreviewUrl(status.environment_url, approvedOrigins) : null;
+      if (url && (!status.environment || status.environment === deployment.environment)) {
+        // Re-read the authenticated checkpoint before returning external evidence.
+        const after = await loadRetainedReviewSettlement(task,project);
+        if (!after || digest(after) !== digest(settlement)) throw Error('Retained review settlement changed during preview verification');
+        return {url,headSha:deployment.sha,deploymentId:deployment.id,statusId:status.id,provider:'vercel',immutable:true};
+      }
+    }
+    return null;
+  }
   const receipt = parseCompletionReceipt(task.external.receipt, task.repository_full_name ?? '', Number(task.external.issueNumber), Number((task.external.receipt as Record<string, unknown>)?.run_id), 'success', project);
   if (task.status !== 'ready' || receipt.outcome !== 'READY' || !receipt.tested_head_sha) throw Error('Head-bound project acceptance required before preview delivery');
   const client = github(), binding = await repository(task);

@@ -432,6 +432,25 @@ test('oversized game assessment is rejected before approval and large source exc
  assert.ok(retained.finalIntegratedEvidence.verification.changedFiles.some(f=>f.patchUnavailable));
 });
 
+test('final game assessment retains authenticated technical review when the outer workflow failed',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
+ const {gameAssessmentEvidence}=modules()('@/lib/projects/game-evidence');
+ const head='c'.repeat(40),tree='d'.repeat(40),receipt=randomUUID();
+ const p={...owner,profile:'game',verified_sha:head,spec:{...plan,game:g.game,finalContract:g.contract},
+  preview:{url:'https://preview.vercel.app/counter',headSha:head,deploymentId:1,statusId:2,browserAcceptance:{passed:true,headSha:head}}};
+ const reviewSettlement={kind:'retained-final-review-settlement',receiptId:receipt,sourceTreeSha:tree,workflowOutcome:'BLOCKED'};
+ const validation={kind:'retained-native-verification',runId:'42',artifactId:'99',artifactSha256:'e'.repeat(64),verificationDigest:'f'.repeat(64)};
+ const outcome={head,taskId:randomUUID(),verification:{observedHeadSha:head,testedHeadSha:head,reviewedHeadSha:head,sourceTreeSha:tree,
+  reviewSettlement,validation,projectAcceptance:{passed:true,headSha:head},changedFiles:[{path:'app/counter/page.tsx',patch:'+actual candidate'}]}};
+ const evidence=gameAssessmentEvidence(p,[],outcome),v=evidence.finalIntegratedEvidence.verification;
+ assert.equal(JSON.stringify(v.reviewSettlement),JSON.stringify(reviewSettlement));
+ assert.equal(JSON.stringify(v.validation),JSON.stringify(validation));assert.equal(v.sourceTreeSha,tree);
+ assert.equal(v.reviewSettlement.workflowOutcome,'BLOCKED');assert.equal(v.pullRequest,undefined);
+ assert.match(v.sourceNote,/original failed workflow receipt/);assert.doesNotMatch(v.sourceNote,/saved PR/);
+ assert.equal(v.changedFiles[0].patch,'+actual candidate');assert.equal(evidence.preview,p.preview);
+ assert.equal(outcome.verification.reviewSettlement.workflowOutcome,'BLOCKED','transport does not rewrite historical outcome');
+});
+
 test('game capacity estimator counts shared browser evidence once and admits a bounded full receipt',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
  const {validateGameAssessmentCapacity,gameAssessmentCapacity,gameAssessmentEvidence}=modules()('@/lib/projects/game-evidence');

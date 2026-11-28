@@ -79,7 +79,7 @@ export async function assertBlockedOwnerRecovery(db,x){
    await db.query('commit');
    console.log('BLOCKED_OWNER_COMMITTED_FIXTURE_READY: new RPC DDL and original-project rows committed in disposable PostgreSQL');
    await new Promise((resolve,reject)=>{
-    const watchdog=setTimeout(()=>reject(Error('Committed race fixture consumer timed out')),180000);
+    const watchdog=setTimeout(()=>reject(Error('Committed race fixture consumer timed out')),process.env.KATIE_TEST_SINGLE_PACKAGE_CONTINUATION==='1'?360000:180000);
     process.on('message',message=>{
      if(message?.kind==='blocked-owner-race-finished'){clearTimeout(watchdog);resolve();}
     });
