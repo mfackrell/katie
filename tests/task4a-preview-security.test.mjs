@@ -287,3 +287,12 @@ test('Task 4A: production deployment discovery validates real receipt, draft SHA
   assert.ok(settings.ghReads===0,'invalid completion receipts never inspect deployments');
  });
 });
+
+// The approved retained game contract asserts exact empty cell text. Empty
+// expected text is an assertion, not a missing assertion or a wildcard.
+test('retained preview permits exact empty expected text without weakening validation',()=>{
+ const {browserContract,digest}=modules()('@/lib/projects/contract');
+ const contract={path:'/milestone-3-tic-tac-toe',scenarios:[{name:'empty cell',steps:[{action:'expectText',selector:'[data-cell="0"]',value:''}]}]};
+ assert.equal(digest(browserContract.parse(contract)),digest(contract));
+ for(const step of [{action:'expectText',selector:'[data-cell="0"]'},{action:'expectText',selector:'',value:''},{action:'expectText',selector:'[data-cell="0"]',value:'x'.repeat(2001)},{action:'fill',selector:'#input',value:''}])assert.throws(()=>browserContract.parse({...contract,scenarios:[{name:'invalid',steps:[step]}]}));
+});
