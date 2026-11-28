@@ -500,7 +500,8 @@ async function reconcileBlockedInfrastructureProjects(){
         if(!p.active_mission_id||!p.approved_hash||p.approved_hash!==p.approval_hash||new Date(p.deadline).getTime()<=Date.now())continue;
         const saved=await readMission(p.active_mission_id);
         if(saved.mission.status!=='blocked')continue;
-        const failed=saved.jobs.find(j=>j.role==='development'&&j.status==='failed');
+        const failed=saved.jobs.find(j=>j.role==='development'&&(j.status==='failed'||
+            j.status==='completed'&&p.spec?.milestones.length===1&&Boolean((j.result?.verification as Record<string,unknown>|undefined)?.reviewSettlement)));
         if(!failed)continue;
         const task=await readTask(failed.id);
         const context=await getDevelopmentProjectContext(task.id);
@@ -518,11 +519,23 @@ async function reconcileBlockedInfrastructureProjects(){
                 const preview=await developmentPreview(task,binding);
                 if(!preview)continue;
                 const deployed={...preview,url:new URL(context.contract.path,preview.url).href};
-                const browser=await verifyDeployedPreview(deployed,context.contract,p.id);
-                if(!browser.passed)throw Error('Retained implementation failed actual deployed browser acceptance');
-                const acceptance={version:1 as const,projectId:browser.projectId,contractHash:browser.contractHash,
-                    headSha:browser.headSha,passed:browser.passed,checks:browser.checks};
-                const verification={...await retainedDevelopmentEvidence(task,binding,acceptance),preview:deployed};
+                let browser:Record<string,unknown>,verification:Record<string,unknown>;
+                if(failed.status==='completed'){
+                    // Reuse the immutable consumption event after an interrupted
+                    // downstream transition. Never rerun accepted browser checks.
+                    const consumed=settlement.consumed;
+                    if(!consumed||digest(consumed.verification)!==digest(failed.result?.verification))throw Error('Saved technical acceptance does not match its immutable consumption event');
+                    verification={...await retainedDevelopmentEvidence(task,binding,consumed.verification.projectAcceptance),preview:deployed};
+                    if(digest(verification)!==digest(consumed.verification))throw Error('Consumed source or deployment changed before continuation');
+                    browser=consumed.browserAcceptance;
+                }else{
+                    const checked=await verifyDeployedPreview(deployed,context.contract,p.id);
+                    if(!checked.passed)throw Error('Retained implementation failed actual deployed browser acceptance');
+                    const acceptance={version:1 as const,projectId:checked.projectId,contractHash:checked.contractHash,
+                        headSha:checked.headSha,passed:checked.passed,checks:checked.checks};
+                    verification={...await retainedDevelopmentEvidence(task,binding,acceptance),preview:deployed};
+                    browser=checked;
+                }
                 await projectRpc('project_consume_development_review_settlement',{
                     p_task:task.id,p_receipt:settlement.receiptId,p_evidence:verification,p_browser:browser,
                     p_release:release,p_generation:epoch.generation,p_deployment:deployment,
@@ -530,6 +543,7 @@ async function reconcileBlockedInfrastructureProjects(){
                 return true;
             }
         }
+        if(failed.status==='completed')continue;
         if(await projectRpc<boolean>('project_provider_mode',{p_project:p.id}))continue;
         const receipt=(failed.result?.external as Record<string,unknown>|undefined)?.receipt as Record<string,unknown>|undefined;
         const checks=receipt?.checks as Record<string,unknown>|undefined;

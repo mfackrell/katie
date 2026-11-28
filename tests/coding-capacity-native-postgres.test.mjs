@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 
-test('native PostgreSQL16: exhausted original project, one bounded owner authorization and real commissioning chain',{timeout:300000},async()=>{
+test('native PostgreSQL16: exhausted original project, one bounded owner authorization and real commissioning chain',{timeout:420000},async()=>{
  const env={...process.env,
   KATIE_TEST_COMPLETION_CONTROLS:'1',KATIE_TEST_AMENDMENT_SUCCESSOR:'1',
   KATIE_TEST_CAPACITY_RENEWAL:'1',KATIE_TEST_LIFECYCLE_AUTHORIZATION:'1',
@@ -11,7 +11,7 @@ test('native PostgreSQL16: exhausted original project, one bounded owner authori
   KATIE_TEST_MISSION80_CONTINUATION:'1',KATIE_TEST_MISSION80_WATCHDOG:'1',
   KATIE_TEST_MISSION82_INDEPENDENT:'1',KATIE_TEST_ORIGINAL_BOUNDED_RECOVERY:'1',
   KATIE_TEST_CONTEXT_90_RETEST:'1',
-  KATIE_TEST_FOLLOWUP_M95:'1',KATIE_TEST_CODING_CAPACITY:'1'
+  KATIE_TEST_FOLLOWUP_M95:'1',KATIE_TEST_CODING_CAPACITY:'1',KATIE_TEST_SINGLE_PACKAGE_CONTINUATION:'1',TZ:'UTC',PGTZ:'UTC'
  };
  delete env.NODE_TEST_CONTEXT;
  const result=await new Promise((resolve,reject)=>{
@@ -25,6 +25,10 @@ test('native PostgreSQL16: exhausted original project, one bounded owner authori
   child.on('close',code=>resolve({code,stdout,stderr}));
  });
  assert.equal(result.code,0,result.stdout+'\n'+result.stderr);
+ assert.match(result.stdout,/SINGLE_PACKAGE_CONSUMED_LIFECYCLE_NATIVE_PASS/);
+ assert.match(result.stdout,/SINGLE_PACKAGE_ACTUAL_FINAL_ASSESSMENT_NATIVE_PASS/);
+ console.log('SINGLE_PACKAGE_CONSUMED_LIFECYCLE_NATIVE_PASS');
+ console.log('SINGLE_PACKAGE_ACTUAL_FINAL_ASSESSMENT_NATIVE_PASS');
  assert.match(result.stdout,/ORIGINAL_84_BOUNDED_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION_CONTEXT90_NATIVE_PASS/);
  assert.match(result.stdout,/MISSION95_ONE_FOLLOWUP_NATIVE_PASS/);

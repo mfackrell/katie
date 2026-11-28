@@ -7,13 +7,14 @@ import {spawnSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {createServer} from 'node:net';
 import pg from 'pg';
+import {assertFinalAssessmentRelease} from './helpers/assert-final-assessment-release.mjs';
 
 const evidenceMigration='supabase/migrations/20261128192606_retained_review_consumption.sql';
 const migration='supabase/migrations/20261128192855_nonbillable_release_continuity.sql';
 const sha=n=>n.repeat(40),hash=n=>n.repeat(64);
 const canonical=value=>Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}':JSON.stringify(value);
 
-test('nonbillable release continuity preserves operator fencing and never revives paid admission',{timeout:90000},async()=>{
+test('qualified release fences paid work and preserves only the signed final assessment',{timeout:90000},async()=>{
  const installed=existsSync('/usr/lib/postgresql')?readdirSync('/usr/lib/postgresql').sort((a,b)=>Number(b)-Number(a)):[];
  const bin=process.env.KATIE_TEST_PG_BIN||installed.map(v=>join('/usr/lib/postgresql',v,'bin')).find(p=>existsSync(join(p,'initdb')));
  assert.ok(bin&&existsSync(join(bin,'initdb')),'Native PostgreSQL required; set KATIE_TEST_PG_BIN');
@@ -29,16 +30,16 @@ test('nonbillable release continuity preserves operator fencing and never revive
   // Match the existing tables/columns read by the production function. This
   // private fixture cannot connect to a project database or a provider.
   await db.query(`create role anon nologin;create role authenticated nologin;create role service_role nologin bypassrls;
-   create table actors(id uuid primary key,actor_kind text);create table chats(id uuid primary key,actor_id uuid);create table managed_agents(actor_id uuid);
+   create table actors(id uuid primary key,actor_kind text);create table chats(id uuid primary key,actor_id uuid);create table managed_agents(id uuid primary key,actor_id uuid);
    create table standalone_owner_bindings(owner_id uuid,actor_id uuid,chat_id uuid);
-   create table work_projects(id uuid primary key,actor_id uuid,chat_id uuid,approved_hash text,approval_hash text);
+   create table work_projects(id uuid primary key,actor_id uuid,chat_id uuid,approved_hash text,approval_hash text,repository_id uuid);
    create table project_work_packages(id uuid primary key,project_id uuid,scope_hash text,contract jsonb);
-   create table agent_missions(id uuid primary key,project_id uuid,project_kind text);
-   create table mission_assignments(id uuid primary key,mission_id uuid,role text,agent_id uuid);
-   create table agent_tasks(id uuid primary key,actor_id uuid,chat_id uuid,repository_full_name text,status text,external jsonb);
+   create table agent_missions(id uuid primary key,project_id uuid,project_kind text,repository_id uuid,team jsonb);
+   create table mission_assignments(id uuid primary key,mission_id uuid,role text,agent_id uuid,payload jsonb);
+   create table agent_tasks(id uuid primary key,actor_id uuid,chat_id uuid,repository_full_name text,status text,external jsonb,agent_id uuid,kind text,repository_id uuid,initial_input text,snapshot jsonb,definition_version integer);
    create table project_runs(project_id uuid,mission_id uuid,kind text,binding jsonb);
    create table project_package_checkpoint_dispatches(authorization_id uuid,task_id uuid,run_id text);
-   create table project_package_checkpoint_continuations(project_id uuid,package_id uuid,authorization_id uuid,owner_id uuid,mission_id uuid,assignment_id uuid,proof jsonb,state_hash text,authorized_at timestamptz,cutoff timestamptz);
+   create table project_package_checkpoint_continuations(project_id uuid,package_id uuid,authorization_id uuid,owner_id uuid,mission_id uuid,assignment_id uuid,proof jsonb,state_hash text,authorized_at timestamptz,cutoff timestamptz,prior_state jsonb);
    create table project_package_corrective_receipts(receipt_id uuid,project_id uuid,package_id uuid,owner_id uuid,checkpoint jsonb,qualification jsonb,state_hash text,recorded_at timestamptz);
    create table project_events(project_id uuid,event text,data jsonb,created_at timestamptz default now());
    create table project_provider_requests(id uuid,operation text,worker_id uuid,mission_id uuid,project_id uuid,started_at timestamptz,resolved_at timestamptz,request_hash text,assignment_id uuid,provider_receipt text,execution_attempt text);`);
@@ -46,8 +47,8 @@ test('nonbillable release continuity preserves operator fencing and never revive
   await db.query(scopeSource.match(/create function public\.standalone_verify_scope[\s\S]*?\$\$;/i)[0]);
   const projectSource=readFileSync('supabase/migrations/20261017141136_chat_projects.sql','utf8');
   await db.query(projectSource.match(/create function public\.project_canonical[\s\S]*?\$\$;/i)[0]);
-  await db.query(readFileSync(evidenceMigration,'utf8').split('-- Reuse the existing append-only event stream')[0]);
-  const ids=Object.fromEntries(['owner','actor','chat','project','package','mission','task','worker','authorization','settlement'].map(k=>[k,randomUUID()]));
+  await db.query(readFileSync(evidenceMigration,'utf8'));
+  const ids=Object.fromEntries(['owner','actor','chat','agentActor','taskChat','repository','project','package','mission','task','worker','authorization','settlement'].map(k=>[k,randomUUID()]));
   ids.project='fe9d2658-41e3-44c1-ae8e-a0cba98371fe';
   const SCOPE='4849dff2cfce136b3a1f3db675ee3cc8e6e84315aa3cc3700ca529dcd84fe6c6';
   const contract={path:'/demo',scenarios:[{name:'Initial state',steps:[{action:'expectText',selector:'#status',value:''}]}]};
@@ -57,15 +58,18 @@ test('nonbillable release continuity preserves operator fencing and never revive
   const proof={candidateSha:sha('b'),sourceTreeSha:sha('c')};
   await db.query('insert into actors values($1,$2);',[ids.actor,'standard']);
   await db.query('insert into chats values($1,$2)',[ids.chat,ids.actor]);
+  await db.query('insert into actors values($1,$2)',[ids.agentActor,'managed_agent']);
+  await db.query('insert into chats values($1,$2)',[ids.taskChat,ids.agentActor]);
+  await db.query('insert into managed_agents values($1,$2)',[ids.worker,ids.agentActor]);
   await db.query('insert into standalone_owner_bindings values($1,$2,$3)',[ids.owner,ids.actor,ids.chat]);
-  await db.query('insert into work_projects values($1,$2,$3,$4,$4)',[ids.project,ids.actor,ids.chat,SCOPE]);
+  await db.query('insert into work_projects values($1,$2,$3,$4,$4,$5)',[ids.project,ids.actor,ids.chat,SCOPE,ids.repository]);
   await db.query('insert into project_work_packages values($1,$2,$3,$4)',[ids.package,ids.project,SCOPE,{milestone:{contract}}]);
-  await db.query('insert into agent_missions values($1,$2,$3)',[ids.mission,ids.project,'development']);
-  await db.query('insert into mission_assignments values($1,$2,$3,$4)',[ids.task,ids.mission,'development',ids.worker]);
-  await db.query('insert into agent_tasks values($1,$2,$3,$4,$5,$6)',[ids.task,ids.actor,ids.chat,'owner/repository','blocked',{receipt,issueNumber:12,checkpointRecoveryAuthorizationId:ids.authorization,checkpointRecoveryCandidate:proof.candidateSha}]);
+  await db.query('insert into agent_missions values($1,$2,$3,$4,$5)',[ids.mission,ids.project,'development',ids.repository,JSON.stringify([{id:ids.worker,version:1,config:{development:true}}])]);
+  await db.query('insert into mission_assignments values($1,$2,$3,$4,$5)',[ids.task,ids.mission,'development',ids.worker,{development_input:'Exact approved implementation context'}]);
+  await db.query('insert into agent_tasks values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1)',[ids.task,ids.agentActor,ids.taskChat,'owner/repository','blocked',{receipt,issueNumber:12,checkpointRecoveryAuthorizationId:ids.authorization,checkpointRecoveryCandidate:proof.candidateSha},ids.worker,'development',ids.repository,'Exact approved implementation context',{development:true}]);
   await db.query('insert into project_runs values($1,$2,$3,$4)',[ids.project,ids.mission,'development',binding]);
   await db.query('insert into project_package_checkpoint_dispatches values($1,$2,$3)',[ids.authorization,ids.task,'123']);
-  await db.query("insert into project_package_checkpoint_continuations values($1,$2,$3,$4,$5,$6,$7,$8,now()-interval '2 hours',now()+interval '1 hour')",[ids.project,ids.package,ids.authorization,ids.owner,ids.mission,ids.task,proof,hash('d')]);
+  await db.query("insert into project_package_checkpoint_continuations values($1,$2,$3,$4,$5,$6,$7,$8,now()-interval '2 hours',now()+interval '1 hour',jsonb_build_object('task',(select to_jsonb(t) from agent_tasks t where id=$6)))",[ids.project,ids.package,ids.authorization,ids.owner,ids.mission,ids.task,proof,hash('d')]);
   for(const [n,operation,provider] of [[0,'input-count','input-token-count'],[1,'inference','response-1']])await db.query("insert into project_provider_requests values($1,$2,$3,$4,$5,now()-interval '110 minutes'+$6*interval '10 seconds',now()-interval '109 minutes'+$6*interval '10 seconds',$7,$8,$9,$10)",[randomUUID(),operation,ids.worker,ids.mission,ids.project,n,hash('e'),ids.task,provider,'123']);
   const requests=(await db.query('select jsonb_agg(to_jsonb(x) order by x.started_at,x.id) requests from project_provider_requests x')).rows[0].requests;
   const checkpoint={mode:'retained-final-review-settlement',authorizationId:ids.authorization,missionId:ids.mission,assignmentId:ids.task,...proof,scopeHash:binding.scopeHash,contractHash,reviewVerdict:'pass',additionalPaidInference:0,nativeDispatchConsumed:true,workflowReceipt:receipt,providerRequests:requests};
@@ -83,28 +87,30 @@ test('nonbillable release continuity preserves operator fencing and never revive
     add column lease uuid,add column lease_until timestamptz,add column active_mission_id uuid,
     add column spec jsonb default '{}',add column objective text default 'fixture',add column clarifications jsonb,
     add column baseline_sha text,add column max_cycles int default 5,add column cycles int default 4,
-    add column milestone_index int default 0,add column verified_sha text,add column preview jsonb;
+    add column milestone_index int default 0,add column verified_sha text,add column preview jsonb,
+    add column detail text,add column updated_at timestamptz,add column organization_version int default 1;
    alter table project_work_packages add column deadline timestamptz,add column status text default 'running',
-    add column manager_id uuid,add column worker_id uuid,add column writer_id uuid,add column reviewer_id uuid;
+    add column manager_id uuid,add column worker_id uuid,add column writer_id uuid,add column reviewer_id uuid,add column evidence jsonb;
    alter table project_package_checkpoint_continuations add column terms jsonb,add column renewed_fingerprint text,
     add column release_sha text,add column release_generation bigint,add column deployment_id text;
    alter table project_package_corrective_receipts add column ordinal int default 6,add column release_sha text,
     add column release_generation bigint,add column deployment_id text;
    alter table agent_missions add column status text default 'blocked',add column deadline timestamptz,
-    add column created_at timestamptz default now(),add column project_evidence jsonb,add column calls int default 0,add column max_calls int default 10;
+    add column created_at timestamptz default now(),add column project_evidence jsonb,add column calls int default 0,add column max_calls int default 10,add column result text;
    alter table mission_assignments add column status text default 'failed',add column attempts int default 1,
-    add column lease uuid,add column lease_until timestamptz;
-   alter table managed_agents add column id uuid,add column version int default 1,add column archived boolean default false,add column config jsonb;
+    add column lease uuid,add column lease_until timestamptz,add column job_key text,
+    add column result jsonb,add column detail text,add column updated_at timestamptz;
+   alter table managed_agents add column version int default 1,add column archived boolean default false,add column config jsonb;
    create table project_worker_contracts(id uuid,package_id uuid);
    create table project_organization_nodes(id uuid,project_id uuid,agent_id uuid,status text,deadline timestamptz);
    create table project_organization_scope_grants(node_id uuid);
    create table project_work_package_dependencies(package_id uuid);
    create table project_work_package_attempts(package_id uuid,mission_id uuid,attempt int);
-   create table project_package_execution_receipts(project_id uuid,package_id uuid,owner_id uuid,scope_hash text,authorization_id uuid,historical_mission_ids uuid[]);
+   create table project_package_execution_receipts(project_id uuid,package_id uuid,owner_id uuid,scope_hash text,authorization_id uuid,historical_mission_ids uuid[],release_sha text,release_generation bigint,deployment_id text);
    create table project_provider_execution(project_id uuid,owner_id uuid,window_id uuid,deadline timestamptz,approved_scope text);
    create table project_execution_windows(id uuid,project_id uuid,owner_id uuid,cutoff timestamptz);
    create table project_retest_production_release_gate(project_id uuid,release_sha text,deployment_id text,alias_name text,state text,generation bigint,updated_at timestamptz);
-   create table project_package_execution_release_receipts(project_id uuid,release_sha text,deployment_id text,release_generation bigint);
+   create table project_package_execution_release_receipts(project_id uuid,release_sha text,deployment_id text,release_generation bigint,prior_authorization_id uuid,package_id uuid,owner_id uuid);
    create table project_coding_capacity_authority(project_id uuid,approved_max_missions int);
    create table project_blocked_management_retest_receipts(project_id uuid,historical_missions int);
    create table project_retest_claim_release_receipts(project_id uuid,mission_id uuid,assignment_id uuid,bound_release_sha text,bound_deployment_id text,bound_release_generation bigint);
@@ -131,6 +137,7 @@ test('nonbillable release continuity preserves operator fencing and never revive
   await db.query(extract(readFileSync('supabase/migrations/20261110010000_provider_controlled_game_trial.sql','utf8'),'project_provider_request_pending'));
   await db.query(extract(readFileSync('supabase/migrations/20261124233000_mission104_package_execution_authority.sql','utf8'),'project_org_package_execution_fingerprint'));
   await db.query(extract(checkpointSource,'project_org_package_checkpoint_live'));
+  await db.query(extract(checkpointSource,'project_org_package_release_matches'));
   await db.query('create function project_org_package_execution_live(uuid) returns boolean language sql as $$select project_org_package_checkpoint_live($1)$$');
   await db.query(extract(checkpointSource,'project_org_package_execution_assignment'));
   await db.query(extract(checkpointSource,'project_org_package_checkpoint_dispatch_live'));
@@ -138,11 +145,14 @@ test('nonbillable release continuity preserves operator fencing and never revive
   await db.query(readFileSync('tests/fixtures/nonbillable-release-predecessor.sql','utf8'));
   await db.query('revoke all on function project_org_retest_set_release_gate(uuid,text,text,text,bigint) from public,anon,authenticated,service_role');
   const oldSha=sha('1'),newSha=sha('2'),oldDeployment='dpl_OldFixture',newDeployment='dpl_NewFixture';
-  await db.query('update work_projects set active_mission_id=$1,deadline=(select cutoff from project_package_checkpoint_continuations)',[ids.mission]);
-  await db.query('update project_work_packages set worker_id=$1,writer_id=$1,deadline=(select cutoff from project_package_checkpoint_continuations)',[ids.worker]);
-  await db.query('insert into managed_agents(id) values($1)',[ids.worker]);
-  await db.query("insert into project_organization_nodes values($1,$2,$1,'active',(select cutoff from project_package_checkpoint_continuations))",[ids.worker,ids.project]);
-  await db.query('insert into project_package_execution_receipts values($1,$2,$3,$4,$5,$6)',[ids.project,ids.package,ids.owner,SCOPE,ids.authorization,Array.from({length:104},randomUUID)]);
+  ids.reviewer=randomUUID();
+  await db.query('update work_projects set active_mission_id=$1,deadline=(select cutoff from project_package_checkpoint_continuations),spec=$2',[ids.mission,{milestones:[{contract}],finalContract:contract}]);
+  await db.query('update project_work_packages set worker_id=$1,writer_id=$1,reviewer_id=$2,deadline=(select cutoff from project_package_checkpoint_continuations)',[ids.worker,ids.reviewer]);
+  for(const agent of [ids.worker,ids.reviewer]){
+   await db.query('insert into managed_agents(id) values($1) on conflict(id) do nothing',[agent]);
+   await db.query("insert into project_organization_nodes values($1,$2,$1,'active',(select cutoff from project_package_checkpoint_continuations))",[agent,ids.project]);
+  }
+  await db.query('insert into project_package_execution_receipts(project_id,package_id,owner_id,scope_hash,authorization_id,historical_mission_ids) values($1,$2,$3,$4,$5,$6)',[ids.project,ids.package,ids.owner,SCOPE,ids.authorization,Array.from({length:104},randomUUID)]);
   const historical=(await db.query('select historical_mission_ids ids from project_package_execution_receipts')).rows[0].ids;
   for(const id of historical)await db.query("insert into agent_missions(id,project_id,project_kind,status) values($1,$2,'management','completed')",[id,ids.project]);
   for(let i=1;i<=4;i++)await db.query('insert into project_work_package_attempts values($1,$2,$3)',[ids.package,ids.mission,i]);
@@ -213,6 +223,7 @@ test('nonbillable release continuity preserves operator fencing and never revive
   assert.equal((await db.query('select count(*) n from project_package_corrective_receipts')).rows[0].n,'1');
   assert.equal((await db.query("select external->'receipt'->>'outcome' outcome from agent_tasks")).rows[0].outcome,'BLOCKED');
   assert.equal((await db.query("select count(*) n from project_events where event='package_nonbillable_release_qualified'")).rows[0].n,'1');
+  await assertFinalAssessmentRelease({db,ids,contract,contractHash,binding,proof,receipt,newSha,newDeployment,oldSha,oldDeployment,before});
  }finally{
   await db?.end();if(started)spawnSync(join(bin,'pg_ctl'),['-D',data,'-m','immediate','-w','stop'],{timeout:15000});rmSync(root,{recursive:true,force:true});
  }

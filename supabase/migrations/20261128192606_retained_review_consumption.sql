@@ -47,7 +47,19 @@ BEGIN
   AND s.recorded_at>=c.authorized_at AND s.recorded_at<c.cutoff
   AND s.state_hash=c.state_hash
   AND public.standalone_verify_scope(c.owner_id,p.actor_id,p.chat_id)
-  AND t.actor_id=p.actor_id AND t.chat_id=p.chat_id
+  -- Native tasks belong to the appointed execution agent's conversation.
+  -- The owner is authenticated on the project above, then bound through the
+  -- original mission/assignment; a task chat is not the owner's project chat.
+  AND t.agent_id=j.agent_id AND t.kind='development' AND t.repository_id=m.repository_id
+  AND m.repository_id=p.repository_id AND t.initial_input=j.payload->>'development_input'
+  AND EXISTS(SELECT 1 FROM jsonb_array_elements(m.team) member
+   WHERE member->>'id'=j.agent_id::text AND member->'config'=t.snapshot
+    AND (member->>'version')::integer=t.definition_version)
+  AND EXISTS(SELECT 1 FROM managed_agents a WHERE a.id=j.agent_id AND a.actor_id=t.actor_id)
+  AND EXISTS(SELECT 1 FROM chats ch WHERE ch.id=t.chat_id AND ch.actor_id=t.actor_id)
+  AND c.prior_state->'task' ?& ARRAY['id','agent_id','actor_id','chat_id','kind','repository_id','repository_full_name','initial_input','snapshot','definition_version']
+  AND NOT EXISTS(SELECT 1 FROM unnest(ARRAY['id','agent_id','actor_id','chat_id','kind','repository_id','repository_full_name','initial_input','snapshot','definition_version']) field
+   WHERE to_jsonb(t)->field IS DISTINCT FROM c.prior_state->'task'->field)
   AND w.project_id=p.id AND w.scope_hash=p.approved_hash AND p.approved_hash=p.approval_hash
   AND m.project_id=p.id AND m.project_kind='development'
   AND j.mission_id=m.id AND j.role='development' AND c.assignment_id=j.id

@@ -40,8 +40,11 @@ export function gameAssessmentEvidence(p:Project,history:Array<{phase:string;ind
  const proof=v?{
   head:outcome?.head,taskId:outcome?.taskId,
   verification:{pullRequest:v.pullRequest,observedHeadSha:v.observedHeadSha,testedHeadSha:v.testedHeadSha,reviewedHeadSha:v.reviewedHeadSha,baseSha:v.baseSha,
+   ...(v.reviewSettlement?{reviewSettlement:v.reviewSettlement,sourceTreeSha:v.sourceTreeSha,validation:v.validation}:{}),
    projectAcceptance:v.projectAcceptance,changedFileCount:files.length,changedFiles:[] as Record<string,unknown>[],omittedFileCount:0,
-   sourceNote:'Bounded actual source excerpts; the complete independently reviewed diff and original receipts remain on the saved PR/task. Missing excerpts are not missing implementation.'}
+   sourceNote:v.reviewSettlement
+    ?'Bounded actual source excerpts. The immutable candidate identifies the complete Git diff; the authenticated review settlement and original failed workflow receipt are recorded with the saved task. The settlement accepts the technical review without representing the failed workflow as successful. Missing excerpts are not missing implementation.'
+    :'Bounded actual source excerpts; the complete independently reviewed diff and original receipts remain on the saved PR/task. Missing excerpts are not missing implementation.'}
  }:null;
  const result={milestones:history,approvedFinalContract:p.spec!.finalContract,approvedScopeHash:p.approved_hash,finalIntegratedEvidence:proof,preview:p.preview,gameRules:p.spec!.game!.rules};
  if(size(result)>24000)throw Error('Saved game receipts exceed the pre-approved assessment envelope; preserve them for diagnosis rather than truncate rules or browser evidence');

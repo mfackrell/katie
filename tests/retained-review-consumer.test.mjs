@@ -126,3 +126,33 @@ test('normal project tick consumes settled development and stops before organiza
  await load('@/lib/projects/worker').runProjectBatch();
  assert.equal(calls.filter(c=>c.name==='project_consume_development_review_settlement').length,1,'completed technical acceptance is not rerun');
 }));
+
+test('interrupted single-package continuation reuses consumed browser evidence without replaying checks',()=>env(async()=>{
+ const f=fixture(),calls=[],events=[];
+ const preview={url:f.origin+f.state.context.contract.path,headSha:f.candidate,deploymentId:1,statusId:2,provider:'vercel',immutable:true};
+ const verification={...await f.consumer.retainedDevelopmentEvidence(f.task,f.project,f.acceptance),preview};
+ const browser={...f.acceptance,deploymentId:1,statusId:2,url:preview.url,checkedAt:new Date(Date.now()-3600000).toISOString()};
+ f.settlement.consumed={verification,browserAcceptance:browser};
+ const project={id:f.project.projectId,status:'blocked',phase:'development',active_mission_id:f.settlement.missionId,
+  approved_hash:f.settlement.scopeHash,approval_hash:f.settlement.scopeHash,deadline:new Date(Date.now()+60000).toISOString(),spec:{milestones:[{contract:f.state.context.contract}]}};
+ const job={id:f.task.id,role:'development',status:'completed',result:{verification}};
+ const db={from:table=>{const eqs={};return {select(){return this;},eq(k,v){eqs[k]=v;return this;},order(){return this;},
+  limit(){const value={data:table==='work_projects'&&eqs.status==='blocked'&&eqs.phase==='development'?[project]:[],error:null};
+   return {then:resolve=>resolve(value),returns:async()=>value};}};}};
+ const worker=modules({
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/projects/specialist-dispatch':{runSpecialistResourceBatch:async()=>{}},
+  '@/lib/projects/store':{getDevelopmentProjectContext:async()=>f.state.context,acceptanceBinding:()=>f.project,
+   projectRpc:async(name,args)=>{calls.push({name,args});if(name==='claim_work_project')return null;if(name==='project_dispatch_recovery_candidates')return [];
+    if(name==='project_org_retest_release_epoch')return {generation:72,active:true,deploymentId:'dpl_fixture'};
+    if(name==='project_consume_development_review_settlement'){assert.equal(JSON.stringify(args.p_browser),JSON.stringify(browser));return {consumed:true};}
+    throw Error('Unexpected inference or lifecycle request: '+name);}},
+  '@/lib/missions/store':{readMission:async()=>({mission:{status:'blocked'},jobs:[job]})},'@/lib/agents/store':{readTask:async()=>f.task},
+  '@/lib/agents/development':{...f.consumer,dispatchOwnerRenewedNativeDevelopment:async()=>false,recoverUnusedNativeStartup:async()=>false},
+  '@/lib/projects/preview':{verifyDeployedPreview:async()=>{events.push('repeated-browser');throw Error('Accepted browser checks must not run again');},PreviewAccessUnavailable:class extends Error{}},
+ })('@/lib/projects/worker');
+ await worker.runProjectBatch();assert.equal(calls.filter(c=>c.name==='project_consume_development_review_settlement').length,1);
+ assert.deepEqual(events,[]);assert.equal(f.task.external.receipt.outcome,'BLOCKED');
+ // A task marker cannot substitute for the immutable consumed evidence.
+ f.settlement.consumed=null;
+ await worker.runProjectBatch();assert.equal(calls.filter(c=>c.name==='project_consume_development_review_settlement').length,1);assert.deepEqual(events,[]);
+}));

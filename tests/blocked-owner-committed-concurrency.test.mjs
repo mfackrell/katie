@@ -134,7 +134,7 @@ async function realRace(a,b,observer,contenderPid,label,query,firstArgs,otherArg
 }
 
 test('new owner authorization and resume RPCs serialize across two committed-schema PostgreSQL connections',
- {timeout:240000},async()=>{
+ {timeout:process.env.KATIE_TEST_SINGLE_PACKAGE_CONTINUATION==='1'?360000:240000},async()=>{
   const child=fork('tests/benchmark-renewal-postgres.test.mjs',[],{
    cwd:process.cwd(),execArgv:[],
    stdio:['ignore','pipe','pipe','ipc'],

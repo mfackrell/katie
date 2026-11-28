@@ -18,7 +18,10 @@ import {followupManagementRetestOffer} from '@/lib/projects/management-followup-
 import {codingCapacityOffer} from '@/lib/projects/coding-capacity-recovery';
 import {packageExecutionOffer,ORIGINAL_PACKAGE,matchesPackageTerms,matchesCorrectiveTerms,matchesCompletionTerms,matchesInvalidRetryTerms,matchesCheckpointTerms} from '@/lib/projects/package-execution-authorization';
 import {originalBoundedRecoveryOffer,ORIGINAL_RECOVERY_MISSION,ORIGINAL_RECOVERY_ASSIGNMENT} from '@/lib/projects/original-bounded-recovery';
-const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive()}).strict();
+const financialTerms=z.object({objective:z.string().min(1).max(8000),clarifications:z.string().max(8000),
+ repositoryId:z.string().uuid().nullable(),repository:z.string().nullable(),deadline:z.string().datetime({offset:true}),
+ limits:z.object({codingJobs:z.number().int().positive(),missions:z.number().int().positive(),modelTokens:z.number().int().positive()}).strict()}).strict();
+const financialInput=z.object({projectId:z.string().uuid(),autonomousExecution:z.literal(true),objectiveHash:z.string().regex(/^[a-f0-9]{64}$/),ceilingMicrousd:z.number().int().positive().max(1_000_000_000),perCallMicrousd:z.number().int().positive(),terms:financialTerms}).strict();
 const providerTrialInput=z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),trialAction:z.enum(['start','stop'])}).strict();
 const directorRecoveryInput=z.object({
  projectId:z.string().uuid(),trialAction:z.literal('recover_director_once'),
@@ -673,7 +676,7 @@ export async function POST(request:NextRequest){
    {p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_actor:p.actorId,p_chat:p.chatId});
   return NextResponse.json({projectId:project.id,status:project.status,messages:await getMessages(p.chatId).catch(()=>undefined)});
  }
- await rpc('project_org_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_objective_hash:p.objectiveHash,p_ceiling:p.ceilingMicrousd,p_per_call:p.perCallMicrousd,p_autonomous:p.autonomousExecution});
+ await rpc('project_org_authorize',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:p.projectId,p_objective_hash:p.objectiveHash,p_ceiling:p.ceilingMicrousd,p_per_call:p.perCallMicrousd,p_autonomous:p.autonomousExecution,p_terms:p.terms});
  return NextResponse.json({authorized:true});
  }catch{return NextResponse.json({error:'trialAction' in p&&['renew_paused_window','resume_management','retest_blocked_management','authorize_mission79_future_window','bind_mission79_release'].includes(p.trialAction)
   ?'Recovery state changed or the request could not be confirmed. Refresh recovery status before continuing.'

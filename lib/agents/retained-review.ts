@@ -13,6 +13,7 @@ const settlementSchema = z.object({
   missionId: z.string().uuid(), assignmentId: z.string().uuid(),
   candidateSha: sha, sourceTreeSha: sha, scopeHash: hash, contractHash: hash,
   workflowReceipt: z.record(z.unknown()), qualification: z.record(z.unknown()),
+  consumed: z.object({verification:z.record(z.unknown()),browserAcceptance:z.record(z.unknown())}).nullable().optional(),
   binding: z.object({
     version: z.literal(1), projectId: z.string().uuid(), baseSha: sha, baselineSha: sha,
     scopeHash: hash, contractHash: hash, allowedPaths: z.array(z.string()).min(1),
