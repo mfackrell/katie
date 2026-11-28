@@ -135,11 +135,15 @@ jobs:
           else
             git switch -c "$branch"
           fi
-          cp "$RUNNER_TEMP/original-agent-request.md" AGENT_REQUEST.md
+          # Native workers read the immutable external request through a read-only mount.
+          # Never introduce an untracked request file into the reviewed candidate.
+          cp "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+          if [ "$native" != true ]; then
+            cp "$RUNNER_TEMP/original-agent-request.md" AGENT_REQUEST.md
+          fi
           echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "repair_smoke=$REPAIR_SMOKE" >> "$GITHUB_OUTPUT"
-          cp AGENT_REQUEST.md "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
       - name: Preserve original task before implementation
         uses: actions/upload-artifact@v4
         with:
